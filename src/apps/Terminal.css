@@ -1,0 +1,255 @@
+/* ============================================================
+   Terminal App — GNOME Terminal Style
+   Dark background, green prompt, tabbed interface
+   ============================================================ */
+
+.terminal-app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #1e1e1e;
+  color: #ffffff;
+  font-family: var(--font-mono);
+}
+
+/* ── Tab Bar ─────────────────────────────────────────────── */
+.terminal-tab-bar {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  background: #303030;
+  border-bottom: 1px solid #3d3d3d;
+  padding: 0 4px;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.terminal-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.6);
+  border-radius: var(--radius-xs) var(--radius-xs) 0 0;
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out);
+  border: none;
+  background: transparent;
+  max-width: 180px;
+}
+
+.terminal-tab:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.terminal-tab.active {
+  background: #1e1e1e;
+  color: #ffffff;
+}
+
+.terminal-tab .tab-icon {
+  font-size: 12px;
+}
+
+.terminal-tab .tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-ui);
+}
+
+.terminal-tab .tab-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  margin-left: 4px;
+  flex-shrink: 0;
+}
+
+.terminal-tab .tab-close:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #ffffff;
+}
+
+.terminal-new-tab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-xs);
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 18px;
+  cursor: pointer;
+  margin-left: 2px;
+}
+
+.terminal-new-tab:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+}
+
+/* ── Terminal Container ──────────────────────────────────── */
+.terminal-container {
+  flex: 1;
+  padding: 4px 0 0 4px;
+  overflow: hidden;
+}
+
+.terminal-instance {
+  height: 100%;
+}
+
+/* xterm.js overrides for GNOME Terminal look */
+.terminal-instance .xterm {
+  height: 100%;
+  padding: 4px;
+}
+
+.terminal-instance .xterm-viewport {
+  /* GNOME Terminal uses a very dark, slightly warm background */
+  background: #1e1e1e !important;
+}
+
+.terminal-instance .xterm-screen {
+  height: 100%;
+}
+
+/* Scrollbar inside terminal */
+.terminal-instance .xterm-viewport::-webkit-scrollbar {
+  width: 8px;
+}
+
+.terminal-instance .xterm-viewport::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: var(--radius-pill);
+}
+
+.terminal-instance .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+/* ── Status Bar ──────────────────────────────────────────── */
+.terminal-status-bar {
+  display: flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 8px;
+  background: #303030;
+  border-top: 1px solid #3d3d3d;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+  gap: 12px;
+  flex-shrink: 0;
+  font-family: var(--font-ui);
+}
+
+.terminal-status-bar .status-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.terminal-status-bar .status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #4ec9b0; /* Connected: green-ish */
+}
+
+.terminal-status-bar .status-dot.disconnected {
+  background: #e01b24; /* Disconnected: red */
+}
+
+.terminal-status-bar .status-spacer {
+  flex: 1;
+}
+
+/* ── Empty State ─────────────────────────────────────────── */
+.terminal-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: rgba(255, 255, 255, 0.3);
+  gap: 12px;
+}
+
+.terminal-empty .empty-icon {
+  font-size: 48px;
+}
+
+.terminal-empty .empty-text {
+  font-size: var(--font-body);
+  font-family: var(--font-ui);
+}
+
+.terminal-empty .empty-hint {
+  font-size: var(--font-small);
+  color: rgba(255, 255, 255, 0.2);
+}
+
+/* ── Fallback Terminal (no xterm.js) ────────────────────── */
+.terminal-fallback {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #1e1e1e;
+  color: #ffffff;
+  font-family: var(--font-mono);
+  padding: 8px;
+}
+
+.terminal-fallback-output {
+  flex: 1;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-size: 13px;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.terminal-fallback-output div {
+  margin-bottom: 2px;
+}
+
+.terminal-fallback-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  border-top: 1px solid #3d3d3d;
+}
+
+.terminal-fallback-input .prompt {
+  color: #4ec9b0;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.terminal-fallback-input .fallback-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #ffffff;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  caret-color: #4ec9b0;
+}

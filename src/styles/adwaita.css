@@ -1,0 +1,134 @@
+/* ============================================================
+   Adwaita Design System — GNOME Remote Client
+   Migrated from GNOME Shell's gnome-shell.css color tokens
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Cantarell:wght@400;700&family=Source+Code+Pro:wght@400;600&display=swap');
+
+/* ── Reset ──────────────────────────────────────────────── */
+*, *::before, *::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  user-select: none;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: var(--font-ui);
+  font-size: var(--font-body);
+  color: var(--text-primary);
+  background: var(--window-bg);
+}
+
+/* ── Light Mode (Adwaita Default) ──────────────────────── */
+:root {
+  /* Accent Colors */
+  --accent-bg:      #3584e4;
+  --accent-fg:      #ffffff;
+  --accent-hover:   #1f75d1;
+  --accent-active:  #1a5fb4;
+
+  /* Window & Surfaces */
+  --window-bg:      #fafafa;
+  --view-bg:        #ffffff;
+  --card-bg:        #f0f0f0;
+  --card-hover:     #e8e8e8;
+  --headerbar-bg:   #ebebeb;
+  --sidebar-bg:     #ebebeb;
+  --sidebar-fg:     #3f3f3f;
+  --sidebar-border: #d5d5d5;
+
+  /* Foreground */
+  --text-primary:     rgba(0, 0, 0, 0.87);
+  --text-secondary:   rgba(0, 0, 0, 0.60);
+  --text-disabled:    rgba(0, 0, 0, 0.38);
+  --text-on-accent:   #ffffff;
+
+  /* Borders */
+  --border-color:   rgba(0, 0, 0, 0.15);
+  --border-focus:   #3584e4;
+
+  /* Radius */
+  --radius-xs:      4px;
+  --radius-sm:      8px;
+  --radius-md:      12px;
+  --radius-lg:      18px;
+  --radius-pill:    9999px;
+
+  /* Typography */
+  --font-ui:        'Cantarell', 'Inter', system-ui, sans-serif;
+  --font-mono:      'Source Code Pro', 'SF Mono', 'Cascadia Code', monospace;
+  --font-title:     11pt;
+  --font-body:      10pt;
+  --font-small:     9pt;
+
+  /* Shadows */
+  --shadow-card:    0 1px 3px rgba(0,0,0,0.08);
+  --shadow-popup:   0 4px 16px rgba(0,0,0,0.15);
+  --shadow-overview: 0 8px 32px rgba(0,0,0,0.25);
+
+  /* Transitions */
+  --ease-out:       cubic-bezier(0.25, 0, 0, 1);
+  --duration-fast:  150ms;
+  --duration-normal: 200ms;
+  --duration-slow:  400ms;
+
+  /* Layout */
+  --headerbar-height: 48px;
+  --topbar-height:    32px;
+  --sidebar-width:    240px;
+  --dock-height:      56px;
+}
+
+/* ── Dark Mode ──────────────────────────────────────────── */
+[data-theme="dark"] {
+  --accent-bg:      #62a0ea;
+  --accent-hover:   #7ab2f0;
+  --accent-active:  #8ec1ff;
+
+  --window-bg:      #242424;
+  --view-bg:        #1e1e1e;
+  --card-bg:        #2d2d2d;
+  --card-hover:     #353535;
+  --headerbar-bg:   #303030;
+  --sidebar-bg:     #303030;
+  --sidebar-fg:     #cccccc;
+  --sidebar-border: #3d3d3d;
+
+  --text-primary:     rgba(255, 255, 255, 0.87);
+  --text-secondary:   rgba(255, 255, 255, 0.60);
+  --text-disabled:    rgba(255, 255, 255, 0.38);
+
+  --border-color:   rgba(255, 255, 255, 0.12);
+  --border-focus:   #62a0ea;
+
+  --shadow-card:    0 1px 3px rgba(0,0,0,0.3);
+  --shadow-popup:   0 4px 16px rgba(0,0,0,0.5);
+  --shadow-overview: 0 8px 32px rgba(0,0,0,0.6);
+}
+
+/* ── Scrollbar (GNOME Style) ───────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: var(--radius-pill);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0,0,0,0.3);
+}
+
+/* ── Focus Ring ────────────────────────────────────────── */
+*:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}

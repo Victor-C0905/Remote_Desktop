@@ -1,0 +1,436 @@
+/* ============================================================
+   FileManager — GNOME Nautilus Style
+   ============================================================ */
+
+.fm {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--window-bg);
+}
+
+/* ── Header Bar (Nautilus CSD) ────────────────────────── */
+.fm-headerbar {
+  height: var(--headerbar-height);
+  background: var(--headerbar-bg);
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.fm-headerbar .nav-btn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: var(--radius-xs);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 16px;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.fm-headerbar .nav-btn:hover:not(:disabled) {
+  background: var(--border-color);
+  color: var(--text-primary);
+}
+
+.fm-headerbar .nav-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* ── Breadcrumb ──────────────────────────────────────── */
+.fm-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  padding: 0 8px;
+  height: 32px;
+  background: var(--view-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.fm-breadcrumb .crumb {
+  background: none;
+  border: none;
+  color: var(--accent-bg);
+  font-family: var(--font-ui);
+  font-size: var(--font-body);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: var(--radius-xs);
+  white-space: nowrap;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.fm-breadcrumb .crumb:hover {
+  background: var(--border-color);
+}
+
+.fm-breadcrumb .crumb.current {
+  color: var(--text-primary);
+  cursor: default;
+  font-weight: 600;
+}
+
+.fm-breadcrumb .crumb.current:hover {
+  background: none;
+}
+
+.fm-breadcrumb .sep {
+  color: var(--text-disabled);
+  font-size: var(--font-small);
+  user-select: none;
+}
+
+/* ── View Toggle + Search ─────────────────────────────── */
+.fm-headerbar .view-toggle {
+  display: flex;
+  background: var(--view-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+}
+
+.fm-headerbar .view-toggle button {
+  width: 32px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 14px;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.fm-headerbar .view-toggle button:hover {
+  background: var(--border-color);
+}
+
+.fm-headerbar .view-toggle button.active {
+  background: var(--accent-bg);
+  color: var(--accent-fg);
+}
+
+.fm-headerbar .search-btn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: var(--radius-xs);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 16px;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.fm-headerbar .search-btn:hover {
+  background: var(--border-color);
+}
+
+/* ── Content Area ─────────────────────────────────────── */
+.fm-content {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ── Sidebar ─────────────────────────────────────────── */
+.fm-sidebar {
+  width: var(--sidebar-width);
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--sidebar-border);
+  overflow-y: auto;
+  flex-shrink: 0;
+  padding: 8px 0;
+}
+
+.fm-sidebar .sidebar-section {
+  padding: 0 12px;
+  margin-bottom: 12px;
+}
+
+.fm-sidebar .sidebar-section-title {
+  font-size: var(--font-small);
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 4px 8px;
+  margin-bottom: 2px;
+}
+
+.fm-sidebar .sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  color: var(--sidebar-fg);
+  font-size: var(--font-body);
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.fm-sidebar .sidebar-item:hover {
+  background: var(--border-color);
+}
+
+.fm-sidebar .sidebar-item.active {
+  background: var(--accent-bg);
+  color: var(--accent-fg);
+}
+
+.fm-sidebar .sidebar-item .si-icon {
+  font-size: 16px;
+  width: 20px;
+  text-align: center;
+}
+
+.fm-sidebar .sidebar-item .si-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── File List / Grid Area ───────────────────────────── */
+.fm-main {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+/* List View */
+.fm-list {
+  width: 100%;
+}
+
+.fm-list .fm-list-header {
+  display: grid;
+  grid-template-columns: 1fr 80px 120px 100px;
+  gap: 8px;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--border-color);
+  font-size: var(--font-small);
+  font-weight: 600;
+  color: var(--text-secondary);
+  position: sticky;
+  top: 0;
+  background: var(--window-bg);
+  z-index: 5;
+}
+
+.fm-list .fm-list-row {
+  display: grid;
+  grid-template-columns: 1fr 80px 120px 100px;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  align-items: center;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.fm-list .fm-list-row:hover {
+  background: var(--card-bg);
+}
+
+.fm-list .fm-list-row.selected {
+  background: var(--accent-bg);
+  color: var(--accent-fg);
+}
+
+.fm-list .fm-list-row .file-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.fm-list .fm-list-row .file-name .fn-icon {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.fm-list .fm-list-row .file-name .fn-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-list .fm-list-row .file-size,
+.fm-list .fm-list-row .file-mtime,
+.fm-list .fm-list-row .file-perm {
+  font-size: var(--font-small);
+  color: var(--text-secondary);
+}
+
+.fm-list .fm-list-row.selected .file-size,
+.fm-list .fm-list-row.selected .file-mtime,
+.fm-list .fm-list-row.selected .file-perm {
+  color: rgba(255, 255, 255, 0.75);
+}
+
+/* Grid View */
+.fm-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  gap: 8px;
+  padding: 4px;
+}
+
+.fm-grid .fm-grid-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.fm-grid .fm-grid-item:hover {
+  background: var(--card-bg);
+}
+
+.fm-grid .fm-grid-item.selected {
+  background: var(--accent-bg);
+  color: var(--accent-fg);
+}
+
+.fm-grid .fm-grid-item .gi-icon {
+  font-size: 40px;
+}
+
+.fm-grid .fm-grid-item .gi-label {
+  font-size: var(--font-small);
+  text-align: center;
+  word-break: break-all;
+  line-height: 1.2;
+  max-height: 2.4em;
+  overflow: hidden;
+}
+
+/* ── Context Menu ─────────────────────────────────────── */
+.fm-context-menu {
+  position: fixed;
+  min-width: 180px;
+  background: var(--view-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-popup);
+  z-index: 300;
+  padding: 4px 0;
+  animation: menuFadeIn 120ms var(--ease-out);
+}
+
+@keyframes menuFadeIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+.fm-context-menu .ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 16px;
+  font-size: var(--font-body);
+  cursor: pointer;
+  color: var(--text-primary);
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.fm-context-menu .ctx-item:hover {
+  background: var(--accent-bg);
+  color: var(--accent-fg);
+}
+
+.fm-context-menu .ctx-item .ctx-icon {
+  font-size: 14px;
+  width: 20px;
+  text-align: center;
+}
+
+.fm-context-menu .ctx-separator {
+  height: 1px;
+  background: var(--border-color);
+  margin: 4px 0;
+}
+
+/* ── Status Bar ──────────────────────────────────────── */
+.fm-statusbar {
+  height: 28px;
+  background: var(--headerbar-bg);
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  font-size: var(--font-small);
+  color: var(--text-secondary);
+  gap: 16px;
+  flex-shrink: 0;
+}
+
+/* ── Empty State ─────────────────────────────────────── */
+.fm-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-disabled);
+  gap: 8px;
+}
+
+.fm-empty .empty-icon {
+  font-size: 48px;
+  opacity: 0.5;
+}
+
+.fm-empty .empty-text {
+  font-size: var(--font-body);
+}
+
+/* ── Loading Spinner ─────────────────────────────────── */
+.fm-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-secondary);
+  gap: 8px;
+  font-size: var(--font-body);
+}
+
+.fm-loading .spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--border-color);
+  border-top-color: var(--accent-bg);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
