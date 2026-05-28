@@ -261,8 +261,8 @@ export function TerminalApp() {
     const poll = async () => {
       try {
         const result = await invoke<{ data: string }>("terminal_read", {
-          ptyId,
-          timeoutMs: 100,
+          pty_id: ptyId,
+          _timeout_ms: 100,
         });
         if (result.data) {
           const bytes = atob(result.data);

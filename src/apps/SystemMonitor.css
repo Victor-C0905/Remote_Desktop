@@ -1,0 +1,409 @@
+/* ============================================================
+   SystemMonitor — GNOME System Monitor Style
+   ============================================================ */
+
+.sm {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--window-bg);
+}
+
+/* ── Header Bar ──────────────────────────────────────── */
+.sm-headerbar {
+  height: var(--headerbar-height);
+  background: var(--headerbar-bg);
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.sm-tabs {
+  display: flex;
+  gap: 2px;
+}
+
+.sm-tab {
+  padding: 6px 16px;
+  font-size: var(--font-body);
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: none;
+  border: none;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.sm-tab:hover {
+  background: var(--border-color);
+  color: var(--text-primary);
+}
+
+.sm-tab.active {
+  background: var(--accent-bg);
+  color: var(--accent-fg);
+}
+
+.sm-headerbar-spacer {
+  flex: 1;
+}
+
+.sm-menu-btn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: var(--radius-xs);
+  color: var(--text-secondary);
+  font-size: 18px;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.sm-menu-btn:hover {
+  background: var(--border-color);
+}
+
+/* ── Content Area ────────────────────────────────────── */
+.sm-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+/* ── Processes Tab ───────────────────────────────────── */
+.sm-processes {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.sm-process-header {
+  display: grid;
+  grid-template-columns: 60px 1fr 80px 70px 70px 40px;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--headerbar-bg);
+  border-bottom: 1px solid var(--border-color);
+  font-size: var(--font-small);
+  font-weight: 600;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.sm-process-header span {
+  cursor: pointer;
+  user-select: none;
+}
+
+.sm-process-header span:hover {
+  color: var(--text-primary);
+}
+
+.sm-process-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.sm-process-row {
+  display: grid;
+  grid-template-columns: 60px 1fr 80px 70px 70px 40px;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.sm-process-row:hover {
+  background: var(--card-bg);
+}
+
+.sm-process-row.selected {
+  background: var(--accent-bg);
+  color: var(--accent-fg);
+}
+
+.sm-pr-pid {
+  font-variant-numeric: tabular-nums;
+}
+
+.sm-pr-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sm-pr-user {
+  color: var(--text-secondary);
+  font-size: var(--font-small);
+}
+
+.sm-process-row.selected .sm-pr-user {
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.sm-pr-cpu,
+.sm-pr-mem {
+  font-variant-numeric: tabular-nums;
+  font-size: var(--font-small);
+}
+
+.sm-pr-state {
+  font-size: var(--font-small);
+  color: var(--text-secondary);
+}
+
+.sm-process-row.selected .sm-pr-state {
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.sm-process-footer {
+  padding: 6px 12px;
+  background: var(--headerbar-bg);
+  border-top: 1px solid var(--border-color);
+  font-size: var(--font-small);
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+/* ── Resources Tab ──────────────────────────────────── */
+.sm-resources {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.sm-res-section {
+  display: flex;
+  gap: 12px;
+}
+
+.sm-res-card {
+  flex: 1;
+  background: var(--view-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sm-res-card-wide {
+  flex: 2;
+}
+
+.sm-res-title {
+  font-size: var(--font-small);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.sm-res-title-section {
+  font-size: var(--font-body);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.sm-res-chart {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 60px;
+}
+
+.mini-chart {
+  width: 100%;
+  max-width: 200px;
+}
+
+.sm-res-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sm-res-stats-center {
+  align-items: center;
+  justify-content: center;
+}
+
+.sm-res-value {
+  font-size: 14pt;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.sm-res-value-large {
+  font-size: 18pt;
+}
+
+.sm-res-label {
+  font-size: var(--font-small);
+  color: var(--text-secondary);
+}
+
+/* ── Progress Bars ──────────────────────────────────── */
+.sm-res-bar-card {
+  flex: 1;
+  background: var(--view-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sm-bar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.sm-bar-title {
+  font-size: var(--font-body);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.sm-bar-value {
+  font-size: var(--font-body);
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.sm-bar-track {
+  height: 8px;
+  background: var(--card-bg);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+
+.sm-bar-fill {
+  height: 100%;
+  border-radius: var(--radius-pill);
+  transition: width 0.5s var(--ease-out);
+}
+
+.sm-bar-detail {
+  font-size: var(--font-small);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Disk Section ──────────────────────────────────── */
+.sm-res-disks {
+  flex-direction: column;
+}
+
+.sm-disk-item {
+  background: var(--view-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* ── Network Stats ─────────────────────────────────── */
+.sm-network-stats {
+  display: flex;
+  gap: 24px;
+  justify-content: center;
+}
+
+.sm-net-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sm-net-icon {
+  font-size: 16px;
+  color: var(--accent-bg);
+}
+
+.sm-net-label {
+  font-size: var(--font-small);
+  color: var(--text-secondary);
+}
+
+.sm-net-value {
+  font-size: var(--font-body);
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Filesystems Tab ────────────────────────────────── */
+.sm-filesystems {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.sm-fs-header {
+  display: grid;
+  grid-template-columns: 100px 1fr 60px 80px 80px 80px;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--headerbar-bg);
+  border-bottom: 1px solid var(--border-color);
+  font-size: var(--font-small);
+  font-weight: 600;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.sm-fs-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.sm-fs-row {
+  display: grid;
+  grid-template-columns: 100px 1fr 60px 80px 80px 80px;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: var(--radius-xs);
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.sm-fs-row:hover {
+  background: var(--card-bg);
+}
+
+.sm-fs-device {
+  font-size: var(--font-small);
+  color: var(--text-secondary);
+}
+
+.sm-fs-dir {
+  font-weight: 500;
+}
+
+.sm-fs-type {
+  font-size: var(--font-small);
+  color: var(--text-secondary);
+}
+
+.sm-fs-total,
+.sm-fs-used,
+.sm-fs-avail {
+  font-size: var(--font-small);
+  font-variant-numeric: tabular-nums;
+}

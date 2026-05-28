@@ -1,6 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
 import { FileManager } from "../apps/FileManager";
 import { TerminalApp } from "../apps/Terminal";
+import { SystemMonitor } from "../apps/SystemMonitor";
+import { Settings } from "../apps/Settings";
+import { NotificationCenter, NotificationBadge } from "./NotificationCenter";
 import "./Desktop.css";
 
 interface ConnectionStatus {
@@ -44,6 +47,9 @@ interface WindowState {
 
 export function Desktop() {
   const [overviewVisible, setOverviewVisible] = useState(false);
+  const [notificationOpen, setNotificationOpen] = useState(false);
+  const [unreadNotifications, setUnreadNotifications] = useState(2);
+  const [criticalNotifications, setCriticalNotifications] = useState(1);
   const [connection] = useState<ConnectionStatus>({
     host: "未连接",
     connected: false,
@@ -151,19 +157,9 @@ export function Desktop() {
       case "terminal":
         return <TerminalApp />;
       case "monitor":
-        return (
-          <div className="app-placeholder">
-            <div className="placeholder-icon">📊</div>
-            <div className="placeholder-text">系统监控（第四步实现）</div>
-          </div>
-        );
+        return <SystemMonitor />;
       case "settings":
-        return (
-          <div className="app-placeholder">
-            <div className="placeholder-icon">⚙️</div>
-            <div className="placeholder-text">设置（后续实现）</div>
-          </div>
-        );
+        return <Settings />;
       default:
         return <div>Unknown app</div>;
     }
@@ -200,7 +196,14 @@ export function Desktop() {
         )}
         <div className="separator" />
         <span className="clock">{clock}</span>
-        <button className="notification-btn">🔔</button>
+        <button
+          className="notification-btn"
+          onClick={() => setNotificationOpen(true)}
+          style={{ position: "relative" }}
+        >
+          🔔
+          <NotificationBadge count={unreadNotifications} criticalCount={criticalNotifications} />
+        </button>
       </div>
 
       {/* Desktop Area */}
@@ -293,6 +296,12 @@ export function Desktop() {
           </div>
         </div>
       )}
+
+      {/* Notification Center */}
+      <NotificationCenter
+        isOpen={notificationOpen}
+        onClose={() => setNotificationOpen(false)}
+      />
     </div>
   );
 }
