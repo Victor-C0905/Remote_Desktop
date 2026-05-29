@@ -102,6 +102,10 @@ export function TerminalApp() {
   ]);
   const [activeTabId, setActiveTabId] = useState("tab-0");
   const [xtermAvailable, setXtermAvailable] = useState(false);
+  const [terminalFontSize, setTerminalFontSize] = useState(() => {
+    const saved = localStorage.getItem("gnome-remote-terminal-font");
+    return saved ? parseInt(saved) : 13;
+  });
   const [xtermModules, setXtermModules] = useState<{
     Terminal: any;
     FitAddon: any;
@@ -131,6 +135,19 @@ export function TerminalApp() {
       }
     })();
   }, []);
+
+  // ── 动态更新所有终端实例的字体大小 ───────────
+  useEffect(() => {
+    localStorage.setItem("gnome-remote-terminal-font", terminalFontSize.toString());
+    xtermRefs.current.forEach((term) => {
+      if (term && term.options) {
+        term.options.fontSize = terminalFontSize;
+      }
+    });
+    fitAddonRefs.current.forEach((fit) => {
+      if (fit) try { fit.fit(); } catch {}
+    });
+  }, [terminalFontSize]);
 
   // ── GNOME Terminal theme ──────────────────────
   const GNOME_TERMINAL_THEME = {
@@ -174,7 +191,7 @@ export function TerminalApp() {
       const term = new xtermModules.Terminal({
         theme: GNOME_TERMINAL_THEME,
         fontFamily: "'Source Code Pro', 'Cascadia Code', monospace",
-        fontSize: 13,
+        fontSize: terminalFontSize,
         lineHeight: 1.2,
         cursorBlink: true,
         cursorStyle: "block",

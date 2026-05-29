@@ -4,13 +4,10 @@ import { TerminalApp } from "../apps/Terminal";
 import { SystemMonitor } from "../apps/SystemMonitor";
 import { Settings } from "../apps/Settings";
 import { NotificationCenter, NotificationBadge } from "./NotificationCenter";
+import { useGlobalShortcuts, createAppShortcuts } from "../hooks/useGlobalShortcuts";
+import { ServerManagerProvider, useServerManager, getStatusColor } from "../context/ServerManager";
+import { WallpaperProvider, useWallpaper, getWallpaperStyle } from "../context/WallpaperContext";
 import "./Desktop.css";
-
-interface ConnectionStatus {
-  host: string;
-  connected: boolean;
-  latency_ms: number;
-}
 
 interface MetricsSnapshot {
   cpu_percent: number;
@@ -46,19 +43,27 @@ interface WindowState {
 }
 
 export function Desktop() {
+  return (
+    <ServerManagerProvider>
+      <WallpaperProvider>
+        <DesktopContent />
+      </WallpaperProvider>
+    </ServerManagerProvider>
+  );
+}
+
+function DesktopContent() {
   const [overviewVisible, setOverviewVisible] = useState(false);
   const [notificationOpen, setNotificationOpen] = useState(false);
-  const [unreadNotifications, setUnreadNotifications] = useState(2);
-  const [criticalNotifications, setCriticalNotifications] = useState(1);
-  const [connection] = useState<ConnectionStatus>({
-    host: "未连接",
-    connected: false,
-    latency_ms: 0,
-  });
+  const unreadNotifications = 2;
+  const criticalNotifications = 1;
   const [metrics] = useState<MetricsSnapshot | null>(null);
   const [clock, setClock] = useState("");
   const [windows, setWindows] = useState<WindowState[]>([]);
   const [activeWindowId, setActiveWindowId] = useState<string | null>(null);
+
+  const { activeServer } = useServerManager();
+  const { wallpaper } = useWallpaper();
 
   // Clock
   useEffect(() => {
@@ -73,29 +78,9 @@ export function Desktop() {
     return () => clearInterval(id);
   }, []);
 
-  // Super key (Meta) toggles overview
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent) => {
-      if (e.key === "Meta" || e.key === "OS") {
-        e.preventDefault();
-        setOverviewVisible((v) => !v);
-      }
-      if (e.key === "Escape" && overviewVisible) {
-        setOverviewVisible(false);
-      }
-    },
-    [overviewVisible]
-  );
-
-  useEffect(() => {
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [handleKeyDown]);
-
-  const openApp = (appId: string) => {
+  const openApp = useCallback((appId: string) => {
     setOverviewVisible(false);
 
-    // Map appId to window title
     const titles: Record<string, string> = {
       files: "文件管理器",
       terminal: "终端",
@@ -103,9 +88,7 @@ export function Desktop() {
       settings: "设置",
     };
 
-    // Only allow one instance of each app
     if (windows.some((w) => w.appId === appId)) {
-      // Focus existing window
       const existing = windows.find((w) => w.appId === appId);
       if (existing) {
         setWindows((ws) =>
@@ -124,7 +107,16 @@ export function Desktop() {
     };
     setWindows((ws) => [...ws, newWindow]);
     setActiveWindowId(newWindow.id);
-  };
+  }, [windows]);
+
+  // Global shortcuts
+  const shortcuts = createAppShortcuts(
+    openApp,
+    () => setOverviewVisible(v => !v),
+    () => setOverviewVisible(false),
+    () => setNotificationOpen(false)
+  );
+  useGlobalShortcuts(shortcuts);
 
   const closeWindow = (windowId: string) => {
     setWindows((ws) => ws.filter((w) => w.id !== windowId));
@@ -175,7 +167,7 @@ export function Desktop() {
   return (
     <div className="shell">
       {/* Top Bar */}
-      <div className="top-bar">
+      <div className="top-bar" data-tauri-drag-region>
         <button
           className="activities-btn"
           onClick={() => setOverviewVisible((v) => !v)}
@@ -184,8 +176,11 @@ export function Desktop() {
         </button>
         <div className="separator" />
         <div className="connection-indicator">
-          <div className={`connection-dot${connection.connected ? "" : " disconnected"}`} />
-          <span>{connection.host}</span>
+          <div 
+            className="connection-dot" 
+            style={{ background: activeServer ? getStatusColor(activeServer.status) : "#9a9996" }}
+          />
+          <span>{activeServer?.name || activeServer?.host || "未连接"}</span>
         </div>
         <div className="spacer" />
         {metrics && (
@@ -207,7 +202,9 @@ export function Desktop() {
       </div>
 
       {/* Desktop Area */}
-      <div className="desktop-area">
+      {console.log("[DEBUG] Desktop - wallpaper:", wallpaper)}
+      {console.log("[DEBUG] Desktop - getWallpaperStyle:", getWallpaperStyle(wallpaper))}
+      <div className="desktop-area" style={getWallpaperStyle(wallpaper)}>
         <div className="desktop-icons">
           {DESKTOP_APPS.map((app) => (
             <div
@@ -229,7 +226,7 @@ export function Desktop() {
               className={`app-window${win.id === activeWindowId ? " active" : ""}`}
               onMouseDown={() => focusWindow(win.id)}
             >
-              <div className="app-window-titlebar">
+              <div className="app-window-titlebar" data-tauri-drag-region>
                 <div className="awt-btns">
                   <button
                     className="awt-btn close"

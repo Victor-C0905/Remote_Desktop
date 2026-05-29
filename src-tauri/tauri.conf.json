@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "gnome-remote",
+  "productName": "GNOME Remote",
   "version": "0.1.0",
-  "identifier": "com.w8067.gnome-remote",
+  "identifier": "com.gnome-remote.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,24 +12,36 @@
   "app": {
     "windows": [
       {
-        "title": "gnome-remote",
-        "width": 800,
-        "height": 600
+        "title": "GNOME Remote",
+        "width": 1024,
+        "height": 768,
+        "minWidth": 800,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": false,
+        "transparent": true
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' ws://localhost:1420"
     }
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["msi", "nsis"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
-  }
+    ],
+    "publisher": "GNOME Remote Project",
+    "homepage": "https://github.com/gnome-remote",
+    "shortDescription": "GNOME-style remote Linux server control client",
+    "longDescription": "A local-first remote control client for Linux servers, built with GNOME Adwaita design system.",
+    "category": "Utility"
+  },
+  "plugins": {}
 }

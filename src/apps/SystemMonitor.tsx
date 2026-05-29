@@ -392,19 +392,16 @@ export function SystemMonitor() {
               <span className="sm-fs-avail">可用</span>
             </div>
             <div className="sm-fs-list">
-              {metrics.disks.map((disk) => {
-                const percent = (disk.used / disk.total) * 100;
-                return (
-                  <div key={disk.mount} className="sm-fs-row">
-                    <span className="sm-fs-device">/dev/sda{metrics.disks.indexOf(disk) + 1}</span>
-                    <span className="sm-fs-dir">{disk.mount}</span>
-                    <span className="sm-fs-type">ext4</span>
-                    <span className="sm-fs-total">{formatBytes(disk.total)}</span>
-                    <span className="sm-fs-used">{formatBytes(disk.used)}</span>
-                    <span className="sm-fs-avail">{formatBytes(disk.total - disk.used)}</span>
-                  </div>
-                );
-              })}
+              {metrics.disks.map((disk) => (
+                <div key={disk.mount} className="sm-fs-row">
+                  <span className="sm-fs-device">/dev/sda{metrics.disks.indexOf(disk) + 1}</span>
+                  <span className="sm-fs-dir">{disk.mount}</span>
+                  <span className="sm-fs-type">ext4</span>
+                  <span className="sm-fs-total">{formatBytes(disk.total)}</span>
+                  <span className="sm-fs-used">{formatBytes(disk.used)}</span>
+                  <span className="sm-fs-avail">{formatBytes(disk.total - disk.used)}</span>
+                </div>
+              ))}
               <div className="sm-fs-row">
                 <span className="sm-fs-device">tmpfs</span>
                 <span className="sm-fs-dir">/tmp</span>

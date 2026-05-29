@@ -358,6 +358,7 @@ fn read_file_text(path: String) -> Result<String, String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(pty::PtyManager::new())
         .invoke_handler(tauri::generate_handler![
             read_dir, stat_file, read_file_text,

@@ -1,26 +1,13 @@
 import { useState, useEffect } from "react";
+import { useServerManager, formatLastConnected, getStatusIcon, getStatusColor } from "../context/ServerManager";
+import { useWallpaper, getPresetWallpaperName, getWallpaperStyle } from "../context/WallpaperContext";
+import { PRESET_WALLPAPERS } from "../context/WallpaperContext";
+import { useTheme } from "../hooks/useTheme";
 import "./Settings.css";
 
 /* ── Types ─────────────────────────────────────────────── */
 
-interface ServerConfig {
-  id: string;
-  name: string;
-  host: string;
-  port: number;
-  lastConnected?: string;
-  status: "connected" | "disconnected" | "error";
-}
-
 type SettingsSection = "connection" | "appearance" | "keyboard" | "files" | "terminal" | "notifications" | "about";
-
-/* ── Demo Server Data ────────────────────────────────── */
-
-const DEMO_SERVERS: ServerConfig[] = [
-  { id: "srv-1", name: "prod-server", host: "prod.example.com", port: 8443, status: "connected", lastConnected: "刚刚" },
-  { id: "srv-2", name: "dev-server", host: "dev.example.com", port: 8443, status: "disconnected", lastConnected: "2 小时前" },
-  { id: "srv-3", name: "staging-server", host: "staging.example.com", port: 8443, status: "disconnected", lastConnected: "昨天" },
-];
 
 /* ── Sidebar Items ──────────────────────────────────── */
 
@@ -40,20 +27,155 @@ const SIDEBAR_ITEMS: SidebarItem[] = [
   { id: "about", icon: "ℹ️", label: "关于" },
 ];
 
+/* ── Add Server Modal ───────────────────────────────── */
+
+interface AddServerModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onAdd: (name: string, host: string, port: number) => void;
+}
+
+function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
+  const [name, setName] = useState("");
+  const [host, setHost] = useState("");
+  const [port, setPort] = useState(8443);
+
+  if (!isOpen) return null;
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (name && host) {
+      onAdd(name, host, port);
+      setName("");
+      setHost("");
+      setPort(8443);
+      onClose();
+    }
+  };
+
+  return (
+    <div className="st-modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="st-modal">
+        <div className="st-modal-header">
+          <span className="st-modal-title">添加服务器</span>
+          <button className="st-modal-close" onClick={onClose}>×</button>
+        </div>
+        <form className="st-modal-body" onSubmit={handleSubmit}>
+          <div className="st-form-row">
+            <label className="st-form-label">服务器名称</label>
+            <input
+              type="text"
+              className="st-form-input"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="例如: prod-server"
+              autoFocus
+            />
+          </div>
+          <div className="st-form-row">
+            <label className="st-form-label">主机地址</label>
+            <input
+              type="text"
+              className="st-form-input"
+              value={host}
+              onChange={(e) => setHost(e.target.value)}
+              placeholder="例如: server.example.com"
+            />
+          </div>
+          <div className="st-form-row">
+            <label className="st-form-label">端口</label>
+            <input
+              type="number"
+              className="st-form-input"
+              value={port}
+              onChange={(e) => setPort(parseInt(e.target.value) || 8443)}
+              placeholder="8443"
+            />
+          </div>
+        </form>
+        <div className="st-modal-footer">
+          <button className="st-btn" onClick={onClose}>取消</button>
+          <button className="st-btn st-btn-primary" onClick={handleSubmit}>添加</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ── Main Component ─────────────────────────────────── */
 
 export function Settings() {
   const [activeSection, setActiveSection] = useState<SettingsSection>("connection");
-  const [servers, setServers] = useState<ServerConfig[]>(DEMO_SERVERS);
-  const [selectedServerId, setSelectedServerId] = useState<string | null>("srv-1");
-  const [theme, setTheme] = useState<"light" | "dark">("light");
-  const [accentColor, setAccentColor] = useState("#3584e4");
+  const [addModalOpen, setAddModalOpen] = useState(false);
+  const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
+
+  const {
+    servers,
+    activeServer,
+    activeServerId,
+    addServer,
+    removeServer,
+    connectServer,
+    disconnectServer,
+  } = useServerManager();
+
+  const {
+    wallpaper,
+    setPresetWallpaper,
+    importWallpaper,
+    clearWallpaper,
+  } = useWallpaper();
+
+  const { theme, setTheme } = useTheme();
+  
+  const [accentColor, setAccentColorState] = useState(() => 
+    localStorage.getItem("gnome-remote-accent") || "#3584e4"
+  );
+  const [fontSize, setFontSize] = useState(() => {
+    const saved = localStorage.getItem("gnome-remote-font-size");
+    return saved ? parseInt(saved) : 10;
+  });
+  const [terminalFontSize, setTerminalFontSize] = useState(() => {
+    const saved = localStorage.getItem("gnome-remote-terminal-font");
+    return saved ? parseInt(saved) : 13;
+  });
+
+  // Apply accent color
+  useEffect(() => {
+    document.documentElement.style.setProperty("--accent-bg", accentColor);
+    localStorage.setItem("gnome-remote-accent", accentColor);
+  }, [accentColor]);
+
+  // Apply font size
+  useEffect(() => {
+    document.documentElement.style.setProperty("--font-body", `${fontSize}pt`);
+    document.documentElement.style.setProperty("--font-title", `${fontSize + 1}pt`);
+    document.documentElement.style.setProperty("--font-small", `${fontSize - 1}pt`);
+    localStorage.setItem("gnome-remote-font-size", fontSize.toString());
+  }, [fontSize]);
 
   useEffect(() => {
-    document.documentElement.setAttribute("data-theme", theme);
-  }, [theme]);
+    localStorage.setItem("gnome-remote-terminal-font", terminalFontSize.toString());
+  }, [terminalFontSize]);
 
-  const selectedServer = servers.find(s => s.id === selectedServerId);
+  const handleAddServer = (name: string, host: string, port: number) => {
+    addServer({ name, host, port });
+  };
+
+  const handleConnect = async (id: string) => {
+    setSelectedServerId(id);
+    await connectServer(id);
+  };
+
+  const handleDisconnect = (id: string) => {
+    disconnectServer(id);
+  };
+
+  const handleRemove = (id: string) => {
+    if (confirm("确定要删除此服务器配置吗？")) {
+      removeServer(id);
+    }
+  };
 
   const renderSection = () => {
     switch (activeSection) {
@@ -68,26 +190,51 @@ export function Settings() {
               <div className="st-current-connection">
                 <div className="st-conn-row">
                   <span className="st-conn-label">主机</span>
-                  <span className="st-conn-value">{selectedServer?.host || "未连接"}</span>
+                  <span className="st-conn-value">{activeServer?.host || "未连接"}</span>
                 </div>
                 <div className="st-conn-row">
                   <span className="st-conn-label">端口</span>
-                  <span className="st-conn-value">{selectedServer?.port || "—"} (QUIC)</span>
+                  <span className="st-conn-value">{activeServer?.port || "—"} (QUIC)</span>
                 </div>
                 <div className="st-conn-row">
                   <span className="st-conn-label">状态</span>
                   <span className="st-conn-value">
-                    <span className={`st-status-dot ${selectedServer?.status || "disconnected"}`} />
-                    {selectedServer?.status === "connected" ? "已连接" : "未连接"}
+                    <span 
+                      className="st-status-dot" 
+                      style={{ background: activeServer ? getStatusColor(activeServer.status) : "#9a9996" }}
+                    />
+                    {activeServer?.status === "connected" ? "已连接" : 
+                     activeServer?.status === "connecting" ? "连接中..." :
+                     activeServer?.status === "error" ? "错误" : "未连接"}
                   </span>
                 </div>
-                <div className="st-conn-row">
-                  <span className="st-conn-label">延迟</span>
-                  <span className="st-conn-value">6 ms</span>
-                </div>
+                {activeServer?.status === "connected" && (
+                  <div className="st-conn-row">
+                    <span className="st-conn-label">延迟</span>
+                    <span className="st-conn-value">6 ms</span>
+                  </div>
+                )}
+                {activeServer?.error && (
+                  <div className="st-conn-error">{activeServer.error}</div>
+                )}
               </div>
               <div className="st-card-actions">
-                <button className="st-btn st-btn-danger">断开连接</button>
+                {activeServer?.status === "connected" && (
+                  <button 
+                    className="st-btn st-btn-danger"
+                    onClick={() => handleDisconnect(activeServer.id)}
+                  >
+                    断开连接
+                  </button>
+                )}
+                {activeServer?.status === "error" && selectedServerId && (
+                  <button 
+                    className="st-btn st-btn-primary"
+                    onClick={() => handleConnect(selectedServerId)}
+                  >
+                    重试连接
+                  </button>
+                )}
               </div>
             </div>
 
@@ -95,23 +242,73 @@ export function Settings() {
             <div className="st-card">
               <div className="st-card-header">已保存的服务器</div>
               <div className="st-server-list">
-                {servers.map(server => (
-                  <div
-                    key={server.id}
-                    className={`st-server-item ${selectedServerId === server.id ? "selected" : ""}`}
-                    onClick={() => setSelectedServerId(server.id)}
-                  >
-                    <span className={`st-server-status ${server.status}`} />
-                    <span className="st-server-name">{server.name}</span>
-                    <span className="st-server-host">{server.host}</span>
-                    <span className="st-server-time">{server.lastConnected || "从未"}</span>
+                {servers.length === 0 ? (
+                  <div className="st-server-empty">
+                    <span>暂无保存的服务器</span>
+                    <span className="st-server-empty-hint">点击下方按钮添加</span>
                   </div>
-                ))}
+                ) : (
+                  servers.map(server => (
+                    <div
+                      key={server.id}
+                      className={`st-server-item ${activeServerId === server.id ? "selected" : ""}`}
+                      onClick={() => setSelectedServerId(server.id)}
+                    >
+                      <span 
+                        className="st-server-status" 
+                        style={{ background: getStatusColor(server.status) }}
+                      >
+                        {getStatusIcon(server.status)}
+                      </span>
+                      <span className="st-server-name">{server.name}</span>
+                      <span className="st-server-host">{server.host}</span>
+                      <span className="st-server-time">{formatLastConnected(server.lastConnected)}</span>
+                      <div className="st-server-actions">
+                        {server.status === "disconnected" && (
+                          <button 
+                            className="st-server-action-btn"
+                            onClick={(e) => { e.stopPropagation(); handleConnect(server.id); }}
+                            title="连接"
+                          >
+                            🔗
+                          </button>
+                        )}
+                        {server.status === "connected" && (
+                          <button 
+                            className="st-server-action-btn"
+                            onClick={(e) => { e.stopPropagation(); handleDisconnect(server.id); }}
+                            title="断开"
+                          >
+                            ⚡
+                          </button>
+                        )}
+                        <button 
+                          className="st-server-action-btn st-server-action-danger"
+                          onClick={(e) => { e.stopPropagation(); handleRemove(server.id); }}
+                          title="删除"
+                        >
+                          🗑️
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
               <div className="st-card-actions">
-                <button className="st-btn st-btn-primary">+ 添加服务器</button>
+                <button 
+                  className="st-btn st-btn-primary"
+                  onClick={() => setAddModalOpen(true)}
+                >
+                  + 添加服务器
+                </button>
               </div>
             </div>
+
+            <AddServerModal
+              isOpen={addModalOpen}
+              onClose={() => setAddModalOpen(false)}
+              onAdd={handleAddServer}
+            />
           </div>
         );
 
@@ -150,7 +347,7 @@ export function Settings() {
                     key={color}
                     className={`st-accent-btn ${accentColor === color ? "selected" : ""}`}
                     style={{ background: color }}
-                    onClick={() => setAccentColor(color)}
+                    onClick={() => setAccentColorState(color)}
                   />
                 ))}
               </div>
@@ -161,14 +358,65 @@ export function Settings() {
               <div className="st-card-header">字体大小</div>
               <div className="st-slider-row">
                 <span className="st-slider-label">界面字体</span>
-                <input type="range" min="8" max="14" defaultValue="10" className="st-slider" />
-                <span className="st-slider-value">10pt</span>
+                <input 
+                  type="range" 
+                  min="8" 
+                  max="14" 
+                  value={fontSize} 
+                  onChange={(e) => setFontSize(parseInt(e.target.value))} 
+                  className="st-slider" 
+                />
+                <span className="st-slider-value">{fontSize}pt</span>
               </div>
               <div className="st-slider-row">
                 <span className="st-slider-label">终端字体</span>
-                <input type="range" min="10" max="16" defaultValue="13" className="st-slider" />
-                <span className="st-slider-value">13pt</span>
+                <input 
+                  type="range" 
+                  min="10" 
+                  max="16" 
+                  value={terminalFontSize} 
+                  onChange={(e) => setTerminalFontSize(parseInt(e.target.value))} 
+                  className="st-slider" 
+                />
+                <span className="st-slider-value">{terminalFontSize}pt</span>
               </div>
+            </div>
+
+            {/* Wallpaper */}
+            <div className="st-card">
+              <div className="st-card-header">壁纸</div>
+              <div className="st-wallpaper-grid">
+                {Object.keys(PRESET_WALLPAPERS).map(presetId => (
+                  <button
+                    key={presetId}
+                    className={`st-wallpaper-btn ${wallpaper.type === "preset" && wallpaper.presetId === presetId ? "selected" : ""}`}
+                    style={{ background: PRESET_WALLPAPERS[presetId] }}
+                    onClick={() => setPresetWallpaper(presetId)}
+                    title={getPresetWallpaperName(presetId)}
+                  >
+                    <span className="st-wallpaper-label">{getPresetWallpaperName(presetId)}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="st-wallpaper-actions">
+                <button className="st-btn st-btn-primary" onClick={importWallpaper}>
+                  📁 导入本地壁纸
+                </button>
+                {wallpaper.type === "custom" && (
+                  <button className="st-btn" onClick={clearWallpaper}>
+                    重置为默认
+                  </button>
+                )}
+              </div>
+              {wallpaper.type === "custom" && wallpaper.customPath && (
+                <div className="st-wallpaper-preview">
+                  <div 
+                    className="st-wallpaper-preview-img"
+                    style={getWallpaperStyle(wallpaper)}
+                  />
+                  <span className="st-wallpaper-preview-label">当前自定义壁纸</span>
+                </div>
+              )}
             </div>
           </div>
         );
