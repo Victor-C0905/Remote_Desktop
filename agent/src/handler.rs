@@ -1,0 +1,184 @@
+use crate::config::AgentConfig;
+use crate::protocol::{Envelope, FileEntry, MetricsSnapshot, Payload};
+use std::fs;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+pub fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig) -> Envelope {
+    match &envelope.payload {
+        Payload::Ping { timestamp } => {
+            let server_time = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+
+            tracing::debug!("收到 ping, timestamp={}", timestamp);
+
+            Envelope::new(
+                envelope.request_id,
+                Payload::Pong {
+                    timestamp: *timestamp,
+                    server_time,
+                },
+            )
+        }
+
+        Payload::AuthRequest { token } => {
+            let success = !cfg.auth.token.is_empty() && token == &cfg.auth.token;
+            let status_str = if success { "✅ 成功" } else { "❌ 失败" };
+            tracing::info!(
+                "认证请求: {} (expected: {}...)",
+                status_str,
+                &cfg.auth.token[..cfg.auth.token.len().min(8)]
+            );
+
+            Envelope::new(
+                envelope.request_id,
+                Payload::AuthResponse {
+                    success,
+                    error: if success {
+                        None
+                    } else {
+                        Some("Token 无效".into())
+                    },
+                },
+            )
+        }
+
+        Payload::ReadDirRequest { path } => {
+            match handle_read_dir(path, cfg) {
+                Ok(entries) => Envelope::new(
+                    envelope.request_id,
+                    Payload::ReadDirResponse {
+                        path: path.clone(),
+                        entries,
+                    },
+                ),
+                Err(e) => error_response(envelope.request_id, &e),
+            }
+        }
+
+        Payload::MetricsSubscribeRequest {} => {
+            match collect_metrics() {
+                Ok(metrics) => Envelope::new(
+                    envelope.request_id,
+                    Payload::MetricsData(metrics),
+                ),
+                Err(e) => error_response(envelope.request_id, &e),
+            }
+        }
+
+        other => {
+            tracing::warn!("未处理的消息类型: {:?}", std::mem::discriminant(other));
+            error_response(envelope.request_id, "未知的消息类型")
+        }
+    }
+}
+
+fn handle_read_dir(path: &str, cfg: &AgentConfig) -> Result<Vec<FileEntry>, String> {
+    let allowed = cfg
+        .security
+        .allowed_paths
+        .iter()
+        .any(|prefix| path.starts_with(prefix));
+    if !allowed && !cfg.security.allowed_paths.is_empty() {
+        return Err(format!("访问被拒绝: 不在允许的路径列表中 ({})", path));
+    }
+
+    let entries = fs::read_dir(path)
+        .map_err(|e| format!("无法读取目录 '{}': {}", path, e))?
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let metadata = entry.metadata().ok()?;
+            let name = entry.file_name().to_string_lossy().to_string();
+
+            let mtime = metadata
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| {
+                    let dt = chrono::DateTime::<chrono::Utc>::from(SystemTime::UNIX_EPOCH + d);
+                    dt.to_rfc3339()
+                })
+                .unwrap_or_default();
+
+            Some(FileEntry {
+                name,
+                is_dir: metadata.is_dir(),
+                size: if metadata.is_dir() { 0 } else { metadata.len() },
+                mtime,
+                permissions: format_permissions(&metadata),
+            })
+        })
+        .collect();
+
+    Ok(entries)
+}
+
+#[cfg(unix)]
+fn format_permissions(metadata: &std::fs::Metadata) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = metadata.permissions().mode();
+    let bits = [
+        (0o400, 'r'), (0o200, 'w'), (0o100, 'x'),
+        (0o040, 'r'), (0o020, 'w'), (0o010, 'x'),
+        (0o004, 'r'), (0o002, 'w'), (0o001, 'x'),
+    ];
+    bits.iter()
+        .map(|(mask, ch)| if mode & mask != 0 { *ch } else { '-' })
+        .collect()
+}
+
+#[cfg(not(unix))]
+fn format_permissions(_metadata: &std::fs::Metadata) -> String {
+    "rw-rw-rw-".into()
+}
+
+fn collect_metrics() -> Result<MetricsSnapshot, String> {
+    use sysinfo::{Disks, Networks, System};
+
+    let mut sys = System::new_all();
+    sys.refresh_all();
+
+    let mem_used = sys.used_memory();
+    let mem_total = sys.total_memory();
+    let cpu_percent = sys.global_cpu_usage();
+
+    let disks_obj = Disks::new_with_refreshed_list();
+    let disks: Vec<_> = disks_obj
+        .iter()
+        .map(|d| crate::protocol::DiskInfo {
+            mount_point: d.mount_point().to_string_lossy().to_string(),
+            total_bytes: d.total_space(),
+            used_bytes: d.total_space() - d.available_space(),
+        })
+        .collect();
+
+    let networks = Networks::new_with_refreshed_list();
+    let mut network_rx = 0u64;
+    let mut network_tx = 0u64;
+    for (_name, data) in &networks {
+        network_rx += data.received();
+        network_tx += data.transmitted();
+    }
+
+    Ok(MetricsSnapshot {
+        cpu_percent,
+        mem_used_bytes: mem_used,
+        mem_total_bytes: mem_total,
+        swap_used_bytes: sys.used_swap(),
+        disks,
+        network_rx_bytes: network_rx,
+        network_tx_bytes: network_tx,
+        uptime_secs: System::uptime() as u64,
+    })
+}
+
+fn error_response(request_id: u32, message: &str) -> Envelope {
+    Envelope::new(
+        request_id,
+        Payload::Error {
+            code: -1,
+            message: message.into(),
+        },
+    )
+}

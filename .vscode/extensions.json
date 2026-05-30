@@ -1,3 +1,14 @@
 {
-  "recommendations": ["tauri-apps.tauri-vscode", "rust-lang.rust-analyzer"]
+    "recommendations": [
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml",
+        "serayuzgur.crates",
+        "usernamehw.errorlens",
+        "formulahendry.code-runner",
+        "ms-vscode.vscode-json",
+        "ms-vscode.vscode-xml",
+        "mohsen1.process-explorer",
+        "meganrogge.running-instances",
+        "wenfangdu.task-manager"
+    ]
 }

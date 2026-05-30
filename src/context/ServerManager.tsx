@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from "react";
+import { invoke } from "@tauri-apps/api/core";
 
 /* ── Types ─────────────────────────────────────────────── */
 
@@ -11,6 +12,17 @@ export interface ServerConfig {
   lastConnected?: number;
   status: "connected" | "disconnected" | "connecting" | "error";
   error?: string;
+  rttMs?: number;
+}
+
+interface ConnectionInfo {
+  server_id: string;
+  host: string;
+  port: number;
+  transport: string;
+  status: string;
+  rttMs: number;
+  connectedAt: number;
 }
 
 interface ServerManagerState {
@@ -100,40 +112,51 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
   }, [activeServerId]);
 
   const connectServer = useCallback(async (id: string) => {
-    // Set connecting status
-    setServers(prev => prev.map(s => 
+    const server = servers.find(s => s.id === id);
+    if (!server) return;
+
+    setServers(prev => prev.map(s =>
       s.id === id ? { ...s, status: "connecting", error: undefined } : s
     ));
 
-    // Simulate connection (in real app, this would use QUIC)
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    try {
+      const info = await invoke<ConnectionInfo>("remote_connect", {
+        serverId: id,
+        host: server.host,
+        port: server.port,
+        token: server.token || null,
+      });
 
-    // Demo: randomly succeed or fail
-    const success = Math.random() > 0.2;
-
-    if (success) {
-      setServers(prev => prev.map(s => 
-        s.id === id ? { 
-          ...s, 
-          status: "connected", 
+      setServers(prev => prev.map(s =>
+        s.id === id ? {
+          ...s,
+          status: "connected",
           lastConnected: Date.now(),
           error: undefined,
+          rttMs: info.rttMs >= 0 ? info.rttMs : undefined,
         } : s
       ));
       setActiveServerId(id);
-    } else {
-      setServers(prev => prev.map(s => 
-        s.id === id ? { 
-          ...s, 
-          status: "error", 
-          error: "连接失败: 无法访问服务器",
-        } : s
+
+      console.log("[ServerManager] 连接成功:", info.transportType, `RTT=${info.rttMs}ms`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[ServerManager] 连接失败:", msg);
+
+      setServers(prev => prev.map(s =>
+        s.id === id ? { ...s, status: "error", error: msg } : s
       ));
     }
-  }, []);
+  }, [servers]);
 
-  const disconnectServer = useCallback((id: string) => {
-    setServers(prev => prev.map(s => 
+  const disconnectServer = useCallback(async (id: string) => {
+    try {
+      await invoke("remote_disconnect", { serverId: id });
+    } catch (e) {
+      console.warn("[ServerManager] 断开连接时出错:", e);
+    }
+
+    setServers(prev => prev.map(s =>
       s.id === id ? { ...s, status: "disconnected", error: undefined } : s
     ));
     if (activeServerId === id) {

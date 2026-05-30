@@ -1,0 +1,33 @@
+# GNOME Remote Agent 配置
+# Token 已自动生成，请妥善保管
+
+[server]
+bind = "0.0.0.0"
+quic_port = 8443
+ws_port = 8444
+cert_path = "./cert.pem"
+key_path = "./key.pem"
+
+[auth]
+token = "gmr_1ecb954c-9a8c-4a5e-a3b4-f9a77af0d036"
+
+[security]
+allowed_paths = [
+    "/home",
+    "/etc",
+    "/var/log",
+    "/opt",
+]
+blocked_commands = [
+    "rm -rf /",
+    "dd if=",
+    "mkfs.",
+    ":(){ :|:& };:",
+    "shutdown",
+    "reboot",
+]
+
+[limits]
+max_terminal_sessions = 10
+max_file_transfer_mb = 500
+metrics_interval_secs = 2
