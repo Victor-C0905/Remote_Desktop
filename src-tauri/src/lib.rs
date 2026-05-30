@@ -2,6 +2,8 @@ use serde::Serialize;
 use std::fs;
 use std::time::UNIX_EPOCH;
 
+mod connection;
+
 /* ── Shared Types ────────────────────────────────────────── */
 
 #[derive(Serialize, Clone)]
@@ -360,12 +362,18 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(pty::PtyManager::new())
+        .manage(connection::ConnectionManager::new())
         .invoke_handler(tauri::generate_handler![
             read_dir, stat_file, read_file_text,
             pty::spawn_terminal,
             pty::terminal_write,
             pty::terminal_read,
             pty::terminal_resize,
+            connection::remote_connect,
+            connection::remote_disconnect,
+            connection::remote_ping,
+            connection::remote_send,
+            connection::remote_read_dir,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

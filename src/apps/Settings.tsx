@@ -32,23 +32,25 @@ const SIDEBAR_ITEMS: SidebarItem[] = [
 interface AddServerModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onAdd: (name: string, host: string, port: number) => void;
+  onAdd: (name: string, host: string, port: number, token: string) => void;
 }
 
 function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
   const [name, setName] = useState("");
   const [host, setHost] = useState("");
   const [port, setPort] = useState(8443);
+  const [token, setToken] = useState("");
 
   if (!isOpen) return null;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (name && host) {
-      onAdd(name, host, port);
+    if (name && host && token) {
+      onAdd(name, host, port, token);
       setName("");
       setHost("");
       setPort(8443);
+      setToken("");
       onClose();
     }
   };
@@ -79,7 +81,7 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
               className="st-form-input"
               value={host}
               onChange={(e) => setHost(e.target.value)}
-              placeholder="例如: server.example.com"
+              placeholder="例如: server.example.com 或 127.0.0.1"
             />
           </div>
           <div className="st-form-row">
@@ -91,6 +93,17 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
               onChange={(e) => setPort(parseInt(e.target.value) || 8443)}
               placeholder="8443"
             />
+          </div>
+          <div className="st-form-row">
+            <label className="st-form-label">认证 Token</label>
+            <input
+              type="text"
+              className="st-form-input"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              placeholder="例如: gmr_xxxxxx-xxxx-xxxx-xxxx"
+            />
+            <span className="st-form-hint">从 Agent 日志中获取</span>
           </div>
         </form>
         <div className="st-modal-footer">
@@ -158,8 +171,8 @@ export function Settings() {
     localStorage.setItem("gnome-remote-terminal-font", terminalFontSize.toString());
   }, [terminalFontSize]);
 
-  const handleAddServer = (name: string, host: string, port: number) => {
-    addServer({ name, host, port });
+  const handleAddServer = (name: string, host: string, port: number, token: string) => {
+    addServer({ name, host, port, token });
   };
 
   const handleConnect = async (id: string) => {
