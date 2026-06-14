@@ -361,6 +361,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_store::Builder::new().build())
         .manage(pty::PtyManager::new())
         .manage(connection::ConnectionManager::new())
         .invoke_handler(tauri::generate_handler![
@@ -374,6 +375,10 @@ pub fn run() {
             connection::remote_ping,
             connection::remote_send,
             connection::remote_read_dir,
+            connection::remote_get_metrics,
+            connection::remote_read_file,
+            connection::remote_write_file,
+            connection::remote_delete,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

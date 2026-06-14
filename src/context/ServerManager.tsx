@@ -1,19 +1,14 @@
-import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from "react";
+import { createContext, useContext, useCallback, ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import {
+  useServersStore,
+  formatLastConnected,
+  getStatusIcon,
+  getStatusColor,
+} from "../stores/serversStore";
+import type { ServerConfig } from "../stores/serversStore";
 
 /* ── Types ─────────────────────────────────────────────── */
-
-export interface ServerConfig {
-  id: string;
-  name: string;
-  host: string;
-  port: number;
-  token?: string;
-  lastConnected?: number;
-  status: "connected" | "disconnected" | "connecting" | "error";
-  error?: string;
-  rttMs?: number;
-}
 
 interface ConnectionInfo {
   server_id: string;
@@ -46,10 +41,6 @@ type ServerManagerContextType = ServerManagerState & ServerManagerActions;
 
 const ServerManagerContext = createContext<ServerManagerContextType | null>(null);
 
-/* ── Storage Key ─────────────────────────────────────── */
-
-const STORAGE_KEY = "gnome-remote-servers";
-
 /* ── Provider ────────────────────────────────────────── */
 
 interface ServerManagerProviderProps {
@@ -57,69 +48,51 @@ interface ServerManagerProviderProps {
 }
 
 export function ServerManagerProvider({ children }: ServerManagerProviderProps) {
-  const [servers, setServers] = useState<ServerConfig[]>([]);
-  const [activeServerId, setActiveServerId] = useState<string | null>(null);
+  // 使用 Zustand store
+  const {
+    servers,
+    activeServerId,
+    addServer,
+    removeServer,
+    updateServer,
+    setActiveServerId,
+    setServerStatus,
+  } = useServersStore();
 
-  // Load from localStorage on mount
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored) as ServerConfig[];
-        // Reset status to disconnected on load
-        const resetServers = parsed.map(s => ({
-          ...s,
-          status: "disconnected" as const,
-          error: undefined,
-        }));
-        setServers(resetServers);
-      }
-    } catch (e) {
-      console.warn("[ServerManager] Failed to load servers from storage:", e);
-    }
-  }, []);
-
-  // Save to localStorage on change
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(servers));
-    } catch (e) {
-      console.warn("[ServerManager] Failed to save servers to storage:", e);
-    }
-  }, [servers]);
-
-  const activeServer = servers.find(s => s.id === activeServerId) || null;
-
-  const generateId = () => `srv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-  const addServer = useCallback(
-    (server: Omit<ServerConfig, "id" | "status" | "lastConnected">) => {
-      const newServer: ServerConfig = {
-        ...server,
-        id: generateId(),
-        status: "disconnected",
-      };
-      setServers(prev => [...prev, newServer]);
-    },
-    []
-  );
-
-  const removeServer = useCallback((id: string) => {
-    setServers(prev => prev.filter(s => s.id !== id));
-    if (activeServerId === id) {
-      setActiveServerId(null);
-    }
-  }, [activeServerId]);
+  const activeServer = servers.find((s) => s.id === activeServerId) || null;
 
   const connectServer = useCallback(async (id: string) => {
-    const server = servers.find(s => s.id === id);
-    if (!server) return;
+    console.log("[ServerManager] 开始连接服务器:", id);
+    const server = servers.find((s) => s.id === id);
+    if (!server) {
+      console.error("[ServerManager] 未找到服务器:", id);
+      return;
+    }
 
-    setServers(prev => prev.map(s =>
-      s.id === id ? { ...s, status: "connecting", error: undefined } : s
-    ));
+    // 如果当前有其他连接，先断开（像切换WiFi一样）
+    if (activeServerId && activeServerId !== id) {
+      console.log("[ServerManager] 断开当前连接:", activeServerId);
+      try {
+        await invoke("remote_disconnect", { serverId: activeServerId });
+        setServerStatus(activeServerId, "disconnected");
+      } catch (e) {
+        console.warn("[ServerManager] 断开旧连接时出错:", e);
+      }
+    }
+
+    console.log("[ServerManager] 服务器信息:", server);
+
+    // 设置连接中状态
+    setServerStatus(id, "connecting");
 
     try {
+      console.log("[ServerManager] 调用 remote_connect:", {
+        serverId: id,
+        host: server.host,
+        port: server.port,
+        token: server.token || null,
+      });
+
       const info = await invoke<ConnectionInfo>("remote_connect", {
         serverId: id,
         host: server.host,
@@ -127,27 +100,19 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
         token: server.token || null,
       });
 
-      setServers(prev => prev.map(s =>
-        s.id === id ? {
-          ...s,
-          status: "connected",
-          lastConnected: Date.now(),
-          error: undefined,
-          rttMs: info.rttMs >= 0 ? info.rttMs : undefined,
-        } : s
-      ));
+      console.log("[ServerManager] 连接成功:", info);
+
+      setServerStatus(id, "connected", undefined, info.rttMs >= 0 ? info.rttMs : undefined);
       setActiveServerId(id);
 
-      console.log("[ServerManager] 连接成功:", info.transportType, `RTT=${info.rttMs}ms`);
+      console.log("[ServerManager] 连接成功:", info.transport, `RTT=${info.rttMs}ms`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error("[ServerManager] 连接失败:", msg);
 
-      setServers(prev => prev.map(s =>
-        s.id === id ? { ...s, status: "error", error: msg } : s
-      ));
+      setServerStatus(id, "error", msg);
     }
-  }, [servers]);
+  }, [servers, activeServerId, setServerStatus, setActiveServerId]);
 
   const disconnectServer = useCallback(async (id: string) => {
     try {
@@ -156,26 +121,18 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
       console.warn("[ServerManager] 断开连接时出错:", e);
     }
 
-    setServers(prev => prev.map(s =>
-      s.id === id ? { ...s, status: "disconnected", error: undefined } : s
-    ));
+    setServerStatus(id, "disconnected");
     if (activeServerId === id) {
       setActiveServerId(null);
     }
-  }, [activeServerId]);
+  }, [activeServerId, setServerStatus, setActiveServerId]);
 
   const setActiveServer = useCallback((id: string) => {
-    const server = servers.find(s => s.id === id);
+    const server = servers.find((s) => s.id === id);
     if (server && server.status === "connected") {
       setActiveServerId(id);
     }
-  }, [servers]);
-
-  const updateServer = useCallback((id: string, updates: Partial<ServerConfig>) => {
-    setServers(prev => prev.map(s => 
-      s.id === id ? { ...s, ...updates } : s
-    ));
-  }, []);
+  }, [servers, setActiveServerId]);
 
   const value: ServerManagerContextType = {
     servers,
@@ -206,34 +163,6 @@ export function useServerManager(): ServerManagerContextType {
   return context;
 }
 
-/* ── Utility Functions ──────────────────────────────── */
+/* ── Re-export Utility Functions ─────────────────────── */
 
-export function formatLastConnected(timestamp?: number): string {
-  if (!timestamp) return "从未";
-  const now = Date.now();
-  const diff = now - timestamp;
-
-  if (diff < 1000 * 60) return "刚刚";
-  if (diff < 1000 * 60 * 60) return `${Math.floor(diff / 60000)} 分钟前`;
-  if (diff < 1000 * 60 * 60 * 24) return `${Math.floor(diff / 3600000)} 小时前`;
-  if (diff < 1000 * 60 * 60 * 24 * 7) return `${Math.floor(diff / 86400000)} 天前`;
-  return new Date(timestamp).toLocaleDateString("zh-CN");
-}
-
-export function getStatusColor(status: ServerConfig["status"]): string {
-  switch (status) {
-    case "connected": return "#33d17a";
-    case "connecting": return "#e8a416";
-    case "disconnected": return "#9a9996";
-    case "error": return "#e01b24";
-  }
-}
-
-export function getStatusIcon(status: ServerConfig["status"]): string {
-  switch (status) {
-    case "connected": return "🟢";
-    case "connecting": return "🟡";
-    case "disconnected": return "⚫";
-    case "error": return "🔴";
-  }
-}
+export { formatLastConnected, getStatusColor, getStatusIcon };

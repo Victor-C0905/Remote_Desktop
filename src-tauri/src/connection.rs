@@ -44,6 +44,28 @@ pub enum Payload {
     ReadDirRequest { path: String },
     #[serde(rename = "read_dir_resp")]
     ReadDirResponse { path: String, entries: Vec<FileEntry> },
+    #[serde(rename = "read_file")]
+    ReadFileRequest { path: String },
+    #[serde(rename = "read_file_resp")]
+    ReadFileResponse { path: String, content: String, size: u64 },
+    #[serde(rename = "write_file")]
+    WriteFileRequest { path: String, content: String },
+    #[serde(rename = "write_file_resp")]
+    WriteFileResponse { path: String, size: u64 },
+    #[serde(rename = "delete")]
+    DeleteRequest { path: String },
+    #[serde(rename = "delete_resp")]
+    DeleteResponse { success: bool },
+    #[serde(rename = "metrics_subscribe")]
+    MetricsSubscribeRequest {},
+    #[serde(rename = "metrics_data")]
+    MetricsData(MetricsSnapshot),
+    #[serde(rename = "terminal_spawn")]
+    TerminalSpawnRequest { shell: String, cols: u16, rows: u16 },
+    #[serde(rename = "terminal_spawn_resp")]
+    TerminalSpawnResponse { session_id: String },
+    #[serde(rename = "terminal_data")]
+    TerminalData { session_id: String, data: Vec<u8>, is_input: bool },
     #[serde(rename = "error")]
     Error { code: i32, message: String },
 }
@@ -55,6 +77,25 @@ pub struct FileEntry {
     pub size: u64,
     pub mtime: String,
     pub permissions: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetricsSnapshot {
+    pub cpu_percent: f32,
+    pub mem_used_bytes: u64,
+    pub mem_total_bytes: u64,
+    pub swap_used_bytes: u64,
+    pub disks: Vec<DiskInfo>,
+    pub network_rx_bytes: u64,
+    pub network_tx_bytes: u64,
+    pub uptime_secs: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiskInfo {
+    pub mount_point: String,
+    pub total_bytes: u64,
+    pub used_bytes: u64,
 }
 
 impl Envelope {
@@ -237,74 +278,8 @@ pub async fn remote_connect(
         return Ok(info);
     }
 
-    // QUIC 失败，尝试 WebSocket
-    tracing::warn!("QUIC 连接失败 ({})，尝试 WebSocket...", quic_err_msg);
-    
-    let ws_result = try_ws_connect(&host, port).await;
-    let ws_err_msg = match &ws_result {
-        Err(e) => e.clone(),
-        Ok(_) => String::new(),
-    };
-
-    if let Ok(ws_stream) = ws_result {
-        tracing::info!("WebSocket 连接成功: {}:{}", host, port);
-        let info = ConnectionInfo {
-            server_id: server_id.clone(),
-            host: host.clone(),
-            port,
-            transport_type: "websocket".into(),
-            status: "connected".into(),
-            rtt_ms: -1.0,
-            connected_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64,
-        };
-
-        let (tx, mut rx) = mpsc::channel::<ClientRequest>(32);
-        {
-            let mut conns = manager.connections.lock().unwrap();
-            conns.insert(server_id.clone(), ActiveConnection { info: info.clone(), tx });
-        }
-
-        let server_id_clone = server_id.clone();
-        let app_handle = app.clone();
-        tokio::spawn(async move {
-            use futures_util::{SinkExt, StreamExt};
-            use tokio_tungstenite::tungstenite::Message as WsMessage;
-
-            let (mut write, mut read) = ws_stream.split();
-
-            while let Some(req) = rx.recv().await {
-                match req {
-                    ClientRequest::Send { envelope, response_tx } => {
-                        if let Ok(bytes) = envelope.encode() {
-                            if write.send(WsMessage::Binary(bytes)).await.is_err() {
-                                let _ = response_tx.send(Err("发送失败".into()));
-                                break;
-                            }
-                            if let Some(Ok(WsMessage::Binary(resp_data))) = read.next().await {
-                                let _ = response_tx.send(Ok(resp_data));
-                            } else {
-                                let _ = response_tx.send(Err("接收失败".into()));
-                                break;
-                            }
-                        }
-                    }
-                    ClientRequest::Disconnect => break,
-                }
-            }
-
-            if let Ok(mut conns) = app_handle.state::<ConnectionManager>().connections.lock() {
-                conns.remove(&server_id_clone);
-            }
-            let _ = app_handle.emit("connection-lost", &server_id_clone);
-        });
-
-        return Ok(info);
-    }
-
-    Err(format!("所有连接方式均失败:\n  QUIC: {}\n  WebSocket: {}", quic_err_msg, ws_err_msg))
+    // QUIC 失败，返回错误
+    Err(format!("QUIC 连接失败: {}", quic_err_msg))
 }
 
 #[tauri::command]
@@ -399,6 +374,59 @@ pub struct RemoteReadDirResponse {
     pub entries: Vec<FileEntry>,
 }
 
+#[tauri::command]
+pub async fn remote_get_metrics(server_id: String, app: tauri::AppHandle) -> Result<MetricsSnapshot, String> {
+    let resp = remote_send(server_id, Payload::MetricsSubscribeRequest {}, app).await?;
+    match resp.payload {
+        Payload::MetricsData(metrics) => Ok(metrics),
+        Payload::Error { message, .. } => Err(message),
+        _ => Err("意外响应".into()),
+    }
+}
+
+#[tauri::command]
+pub async fn remote_read_file(server_id: String, path: String, app: tauri::AppHandle) -> Result<RemoteReadFileResponse, String> {
+    let resp = remote_send(server_id, Payload::ReadFileRequest { path }, app).await?;
+    match resp.payload {
+        Payload::ReadFileResponse { path, content, size } => Ok(RemoteReadFileResponse { path, content, size }),
+        Payload::Error { message, .. } => Err(message),
+        _ => Err("意外响应".into()),
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct RemoteReadFileResponse {
+    pub path: String,
+    pub content: String,
+    pub size: u64,
+}
+
+#[tauri::command]
+pub async fn remote_write_file(server_id: String, path: String, content: String, app: tauri::AppHandle) -> Result<RemoteWriteFileResponse, String> {
+    let resp = remote_send(server_id, Payload::WriteFileRequest { path, content }, app).await?;
+    match resp.payload {
+        Payload::WriteFileResponse { path, size } => Ok(RemoteWriteFileResponse { path, size }),
+        Payload::Error { message, .. } => Err(message),
+        _ => Err("意外响应".into()),
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct RemoteWriteFileResponse {
+    pub path: String,
+    pub size: u64,
+}
+
+#[tauri::command]
+pub async fn remote_delete(server_id: String, path: String, app: tauri::AppHandle) -> Result<bool, String> {
+    let resp = remote_send(server_id, Payload::DeleteRequest { path }, app).await?;
+    match resp.payload {
+        Payload::DeleteResponse { success } => Ok(success),
+        Payload::Error { message, .. } => Err(message),
+        _ => Err("意外响应".into()),
+    }
+}
+
 // ── QUIC 客户端 ───────────────────────────────────────
 
 async fn try_quic_connect(host: &str, port: u16) -> Result<(quinn::Connection, f64), String> {
@@ -417,11 +445,17 @@ async fn try_quic_connect(host: &str, port: u16) -> Result<(quinn::Connection, f
     endpoint.set_default_client_config(client_config);
 
     let start = std::time::Instant::now();
-    let conn = endpoint
-        .connect(addr, "gnome-remote")
-        .map_err(|e| format!("发起连接失败: {}", e))?
-        .await
-        .map_err(|e| format!("QUIC 握手失败: {}", e))?;
+    
+    // 添加超时机制（5 秒）
+    let conn = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        endpoint
+            .connect(addr, "gnome-remote")
+            .map_err(|e| format!("发起连接失败: {}", e))?
+    )
+    .await
+    .map_err(|_| "QUIC 连接超时 (5秒)".to_string())?
+    .map_err(|e| format!("QUIC 握手失败: {}", e))?;
 
     Ok((conn, start.elapsed().as_secs_f64() * 1000.0))
 }
@@ -506,14 +540,4 @@ async fn send_and_receive_quic(conn: &quinn::Connection, request_id: u32, payloa
     recv.read_exact(&mut data).await.map_err(|e| format!("读取响应数据失败: {}", e))?;
 
     Ok(data)
-}
-
-// ── WebSocket 客户端 ───────────────────────────────────
-
-async fn try_ws_connect(host: &str, port: u16) -> Result<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, String> {
-    let url = format!("wss://{}:{}/ws", host, port);
-    let (stream, _) = tokio_tungstenite::connect_async(&url)
-        .await
-        .map_err(|e| format!("WebSocket 连接失败: {}", e))?;
-    Ok(stream)
 }

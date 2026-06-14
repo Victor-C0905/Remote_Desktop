@@ -1,15 +1,14 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { useServerManager } from "../context/ServerManager";
 import "./FileManager.css";
-
-/* ── Types ─────────────────────────────────────────────── */
 
 export interface FileEntry {
   name: string;
   is_dir: boolean;
-  size: number;       // bytes
-  mtime: string;      // ISO 8601
-  permissions: string; // "rwxr-xr-x"
+  size: number;
+  mtime: string;
+  permissions: string;
 }
 
 interface ReadDirResponse {
@@ -94,8 +93,9 @@ const PLACES: Bookmark[] = IS_WIN ? [
 type ViewMode = "list" | "grid";
 
 export function FileManager() {
+  const { activeServerId } = useServerManager();
+  
   const [currentPath, setCurrentPath] = useState(() => {
-    // Use a sensible default based on platform
     if (navigator.platform.startsWith("Win")) {
       return "C:\\Users";
     }
@@ -114,7 +114,6 @@ export function FileManager() {
   } | null>(null);
   const mainRef = useRef<HTMLDivElement>(null);
 
-  // ── Fetch directory ─────────────────────────────────
   const loadDir = useCallback(async (path: string) => {
     setLoading(true);
     setError(null);
@@ -122,19 +121,26 @@ export function FileManager() {
     setContextMenu(null);
 
     try {
-      // Tauri command call — reads local filesystem as a demo
-      // Will be replaced with QUIC Agent call in production
-      const resp = await invoke<ReadDirResponse>("read_dir", { path });
+      let resp: ReadDirResponse | null = null;
+      
+      if (activeServerId) {
+        // 远程模式：通过 QUIC 从 Agent 获取
+        resp = await invoke<ReadDirResponse>("remote_read_dir", {
+          serverId: activeServerId,
+          path,
+        });
+      } else {
+        // 本地模式：直接读取本地文件系统
+        resp = await invoke<ReadDirResponse>("read_dir", { path });
+      }
 
-      if (resp) {
-        // Sort: dirs first, then files; alphabetical within each group
+      if (resp && resp.entries) {
         const sorted = [...resp.entries].sort((a, b) => {
           if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
           return a.name.localeCompare(b.name);
         });
         setEntries(sorted);
       } else {
-        // Fallback: demo data for UI development
         setEntries(getDemoEntries(path));
       }
 
@@ -145,7 +151,7 @@ export function FileManager() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [activeServerId]);
 
   const HOME_PATH = navigator.platform.startsWith("Win") ? "C:\\Users" : "/home";
 
