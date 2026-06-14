@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { useServerManager } from "../context/ServerManager";
+import { useSettingsStore } from "../stores/settingsStore";
 import "./Terminal.css";
-
-/* ── Types ─────────────────────────────────────────────── */
 
 interface TabInfo {
   id: string;
@@ -10,8 +10,6 @@ interface TabInfo {
   ptyId: string | null;
   xtermReady: boolean;
 }
-
-/* ── GNOME Terminal Color Theme (CSS-friendly) ──────── */
 
 const GNOME_THEME = {
   bg: "#1e1e1e",
@@ -22,8 +20,6 @@ const GNOME_THEME = {
   yellow: "#c4a000",
   red: "#cc0000",
 };
-
-/* ── Demo command handler ────────────────────────────── */
 
 function getPrompt(): string {
   return `\x1b[1;32muser@gnome-remote\x1b[0m:\x1b[1;34m~\x1b[0m$ `;
@@ -97,15 +93,14 @@ function processDemoCommand(cmd: string): string {
 /* ── Component ───────────────────────────────────────── */
 
 export function TerminalApp() {
+  const { activeServerId, activeServer } = useServerManager();
+  
   const [tabs, setTabs] = useState<TabInfo[]>([
     { id: "tab-0", label: "终端 1", ptyId: null, xtermReady: false },
   ]);
   const [activeTabId, setActiveTabId] = useState("tab-0");
   const [xtermAvailable, setXtermAvailable] = useState(false);
-  const [terminalFontSize, setTerminalFontSize] = useState(() => {
-    const saved = localStorage.getItem("gnome-remote-terminal-font");
-    return saved ? parseInt(saved) : 13;
-  });
+  const terminalFontSize = useSettingsStore((state) => state.terminalFontSize);
   const [xtermModules, setXtermModules] = useState<{
     Terminal: any;
     FitAddon: any;
@@ -250,6 +245,27 @@ export function TerminalApp() {
 
   // ── Spawn PTY via Tauri command ────────────────
   const spawnPty = async (tabId: string, term: any) => {
+    // 远程模式：终端功能尚未实现
+    if (activeServerId) {
+      term.writeln("\x1b[1;33m⚠️ 远程终端功能尚未实现\x1b[0m");
+      term.writeln("");
+      term.writeln("\x1b[1m远程 PTY 需要在 Linux Agent 上实现:\x1b[0m");
+      term.writeln("  • forkpty + bash");
+      term.writeln("  • QUIC Stream 原始字节隧道");
+      term.writeln("  • 多终端会话管理");
+      term.writeln("");
+      term.writeln(`当前连接: \x1b[1;34m${activeServer?.host || activeServerId}\x1b[0m`);
+      term.writeln("");
+      term.writeln("\x1b[33m[演示模式]\x1b[0m 输入 \x1b[1mhelp\x1b[0m 查看可用命令");
+      term.writeln("");
+      term.write(getPrompt());
+      setTabs((prev) =>
+        prev.map((t) => (t.id === tabId ? { ...t, xtermReady: true } : t))
+      );
+      return;
+    }
+
+    // 本地模式：尝试使用本地 PTY
     try {
       const result = await invoke<{ pty_id: string }>("spawn_terminal", {
         shell: "",

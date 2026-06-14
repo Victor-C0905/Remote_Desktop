@@ -1,8 +1,8 @@
 import { useState, useEffect } from "react";
 import { useServerManager, formatLastConnected, getStatusIcon, getStatusColor } from "../context/ServerManager";
 import { useWallpaper, getPresetWallpaperName, getWallpaperStyle } from "../context/WallpaperContext";
-import { PRESET_WALLPAPERS } from "../context/WallpaperContext";
-import { useTheme } from "../hooks/useTheme";
+import { PRESET_WALLPAPERS } from "../stores/wallpaperStore";
+import { useSettingsStore } from "../stores/settingsStore";
 import "./Settings.css";
 
 /* ── Types ─────────────────────────────────────────────── */
@@ -56,7 +56,7 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
   };
 
   return (
-    <div className="st-modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="st-modal-overlay">
       <div className="st-modal">
         <div className="st-modal-header">
           <span className="st-modal-title">添加服务器</span>
@@ -81,7 +81,7 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
               className="st-form-input"
               value={host}
               onChange={(e) => setHost(e.target.value)}
-              placeholder="例如: server.example.com 或 127.0.0.1"
+              placeholder="例如: server.example.com 或 172.20.10.3"
             />
           </div>
           <div className="st-form-row">
@@ -115,11 +115,108 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
   );
 }
 
+/* ── Edit Server Modal ───────────────────────────────── */
+
+interface EditServerModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onSave: (id: string, name: string, host: string, port: number, token: string) => void;
+  server: { id: string; name: string; host: string; port: number; token?: string } | null;
+}
+
+function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalProps) {
+  const [name, setName] = useState("");
+  const [host, setHost] = useState("");
+  const [port, setPort] = useState(8443);
+  const [token, setToken] = useState("");
+
+  // 当 server 变化时，更新表单数据
+  useEffect(() => {
+    if (server) {
+      setName(server.name);
+      setHost(server.host);
+      setPort(server.port);
+      setToken(server.token || "");
+    }
+  }, [server]);
+
+  if (!isOpen || !server) return null;
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (name && host && token) {
+      onSave(server.id, name, host, port, token);
+      onClose();
+    }
+  };
+
+  return (
+    <div className="st-modal-overlay">
+      <div className="st-modal">
+        <div className="st-modal-header">
+          <span className="st-modal-title">编辑服务器</span>
+          <button className="st-modal-close" onClick={onClose}>×</button>
+        </div>
+        <form className="st-modal-body" onSubmit={handleSubmit}>
+          <div className="st-form-row">
+            <label className="st-form-label">服务器名称</label>
+            <input
+              type="text"
+              className="st-form-input"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="例如: prod-server"
+              autoFocus
+            />
+          </div>
+          <div className="st-form-row">
+            <label className="st-form-label">主机地址</label>
+            <input
+              type="text"
+              className="st-form-input"
+              value={host}
+              onChange={(e) => setHost(e.target.value)}
+              placeholder="例如: server.example.com 或 172.20.10.3"
+            />
+          </div>
+          <div className="st-form-row">
+            <label className="st-form-label">端口</label>
+            <input
+              type="number"
+              className="st-form-input"
+              value={port}
+              onChange={(e) => setPort(parseInt(e.target.value) || 8443)}
+              placeholder="8443"
+            />
+          </div>
+          <div className="st-form-row">
+            <label className="st-form-label">认证 Token</label>
+            <input
+              type="text"
+              className="st-form-input"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              placeholder="例如: gmr_xxxxxx-xxxx-xxxx-xxxx"
+            />
+            <span className="st-form-hint">从 Agent 日志中获取</span>
+          </div>
+        </form>
+        <div className="st-modal-footer">
+          <button className="st-btn" onClick={onClose}>取消</button>
+          <button className="st-btn st-btn-primary" onClick={handleSubmit}>保存</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ── Main Component ─────────────────────────────────── */
 
 export function Settings() {
   const [activeSection, setActiveSection] = useState<SettingsSection>("connection");
   const [addModalOpen, setAddModalOpen] = useState(false);
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [editingServer, setEditingServer] = useState<{ id: string; name: string; host: string; port: number; token?: string } | null>(null);
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
 
   const {
@@ -127,6 +224,7 @@ export function Settings() {
     activeServer,
     activeServerId,
     addServer,
+    updateServer,
     removeServer,
     connectServer,
     disconnectServer,
@@ -139,45 +237,28 @@ export function Settings() {
     clearWallpaper,
   } = useWallpaper();
 
-  const { theme, setTheme } = useTheme();
-  
-  const [accentColor, setAccentColorState] = useState(() => 
-    localStorage.getItem("gnome-remote-accent") || "#3584e4"
-  );
-  const [fontSize, setFontSize] = useState(() => {
-    const saved = localStorage.getItem("gnome-remote-font-size");
-    return saved ? parseInt(saved) : 10;
-  });
-  const [terminalFontSize, setTerminalFontSize] = useState(() => {
-    const saved = localStorage.getItem("gnome-remote-terminal-font");
-    return saved ? parseInt(saved) : 13;
-  });
-
-  // Apply accent color
-  useEffect(() => {
-    document.documentElement.style.setProperty("--accent-bg", accentColor);
-    localStorage.setItem("gnome-remote-accent", accentColor);
-  }, [accentColor]);
-
-  // Apply font size
-  useEffect(() => {
-    document.documentElement.style.setProperty("--font-body", `${fontSize}pt`);
-    document.documentElement.style.setProperty("--font-title", `${fontSize + 1}pt`);
-    document.documentElement.style.setProperty("--font-small", `${fontSize - 1}pt`);
-    localStorage.setItem("gnome-remote-font-size", fontSize.toString());
-  }, [fontSize]);
-
-  useEffect(() => {
-    localStorage.setItem("gnome-remote-terminal-font", terminalFontSize.toString());
-  }, [terminalFontSize]);
+  // 使用 Zustand settingsStore
+  const { theme, setTheme, accentColor, setAccentColor, fontSize, setFontSize, terminalFontSize, setTerminalFontSize } = useSettingsStore();
 
   const handleAddServer = (name: string, host: string, port: number, token: string) => {
     addServer({ name, host, port, token });
   };
 
+  const handleEditServer = (id: string, name: string, host: string, port: number, token: string) => {
+    updateServer(id, { name, host, port, token });
+  };
+
+  const handleOpenEditModal = (server: { id: string; name: string; host: string; port: number; token?: string }) => {
+    setEditingServer(server);
+    setEditModalOpen(true);
+  };
+
   const handleConnect = async (id: string) => {
+    console.log("[Settings] handleConnect 被调用, id:", id);
     setSelectedServerId(id);
+    console.log("[Settings] 调用 connectServer");
     await connectServer(id);
+    console.log("[Settings] connectServer 完成");
   };
 
   const handleDisconnect = (id: string) => {
@@ -265,7 +346,7 @@ export function Settings() {
                     <div
                       key={server.id}
                       className={`st-server-item ${activeServerId === server.id ? "selected" : ""}`}
-                      onClick={() => setSelectedServerId(server.id)}
+                      onClick={() => handleOpenEditModal(server)}
                     >
                       <span 
                         className="st-server-status" 
@@ -277,22 +358,29 @@ export function Settings() {
                       <span className="st-server-host">{server.host}</span>
                       <span className="st-server-time">{formatLastConnected(server.lastConnected)}</span>
                       <div className="st-server-actions">
-                        {server.status === "disconnected" && (
+                        {server.status === "connected" ? (
+                          <button 
+                            className="st-server-action-btn st-server-action-connected"
+                            onClick={(e) => { e.stopPropagation(); handleDisconnect(server.id); }}
+                            title="已连接 - 点击断开"
+                          >
+                            ✓
+                          </button>
+                        ) : server.status === "connecting" ? (
+                          <button 
+                            className="st-server-action-btn st-server-action-connecting"
+                            disabled
+                            title="连接中..."
+                          >
+                            ◷
+                          </button>
+                        ) : (
                           <button 
                             className="st-server-action-btn"
                             onClick={(e) => { e.stopPropagation(); handleConnect(server.id); }}
                             title="连接"
                           >
                             🔗
-                          </button>
-                        )}
-                        {server.status === "connected" && (
-                          <button 
-                            className="st-server-action-btn"
-                            onClick={(e) => { e.stopPropagation(); handleDisconnect(server.id); }}
-                            title="断开"
-                          >
-                            ⚡
                           </button>
                         )}
                         <button 
@@ -321,6 +409,13 @@ export function Settings() {
               isOpen={addModalOpen}
               onClose={() => setAddModalOpen(false)}
               onAdd={handleAddServer}
+            />
+
+            <EditServerModal
+              isOpen={editModalOpen}
+              onClose={() => setEditModalOpen(false)}
+              onSave={handleEditServer}
+              server={editingServer}
             />
           </div>
         );
@@ -360,7 +455,7 @@ export function Settings() {
                     key={color}
                     className={`st-accent-btn ${accentColor === color ? "selected" : ""}`}
                     style={{ background: color }}
-                    onClick={() => setAccentColorState(color)}
+                    onClick={() => setAccentColor(color)}
                   />
                 ))}
               </div>

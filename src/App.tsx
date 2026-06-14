@@ -1,8 +1,13 @@
 import { Desktop } from "./shell/Desktop";
+import { StorageInitializer } from "./components/StorageInitializer";
 import "./styles/adwaita.css";
 
 function App() {
-  return <Desktop />;
+  return (
+    <StorageInitializer>
+      <Desktop />
+    </StorageInitializer>
+  );
 }
 
 export default App;

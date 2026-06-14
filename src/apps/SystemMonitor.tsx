@@ -1,24 +1,23 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { useServerManager } from "../context/ServerManager";
 import "./SystemMonitor.css";
-
-/* ── Types ─────────────────────────────────────────────── */
 
 interface MetricsSnapshot {
   cpu_percent: number;
-  mem_used: number;
-  mem_total: number;
-  swap_used: number;
-  swap_total: number;
+  mem_used_bytes: number;
+  mem_total_bytes: number;
+  swap_used_bytes: number;
   disks: DiskInfo[];
-  network_rx: number;
-  network_tx: number;
-  uptime: number;
+  network_rx_bytes: number;
+  network_tx_bytes: number;
+  uptime_secs: number;
 }
 
 interface DiskInfo {
-  mount: string;
-  total: number;
-  used: number;
+  mount_point: string;
+  total_bytes: number;
+  used_bytes: number;
 }
 
 interface ProcessInfo {
@@ -38,44 +37,6 @@ interface HistoryPoint {
 
 type TabId = "processes" | "resources" | "filesystems";
 
-/* ── Demo Data Generator ──────────────────────────────── */
-
-function generateDemoMetrics(): MetricsSnapshot {
-  return {
-    cpu_percent: Math.random() * 30 + 15,
-    mem_used: Math.floor(Math.random() * 2 + 3) * 1024 * 1024 * 1024,
-    mem_total: 8 * 1024 * 1024 * 1024,
-    swap_used: Math.floor(Math.random() * 512) * 1024 * 1024,
-    swap_total: 2 * 1024 * 1024 * 1024,
-    disks: [
-      { mount: "/", total: 100 * 1024 * 1024 * 1024, used: 67 * 1024 * 1024 * 1024 },
-      { mount: "/var", total: 200 * 1024 * 1024 * 1024, used: 64 * 1024 * 1024 * 1024 },
-      { mount: "/home", total: 50 * 1024 * 1024 * 1024, used: 28 * 1024 * 1024 * 1024 },
-    ],
-    network_rx: Math.floor(Math.random() * 1.5 + 0.5) * 1024 * 1024,
-    network_tx: Math.floor(Math.random() * 500 + 100) * 1024,
-    uptime: Math.floor(Math.random() * 3600 * 24 * 10 + 3600 * 24 * 5),
-  };
-}
-
-function generateDemoProcesses(): ProcessInfo[] {
-  const processes: ProcessInfo[] = [
-    { pid: 1, name: "systemd", user: "root", cpu_percent: 0.1, mem_percent: 0.5, mem_bytes: 4096000, state: "S" },
-    { pid: 1234, name: "gnome-shell", user: "user", cpu_percent: 3.2, mem_percent: 4.5, mem_bytes: 368640000, state: "S" },
-    { pid: 2345, name: "firefox", user: "user", cpu_percent: 8.5, mem_percent: 12.3, mem_bytes: 1000000000, state: "S" },
-    { pid: 3456, name: "code", user: "user", cpu_percent: 5.1, mem_percent: 8.2, mem_bytes: 670000000, state: "S" },
-    { pid: 4567, name: "node", user: "user", cpu_percent: 2.3, mem_percent: 3.1, mem_bytes: 250000000, state: "S" },
-    { pid: 5678, name: "rustc", user: "user", cpu_percent: 15.2, mem_percent: 6.5, mem_bytes: 520000000, state: "R" },
-    { pid: 6789, name: "docker", user: "root", cpu_percent: 1.2, mem_percent: 2.1, mem_bytes: 170000000, state: "S" },
-    { pid: 7890, name: "nginx", user: "root", cpu_percent: 0.3, mem_percent: 0.8, mem_bytes: 65000000, state: "S" },
-    { pid: 8901, name: "postgres", user: "postgres", cpu_percent: 0.5, mem_percent: 1.5, mem_bytes: 120000000, state: "S" },
-    { pid: 9012, name: "redis-server", user: "redis", cpu_percent: 0.2, mem_percent: 0.3, mem_bytes: 24000000, state: "S" },
-  ];
-  return processes.sort((a, b) => b.cpu_percent - a.cpu_percent);
-}
-
-/* ── Utility Functions ───────────────────────────────── */
-
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -93,6 +54,39 @@ function formatUptime(seconds: number): string {
 
 function formatPercent(value: number): string {
   return value.toFixed(1) + "%";
+}
+
+function generateDemoMetrics(): MetricsSnapshot {
+  return {
+    cpu_percent: Math.random() * 30 + 15,
+    mem_used_bytes: Math.floor(Math.random() * 2 + 3) * 1024 * 1024 * 1024,
+    mem_total_bytes: 8 * 1024 * 1024 * 1024,
+    swap_used_bytes: Math.floor(Math.random() * 512) * 1024 * 1024,
+    disks: [
+      { mount_point: "/", total_bytes: 100 * 1024 * 1024 * 1024, used_bytes: 67 * 1024 * 1024 * 1024 },
+      { mount_point: "/var", total_bytes: 200 * 1024 * 1024 * 1024, used_bytes: 64 * 1024 * 1024 * 1024 },
+      { mount_point: "/home", total_bytes: 50 * 1024 * 1024 * 1024, used_bytes: 28 * 1024 * 1024 * 1024 },
+    ],
+    network_rx_bytes: Math.floor(Math.random() * 1.5 + 0.5) * 1024 * 1024,
+    network_tx_bytes: Math.floor(Math.random() * 500 + 100) * 1024,
+    uptime_secs: Math.floor(Math.random() * 3600 * 24 * 10 + 3600 * 24 * 5),
+  };
+}
+
+function generateDemoProcesses(): ProcessInfo[] {
+  const processes: ProcessInfo[] = [
+    { pid: 1, name: "systemd", user: "root", cpu_percent: 0.1, mem_percent: 0.5, mem_bytes: 4096000, state: "S" },
+    { pid: 1234, name: "gnome-shell", user: "user", cpu_percent: 3.2, mem_percent: 4.5, mem_bytes: 368640000, state: "S" },
+    { pid: 2345, name: "firefox", user: "user", cpu_percent: 8.5, mem_percent: 12.3, mem_bytes: 1000000000, state: "S" },
+    { pid: 3456, name: "code", user: "user", cpu_percent: 5.1, mem_percent: 8.2, mem_bytes: 670000000, state: "S" },
+    { pid: 4567, name: "node", user: "user", cpu_percent: 2.3, mem_percent: 3.1, mem_bytes: 250000000, state: "S" },
+    { pid: 5678, name: "rustc", user: "user", cpu_percent: 15.2, mem_percent: 6.5, mem_bytes: 520000000, state: "R" },
+    { pid: 6789, name: "docker", user: "root", cpu_percent: 1.2, mem_percent: 2.1, mem_bytes: 170000000, state: "S" },
+    { pid: 7890, name: "nginx", user: "root", cpu_percent: 0.3, mem_percent: 0.8, mem_bytes: 65000000, state: "S" },
+    { pid: 8901, name: "postgres", user: "postgres", cpu_percent: 0.5, mem_percent: 1.5, mem_bytes: 120000000, state: "S" },
+    { pid: 9012, name: "redis-server", user: "redis", cpu_percent: 0.2, mem_percent: 0.3, mem_bytes: 24000000, state: "S" },
+  ];
+  return processes.sort((a, b) => b.cpu_percent - a.cpu_percent);
 }
 
 /* ── Mini Chart Component (Canvas-based) ─────────────── */
@@ -153,6 +147,8 @@ function MiniChart({ data, color, height, max }: MiniChartProps) {
 /* ── Main Component ───────────────────────────────────── */
 
 export function SystemMonitor() {
+  const { activeServerId } = useServerManager();
+  
   const [activeTab, setActiveTab] = useState<TabId>("resources");
   const [metrics, setMetrics] = useState<MetricsSnapshot>(generateDemoMetrics());
   const [cpuHistory, setCpuHistory] = useState<HistoryPoint[]>([]);
@@ -160,32 +156,63 @@ export function SystemMonitor() {
   const [processes, setProcesses] = useState<ProcessInfo[]>(generateDemoProcesses());
   const [processSort, setProcessSort] = useState<"cpu" | "mem" | "pid">("cpu");
   const [selectedPid, setSelectedPid] = useState<number | null>(null);
+  const [_loading, setLoading] = useState(false);
+  const [_error, setError] = useState<string | null>(null);
 
   const HISTORY_LENGTH = 60;
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const newMetrics = generateDemoMetrics();
-      setMetrics(newMetrics);
-
+  const fetchMetrics = useCallback(async () => {
+    if (!activeServerId) {
+      // 无连接时使用 demo 数据
+      const demoMetrics = generateDemoMetrics();
+      setMetrics(demoMetrics);
       const now = Date.now();
       setCpuHistory(prev => {
-        const next = [...prev, { time: now, value: newMetrics.cpu_percent }];
+        const next = [...prev, { time: now, value: demoMetrics.cpu_percent }];
         return next.length > HISTORY_LENGTH ? next.slice(-HISTORY_LENGTH) : next;
       });
-
       setMemHistory(prev => {
-        const memPercent = (newMetrics.mem_used / newMetrics.mem_total) * 100;
+        const memPercent = (demoMetrics.mem_used_bytes / demoMetrics.mem_total_bytes) * 100;
         const next = [...prev, { time: now, value: memPercent }];
         return next.length > HISTORY_LENGTH ? next.slice(-HISTORY_LENGTH) : next;
       });
+      return;
+    }
 
-      if (activeTab === "processes") {
-        setProcesses(generateDemoProcesses());
-      }
-    }, 2000);
+    setLoading(true);
+    try {
+      const resp = await invoke<MetricsSnapshot>("remote_get_metrics", {
+        serverId: activeServerId,
+      });
+      setMetrics(resp);
+      const now = Date.now();
+      setCpuHistory(prev => {
+        const next = [...prev, { time: now, value: resp.cpu_percent }];
+        return next.length > HISTORY_LENGTH ? next.slice(-HISTORY_LENGTH) : next;
+      });
+      setMemHistory(prev => {
+        const memPercent = (resp.mem_used_bytes / resp.mem_total_bytes) * 100;
+        const next = [...prev, { time: now, value: memPercent }];
+        return next.length > HISTORY_LENGTH ? next.slice(-HISTORY_LENGTH) : next;
+      });
+      setError(null);
+    } catch (e: any) {
+      setError(e.toString());
+    } finally {
+      setLoading(false);
+    }
+  }, [activeServerId]);
 
+  useEffect(() => {
+    const interval = setInterval(fetchMetrics, 2000);
     return () => clearInterval(interval);
+  }, [fetchMetrics]);
+
+  useEffect(() => {
+    if (activeTab === "processes") {
+      // 进程列表暂时使用 demo 数据（Agent 未实现进程列表）
+      setProcesses(generateDemoProcesses());
+    }
   }, [activeTab]);
 
   const sortedProcesses = useCallback(() => {
@@ -198,8 +225,8 @@ export function SystemMonitor() {
     return sorted;
   }, [processes, processSort]);
 
-  const memPercent = (metrics.mem_used / metrics.mem_total) * 100;
-  const swapPercent = metrics.swap_total > 0 ? (metrics.swap_used / metrics.swap_total) * 100 : 0;
+  const memPercent = (metrics.mem_used_bytes / metrics.mem_total_bytes) * 100;
+  const swapPercent = metrics.swap_used_bytes > 0 ? 0 : 0;
 
   return (
     <div className="sm">
@@ -290,13 +317,12 @@ export function SystemMonitor() {
                   <MiniChart data={memHistory} color="#33d17a" height={60} max={100} />
                 </div>
                 <div className="sm-res-stats">
-                  <span className="sm-res-value">{formatBytes(metrics.mem_used)}</span>
-                  <span className="sm-res-label">/ {formatBytes(metrics.mem_total)}</span>
+                  <span className="sm-res-value">{formatBytes(metrics.mem_used_bytes)}</span>
+                  <span className="sm-res-label">/ {formatBytes(metrics.mem_total_bytes)}</span>
                 </div>
               </div>
             </div>
 
-            {/* Memory & Swap Details */}
             <div className="sm-res-section">
               <div className="sm-res-bar-card">
                 <div className="sm-bar-header">
@@ -307,7 +333,7 @@ export function SystemMonitor() {
                   <div className="sm-bar-fill" style={{ width: `${memPercent}%`, background: "#33d17a" }} />
                 </div>
                 <div className="sm-bar-detail">
-                  {formatBytes(metrics.mem_used)} / {formatBytes(metrics.mem_total)}
+                  {formatBytes(metrics.mem_used_bytes)} / {formatBytes(metrics.mem_total_bytes)}
                 </div>
               </div>
 
@@ -320,12 +346,11 @@ export function SystemMonitor() {
                   <div className="sm-bar-fill" style={{ width: `${swapPercent}%`, background: "#e8a416" }} />
                 </div>
                 <div className="sm-bar-detail">
-                  {formatBytes(metrics.swap_used)} / {formatBytes(metrics.swap_total)}
+                  {formatBytes(metrics.swap_used_bytes)} / —
                 </div>
               </div>
             </div>
 
-            {/* Network */}
             <div className="sm-res-section">
               <div className="sm-res-card sm-res-card-wide">
                 <div className="sm-res-title">网络</div>
@@ -333,12 +358,12 @@ export function SystemMonitor() {
                   <div className="sm-net-item">
                     <span className="sm-net-icon">↓</span>
                     <span className="sm-net-label">接收</span>
-                    <span className="sm-net-value">{formatBytes(metrics.network_rx)}/s</span>
+                    <span className="sm-net-value">{formatBytes(metrics.network_rx_bytes)}/s</span>
                   </div>
                   <div className="sm-net-item">
                     <span className="sm-net-icon">↑</span>
                     <span className="sm-net-label">发送</span>
-                    <span className="sm-net-value">{formatBytes(metrics.network_tx)}/s</span>
+                    <span className="sm-net-value">{formatBytes(metrics.network_tx_bytes)}/s</span>
                   </div>
                 </div>
               </div>
@@ -346,20 +371,19 @@ export function SystemMonitor() {
               <div className="sm-res-card">
                 <div className="sm-res-title">运行时间</div>
                 <div className="sm-res-stats sm-res-stats-center">
-                  <span className="sm-res-value sm-res-value-large">{formatUptime(metrics.uptime)}</span>
+                  <span className="sm-res-value sm-res-value-large">{formatUptime(metrics.uptime_secs)}</span>
                 </div>
               </div>
             </div>
 
-            {/* Disk Usage */}
             <div className="sm-res-section sm-res-disks">
               <div className="sm-res-title-section">磁盘用量</div>
               {metrics.disks.map((disk) => {
-                const percent = (disk.used / disk.total) * 100;
+                const percent = (disk.used_bytes / disk.total_bytes) * 100;
                 return (
-                  <div key={disk.mount} className="sm-disk-item">
+                  <div key={disk.mount_point} className="sm-disk-item">
                     <div className="sm-bar-header">
-                      <span className="sm-bar-title">{disk.mount}</span>
+                      <span className="sm-bar-title">{disk.mount_point}</span>
                       <span className="sm-bar-value">{formatPercent(percent)}</span>
                     </div>
                     <div className="sm-bar-track">
@@ -372,7 +396,7 @@ export function SystemMonitor() {
                       />
                     </div>
                     <div className="sm-bar-detail">
-                      {formatBytes(disk.used)} / {formatBytes(disk.total)}
+                      {formatBytes(disk.used_bytes)} / {formatBytes(disk.total_bytes)}
                     </div>
                   </div>
                 );
@@ -393,13 +417,13 @@ export function SystemMonitor() {
             </div>
             <div className="sm-fs-list">
               {metrics.disks.map((disk) => (
-                <div key={disk.mount} className="sm-fs-row">
+                <div key={disk.mount_point} className="sm-fs-row">
                   <span className="sm-fs-device">/dev/sda{metrics.disks.indexOf(disk) + 1}</span>
-                  <span className="sm-fs-dir">{disk.mount}</span>
+                  <span className="sm-fs-dir">{disk.mount_point}</span>
                   <span className="sm-fs-type">ext4</span>
-                  <span className="sm-fs-total">{formatBytes(disk.total)}</span>
-                  <span className="sm-fs-used">{formatBytes(disk.used)}</span>
-                  <span className="sm-fs-avail">{formatBytes(disk.total - disk.used)}</span>
+                  <span className="sm-fs-total">{formatBytes(disk.total_bytes)}</span>
+                  <span className="sm-fs-used">{formatBytes(disk.used_bytes)}</span>
+                  <span className="sm-fs-avail">{formatBytes(disk.total_bytes - disk.used_bytes)}</span>
                 </div>
               ))}
               <div className="sm-fs-row">

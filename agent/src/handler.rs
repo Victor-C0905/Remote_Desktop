@@ -57,6 +57,43 @@ pub fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig) -> Envelope {
             }
         }
 
+        Payload::ReadFileRequest { path } => {
+            match handle_read_file(path, cfg) {
+                Ok((content, size)) => Envelope::new(
+                    envelope.request_id,
+                    Payload::ReadFileResponse {
+                        path: path.clone(),
+                        content,
+                        size,
+                    },
+                ),
+                Err(e) => error_response(envelope.request_id, &e),
+            }
+        }
+
+        Payload::WriteFileRequest { path, content } => {
+            match handle_write_file(path, content, cfg) {
+                Ok(size) => Envelope::new(
+                    envelope.request_id,
+                    Payload::WriteFileResponse {
+                        path: path.clone(),
+                        size,
+                    },
+                ),
+                Err(e) => error_response(envelope.request_id, &e),
+            }
+        }
+
+        Payload::DeleteRequest { path } => {
+            match handle_delete(path, cfg) {
+                Ok(_) => Envelope::new(
+                    envelope.request_id,
+                    Payload::DeleteResponse { success: true },
+                ),
+                Err(e) => error_response(envelope.request_id, &e),
+            }
+        }
+
         Payload::MetricsSubscribeRequest {} => {
             match collect_metrics() {
                 Ok(metrics) => Envelope::new(
@@ -65,6 +102,16 @@ pub fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig) -> Envelope {
                 ),
                 Err(e) => error_response(envelope.request_id, &e),
             }
+        }
+
+        Payload::TerminalSpawnRequest { shell, cols, rows } => {
+            tracing::info!("终端请求: shell={}, cols={}, rows={} (未实现)", shell, cols, rows);
+            error_response(envelope.request_id, "终端功能尚未实现")
+        }
+
+        Payload::TerminalData { session_id, data, is_input } => {
+            tracing::debug!("终端数据: session={}, len={}, is_input={} (未实现)", session_id, data.len(), is_input);
+            error_response(envelope.request_id, "终端功能尚未实现")
         }
 
         other => {
@@ -112,6 +159,81 @@ fn handle_read_dir(path: &str, cfg: &AgentConfig) -> Result<Vec<FileEntry>, Stri
         .collect();
 
     Ok(entries)
+}
+
+fn handle_read_file(path: &str, cfg: &AgentConfig) -> Result<(String, u64), String> {
+    let allowed = cfg
+        .security
+        .allowed_paths
+        .iter()
+        .any(|prefix| path.starts_with(prefix));
+    if !allowed && !cfg.security.allowed_paths.is_empty() {
+        return Err(format!("访问被拒绝: 不在允许的路径列表中 ({})", path));
+    }
+
+    let metadata = fs::metadata(path)
+        .map_err(|e| format!("无法访问文件 '{}': {}", path, e))?;
+    
+    if metadata.is_dir() {
+        return Err("这是一个目录，不能作为文件读取".to_string());
+    }
+
+    const MAX_SIZE: u64 = 10 * 1024 * 1024; // 10MB
+    if metadata.len() > MAX_SIZE {
+        return Err(format!("文件太大 ({}MB)，限制 10MB", metadata.len() / (1024 * 1024)));
+    }
+
+    let content = fs::read_to_string(path)
+        .map_err(|e| format!("读取文件失败: {}", e))?;
+
+    Ok((content, metadata.len()))
+}
+
+fn handle_write_file(path: &str, content: &str, cfg: &AgentConfig) -> Result<u64, String> {
+    let allowed = cfg
+        .security
+        .allowed_paths
+        .iter()
+        .any(|prefix| path.starts_with(prefix));
+    if !allowed && !cfg.security.allowed_paths.is_empty() {
+        return Err(format!("访问被拒绝: 不在允许的路径列表中 ({})", path));
+    }
+
+    fs::write(path, content)
+        .map_err(|e| format!("写入文件失败: {}", e))?;
+
+    Ok(content.len() as u64)
+}
+
+fn handle_delete(path: &str, cfg: &AgentConfig) -> Result<(), String> {
+    let allowed = cfg
+        .security
+        .allowed_paths
+        .iter()
+        .any(|prefix| path.starts_with(prefix));
+    if !allowed && !cfg.security.allowed_paths.is_empty() {
+        return Err(format!("访问被拒绝: 不在允许的路径列表中 ({})", path));
+    }
+
+    // 检查是否在禁止删除的路径
+    for blocked in &cfg.security.blocked_commands {
+        if path.contains(blocked) {
+            return Err(format!("禁止删除: 路径包含敏感内容 ({})", path));
+        }
+    }
+
+    let metadata = fs::metadata(path)
+        .map_err(|e| format!("无法访问 '{}': {}", path, e))?;
+
+    if metadata.is_dir() {
+        fs::remove_dir_all(path)
+            .map_err(|e| format!("删除目录失败: {}", e))?;
+    } else {
+        fs::remove_file(path)
+            .map_err(|e| format!("删除文件失败: {}", e))?;
+    }
+
+    Ok(())
 }
 
 #[cfg(unix)]

@@ -679,6 +679,44 @@
   background: var(--border-color);
 }
 
+.st-server-action-btn:active {
+  transform: scale(0.9);
+  opacity: 0.8;
+}
+
+.st-server-action-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* 已连接状态 - 绿色背景 */
+.st-server-action-connected {
+  background: #33d17a;
+  opacity: 1;
+  color: #ffffff;
+  font-weight: bold;
+}
+
+.st-server-action-connected:hover {
+  background: #26a269;
+}
+
+/* 连接中状态 - 旋转动画 */
+.st-server-action-connecting {
+  animation: spin 1s linear infinite;
+  opacity: 0.8;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .st-server-action-danger:hover {
   background: #e01b24;
   color: #ffffff;

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { FileManager } from "../apps/FileManager";
 import { TerminalApp } from "../apps/Terminal";
 import { SystemMonitor } from "../apps/SystemMonitor";
@@ -9,9 +10,20 @@ import { ServerManagerProvider, useServerManager, getStatusColor } from "../cont
 import { WallpaperProvider, useWallpaper, getWallpaperStyle } from "../context/WallpaperContext";
 import "./Desktop.css";
 
+// 完整的 MetricsSnapshot 类型（匹配 Agent）
 interface MetricsSnapshot {
   cpu_percent: number;
-  mem_used_gb: string;
+  mem_used_bytes: number;
+  mem_total_bytes: number;
+  swap_used_bytes: number;
+  disks: Array<{
+    mount_point: string;
+    total_bytes: number;
+    used_bytes: number;
+  }>;
+  network_rx_bytes: number;
+  network_tx_bytes: number;
+  uptime_secs: number;
 }
 
 interface DesktopApp {
@@ -57,7 +69,7 @@ function DesktopContent() {
   const [notificationOpen, setNotificationOpen] = useState(false);
   const unreadNotifications = 2;
   const criticalNotifications = 1;
-  const [metrics] = useState<MetricsSnapshot | null>(null);
+  const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
   const [clock, setClock] = useState("");
   const [windows, setWindows] = useState<WindowState[]>([]);
   const [activeWindowId, setActiveWindowId] = useState<string | null>(null);
@@ -77,6 +89,34 @@ function DesktopContent() {
     const id = setInterval(update, 10000);
     return () => clearInterval(id);
   }, []);
+
+  // 从 Agent 获取系统指标（每 2 秒更新）
+  useEffect(() => {
+    if (!activeServer || activeServer.status !== "connected") {
+      setMetrics(null);
+      return;
+    }
+
+    const fetchMetrics = async () => {
+      try {
+        const data = await invoke<MetricsSnapshot>("remote_get_metrics", {
+          serverId: activeServer.id,
+        });
+        setMetrics(data);
+      } catch (error) {
+        console.error("获取系统指标失败:", error);
+        setMetrics(null);
+      }
+    };
+
+    // 立即获取一次
+    fetchMetrics();
+
+    // 每 2 秒更新一次
+    const intervalId = setInterval(fetchMetrics, 2000);
+
+    return () => clearInterval(intervalId);
+  }, [activeServer]);
 
   const openApp = useCallback((appId: string) => {
     setOverviewVisible(false);
@@ -180,13 +220,22 @@ function DesktopContent() {
             className="connection-dot" 
             style={{ background: activeServer ? getStatusColor(activeServer.status) : "#9a9996" }}
           />
-          <span>{activeServer?.name || activeServer?.host || "未连接"}</span>
+          <span>
+            {activeServer?.status === "connected" ? "已连接" :
+             activeServer?.status === "connecting" ? "连接中..." :
+             activeServer?.status === "error" ? "连接失败" : "未连接"}
+          </span>
+          {activeServer && (
+            <span style={{ marginLeft: "8px", opacity: 0.7 }}>
+              {activeServer.name || activeServer.host}
+            </span>
+          )}
         </div>
         <div className="spacer" />
         {metrics && (
           <div className="metrics">
-            <span>CPU {metrics.cpu_percent}%</span>
-            <span>MEM {metrics.mem_used_gb}G</span>
+            <span>CPU {metrics.cpu_percent.toFixed(1)}%</span>
+            <span>MEM {(metrics.mem_used_bytes / (1024 * 1024 * 1024)).toFixed(1)}G / {(metrics.mem_total_bytes / (1024 * 1024 * 1024)).toFixed(1)}G</span>
           </div>
         )}
         <div className="separator" />
@@ -202,8 +251,6 @@ function DesktopContent() {
       </div>
 
       {/* Desktop Area */}
-      {console.log("[DEBUG] Desktop - wallpaper:", wallpaper)}
-      {console.log("[DEBUG] Desktop - getWallpaperStyle:", getWallpaperStyle(wallpaper))}
       <div className="desktop-area" style={getWallpaperStyle(wallpaper)}>
         <div className="desktop-icons">
           {DESKTOP_APPS.map((app) => (
