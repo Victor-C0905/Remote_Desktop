@@ -94,7 +94,31 @@
   user-select: none;
 }
 
-/* ── View Toggle + Search ─────────────────────────────── */
+/* ── Path Input ─────────────────────────────────────────── */
+.fm-path-input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 12px;
+  background: var(--view-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-ui);
+  font-size: var(--font-body);
+  color: var(--text-primary);
+  outline: none;
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+.fm-path-input:focus {
+  border-color: var(--accent-bg);
+}
+
+.fm-path-input::placeholder {
+  color: var(--text-disabled);
+}
+
+/* ── View Toggle ──────────────────────────────────────── */
 .fm-headerbar .view-toggle {
   display: flex;
   background: var(--view-bg);
@@ -433,4 +457,77 @@
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+/* ── Properties Dialog ─────────────────────────────────── */
+.fm-properties-dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 400px;
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  z-index: 1000;
+  box-shadow: var(--shadow-popup);
+}
+
+.pd-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.pd-icon {
+  font-size: 32px;
+}
+
+.pd-name {
+  font-size: 14pt;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.pd-content {
+  margin-bottom: 16px;
+}
+
+.pd-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.pd-label {
+  color: var(--text-secondary);
+  font-size: var(--font-body);
+}
+
+.pd-value {
+  color: var(--text-primary);
+  font-size: var(--font-body);
+}
+
+.pd-footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.pd-footer button {
+  padding: 6px 16px;
+  background: var(--accent-bg);
+  color: var(--accent-fg);
+  border: none;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  font-size: var(--font-body);
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.pd-footer button:hover {
+  background: var(--accent-hover);
 }

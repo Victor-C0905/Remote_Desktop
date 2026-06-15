@@ -12,12 +12,10 @@ key_path = "./key.pem"
 token = "gmr_1ecb954c-9a8c-4a5e-a3b4-f9a77af0d036"
 
 [security]
-allowed_paths = [
-    "/home",
-    "/etc",
-    "/var/log",
-    "/opt",
-]
+# allowed_paths 为空表示不限制，完全依赖 Linux 文件系统权限
+# 如果需要限制，可以添加路径白名单，例如：
+# allowed_paths = ["/home", "/var/log"]
+allowed_paths = []
 blocked_commands = [
     "rm -rf /",
     "dd if=",
