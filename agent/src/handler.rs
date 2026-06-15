@@ -1,5 +1,5 @@
 use crate::config::AgentConfig;
-use crate::protocol::{Envelope, FileEntry, MetricsSnapshot, Payload};
+use crate::protocol::{Envelope, FileEntry, MetricsSnapshot, MountInfo, Payload};
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -45,15 +45,22 @@ pub fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig) -> Envelope {
         }
 
         Payload::ReadDirRequest { path } => {
+            tracing::info!("读取目录请求: {}", path);
             match handle_read_dir(path, cfg) {
-                Ok(entries) => Envelope::new(
-                    envelope.request_id,
-                    Payload::ReadDirResponse {
-                        path: path.clone(),
-                        entries,
-                    },
-                ),
-                Err(e) => error_response(envelope.request_id, &e),
+                Ok(entries) => {
+                    tracing::info!("读取目录成功: {} ({} 个文件)", path, entries.len());
+                    Envelope::new(
+                        envelope.request_id,
+                        Payload::ReadDirResponse {
+                            path: path.clone(),
+                            entries,
+                        },
+                    )
+                }
+                Err(e) => {
+                    tracing::error!("读取目录失败: {} - {}", path, e);
+                    error_response(envelope.request_id, &e)
+                }
             }
         }
 
@@ -114,6 +121,26 @@ pub fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig) -> Envelope {
             error_response(envelope.request_id, "终端功能尚未实现")
         }
 
+        Payload::GetCurrentUser => {
+            tracing::info!("获取当前用户请求");
+            let username = handle_get_current_user();
+            tracing::info!("当前用户: {}", username);
+            Envelope::new(
+                envelope.request_id,
+                Payload::CurrentUserResponse { username },
+            )
+        }
+
+        Payload::GetMounts => {
+            tracing::info!("获取挂载点列表请求");
+            let mounts = handle_get_mounts();
+            tracing::info!("挂载点数量: {}", mounts.len());
+            Envelope::new(
+                envelope.request_id,
+                Payload::MountsResponse { mounts },
+            )
+        }
+
         other => {
             tracing::warn!("未处理的消息类型: {:?}", std::mem::discriminant(other));
             error_response(envelope.request_id, "未知的消息类型")
@@ -121,18 +148,50 @@ pub fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig) -> Envelope {
     }
 }
 
-fn handle_read_dir(path: &str, cfg: &AgentConfig) -> Result<Vec<FileEntry>, String> {
-    let allowed = cfg
-        .security
-        .allowed_paths
+fn handle_get_current_user() -> String {
+    whoami::username()
+}
+
+fn handle_get_mounts() -> Vec<MountInfo> {
+    use sysinfo::Disks;
+
+    let disks = Disks::new_with_refreshed_list();
+    disks
         .iter()
-        .any(|prefix| path.starts_with(prefix));
-    if !allowed && !cfg.security.allowed_paths.is_empty() {
-        return Err(format!("访问被拒绝: 不在允许的路径列表中 ({})", path));
+        .map(|disk| MountInfo {
+            mount_point: disk.mount_point().to_string_lossy().to_string(),
+            device: disk.name().to_string_lossy().to_string(),
+            filesystem: disk.file_system().to_string_lossy().to_string(),
+            total_bytes: disk.total_space(),
+            used_bytes: disk.total_space() - disk.available_space(),
+        })
+        .collect()
+}
+
+fn handle_read_dir(path: &str, cfg: &AgentConfig) -> Result<Vec<FileEntry>, String> {
+    // 如果 allowed_paths 不为空，则检查白名单
+    // 如果 allowed_paths 为空，则不限制，依赖 Linux 文件系统权限
+    if !cfg.security.allowed_paths.is_empty() {
+        let allowed = cfg
+            .security
+            .allowed_paths
+            .iter()
+            .any(|prefix| path.starts_with(prefix));
+        if !allowed {
+            return Err(format!("访问被拒绝: 不在允许的路径列表中 ({})", path));
+        }
     }
 
+    // 尝试读取目录，依赖 Linux 文件系统权限
     let entries = fs::read_dir(path)
-        .map_err(|e| format!("无法读取目录 '{}': {}", path, e))?
+        .map_err(|e| {
+            let error_msg = e.to_string();
+            if error_msg.contains("Permission denied") {
+                format!("权限不足: 无法访问目录 '{}' (需要相应的 Linux 用户权限)", path)
+            } else {
+                format!("无法读取目录 '{}': {}", path, e)
+            }
+        })?
         .filter_map(|entry| {
             let entry = entry.ok()?;
             let metadata = entry.metadata().ok()?;
@@ -162,17 +221,28 @@ fn handle_read_dir(path: &str, cfg: &AgentConfig) -> Result<Vec<FileEntry>, Stri
 }
 
 fn handle_read_file(path: &str, cfg: &AgentConfig) -> Result<(String, u64), String> {
-    let allowed = cfg
-        .security
-        .allowed_paths
-        .iter()
-        .any(|prefix| path.starts_with(prefix));
-    if !allowed && !cfg.security.allowed_paths.is_empty() {
-        return Err(format!("访问被拒绝: 不在允许的路径列表中 ({})", path));
+    // 如果 allowed_paths 不为空，则检查白名单
+    // 如果 allowed_paths 为空，则不限制，依赖 Linux 文件系统权限
+    if !cfg.security.allowed_paths.is_empty() {
+        let allowed = cfg
+            .security
+            .allowed_paths
+            .iter()
+            .any(|prefix| path.starts_with(prefix));
+        if !allowed {
+            return Err(format!("访问被拒绝: 不在允许的路径列表中 ({})", path));
+        }
     }
 
     let metadata = fs::metadata(path)
-        .map_err(|e| format!("无法访问文件 '{}': {}", path, e))?;
+        .map_err(|e| {
+            let error_msg = e.to_string();
+            if error_msg.contains("Permission denied") {
+                format!("权限不足: 无法访问文件 '{}' (需要相应的 Linux 用户权限)", path)
+            } else {
+                format!("无法访问文件 '{}': {}", path, e)
+            }
+        })?;
     
     if metadata.is_dir() {
         return Err("这是一个目录，不能作为文件读取".to_string());
@@ -190,29 +260,44 @@ fn handle_read_file(path: &str, cfg: &AgentConfig) -> Result<(String, u64), Stri
 }
 
 fn handle_write_file(path: &str, content: &str, cfg: &AgentConfig) -> Result<u64, String> {
-    let allowed = cfg
-        .security
-        .allowed_paths
-        .iter()
-        .any(|prefix| path.starts_with(prefix));
-    if !allowed && !cfg.security.allowed_paths.is_empty() {
-        return Err(format!("访问被拒绝: 不在允许的路径列表中 ({})", path));
+    // 如果 allowed_paths 不为空，则检查白名单
+    // 如果 allowed_paths 为空，则不限制，依赖 Linux 文件系统权限
+    if !cfg.security.allowed_paths.is_empty() {
+        let allowed = cfg
+            .security
+            .allowed_paths
+            .iter()
+            .any(|prefix| path.starts_with(prefix));
+        if !allowed {
+            return Err(format!("访问被拒绝: 不在允许的路径列表中 ({})", path));
+        }
     }
 
     fs::write(path, content)
-        .map_err(|e| format!("写入文件失败: {}", e))?;
+        .map_err(|e| {
+            let error_msg = e.to_string();
+            if error_msg.contains("Permission denied") {
+                format!("权限不足: 无法写入文件 '{}' (需要相应的 Linux 用户权限)", path)
+            } else {
+                format!("写入文件失败: {}", e)
+            }
+        })?;
 
     Ok(content.len() as u64)
 }
 
 fn handle_delete(path: &str, cfg: &AgentConfig) -> Result<(), String> {
-    let allowed = cfg
-        .security
-        .allowed_paths
-        .iter()
-        .any(|prefix| path.starts_with(prefix));
-    if !allowed && !cfg.security.allowed_paths.is_empty() {
-        return Err(format!("访问被拒绝: 不在允许的路径列表中 ({})", path));
+    // 如果 allowed_paths 不为空，则检查白名单
+    // 如果 allowed_paths 为空，则不限制，依赖 Linux 文件系统权限
+    if !cfg.security.allowed_paths.is_empty() {
+        let allowed = cfg
+            .security
+            .allowed_paths
+            .iter()
+            .any(|prefix| path.starts_with(prefix));
+        if !allowed {
+            return Err(format!("访问被拒绝: 不在允许的路径列表中 ({})", path));
+        }
     }
 
     // 检查是否在禁止删除的路径

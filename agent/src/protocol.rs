@@ -77,6 +77,18 @@ pub enum Payload {
     #[serde(rename = "terminal_data")]
     TerminalData { session_id: String, data: Vec<u8>, is_input: bool },
 
+    #[serde(rename = "get_current_user")]
+    GetCurrentUser,
+
+    #[serde(rename = "current_user_resp")]
+    CurrentUserResponse { username: String },
+
+    #[serde(rename = "get_mounts")]
+    GetMounts,
+
+    #[serde(rename = "mounts_resp")]
+    MountsResponse { mounts: Vec<MountInfo> },
+
     #[serde(rename = "error")]
     Error { code: i32, message: String },
 }
@@ -98,6 +110,16 @@ pub struct MetricsSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiskInfo {
     pub mount_point: String,
+    pub total_bytes: u64,
+    pub used_bytes: u64,
+}
+
+/// 挂载点信息
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MountInfo {
+    pub mount_point: String,
+    pub device: String,
+    pub filesystem: String,
     pub total_bytes: u64,
     pub used_bytes: u64,
 }

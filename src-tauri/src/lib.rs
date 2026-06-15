@@ -375,6 +375,8 @@ pub fn run() {
             connection::remote_ping,
             connection::remote_send,
             connection::remote_read_dir,
+            connection::remote_get_current_user,
+            connection::remote_get_mounts,
             connection::remote_get_metrics,
             connection::remote_read_file,
             connection::remote_write_file,

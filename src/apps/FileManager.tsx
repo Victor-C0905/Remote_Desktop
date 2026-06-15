@@ -16,6 +16,29 @@ interface ReadDirResponse {
   entries: FileEntry[];
 }
 
+// 挂载点信息
+interface MountInfo {
+  mount_point: string;
+  device: string;
+  filesystem: string;
+  total_bytes: number;
+  used_bytes: number;
+}
+
+// 侧边栏项
+interface SidebarItem {
+  icon: string;
+  label: string;
+  path: string;
+  type: "bookmark" | "mount" | "network";
+}
+
+// 侧边栏部分
+interface SidebarSection {
+  title: string;
+  items: SidebarItem[];
+}
+
 /* ── Icon Map ──────────────────────────────────────────── */
 
 const FOLDER_ICON = "📁";
@@ -57,62 +80,43 @@ function formatDate(iso: string): string {
   });
 }
 
-/* ── Sidebar Bookmarks ─────────────────────────────────── */
-
-interface Bookmark {
-  icon: string;
-  label: string;
-  path: string;
-}
-
-const IS_WIN = typeof navigator !== "undefined" && navigator.platform.startsWith("Win");
-
-const BOOKMARKS: Bookmark[] = IS_WIN ? [
-  { icon: "🏠", label: "用户目录", path: "C:\\Users" },
-  { icon: "📄", label: "文档", path: "C:\\Users\\Public\\Documents" },
-  { icon: "⬇️", label: "下载", path: "C:\\Users\\Public\\Downloads" },
-  { icon: "🖼️", label: "图片", path: "C:\\Users\\Public\\Pictures" },
-] : [
-  { icon: "🏠", label: "主目录", path: "/home" },
-  { icon: "📄", label: "文档", path: "/home/user/Documents" },
-  { icon: "⬇️", label: "下载", path: "/home/user/Downloads" },
-  { icon: "🖼️", label: "图片", path: "/home/user/Pictures" },
-  { icon: "🎵", label: "音乐", path: "/home/user/Music" },
-];
-
-const PLACES: Bookmark[] = IS_WIN ? [
-  { icon: "💻", label: "C 盘", path: "C:\\" },
-  { icon: "💾", label: "D 盘", path: "D:\\" },
-] : [
-  { icon: "💻", label: "计算机", path: "/" },
-  { icon: "📁", label: "临时文件", path: "/tmp" },
-];
-
 /* ── Component ─────────────────────────────────────────── */
 
 type ViewMode = "list" | "grid";
 
 export function FileManager() {
   const { activeServerId } = useServerManager();
-  
+
+  // 路径系统：区分本地模式和远程模式
+  const IS_WIN_LOCAL = typeof navigator !== "undefined" && navigator.platform.startsWith("Win");  // 本地客户端平台
+  const IS_WIN = !activeServerId && IS_WIN_LOCAL;  // 只有在本地模式下才使用 Windows 路径格式
+
   const [currentPath, setCurrentPath] = useState(() => {
-    if (navigator.platform.startsWith("Win")) {
-      return "C:\\Users";
-    }
-    return "/home";
+    // 初始状态：根据本地客户端平台判断
+    return IS_WIN_LOCAL ? "C:\\Users" : "/home";
   });
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
+  const [username, setUsername] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [history, setHistory] = useState<string[]>([currentPath]);
   const [historyIdx, setHistoryIdx] = useState(0);
-  const pathSep = IS_WIN ? "\\" : "/";
+  const pathSep = IS_WIN ? "\\" : "/";  // 路径分隔符：根据模式判断
   const [contextMenu, setContextMenu] = useState<{
     x: number; y: number; entry: FileEntry;
   } | null>(null);
+  const [propertiesEntry, setPropertiesEntry] = useState<FileEntry | null>(null);
   const mainRef = useRef<HTMLDivElement>(null);
+  
+  // 侧边栏状态
+  const [sidebarSections, setSidebarSections] = useState<SidebarSection[]>([]);
+  const [mounts, setMounts] = useState<MountInfo[]>([]);
+  
+  // 路径输入框状态
+  const [pathInput, setPathInput] = useState(currentPath);
+  const [isEditingPath, setIsEditingPath] = useState(false);
 
   const loadDir = useCallback(async (path: string) => {
     setLoading(true);
@@ -120,17 +124,29 @@ export function FileManager() {
     setSelectedIdx(null);
     setContextMenu(null);
 
+    // 调试：打印当前状态
+    console.log("[FileManager] loadDir 调用:", {
+      path,
+      activeServerId,
+      isRemote: !!activeServerId,
+    });
+
+    // 无论成功或失败，都更新当前路径
+    setCurrentPath(path);
+
     try {
       let resp: ReadDirResponse | null = null;
-      
+
       if (activeServerId) {
         // 远程模式：通过 QUIC 从 Agent 获取
+        console.log("[FileManager] 远程模式，调用 remote_read_dir");
         resp = await invoke<ReadDirResponse>("remote_read_dir", {
           serverId: activeServerId,
           path,
         });
       } else {
         // 本地模式：直接读取本地文件系统
+        console.log("[FileManager] 本地模式，调用 read_dir");
         resp = await invoke<ReadDirResponse>("read_dir", { path });
       }
 
@@ -143,8 +159,6 @@ export function FileManager() {
       } else {
         setEntries(getDemoEntries(path));
       }
-
-      setCurrentPath(path);
     } catch (e: any) {
       setError(e.toString());
       setEntries([]);
@@ -153,18 +167,200 @@ export function FileManager() {
     }
   }, [activeServerId]);
 
-  const HOME_PATH = navigator.platform.startsWith("Win") ? "C:\\Users" : "/home";
+  // HOME_PATH：根据模式判断
+  const HOME_PATH = activeServerId ? "/home" : (IS_WIN_LOCAL ? "C:\\Users" : "/home");
+
+  // 获取远程服务器用户名
+  useEffect(() => {
+    console.log("[FileManager] 获取用户名 useEffect, activeServerId:", activeServerId);
+    if (activeServerId) {
+      // 连接建立后，获取用户名
+      console.log("[FileManager] 调用 remote_get_current_user, serverId:", activeServerId);
+      invoke<string>("remote_get_current_user", { serverId: activeServerId })
+        .then((username) => {
+          console.log("[FileManager] 获取用户名成功:", username);
+          setUsername(username);
+        })
+        .catch(err => {
+          console.error("[FileManager] 获取用户名失败:", err);
+          setUsername("user");  // 默认值
+        });
+    } else {
+      console.log("[FileManager] 本地模式，清空用户名");
+      setUsername(null);  // 本地模式清空用户名
+    }
+  }, [activeServerId]);
 
   // Initial load
-  useEffect(() => { loadDir(HOME_PATH); }, [loadDir, HOME_PATH]);
+  useEffect(() => {
+    console.log("[FileManager] 初始加载 useEffect, activeServerId:", activeServerId, "username:", username);
+    if (activeServerId && username) {
+      // 远程模式：有用户名后，加载初始目录
+      const homePath = `/home/${username}`;
+      console.log("[FileManager] 远程模式，加载路径:", homePath);
+      loadDir(homePath);
+    } else if (!activeServerId) {
+      // 本地模式：使用默认路径
+      console.log("[FileManager] 本地模式，加载路径:", HOME_PATH);
+      loadDir(HOME_PATH);
+    } else {
+      console.log("[FileManager] 等待用户名...");
+    }
+  }, [activeServerId, username, loadDir, HOME_PATH]);
+
+  // 获取挂载点列表
+  useEffect(() => {
+    console.log("[FileManager] 获取挂载点 useEffect, activeServerId:", activeServerId);
+    if (activeServerId) {
+      // 远程模式：获取挂载点列表
+      console.log("[FileManager] 调用 remote_get_mounts, serverId:", activeServerId);
+      invoke<MountInfo[]>("remote_get_mounts", { serverId: activeServerId })
+        .then((mounts) => {
+          console.log("[FileManager] 获取挂载点成功:", mounts);
+          setMounts(mounts);
+        })
+        .catch(err => {
+          console.error("[FileManager] 获取挂载点失败:", err);
+          setMounts([]);  // 默认空列表
+        });
+    } else {
+      console.log("[FileManager] 本地模式，清空挂载点");
+      setMounts([]);  // 本地模式清空挂载点
+    }
+  }, [activeServerId]);
+
+  // 生成侧边栏
+  useEffect(() => {
+    console.log("[FileManager] 生成侧边栏 useEffect, activeServerId:", activeServerId, "username:", username, "mounts:", mounts.length);
+    if (activeServerId && username) {
+      // 远程模式：生成远程侧边栏
+      const sections: SidebarSection[] = [
+        {
+          title: "位置",
+          items: [
+            { icon: "🏠", label: "主目录", path: `/home/${username}`, type: "bookmark" },
+            { icon: "📄", label: "文档", path: `/home/${username}/Documents`, type: "bookmark" },
+            { icon: "⬇️", label: "下载", path: `/home/${username}/Downloads`, type: "bookmark" },
+            { icon: "🖼️", label: "图片", path: `/home/${username}/Pictures`, type: "bookmark" },
+            { icon: "🎵", label: "音乐", path: `/home/${username}/Music`, type: "bookmark" },
+            { icon: "🎬", label: "视频", path: `/home/${username}/Videos`, type: "bookmark" },
+          ]
+        },
+        {
+          title: "设备",
+          items: mounts.map(m => ({
+            icon: "💾",
+            label: m.mount_point,
+            path: m.mount_point,
+            type: "mount"
+          }))
+        },
+        {
+          title: "其他位置",
+          items: [
+            { icon: "🌐", label: "网络", path: "/network", type: "network" }
+          ]
+        }
+      ];
+      console.log("[FileManager] 远程侧边栏生成完成:", sections);
+      setSidebarSections(sections);
+    } else if (!activeServerId) {
+      // 本地模式：使用本地侧边栏
+      const sections: SidebarSection[] = [
+        {
+          title: "位置",
+          items: IS_WIN ? [
+            { icon: "🏠", label: "主目录", path: "C:\\Users", type: "bookmark" },
+            { icon: "📄", label: "文档", path: "C:\\Users\\Public\\Documents", type: "bookmark" },
+            { icon: "⬇️", label: "下载", path: "C:\\Users\\Public\\Downloads", type: "bookmark" },
+            { icon: "🖼️", label: "图片", path: "C:\\Users\\Public\\Pictures", type: "bookmark" },
+            { icon: "🎵", label: "音乐", path: "C:\\Users\\Public\\Music", type: "bookmark" },
+            { icon: "🎬", label: "视频", path: "C:\\Users\\Public\\Videos", type: "bookmark" },
+          ] : [
+            { icon: "🏠", label: "主目录", path: "/home", type: "bookmark" },
+            { icon: "📄", label: "文档", path: "/home/Documents", type: "bookmark" },
+            { icon: "⬇️", label: "下载", path: "/home/Downloads", type: "bookmark" },
+            { icon: "🖼️", label: "图片", path: "/home/Pictures", type: "bookmark" },
+            { icon: "🎵", label: "音乐", path: "/home/Music", type: "bookmark" },
+            { icon: "🎬", label: "视频", path: "/home/Videos", type: "bookmark" },
+          ]
+        },
+        {
+          title: "其他位置",
+          items: [
+            { icon: "🌐", label: "网络", path: "/network", type: "network" }
+          ]
+        }
+      ];
+      console.log("[FileManager] 本地侧边栏生成完成:", sections);
+      setSidebarSections(sections);
+    }
+  }, [activeServerId, username, mounts]);
+
+  // 同步路径输入框
+  useEffect(() => {
+    if (!isEditingPath) {
+      setPathInput(currentPath);
+    }
+  }, [currentPath, isEditingPath]);
+
+  // 处理路径输入
+  const handlePathInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setPathInput(e.target.value);
+  };
+
+  const handlePathInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      setIsEditingPath(false);
+      navigateTo(pathInput);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      setIsEditingPath(false);
+      setPathInput(currentPath);
+    }
+  };
+
+  const handlePathInputFocus = () => {
+    setIsEditingPath(true);
+  };
+
+  const handlePathInputBlur = () => {
+    setIsEditingPath(false);
+    setPathInput(currentPath);
+  };
 
   // ── Navigation ──────────────────────────────────────
   const navigateTo = useCallback((path: string) => {
+    // 清理路径：移除多余的斜杠
+    let cleanPath = path;
+    if (!IS_WIN) {
+      // Linux: 移除多余的斜杠，但保留根目录的斜杠
+      cleanPath = path.replace(/\/+/g, "/");
+      // 确保路径以斜杠开头（除非是空路径）
+      if (cleanPath.length > 0 && !cleanPath.startsWith("/")) {
+        cleanPath = "/" + cleanPath;
+      }
+      // 空路径默认为根目录
+      if (cleanPath === "") {
+        cleanPath = "/";
+      }
+    } else {
+      // Windows: 移除多余的反斜杠
+      cleanPath = path.replace(/\\+/g, "\\");
+      // 确保路径格式正确（例如 C:\）
+      if (cleanPath.length > 0 && !cleanPath.includes(":")) {
+        cleanPath = "C:" + cleanPath;
+      }
+    }
+
+    console.log("[FileManager] navigateTo: 输入路径:", path, "清理后:", cleanPath);
+
     const newHistory = history.slice(0, historyIdx + 1);
-    newHistory.push(path);
+    newHistory.push(cleanPath);
     setHistory(newHistory);
     setHistoryIdx(newHistory.length - 1);
-    loadDir(path);
+    loadDir(cleanPath);
   }, [history, historyIdx, loadDir]);
 
   const goBack = useCallback(() => {
@@ -214,6 +410,11 @@ export function FileManager() {
     navigateTo(IS_WIN ? targetPath : "/" + targetPath);
   }, [currentPath, navigateTo, pathSep]);
 
+  // ── Properties Dialog ────────────────────────────────
+  const showProperties = useCallback((entry: FileEntry) => {
+    setPropertiesEntry(entry);
+  }, []);
+
   // ── Context Menu ─────────────────────────────────────
   const handleContextMenu = useCallback((e: React.MouseEvent, entry: FileEntry, idx: number) => {
     e.preventDefault();
@@ -262,24 +463,18 @@ export function FileManager() {
         <button className="nav-btn" onClick={goForward} disabled={historyIdx >= history.length - 1} title="前进">→</button>
         <button className="nav-btn" onClick={goUp} title="上级目录">↑</button>
 
-        {/* Breadcrumb */}
-        <div className="fm-breadcrumb">
-          <button className="crumb" onClick={() => navigateTo(IS_WIN ? "C:\\" : "/")}>
-            {IS_WIN ? "C:" : "/"}
-          </button>
-          {pathParts.map((_, i) => (
-            <span key={`sep-${i}`} className="sep">{pathSep}</span>
-          ))}
-          {pathParts.map((part, i) => (
-            <button
-              key={i}
-              className={`crumb${i === pathParts.length - 1 ? " current" : ""}`}
-              onClick={() => handleCrumbClick(i)}
-            >
-              {part}
-            </button>
-          ))}
-        </div>
+        {/* Path Input */}
+        <input
+          type="text"
+          className="fm-path-input"
+          value={pathInput}
+          onChange={handlePathInputChange}
+          onKeyDown={handlePathInputKeyDown}
+          onFocus={handlePathInputFocus}
+          onBlur={handlePathInputBlur}
+          placeholder={IS_WIN ? "C:\\Users" : "/home"}
+          title="输入路径并按 Enter 跳转"
+        />
 
         {/* View Toggle */}
         <div className="view-toggle">
@@ -302,32 +497,21 @@ export function FileManager() {
       <div className="fm-content">
         {/* Sidebar */}
         <div className="fm-sidebar">
-          <div className="sidebar-section">
-            <div className="sidebar-section-title">位置</div>
-            {BOOKMARKS.map((bm) => (
-              <div
-                key={bm.path}
-                className={`sidebar-item${currentPath === bm.path ? " active" : ""}`}
-                onClick={() => navigateTo(bm.path)}
-              >
-                <span className="si-icon">{bm.icon}</span>
-                <span className="si-label">{bm.label}</span>
-              </div>
-            ))}
-          </div>
-          <div className="sidebar-section">
-            <div className="sidebar-section-title">设备</div>
-            {PLACES.map((p) => (
-              <div
-                key={p.path}
-                className={`sidebar-item${currentPath === p.path ? " active" : ""}`}
-                onClick={() => navigateTo(p.path)}
-              >
-                <span className="si-icon">{p.icon}</span>
-                <span className="si-label">{p.label}</span>
-              </div>
-            ))}
-          </div>
+          {sidebarSections.map((section, sectionIdx) => (
+            <div key={sectionIdx} className="sidebar-section">
+              <div className="sidebar-section-title">{section.title}</div>
+              {section.items.map((item, itemIdx) => (
+                <div
+                  key={`${sectionIdx}-${itemIdx}`}
+                  className={`sidebar-item${currentPath === item.path ? " active" : ""}`}
+                  onClick={() => navigateTo(item.path)}
+                >
+                  <span className="si-icon">{item.icon}</span>
+                  <span className="si-label">{item.label}</span>
+                </div>
+              ))}
+            </div>
+          ))}
         </div>
 
         {/* Main Area */}
@@ -422,8 +606,39 @@ export function FileManager() {
             <span className="ctx-icon">✏️</span> 重命名
           </div>
           <div className="ctx-separator" />
-          <div className="ctx-item" onClick={() => setContextMenu(null)}>
+          <div className="ctx-item" onClick={() => { showProperties(contextMenu.entry); setContextMenu(null); }}>
             <span className="ctx-icon">ℹ️</span> 属性
+          </div>
+        </div>
+      )}
+
+      {/* Properties Dialog */}
+      {propertiesEntry && (
+        <div className="fm-properties-dialog">
+          <div className="pd-header">
+            <span className="pd-icon">{getFileIcon(propertiesEntry)}</span>
+            <span className="pd-name">{propertiesEntry.name}</span>
+          </div>
+          <div className="pd-content">
+            <div className="pd-row">
+              <span className="pd-label">类型:</span>
+              <span className="pd-value">{propertiesEntry.is_dir ? "文件夹" : "文件"}</span>
+            </div>
+            <div className="pd-row">
+              <span className="pd-label">大小:</span>
+              <span className="pd-value">{formatSize(propertiesEntry.size)}</span>
+            </div>
+            <div className="pd-row">
+              <span className="pd-label">修改时间:</span>
+              <span className="pd-value">{formatDate(propertiesEntry.mtime)}</span>
+            </div>
+            <div className="pd-row">
+              <span className="pd-label">权限:</span>
+              <span className="pd-value">{propertiesEntry.permissions}</span>
+            </div>
+          </div>
+          <div className="pd-footer">
+            <button onClick={() => setPropertiesEntry(null)}>关闭</button>
           </div>
         </div>
       )}

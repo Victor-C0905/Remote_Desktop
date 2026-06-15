@@ -1,4 +1,4 @@
-import { createContext, useContext, useCallback, ReactNode } from "react";
+import { createContext, useContext, useCallback, useEffect, ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   useServersStore,
@@ -57,9 +57,13 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
     updateServer,
     setActiveServerId,
     setServerStatus,
+    resetAllStatus,
   } = useServersStore();
 
   const activeServer = servers.find((s) => s.id === activeServerId) || null;
+
+  // 注意：不在这里重置状态，因为会干扰用户连接
+  // onRehydrateStorage 已经在 serversStore 中处理了重置逻辑
 
   const connectServer = useCallback(async (id: string) => {
     console.log("[ServerManager] 开始连接服务器:", id);
