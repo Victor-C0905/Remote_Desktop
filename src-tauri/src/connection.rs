@@ -433,7 +433,26 @@ async fn try_quic_connect(host: &str, port: u16) -> Result<(quinn::Connection, f
     // 安装 CryptoProvider
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let addr = format!("{}:{}", host, port).parse().map_err(|e| format!("地址解析失败: {}", e))?;
+    // 解析域名或 IP 地址
+    let addr = if host.contains(':') || host.parse::<std::net::IpAddr>().is_ok() {
+        // 已经是 IP 地址格式
+        format!("{}:{}", host, port).parse().map_err(|e| format!("地址解析失败: {}", e))?
+    } else {
+        // 需要解析域名，优先使用 IPv4
+        let addr_str = format!("{}:{}", host, port);
+        let resolved_addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host(&addr_str)
+            .await
+            .map_err(|e| format!("DNS 解析失败: {}", e))?
+            .collect();
+
+        // 优先选择 IPv4 地址
+        resolved_addrs
+            .iter()
+            .find(|addr| addr.is_ipv4())
+            .copied()
+            .or_else(|| resolved_addrs.first().copied())
+            .ok_or_else(|| "DNS 解析无结果".to_string())?
+    };
 
     // 创建客户端配置（跳过证书验证）
     let client_config = build_quic_client_config()?;
