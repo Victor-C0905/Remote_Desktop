@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
+use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod cert;
@@ -52,9 +53,13 @@ async fn main() -> Result<()> {
         tracing::info!("🔑 认证 Token: {}...", masked);
     }
 
+    // 创建 EventBus 和 SubscriptionManager
+    let event_bus = Arc::new(event_bus::EventBus::new());
+    let subscription_manager = Arc::new(subscription::SubscriptionManager::new(cfg.clone(), event_bus.clone()));
+
     let key_clone = key.clone_key();
     tokio::try_join!(
-        server::quic::run(cfg.clone(), cert.clone(), key_clone),
+        server::quic::run(cfg.clone(), cert.clone(), key_clone, subscription_manager.clone(), event_bus.clone()),
         server::websocket::run(cfg.clone(), cert, key),
     )?;
 

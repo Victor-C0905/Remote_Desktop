@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
 use tokio::sync::mpsc;
@@ -211,6 +212,10 @@ pub struct ConnectionManager {
 struct ActiveConnection {
     info: ConnectionInfo,
     tx: mpsc::Sender<ClientRequest>,
+    // QUIC Connection（用于创建持久 Stream）
+    quic_conn: Option<Arc<quinn::Connection>>,
+    // 持久 Stream 监听任务
+    subscription_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 enum ClientRequest {
@@ -297,7 +302,12 @@ pub async fn remote_connect(
         let (tx, mut rx) = mpsc::channel::<ClientRequest>(32);
         {
             let mut conns = manager.connections.lock().unwrap();
-            conns.insert(server_id.clone(), ActiveConnection { info: info.clone(), tx: tx.clone() });
+            conns.insert(server_id.clone(), ActiveConnection {
+                info: info.clone(),
+                tx: tx.clone(),
+                quic_conn: Some(Arc::new(conn.clone())),
+                subscription_task: None,
+            });
         }
 
         let server_id_clone = server_id.clone();
@@ -613,43 +623,135 @@ pub async fn subscribe(
 ) -> Result<(), String> {
     let manager = app.state::<ConnectionManager>();
 
-    // 获取连接
-    let conn = {
-        let conns = manager.connections.lock().unwrap();
-        let active_conn = conns.get(&server_id).ok_or("未找到连接")?;
-        // 获取 QUIC Connection（需要从 ActiveConnection 中提取）
-        // 暂时使用简化实现：通过 remote_send 发送订阅请求
-        active_conn.tx.clone()
+    // 使用锁保护整个订阅流程，避免竞态条件
+    let quic_conn = {
+        let mut conns = manager.connections.lock().unwrap();
+        if let Some(active_conn) = conns.get_mut(&server_id) {
+            // 检查是否已有订阅任务
+            if active_conn.subscription_task.is_some() {
+                tracing::info!("已有订阅任务: server_id={}", server_id);
+                return Ok(()); // 已订阅，直接返回
+            }
+
+            // 获取 QUIC Connection
+            active_conn.quic_conn.clone()
+        } else {
+            return Err("未找到连接".into());
+        }
     };
 
-    // 发送 Subscribe payload
-    let request_id = manager.next_request_id();
-    let envelope = Envelope::new(request_id, Payload::Subscribe {
-        server_id: server_id.clone(),
-        types: types.clone(),
-    });
+    // 创建持久 Stream（用于订阅请求和事件监听）
+    if let Some(conn) = quic_conn {
+        let app_handle = app.clone();
+        let server_id_clone = server_id.clone();
+        let types_clone = types.clone();
 
-    let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-    conn.send(ClientRequest::Send { envelope, response_tx }).await
-        .map_err(|_| "发送订阅请求失败")?;
+        // 创建持久 Stream
+        let stream = conn.open_bi().await
+            .map_err(|e| format!("创建 Stream 失败: {}", e))?;
 
-    // 等待确认
-    let data = response_rx.await.map_err(|_| "等待响应超时")??;
-    let resp = Envelope::decode(&data)?;
+        let (mut send, mut recv) = stream;
 
-    match resp.payload {
-        Payload::SubscribeAck { success, .. } => {
-            if success {
-                // 启动事件监听任务（持久 Stream）
-                // 注意：这里需要创建新的持久 Stream，而不是使用现有的请求-响应模式
-                // 暂时使用简化实现：后续完善持久 Stream 管理
-                Ok(())
+        // 发送 Subscribe payload
+        let request_id = 1; // 使用固定的 request_id
+        let subscribe_payload = Envelope::new(request_id, Payload::Subscribe {
+            server_id: server_id_clone.clone(),
+            types: types_clone.clone(),
+        });
+
+        if let Ok(data) = subscribe_payload.encode() {
+            use tokio::io::AsyncWriteExt;
+            // 发送消息长度
+            let len = (data.len() as u32).to_le_bytes();
+            if send.write_all(&len).await.is_err() {
+                return Err("发送订阅请求失败".into());
+            }
+            // 发送消息数据
+            if send.write_all(&data).await.is_err() {
+                return Err("发送订阅请求失败".into());
+            }
+            send.flush().await.ok();
+        }
+
+        // 等待 SubscribeAck 响应
+        let mut len_buf = [0u8; 4];
+        use tokio::io::AsyncReadExt;
+        if recv.read_exact(&mut len_buf).await.is_err() {
+            return Err("等待响应超时".into());
+        }
+        let len = u32::from_le_bytes(len_buf) as usize;
+        let mut data_buf = vec![0u8; len];
+        if recv.read_exact(&mut data_buf).await.is_err() {
+            return Err("读取响应失败".into());
+        }
+
+        if let Ok(resp_envelope) = Envelope::decode(&data_buf) {
+            if let Payload::SubscribeAck { success, .. } = resp_envelope.payload {
+                if !success {
+                    return Err("订阅失败".into());
+                }
             } else {
-                Err("订阅失败".into())
+                return Err("意外响应".into());
+            }
+        } else {
+            return Err("解析响应失败".into());
+        }
+
+        // 启动监听任务
+        let task = tokio::spawn(async move {
+            tracing::info!("订阅成功: server_id={}", server_id_clone);
+
+            // 监听 Event payload
+            loop {
+                // 读取消息长度
+                let mut len_buf = [0u8; 4];
+                match recv.read_exact(&mut len_buf).await {
+                    Ok(_) => {
+                        let len = u32::from_le_bytes(len_buf) as usize;
+                        let mut data_buf = vec![0u8; len];
+                        match recv.read_exact(&mut data_buf).await {
+                            Ok(_) => {
+                                // 解析 Event payload
+                                if let Ok(event_envelope) = Envelope::decode(&data_buf) {
+                                    if let Payload::Event { event_type, data, timestamp } = event_envelope.payload {
+                                        // 转发到前端 Tauri Event
+                                        let event_data = serde_json::json!({
+                                            "server_id": server_id_clone,
+                                            "event_type": event_type,
+                                            "data": data,
+                                            "timestamp": timestamp,
+                                        });
+
+                                        app_handle.emit("subscription_event", event_data).ok();
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!("读取事件数据失败: {}", e);
+                                break;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("读取事件长度失败: {}", e);
+                        break;
+                    }
+                }
+            }
+        });
+
+        // 保存监听任务（使用锁保护）
+        {
+            let mut conns = manager.connections.lock().unwrap();
+            if let Some(active_conn) = conns.get_mut(&server_id) {
+                active_conn.subscription_task = Some(task);
             }
         }
-        Payload::Error { message, .. } => Err(message),
-        _ => Err("意外响应".into()),
+
+        tracing::info!("订阅请求已发送并确认: server_id={}, types={}", server_id, types.len());
+        Ok(())
+    } else {
+        Err("未找到 QUIC Connection".into())
     }
 }
 
@@ -659,15 +761,44 @@ pub async fn unsubscribe(
     types: Vec<SubscriptionType>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
+    let manager = app.state::<ConnectionManager>();
+
+    // 停止持久 Stream 监听任务
+    let task_opt = {
+        let mut conns = manager.connections.lock().unwrap();
+        if let Some(active_conn) = conns.get_mut(&server_id) {
+            active_conn.subscription_task.take()
+        } else {
+            None
+        }
+    };
+
+    if let Some(task) = task_opt {
+        // 使用 tokio::select! 等待任务完成或超时
+        use tokio::time::{sleep, Duration};
+        tokio::select! {
+            _ = task => {
+                tracing::info!("订阅监听任务已正常停止: server_id={}", server_id);
+            }
+            _ = sleep(Duration::from_secs(2)) => {
+                // 超时，强制 abort
+                tracing::warn!("订阅监听任务超时，强制停止: server_id={}", server_id);
+            }
+        }
+    } else {
+        tracing::info!("未找到订阅监听任务: server_id={}", server_id);
+    }
+
     // 发送 Unsubscribe payload
     let resp = remote_send(server_id.clone(), Payload::Unsubscribe {
-        server_id,
+        server_id: server_id.clone(),
         types,
     }, app).await?;
 
     match resp.payload {
         Payload::UnsubscribeAck { success } => {
             if success {
+                tracing::info!("取消订阅成功: server_id={}", server_id);
                 Ok(())
             } else {
                 Err("取消订阅失败".into())

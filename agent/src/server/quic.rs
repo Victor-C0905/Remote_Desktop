@@ -108,120 +108,58 @@ async fn handle_stream(
     let stream_id = STREAM_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
     tracing::info!("Stream ID: {}", stream_id);
 
-    // 订阅 EventBus（用于事件推送）
-    let mut event_rx = event_bus.subscribe();
+    // 读取第一条消息（订阅请求）
+    let data = read_message(&mut recv).await?;
+    if data.is_none() {
+        tracing::info!("Stream 关闭: stream_id={}", stream_id);
+        return Ok(());
+    }
 
-    // 标记是否已订阅（用于控制事件推送）
-    let mut is_subscribed = false;
+    let data = data.unwrap();
+    let envelope = Envelope::decode(&data).map_err(|e| anyhow::anyhow!(e))?;
 
-    loop {
-        // 使用 tokio::select! 同时监听 recv 和 event_bus
-        tokio::select! {
-            // 监听客户端请求
-            result = read_message(&mut recv) => {
-                match result {
-                    Ok(Some(data)) => {
-                        match Envelope::decode(&data) {
-                            Ok(envelope) => {
-                                // 处理订阅请求
-                                match &envelope.payload {
-                                    Payload::Subscribe { server_id, types } => {
-                                        tracing::info!("订阅请求: server_id={}, types={}", server_id, types.len());
+    // 处理订阅请求
+    match &envelope.payload {
+        Payload::Subscribe { server_id, types } => {
+            tracing::info!("订阅请求: server_id={}, types={}", server_id, types.len());
 
-                                        // 添加订阅
-                                        let subscribed_types = subscription_manager.subscribe(stream_id, types.clone()).await?;
+            // 添加订阅
+            let subscribed_types = subscription_manager.subscribe(stream_id, types.clone()).await?;
 
-                                        // 发送确认响应
-                                        let response = Envelope::new(
-                                            envelope.request_id,
-                                            Payload::SubscribeAck {
-                                                success: true,
-                                                subscribed_types,
-                                            },
-                                        );
-                                        match response.encode() {
-                                            Ok(resp_bytes) => {
-                                                if let Err(e) = write_message(&mut send, &resp_bytes).await {
-                                                    tracing::warn!("发送响应失败: {}", e);
-                                                    break;
-                                                }
-                                            }
-                                            Err(e) => {
-                                                tracing::warn!("编码响应失败: {}", e);
-                                            }
-                                        }
-
-                                        // 标记已订阅，开始推送事件
-                                        is_subscribed = true;
-                                    }
-
-                                    Payload::Unsubscribe { server_id, types } => {
-                                        tracing::info!("取消订阅请求: server_id={}, types={}", server_id, types.len());
-
-                                        // 移除订阅
-                                        subscription_manager.unsubscribe(stream_id, types.clone()).await?;
-
-                                        // 发送确认响应
-                                        let response = Envelope::new(
-                                            envelope.request_id,
-                                            Payload::UnsubscribeAck { success: true },
-                                        );
-                                        match response.encode() {
-                                            Ok(resp_bytes) => {
-                                                if let Err(e) = write_message(&mut send, &resp_bytes).await {
-                                                    tracing::warn!("发送响应失败: {}", e);
-                                                    break;
-                                                }
-                                            }
-                                            Err(e) => {
-                                                tracing::warn!("编码响应失败: {}", e);
-                                            }
-                                        }
-
-                                        // 检查是否还有订阅
-                                        if !subscription_manager.has_subscribers("metrics").await {
-                                            is_subscribed = false;
-                                        }
-                                    }
-
-                                    // 其他请求使用同步 handler
-                                    _ => {
-                                        let response = crate::handler::handle_envelope(&envelope, cfg);
-                                        match response.encode() {
-                                            Ok(resp_bytes) => {
-                                                if let Err(e) = write_message(&mut send, &resp_bytes).await {
-                                                    tracing::warn!("发送响应失败: {}", e);
-                                                    break;
-                                                }
-                                            }
-                                            Err(e) => {
-                                                tracing::warn!("编码响应失败: {}", e);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                tracing::warn!("解码消息失败: {}", e);
-                            }
-                        }
+            // 发送确认响应
+            let response = Envelope::new(
+                envelope.request_id,
+                Payload::SubscribeAck {
+                    success: true,
+                    subscribed_types,
+                },
+            );
+            match response.encode() {
+                Ok(resp_bytes) => {
+                    if let Err(e) = write_message(&mut send, &resp_bytes).await {
+                        tracing::warn!("发送响应失败: {}", e);
+                        return Ok(());
                     }
-                    Ok(None) => break, // Stream 关闭
-                    Err(e) => {
-                        tracing::warn!("读取消息失败: {}", e);
-                        break;
-                    }
+                }
+                Err(e) => {
+                    tracing::warn!("编码响应失败: {}", e);
+                    return Ok(());
                 }
             }
 
-            // 监听 EventBus 事件（仅在已订阅时）
-            result = event_rx.recv(), if is_subscribed => {
-                match result {
+            // 订阅 EventBus（用于事件推送）
+            let mut event_rx = event_bus.subscribe();
+
+            tracing::info!("开始事件推送: stream_id={}", stream_id);
+
+            // 进入事件推送循环
+            loop {
+                match event_rx.recv().await {
                     Ok(event) => {
                         // 检查是否有订阅者
                         if subscription_manager.has_subscribers(&event.event_type).await {
                             // 发送事件
-                            let envelope = Envelope::new(
+                            let event_envelope = Envelope::new(
                                 0, // 事件推送不需要 request_id
                                 Payload::Event {
                                     event_type: event.event_type.clone(),
@@ -230,7 +168,7 @@ async fn handle_stream(
                                 },
                             );
 
-                            match envelope.encode() {
+                            match event_envelope.encode() {
                                 Ok(resp_bytes) => {
                                     if let Err(e) = write_message(&mut send, &resp_bytes).await {
                                         tracing::warn!("事件推送失败: {}", e);
@@ -245,15 +183,32 @@ async fn handle_stream(
                         }
                     }
                     Err(e) => {
-                        tracing::warn!("接收事件失败: {}", e);
+                        tracing::warn!("EventBus 接收失败: {}", e);
+                        break;
                     }
+                }
+            }
+
+            // 移除订阅
+            subscription_manager.remove_all(stream_id).await?;
+            tracing::info!("停止事件推送: stream_id={}", stream_id);
+        }
+
+        _ => {
+            // 其他请求使用同步 handler
+            let response = crate::handler::handle_envelope(&envelope, cfg);
+            match response.encode() {
+                Ok(resp_bytes) => {
+                    if let Err(e) = write_message(&mut send, &resp_bytes).await {
+                        tracing::warn!("发送响应失败: {}", e);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("编码响应失败: {}", e);
                 }
             }
         }
     }
-
-    // Stream 关闭，移除所有订阅
-    subscription_manager.remove_all(stream_id).await?;
 
     Ok(())
 }

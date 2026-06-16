@@ -3,7 +3,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use crate::protocol::{SubscriptionType, Payload, Envelope};
+use anyhow::Result;
+use crate::protocol::SubscriptionType;
 use crate::event_bus::EventBus;
 use crate::collectors::MetricsCollector;
 use crate::config::AgentConfig;
@@ -43,7 +44,7 @@ impl SubscriptionManager {
         &self,
         stream_id: u64,
         types: Vec<SubscriptionType>,
-    ) -> Result<Vec<SubscriptionType>, String> {
+    ) -> Result<Vec<SubscriptionType>> {
         // 记录订阅者
         {
             let mut subs = self.subscribers.write().await;
@@ -71,7 +72,7 @@ impl SubscriptionManager {
         &self,
         stream_id: u64,
         types: Vec<SubscriptionType>,
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         // 移除订阅者
         {
             let mut subs = self.subscribers.write().await;
@@ -106,7 +107,7 @@ impl SubscriptionManager {
     }
 
     /// 移除所有订阅（Stream 关闭时）
-    pub async fn remove_all(&self, stream_id: u64) -> Result<(), String> {
+    pub async fn remove_all(&self, stream_id: u64) -> Result<()> {
         // 获取订阅者的所有订阅类型
         let types = {
             let subs = self.subscribers.read().await;
@@ -140,26 +141,26 @@ impl SubscriptionManager {
     }
 
     /// 启动采集器
-    async fn start_collector(&self, subscription_type: &SubscriptionType) -> Result<(), String> {
+    async fn start_collector(&self, subscription_type: &SubscriptionType) -> Result<()> {
         match subscription_type {
             SubscriptionType::Metrics { .. } => {
                 self.metrics_collector.start().await;
                 tracing::info!("启动 MetricsCollector");
                 Ok(())
             }
-            _ => Err("订阅类型尚未实现".to_string()),
+            _ => anyhow::bail!("订阅类型尚未实现"),
         }
     }
 
     /// 停止采集器
-    async fn stop_collector(&self, subscription_type: &SubscriptionType) -> Result<(), String> {
+    async fn stop_collector(&self, subscription_type: &SubscriptionType) -> Result<()> {
         match subscription_type {
             SubscriptionType::Metrics { .. } => {
                 self.metrics_collector.stop().await;
                 tracing::info!("停止 MetricsCollector");
                 Ok(())
             }
-            _ => Err("订阅类型尚未实现".to_string()),
+            _ => anyhow::bail!("订阅类型尚未实现"),
         }
     }
 
