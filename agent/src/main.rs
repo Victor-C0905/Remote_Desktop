@@ -9,6 +9,7 @@ mod event_bus;
 mod handler;
 mod protocol;
 mod server;
+mod subscription;
 
 #[derive(Parser, Debug)]
 #[command(name = "gnome-remote-agent")]

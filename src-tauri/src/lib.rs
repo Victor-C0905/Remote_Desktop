@@ -385,6 +385,8 @@ pub fn run() {
             connection::remote_rename,
             connection::remote_copy,
             connection::remote_move,
+            connection::subscribe,
+            connection::unsubscribe,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

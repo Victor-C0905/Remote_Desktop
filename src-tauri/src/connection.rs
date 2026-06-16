@@ -90,8 +90,64 @@ pub enum Payload {
     GetMounts,
     #[serde(rename = "mounts_resp")]
     MountsResponse { mounts: Vec<MountInfo> },
+
+    // 新增：通用订阅
+    #[serde(rename = "subscribe")]
+    Subscribe {
+        server_id: String,
+        types: Vec<SubscriptionType>,
+    },
+
+    // 新增：通用取消订阅
+    #[serde(rename = "unsubscribe")]
+    Unsubscribe {
+        server_id: String,
+        types: Vec<SubscriptionType>,
+    },
+
+    // 新增：通用事件推送
+    #[serde(rename = "event")]
+    Event {
+        event_type: String,
+        data: serde_json::Value,
+        timestamp: u64,
+    },
+
+    // 新增：订阅确认
+    #[serde(rename = "subscribe_ack")]
+    SubscribeAck {
+        success: bool,
+        subscribed_types: Vec<SubscriptionType>,
+    },
+
+    // 新增：取消订阅确认
+    #[serde(rename = "unsubscribe_ack")]
+    UnsubscribeAck {
+        success: bool,
+    },
+
     #[serde(rename = "error")]
     Error { code: i32, message: String },
+}
+
+// 新增：订阅类型定义
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(tag = "type", content = "params")]
+pub enum SubscriptionType {
+    #[serde(rename = "metrics")]
+    Metrics { interval_secs: Option<u64> },
+
+    #[serde(rename = "file_changes")]
+    FileChanges { path: String, recursive: Option<bool> },
+
+    #[serde(rename = "process_events")]
+    ProcessEvents { interval_secs: Option<u64> },
+
+    #[serde(rename = "app_logs")]
+    AppLogs { app_name: String, level: Option<String> },
+
+    #[serde(rename = "service_status")]
+    ServiceStatus { service: String, interval_secs: Option<u64> },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -542,6 +598,81 @@ pub async fn remote_move(
 
     match resp.payload {
         Payload::MoveResponse { success, .. } => Ok(success),
+        Payload::Error { message, .. } => Err(message),
+        _ => Err("意外响应".into()),
+    }
+}
+
+// ── 订阅相关 Tauri Commands ─────────────────────────────────
+
+#[tauri::command]
+pub async fn subscribe(
+    server_id: String,
+    types: Vec<SubscriptionType>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let manager = app.state::<ConnectionManager>();
+
+    // 获取连接
+    let conn = {
+        let conns = manager.connections.lock().unwrap();
+        let active_conn = conns.get(&server_id).ok_or("未找到连接")?;
+        // 获取 QUIC Connection（需要从 ActiveConnection 中提取）
+        // 暂时使用简化实现：通过 remote_send 发送订阅请求
+        active_conn.tx.clone()
+    };
+
+    // 发送 Subscribe payload
+    let request_id = manager.next_request_id();
+    let envelope = Envelope::new(request_id, Payload::Subscribe {
+        server_id: server_id.clone(),
+        types: types.clone(),
+    });
+
+    let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+    conn.send(ClientRequest::Send { envelope, response_tx }).await
+        .map_err(|_| "发送订阅请求失败")?;
+
+    // 等待确认
+    let data = response_rx.await.map_err(|_| "等待响应超时")??;
+    let resp = Envelope::decode(&data)?;
+
+    match resp.payload {
+        Payload::SubscribeAck { success, .. } => {
+            if success {
+                // 启动事件监听任务（持久 Stream）
+                // 注意：这里需要创建新的持久 Stream，而不是使用现有的请求-响应模式
+                // 暂时使用简化实现：后续完善持久 Stream 管理
+                Ok(())
+            } else {
+                Err("订阅失败".into())
+            }
+        }
+        Payload::Error { message, .. } => Err(message),
+        _ => Err("意外响应".into()),
+    }
+}
+
+#[tauri::command]
+pub async fn unsubscribe(
+    server_id: String,
+    types: Vec<SubscriptionType>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    // 发送 Unsubscribe payload
+    let resp = remote_send(server_id.clone(), Payload::Unsubscribe {
+        server_id,
+        types,
+    }, app).await?;
+
+    match resp.payload {
+        Payload::UnsubscribeAck { success } => {
+            if success {
+                Ok(())
+            } else {
+                Err("取消订阅失败".into())
+            }
+        }
         Payload::Error { message, .. } => Err(message),
         _ => Err("意外响应".into()),
     }

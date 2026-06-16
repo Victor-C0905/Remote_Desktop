@@ -224,6 +224,22 @@ pub fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig) -> Envelope {
             )
         }
 
+        // 新增：订阅处理（暂时返回错误响应，后续在 QUIC Server 中完善）
+        Payload::Subscribe { server_id, types } => {
+            tracing::info!("订阅请求: server_id={}, types={}", server_id, types.len());
+            // 注意：订阅处理需要 SubscriptionManager，需要在 QUIC Server 中异步处理
+            // 这里暂时返回错误响应
+            error_response(envelope.request_id, "订阅功能需要在 QUIC Server 中异步处理")
+        }
+
+        // 新增：取消订阅处理（暂时返回错误响应，后续在 QUIC Server 中完善）
+        Payload::Unsubscribe { server_id, types } => {
+            tracing::info!("取消订阅请求: server_id={}, types={}", server_id, types.len());
+            // 注意：取消订阅处理需要 SubscriptionManager，需要在 QUIC Server 中异步处理
+            // 这里暂时返回错误响应
+            error_response(envelope.request_id, "取消订阅功能需要在 QUIC Server 中异步处理")
+        }
+
         other => {
             tracing::warn!("未处理的消息类型: {:?}", std::mem::discriminant(other));
             error_response(envelope.request_id, "未知的消息类型")

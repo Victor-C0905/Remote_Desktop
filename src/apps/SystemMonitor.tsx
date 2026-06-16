@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useServerManager } from "../context/ServerManager";
+import { useMetricsSubscription } from "../hooks/useSubscription";
+import { SUBSCRIPTION_CONFIG } from "../config/subscription";
 import "./SystemMonitor.css";
 
 interface MetricsSnapshot {
@@ -148,7 +150,7 @@ function MiniChart({ data, color, height, max }: MiniChartProps) {
 
 export function SystemMonitor() {
   const { activeServerId } = useServerManager();
-  
+
   const [activeTab, setActiveTab] = useState<TabId>("resources");
   const [metrics, setMetrics] = useState<MetricsSnapshot>(generateDemoMetrics());
   const [cpuHistory, setCpuHistory] = useState<HistoryPoint[]>([]);
@@ -156,57 +158,27 @@ export function SystemMonitor() {
   const [processes, setProcesses] = useState<ProcessInfo[]>(generateDemoProcesses());
   const [processSort, setProcessSort] = useState<"cpu" | "mem" | "pid">("cpu");
   const [selectedPid, setSelectedPid] = useState<number | null>(null);
-  const [_loading, setLoading] = useState(false);
-  const [_error, setError] = useState<string | null>(null);
 
-  const HISTORY_LENGTH = 60;
+  const HISTORY_LENGTH = SUBSCRIPTION_CONFIG.HISTORY_LENGTH; // 使用配置的历史长度
 
-  const fetchMetrics = useCallback(async () => {
-    if (!activeServerId) {
-      // 无连接时使用 demo 数据
-      const demoMetrics = generateDemoMetrics();
-      setMetrics(demoMetrics);
-      const now = Date.now();
-      setCpuHistory(prev => {
-        const next = [...prev, { time: now, value: demoMetrics.cpu_percent }];
-        return next.length > HISTORY_LENGTH ? next.slice(-HISTORY_LENGTH) : next;
-      });
-      setMemHistory(prev => {
-        const memPercent = (demoMetrics.mem_used_bytes / demoMetrics.mem_total_bytes) * 100;
-        const next = [...prev, { time: now, value: memPercent }];
-        return next.length > HISTORY_LENGTH ? next.slice(-HISTORY_LENGTH) : next;
-      });
-      return;
-    }
+  // 使用订阅 Hook 接收 metrics 数据
+  const handleMetricsUpdate = useCallback((newMetrics: MetricsSnapshot) => {
+    setMetrics(newMetrics);
+    const now = Date.now();
+    setCpuHistory(prev => {
+      const next = [...prev, { time: now, value: newMetrics.cpu_percent }];
+      return next.length > HISTORY_LENGTH ? next.slice(-HISTORY_LENGTH) : next;
+    });
+    setMemHistory(prev => {
+      const memPercent = (newMetrics.mem_used_bytes / newMetrics.mem_total_bytes) * 100;
+      const next = [...prev, { time: now, value: memPercent }];
+      return next.length > HISTORY_LENGTH ? next.slice(-HISTORY_LENGTH) : next;
+    });
+  }, [HISTORY_LENGTH]);
 
-    setLoading(true);
-    try {
-      const resp = await invoke<MetricsSnapshot>("remote_get_metrics", {
-        serverId: activeServerId,
-      });
-      setMetrics(resp);
-      const now = Date.now();
-      setCpuHistory(prev => {
-        const next = [...prev, { time: now, value: resp.cpu_percent }];
-        return next.length > HISTORY_LENGTH ? next.slice(-HISTORY_LENGTH) : next;
-      });
-      setMemHistory(prev => {
-        const memPercent = (resp.mem_used_bytes / resp.mem_total_bytes) * 100;
-        const next = [...prev, { time: now, value: memPercent }];
-        return next.length > HISTORY_LENGTH ? next.slice(-HISTORY_LENGTH) : next;
-      });
-      setError(null);
-    } catch (e: any) {
-      setError(e.toString());
-    } finally {
-      setLoading(false);
-    }
-  }, [activeServerId]);
+  useMetricsSubscription(activeServerId, handleMetricsUpdate);
 
-  useEffect(() => {
-    const interval = setInterval(fetchMetrics, 2000);
-    return () => clearInterval(interval);
-  }, [fetchMetrics]);
+  // 移除原有的轮询逻辑（fetchMetrics 和 setInterval）
 
   useEffect(() => {
     if (activeTab === "processes") {
