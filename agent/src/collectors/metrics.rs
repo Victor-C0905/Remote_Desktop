@@ -93,13 +93,9 @@ impl MetricsCollector {
             })
             .collect();
 
-        let networks = Networks::new_with_refreshed_list();
-        let mut network_rx = 0u64;
-        let mut network_tx = 0u64;
-        for (_name, data) in &networks {
-            network_rx += data.received();
-            network_tx += data.transmitted();
-        }
+        // 直接读取 /proc/net/dev 获取网络数据（兼容 WSL 镜像网络模式）
+        let (network_rx, network_tx) = Self::get_network_stats();
+        tracing::info!("网络总计: 接收 {} bytes, 发送 {} bytes", network_rx, network_tx);
 
         // 计算真正被进程使用的内存（不包括 buffer/cache）
         // 与 free 命令的 "used" 一致：total - free - buffers - cache
@@ -114,6 +110,57 @@ impl MetricsCollector {
             network_rx_bytes: network_rx,
             network_tx_bytes: network_tx,
             uptime_secs: System::uptime() as u64,
+        }
+    }
+
+    /// 从 /proc/net/dev 读取网络统计数据（兼容 WSL 镜像网络模式）
+    fn get_network_stats() -> (u64, u64) {
+        use std::fs::File;
+        use std::io::{BufRead, BufReader};
+
+        let file = File::open("/proc/net/dev");
+        if let Ok(file) = file {
+            let reader = BufReader::new(file);
+            let mut total_rx = 0u64;
+            let mut total_tx = 0u64;
+
+            for line in reader.lines() {
+                if let Ok(line) = line {
+                    // 跳过前两行（标题行）
+                    if line.contains("Inter-") || line.contains("face") {
+                        continue;
+                    }
+
+                    // 解析网络接口行
+                    // 格式: "interface: rx_bytes rx_packets ... tx_bytes tx_packets ..."
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 17 {
+                        // 接口名称（去掉冒号）
+                        let interface = parts[0].replace(':', "");
+                        // 接收字节数（第 2 列）
+                        let rx_bytes = parts[1].parse::<u64>().unwrap_or(0);
+                        // 发送字节数（第 10 列）
+                        let tx_bytes = parts[9].parse::<u64>().unwrap_or(0);
+
+                        // 排除 lo（本地回环接口）
+                        if interface != "lo" {
+                            total_rx += rx_bytes;
+                            total_tx += tx_bytes;
+                            tracing::debug!(
+                                "网络接口 {}: 接收 {} bytes, 发送 {} bytes",
+                                interface,
+                                rx_bytes,
+                                tx_bytes
+                            );
+                        }
+                    }
+                }
+            }
+
+            (total_rx, total_tx)
+        } else {
+            tracing::warn!("无法读取 /proc/net/dev");
+            (0, 0)
         }
     }
 
