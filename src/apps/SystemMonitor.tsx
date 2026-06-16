@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { useServerManager } from "../context/ServerManager";
-import { useMetricsSubscription } from "../hooks/useSubscription";
+import { listen } from "@tauri-apps/api/event";
 import { SUBSCRIPTION_CONFIG } from "../config/subscription";
 import "./SystemMonitor.css";
 
@@ -153,30 +152,69 @@ export function SystemMonitor() {
 
   const [activeTab, setActiveTab] = useState<TabId>("resources");
   const [metrics, setMetrics] = useState<MetricsSnapshot>(generateDemoMetrics());
-  const [cpuHistory, setCpuHistory] = useState<HistoryPoint[]>([]);
-  const [memHistory, setMemHistory] = useState<HistoryPoint[]>([]);
   const [processes, setProcesses] = useState<ProcessInfo[]>(generateDemoProcesses());
   const [processSort, setProcessSort] = useState<"cpu" | "mem" | "pid">("cpu");
   const [selectedPid, setSelectedPid] = useState<number | null>(null);
 
   const HISTORY_LENGTH = SUBSCRIPTION_CONFIG.HISTORY_LENGTH; // 使用配置的历史长度
 
-  // 使用订阅 Hook 接收 metrics 数据
-  const handleMetricsUpdate = useCallback((newMetrics: MetricsSnapshot) => {
-    setMetrics(newMetrics);
-    const now = Date.now();
-    setCpuHistory(prev => {
-      const next = [...prev, { time: now, value: newMetrics.cpu_percent }];
-      return next.length > HISTORY_LENGTH ? next.slice(-HISTORY_LENGTH) : next;
-    });
-    setMemHistory(prev => {
-      const memPercent = (newMetrics.mem_used_bytes / newMetrics.mem_total_bytes) * 100;
-      const next = [...prev, { time: now, value: memPercent }];
-      return next.length > HISTORY_LENGTH ? next.slice(-HISTORY_LENGTH) : next;
-    });
-  }, [HISTORY_LENGTH]);
+  // 使用 useRef 来存储历史数据，避免每次创建新数组
+  const cpuHistoryRef = useRef<HistoryPoint[]>([]);
+  const memHistoryRef = useRef<HistoryPoint[]>([]);
+  const historyIndexRef = useRef<number>(0);
 
-  useMetricsSubscription(activeServerId, handleMetricsUpdate);
+  // 使用 useMemo 来创建固定大小的数组
+  const [cpuHistory, setCpuHistory] = useState<HistoryPoint[]>([]);
+  const [memHistory, setMemHistory] = useState<HistoryPoint[]>([]);
+
+  // 监听系统指标事件（由 ServerManager 自动订阅）
+  useEffect(() => {
+    if (!activeServerId) return;
+
+    const setupListener = async () => {
+      const unlisten = await listen<{ server_id: string; event_type: string; data: MetricsSnapshot }>(
+        'subscription_event',
+        (event) => {
+          if (event.payload.server_id === activeServerId && event.payload.event_type === 'metrics') {
+            const newMetrics = event.payload.data;
+            setMetrics(newMetrics);
+            const now = Date.now();
+
+            // 使用环形缓冲区更新历史数据
+            const cpuPoint = { time: now, value: newMetrics.cpu_percent };
+            const memPercent = (newMetrics.mem_used_bytes / newMetrics.mem_total_bytes) * 100;
+            const memPoint = { time: now, value: memPercent };
+
+            // 更新环形缓冲区
+            if (cpuHistoryRef.current.length < HISTORY_LENGTH) {
+              cpuHistoryRef.current.push(cpuPoint);
+              memHistoryRef.current.push(memPoint);
+            } else {
+              cpuHistoryRef.current[historyIndexRef.current] = cpuPoint;
+              memHistoryRef.current[historyIndexRef.current] = memPoint;
+              historyIndexRef.current = (historyIndexRef.current + 1) % HISTORY_LENGTH;
+            }
+
+            // 触发重新渲染（复制数组）
+            setCpuHistory([...cpuHistoryRef.current]);
+            setMemHistory([...memHistoryRef.current]);
+          }
+        }
+      );
+      return unlisten;
+    };
+
+    let unlistenFn: (() => void) | undefined;
+    setupListener().then((fn) => {
+      unlistenFn = fn;
+    });
+
+    return () => {
+      if (unlistenFn) {
+        unlistenFn();
+      }
+    };
+  }, [activeServerId, HISTORY_LENGTH]);
 
   // 移除原有的轮询逻辑（fetchMetrics 和 setInterval）
 
@@ -273,7 +311,7 @@ export function SystemMonitor() {
             {/* CPU & Memory Section */}
             <div className="sm-res-section">
               <div className="sm-res-card">
-                <div className="sm-res-title">CPU 历史 (60秒)</div>
+                <div className="sm-res-title">CPU 历史 (最近120秒)</div>
                 <div className="sm-res-chart">
                   <MiniChart data={cpuHistory} color="#3584e4" height={60} max={100} />
                 </div>
@@ -284,7 +322,7 @@ export function SystemMonitor() {
               </div>
 
               <div className="sm-res-card">
-                <div className="sm-res-title">内存历史 (60秒)</div>
+                <div className="sm-res-title">内存历史 (最近120秒)</div>
                 <div className="sm-res-chart">
                   <MiniChart data={memHistory} color="#33d17a" height={60} max={100} />
                 </div>

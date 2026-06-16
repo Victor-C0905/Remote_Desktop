@@ -149,6 +149,18 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
       setServerStatus(id, "connected", undefined, info.rttMs >= 0 ? info.rttMs : undefined);
       setActiveServerId(id);
 
+      // 连接成功后，自动订阅系统指标（长期状态）
+      console.log("[ServerManager] 自动订阅系统指标");
+      try {
+        await invoke('subscribe', {
+          serverId: id,
+          types: [{ type: 'metrics', params: { interval_secs: 1 } }]
+        });
+        console.log("[ServerManager] 系统指标订阅成功");
+      } catch (e) {
+        console.warn("[ServerManager] 系统指标订阅失败:", e);
+      }
+
       console.log("[ServerManager] 连接成功:", info.transport, `RTT=${info.rttMs}ms`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -159,6 +171,18 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
   }, [servers, activeServerId, setServerStatus, setActiveServerId]);
 
   const disconnectServer = useCallback(async (id: string) => {
+    // 断开连接前，先取消订阅
+    try {
+      await invoke('unsubscribe', {
+        serverId: id,
+        types: [{ type: 'metrics', params: { interval_secs: 1 } }]
+      });
+      console.log("[ServerManager] 系统指标订阅已取消");
+    } catch (e) {
+      console.warn("[ServerManager] 取消订阅失败:", e);
+    }
+
+    // 断开连接
     try {
       await invoke("remote_disconnect", { serverId: id });
     } catch (e) {

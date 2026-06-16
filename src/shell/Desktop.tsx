@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { FileManager } from "../apps/FileManager";
 import { TerminalApp } from "../apps/Terminal";
 import { SystemMonitor } from "../apps/SystemMonitor";
@@ -8,6 +7,7 @@ import { NotificationCenter, NotificationBadge } from "./NotificationCenter";
 import { useGlobalShortcuts, createAppShortcuts } from "../hooks/useGlobalShortcuts";
 import { ServerManagerProvider, useServerManager, getStatusColor } from "../context/ServerManager";
 import { WallpaperProvider, useWallpaper, getWallpaperStyle } from "../context/WallpaperContext";
+import { listen } from "@tauri-apps/api/event";
 import "./Desktop.css";
 
 // 完整的 MetricsSnapshot 类型（匹配 Agent）
@@ -90,33 +90,33 @@ function DesktopContent() {
     return () => clearInterval(id);
   }, []);
 
-  // 从 Agent 获取系统指标（每 2 秒更新）
+  // 监听系统指标事件（由 ServerManager 自动订阅）
   useEffect(() => {
-    if (!activeServer || activeServer.status !== "connected") {
-      setMetrics(null);
-      return;
-    }
+    if (!activeServer?.id) return;
 
-    const fetchMetrics = async () => {
-      try {
-        const data = await invoke<MetricsSnapshot>("remote_get_metrics", {
-          serverId: activeServer.id,
-        });
-        setMetrics(data);
-      } catch (error) {
-        console.error("获取系统指标失败:", error);
-        setMetrics(null);
-      }
+    const setupListener = async () => {
+      const unlisten = await listen<{ server_id: string; event_type: string; data: MetricsSnapshot }>(
+        'subscription_event',
+        (event) => {
+          if (event.payload.server_id === activeServer.id && event.payload.event_type === 'metrics') {
+            setMetrics(event.payload.data);
+          }
+        }
+      );
+      return unlisten;
     };
 
-    // 立即获取一次
-    fetchMetrics();
+    let unlistenFn: (() => void) | undefined;
+    setupListener().then((fn) => {
+      unlistenFn = fn;
+    });
 
-    // 每 2 秒更新一次
-    const intervalId = setInterval(fetchMetrics, 2000);
-
-    return () => clearInterval(intervalId);
-  }, [activeServer]);
+    return () => {
+      if (unlistenFn) {
+        unlistenFn();
+      }
+    };
+  }, [activeServer?.id]);
 
   const openApp = useCallback((appId: string) => {
     setOverviewVisible(false);
