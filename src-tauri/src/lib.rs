@@ -381,6 +381,10 @@ pub fn run() {
             connection::remote_read_file,
             connection::remote_write_file,
             connection::remote_delete,
+            connection::remote_mkdir,
+            connection::remote_rename,
+            connection::remote_copy,
+            connection::remote_move,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

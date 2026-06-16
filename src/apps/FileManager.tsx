@@ -108,12 +108,15 @@ export function FileManager() {
     x: number; y: number; entry: FileEntry;
   } | null>(null);
   const [propertiesEntry, setPropertiesEntry] = useState<FileEntry | null>(null);
+  const [editingEntry, setEditingEntry] = useState<FileEntry | null>(null);  // 正在编辑的文件
+  const [editingName, setEditingName] = useState<string>("");  // 编辑中的新名称
   const mainRef = useRef<HTMLDivElement>(null);
-  
+  const clickTimerRef = useRef<number | null>(null);  // 单击延迟定时器（防止双击误触发）
+
   // 侧边栏状态
   const [sidebarSections, setSidebarSections] = useState<SidebarSection[]>([]);
   const [mounts, setMounts] = useState<MountInfo[]>([]);
-  
+
   // 路径输入框状态
   const [pathInput, setPathInput] = useState(currentPath);
   const [isEditingPath, setIsEditingPath] = useState(false);
@@ -415,6 +418,142 @@ export function FileManager() {
     setPropertiesEntry(entry);
   }, []);
 
+  // ── File Operations ───────────────────────────────────
+  const handleMkdir = useCallback(async () => {
+    // 使用简单的 prompt（后续可以改为对话框）
+    const name = prompt("新建文件夹名称:");
+    if (!name || name.trim() === "") return;
+
+    // 构建新路径
+    const sep = IS_WIN ? "\\" : "/";
+    const newPath = currentPath === "/" || (IS_WIN && currentPath.endsWith(":"))
+      ? `${currentPath}${sep}${name.trim()}`
+      : `${currentPath}${sep}${name.trim()}`;
+
+    console.log("[FileManager] mkdir:", newPath);
+
+    try {
+      if (activeServerId) {
+        await invoke("remote_mkdir", { serverId: activeServerId, path: newPath });
+      } else {
+        // 本地模式（暂不支持）
+        alert("本地模式暂不支持文件操作");
+        return;
+      }
+
+      // 刷新当前目录
+      loadDir(currentPath);
+    } catch (err) {
+      console.error("[FileManager] mkdir 失败:", err);
+      alert(`创建文件夹失败: ${err}`);
+    }
+  }, [currentPath, activeServerId, loadDir]);
+
+  const handleRename = useCallback((entry: FileEntry) => {
+    // GNOME-style inline editing：直接在文件名上编辑
+    setEditingEntry(entry);
+    setEditingName(entry.name);
+    setContextMenu(null);  // 关闭右键菜单
+  }, []);
+
+  // 完成重命名（inline editing）
+  const finishRename = useCallback(async () => {
+    if (!editingEntry) return;
+
+    const trimmedName = editingName.trim();
+    if (trimmedName === "" || trimmedName === editingEntry.name) {
+      // 取消编辑
+      setEditingEntry(null);
+      setEditingName("");
+      return;
+    }
+
+    // 构建路径
+    const sep = IS_WIN ? "\\" : "/";
+    const oldPath = currentPath === "/" || (IS_WIN && currentPath.endsWith(":"))
+      ? `${currentPath}${sep}${editingEntry.name}`
+      : `${currentPath}${sep}${editingEntry.name}`;
+
+    const newPath = currentPath === "/" || (IS_WIN && currentPath.endsWith(":"))
+      ? `${currentPath}${sep}${trimmedName}`
+      : `${currentPath}${sep}${trimmedName}`;
+
+    console.log("[FileManager] rename:", oldPath, "->", newPath);
+
+    try {
+      if (activeServerId) {
+        await invoke("remote_rename", {
+          serverId: activeServerId,
+          oldPath,
+          newPath
+        });
+      } else {
+        alert("本地模式暂不支持文件操作");
+        setEditingEntry(null);
+        setEditingName("");
+        return;
+      }
+
+      // 刷新当前目录
+      loadDir(currentPath);
+    } catch (err) {
+      console.error("[FileManager] rename 失败:", err);
+      alert(`重命名失败: ${err}`);
+    }
+
+    // 清除编辑状态
+    setEditingEntry(null);
+    setEditingName("");
+  }, [editingEntry, editingName, currentPath, activeServerId, loadDir]);
+
+  // 取消重命名（inline editing）
+  const cancelRename = useCallback(() => {
+    setEditingEntry(null);
+    setEditingName("");
+  }, []);
+
+  // 处理编辑输入框的键盘事件
+  const handleEditKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      e.stopPropagation();  // 阻止事件冒泡，防止触发父元素的键盘事件
+      finishRename();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();  // 阻止事件冒泡
+      cancelRename();
+    }
+  }, [finishRename, cancelRename]);
+
+  const handleDelete = useCallback(async (entry: FileEntry) => {
+    // 使用简单的 confirm
+    const confirmed = confirm(`确定删除 "${entry.name}"?\n\n${entry.is_dir ? "这将删除文件夹及其所有内容。" : "此操作无法撤销。"}`);
+    if (!confirmed) return;
+
+    // 构建路径
+    const sep = IS_WIN ? "\\" : "/";
+    const path = currentPath === "/" || (IS_WIN && currentPath.endsWith(":"))
+      ? `${currentPath}${sep}${entry.name}`
+      : `${currentPath}${sep}${entry.name}`;
+
+    console.log("[FileManager] delete:", path);
+
+    try {
+      if (activeServerId) {
+        await invoke("remote_delete", { serverId: activeServerId, path });
+      } else {
+        alert("本地模式暂不支持文件操作");
+        return;
+      }
+
+      // 刷新当前目录
+      loadDir(currentPath);
+    } catch (err) {
+      console.error("[FileManager] delete 失败:", err);
+      alert(`删除失败: ${err}`);
+    }
+  }, [currentPath, activeServerId, loadDir]);
+
   // ── Context Menu ─────────────────────────────────────
   const handleContextMenu = useCallback((e: React.MouseEvent, entry: FileEntry, idx: number) => {
     e.preventDefault();
@@ -433,6 +572,9 @@ export function FileManager() {
 
   // ── Keyboard ─────────────────────────────────────────
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    // 如果正在编辑文件名，不处理任何键盘事件（编辑输入框会处理）
+    if (editingEntry) return;
+
     if (e.key === "Backspace") { e.preventDefault(); goUp(); }
     if (e.key === "Enter" && selectedIdx !== null) {
       handleOpen(entries[selectedIdx]);
@@ -445,7 +587,7 @@ export function FileManager() {
       e.preventDefault();
       setSelectedIdx(prev => Math.max((prev ?? 0) - 1, 0));
     }
-  }, [entries, selectedIdx, goUp, handleOpen]);
+  }, [entries, selectedIdx, goUp, handleOpen, editingEntry]);
 
   // ── Breadcrumb parts ─────────────────────────────────
   const pathParts = currentPath.split(pathSep).filter(Boolean);
@@ -489,6 +631,14 @@ export function FileManager() {
             title="网格视图"
           >⊞</button>
         </div>
+
+        {/* New Folder Button */}
+        <button
+          className="nav-btn"
+          onClick={handleMkdir}
+          title="新建文件夹"
+          disabled={!activeServerId}
+        >📁+</button>
 
         <button className="search-btn" title="搜索">🔍</button>
       </div>
@@ -543,13 +693,51 @@ export function FileManager() {
                 <div
                   key={entry.name}
                   className={`fm-list-row${selectedIdx === idx ? " selected" : ""}`}
-                  onClick={() => setSelectedIdx(idx)}
-                  onDoubleClick={() => handleOpen(entry)}
+                  onClick={() => {
+                    // 清除之前的定时器
+                    if (clickTimerRef.current) {
+                      clearTimeout(clickTimerRef.current);
+                      clickTimerRef.current = null;
+                    }
+
+                    // GNOME-style: 如果文件已被选中，延迟判断是否为单击（防止双击误触发）
+                    if (selectedIdx === idx && editingEntry?.name !== entry.name) {
+                      clickTimerRef.current = setTimeout(() => {
+                        handleRename(entry);
+                        clickTimerRef.current = null;
+                      }, 200);  // 200ms 延迟，更快的响应，确保双击不会触发重命名
+                    } else {
+                      setSelectedIdx(idx);
+                    }
+                  }}
+                  onDoubleClick={() => {
+                    // 双击时，清除单击的定时器，防止触发重命名
+                    if (clickTimerRef.current) {
+                      clearTimeout(clickTimerRef.current);
+                      clickTimerRef.current = null;
+                    }
+                    handleOpen(entry);
+                  }}
                   onContextMenu={(e) => handleContextMenu(e, entry, idx)}
                 >
                   <div className="file-name">
                     <span className="fn-icon">{getFileIcon(entry)}</span>
-                    <span className="fn-text">{entry.name}</span>
+                    {editingEntry?.name === entry.name ? (
+                      <input
+                        type="text"
+                        className="fn-edit-input"
+                        value={editingName}
+                        onChange={(e) => setEditingName(e.target.value)}
+                        onKeyDown={handleEditKeyDown}
+                        onBlur={finishRename}
+                        autoFocus
+                        onClick={(e) => e.stopPropagation()}
+                        onDoubleClick={(e) => e.stopPropagation()}  // 阻止双击事件冒泡
+                        style={{ width: `${Math.max(editingName.length + 0.5, 4)}ch` }}  // 动态宽度：文本长度 + 0.5字符，最小4字符
+                      />
+                    ) : (
+                      <span className="fn-text">{entry.name}</span>
+                    )}
                   </div>
                   <span className="file-size">{entry.is_dir ? "—" : formatSize(entry.size)}</span>
                   <span className="file-mtime">{formatDate(entry.mtime)}</span>
@@ -563,12 +751,50 @@ export function FileManager() {
                 <div
                   key={entry.name}
                   className={`fm-grid-item${selectedIdx === idx ? " selected" : ""}`}
-                  onClick={() => setSelectedIdx(idx)}
-                  onDoubleClick={() => handleOpen(entry)}
+                  onClick={() => {
+                    // 清除之前的定时器
+                    if (clickTimerRef.current) {
+                      clearTimeout(clickTimerRef.current);
+                      clickTimerRef.current = null;
+                    }
+
+                    // GNOME-style: 如果文件已被选中，延迟判断是否为单击（防止双击误触发）
+                    if (selectedIdx === idx && editingEntry?.name !== entry.name) {
+                      clickTimerRef.current = setTimeout(() => {
+                        handleRename(entry);
+                        clickTimerRef.current = null;
+                      }, 200);  // 200ms 延迟，更快的响应，确保双击不会触发重命名
+                    } else {
+                      setSelectedIdx(idx);
+                    }
+                  }}
+                  onDoubleClick={() => {
+                    // 双击时，清除单击的定时器，防止触发重命名
+                    if (clickTimerRef.current) {
+                      clearTimeout(clickTimerRef.current);
+                      clickTimerRef.current = null;
+                    }
+                    handleOpen(entry);
+                  }}
                   onContextMenu={(e) => handleContextMenu(e, entry, idx)}
                 >
                   <div className="gi-icon">{getFileIcon(entry)}</div>
-                  <div className="gi-label">{entry.name}</div>
+                  {editingEntry?.name === entry.name ? (
+                    <input
+                      type="text"
+                      className="gi-edit-input"
+                      value={editingName}
+                      onChange={(e) => setEditingName(e.target.value)}
+                      onKeyDown={handleEditKeyDown}
+                      onBlur={finishRename}
+                      autoFocus
+                      onClick={(e) => e.stopPropagation()}
+                      onDoubleClick={(e) => e.stopPropagation()}  // 阻止双击事件冒泡
+                      style={{ width: `${Math.max(editingName.length + 0.5, 4)}ch` }}  // 动态宽度：文本长度 + 0.5字符，最小4字符
+                    />
+                  ) : (
+                    <div className="gi-label">{entry.name}</div>
+                  )}
                 </div>
               ))}
             </div>
@@ -592,19 +818,33 @@ export function FileManager() {
             <span className="ctx-icon">📂</span> 打开
           </div>
           <div className="ctx-separator" />
-          <div className="ctx-item" onClick={() => setContextMenu(null)}>
+
+          {/* 文件操作 */}
+          <div className="ctx-item" onClick={() => { handleRename(contextMenu.entry); setContextMenu(null); }}>
+            <span className="ctx-icon">✏️</span> 重命名
+          </div>
+          <div className="ctx-item" onClick={() => { handleDelete(contextMenu.entry); setContextMenu(null); }}>
+            <span className="ctx-icon">🗑️</span> 删除
+          </div>
+
+          <div className="ctx-separator" />
+
+          {/* 其他操作 */}
+          <div className="ctx-item" onClick={() => {
+            // 复制路径到剪贴板
+            const sep = IS_WIN ? "\\" : "/";
+            const path = currentPath === "/" || (IS_WIN && currentPath.endsWith(":"))
+              ? `${currentPath}${sep}${contextMenu.entry.name}`
+              : `${currentPath}${sep}${contextMenu.entry.name}`;
+            navigator.clipboard.writeText(path);
+            setContextMenu(null);
+          }}>
             <span className="ctx-icon">📋</span> 复制路径
           </div>
           <div className="ctx-item" onClick={() => setContextMenu(null)}>
             <span className="ctx-icon">⬇️</span> 下载
           </div>
-          <div className="ctx-separator" />
-          <div className="ctx-item" onClick={() => setContextMenu(null)}>
-            <span className="ctx-icon">🗑️</span> 删除
-          </div>
-          <div className="ctx-item" onClick={() => setContextMenu(null)}>
-            <span className="ctx-icon">✏️</span> 重命名
-          </div>
+
           <div className="ctx-separator" />
           <div className="ctx-item" onClick={() => { showProperties(contextMenu.entry); setContextMenu(null); }}>
             <span className="ctx-icon">ℹ️</span> 属性

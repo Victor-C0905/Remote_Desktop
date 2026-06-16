@@ -56,6 +56,22 @@ pub enum Payload {
     DeleteRequest { path: String },
     #[serde(rename = "delete_resp")]
     DeleteResponse { success: bool },
+    #[serde(rename = "mkdir")]
+    MkdirRequest { path: String },
+    #[serde(rename = "mkdir_resp")]
+    MkdirResponse { success: bool, path: String },
+    #[serde(rename = "rename")]
+    RenameRequest { old_path: String, new_path: String },
+    #[serde(rename = "rename_resp")]
+    RenameResponse { success: bool, old_path: String, new_path: String },
+    #[serde(rename = "copy")]
+    CopyRequest { src: String, dst: String },
+    #[serde(rename = "copy_resp")]
+    CopyResponse { success: bool, src: String, dst: String },
+    #[serde(rename = "move")]
+    MoveRequest { src: String, dst: String },
+    #[serde(rename = "move_resp")]
+    MoveResponse { success: bool, src: String, dst: String },
     #[serde(rename = "metrics_subscribe")]
     MetricsSubscribeRequest {},
     #[serde(rename = "metrics_data")]
@@ -459,6 +475,73 @@ pub async fn remote_delete(server_id: String, path: String, app: tauri::AppHandl
     let resp = remote_send(server_id, Payload::DeleteRequest { path }, app).await?;
     match resp.payload {
         Payload::DeleteResponse { success } => Ok(success),
+        Payload::Error { message, .. } => Err(message),
+        _ => Err("意外响应".into()),
+    }
+}
+
+#[tauri::command]
+pub async fn remote_mkdir(server_id: String, path: String, app: tauri::AppHandle) -> Result<bool, String> {
+    println!("[Connection] remote_mkdir: server_id={}, path={}", server_id, path);
+
+    let resp = remote_send(server_id, Payload::MkdirRequest { path }, app).await?;
+
+    match resp.payload {
+        Payload::MkdirResponse { success, .. } => Ok(success),
+        Payload::Error { message, .. } => Err(message),
+        _ => Err("意外响应".into()),
+    }
+}
+
+#[tauri::command]
+pub async fn remote_rename(
+    server_id: String,
+    old_path: String,
+    new_path: String,
+    app: tauri::AppHandle
+) -> Result<bool, String> {
+    println!("[Connection] remote_rename: old={}, new={}", old_path, new_path);
+
+    let resp = remote_send(server_id, Payload::RenameRequest { old_path, new_path }, app).await?;
+
+    match resp.payload {
+        Payload::RenameResponse { success, .. } => Ok(success),
+        Payload::Error { message, .. } => Err(message),
+        _ => Err("意外响应".into()),
+    }
+}
+
+#[tauri::command]
+pub async fn remote_copy(
+    server_id: String,
+    src: String,
+    dst: String,
+    app: tauri::AppHandle
+) -> Result<bool, String> {
+    println!("[Connection] remote_copy: src={}, dst={}", src, dst);
+
+    let resp = remote_send(server_id, Payload::CopyRequest { src, dst }, app).await?;
+
+    match resp.payload {
+        Payload::CopyResponse { success, .. } => Ok(success),
+        Payload::Error { message, .. } => Err(message),
+        _ => Err("意外响应".into()),
+    }
+}
+
+#[tauri::command]
+pub async fn remote_move(
+    server_id: String,
+    src: String,
+    dst: String,
+    app: tauri::AppHandle
+) -> Result<bool, String> {
+    println!("[Connection] remote_move: src={}, dst={}", src, dst);
+
+    let resp = remote_send(server_id, Payload::MoveRequest { src, dst }, app).await?;
+
+    match resp.payload {
+        Payload::MoveResponse { success, .. } => Ok(success),
         Payload::Error { message, .. } => Err(message),
         _ => Err("意外响应".into()),
     }

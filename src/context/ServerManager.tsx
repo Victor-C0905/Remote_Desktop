@@ -1,5 +1,6 @@
 import { createContext, useContext, useCallback, useEffect, ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   useServersStore,
   formatLastConnected,
@@ -61,6 +62,45 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
   } = useServersStore();
 
   const activeServer = servers.find((s) => s.id === activeServerId) || null;
+
+  // 监听连接丢失事件
+  useEffect(() => {
+    console.log("[ServerManager] 设置连接丢失监听器");
+
+    const setupListener = async () => {
+      const unlisten = await listen<string>("connection-lost", (event) => {
+        console.log("[ServerManager] 收到连接丢失事件:", event.payload);
+        const lostServerId = event.payload;
+
+        // 更新服务器状态为 disconnected
+        setServerStatus(lostServerId, "disconnected");
+
+        // 如果是当前活跃服务器，设置 activeServerId 为 null
+        if (activeServerId === lostServerId) {
+          console.log("[ServerManager] 当前活跃服务器断开，清空 activeServerId");
+          setActiveServerId(null);
+        }
+
+        // TODO: 显示通知提示用户（可以在 UI 中添加通知系统）
+        console.warn(`[ServerManager] 服务器 ${lostServerId} 连接已断开`);
+      });
+
+      return unlisten;
+    };
+
+    let unlistenFn: (() => void) | undefined;
+    setupListener().then((fn) => {
+      unlistenFn = fn;
+    });
+
+    // 清理监听器
+    return () => {
+      if (unlistenFn) {
+        console.log("[ServerManager] 清理连接丢失监听器");
+        unlistenFn();
+      }
+    };
+  }, [activeServerId, setServerStatus, setActiveServerId]);
 
   // 注意：不在这里重置状态，因为会干扰用户连接
   // onRehydrateStorage 已经在 serversStore 中处理了重置逻辑

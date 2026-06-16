@@ -8,6 +8,7 @@ pub struct AgentConfig {
     pub auth: AuthConfig,
     pub security: SecurityConfig,
     pub limits: LimitsConfig,
+    pub collectors: CollectorsConfig, // 新增
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -45,13 +46,31 @@ pub struct LimitsConfig {
     pub metrics_interval_secs: u64,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CollectorsConfig {
+    #[serde(default = "default_metrics_interval")]
+    pub metrics_interval_secs: u64,
+
+    #[serde(default = "default_file_changes_delay")]
+    pub file_changes_delay_ms: u64,
+
+    #[serde(default = "default_process_scan_interval")]
+    pub process_scan_interval_secs: u64,
+
+    #[serde(default = "default_service_status_interval")]
+    pub service_status_interval_secs: u64,
+}
+
 fn default_quic_port() -> u16 { 8443 }
 fn default_ws_port() -> u16 { 443 }
 fn default_allowed_paths() -> Vec<String> { vec!["/home".into(), "/etc".into(), "/var/log".into(), "/opt".into()] }
 fn default_blocked_commands() -> Vec<String> { vec!["rm -rf /".into(), "dd if=".into(), "mkfs.".into()] }
 fn default_max_sessions() -> usize { 10 }
 fn default_max_file_mb() -> u64 { 500 }
-fn default_metrics_interval() -> u64 { 2 }
+fn default_metrics_interval() -> u64 { 1 }
+fn default_file_changes_delay() -> u64 { 100 }
+fn default_process_scan_interval() -> u64 { 2 }
+fn default_service_status_interval() -> u64 { 5 }
 
 pub fn load(path: &str) -> Result<AgentConfig, anyhow::Error> {
     let p = Path::new(path);
@@ -99,6 +118,12 @@ fn default_config() -> AgentConfig {
             max_terminal_sessions: 10,
             max_file_transfer_mb: 500,
             metrics_interval_secs: 2,
+        },
+        collectors: CollectorsConfig {
+            metrics_interval_secs: 1,
+            file_changes_delay_ms: 100,
+            process_scan_interval_secs: 2,
+            service_status_interval_secs: 5,
         },
     }
 }

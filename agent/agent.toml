@@ -29,3 +29,13 @@ blocked_commands = [
 max_terminal_sessions = 10
 max_file_transfer_mb = 500
 metrics_interval_secs = 2
+
+[collectors]
+# 系统监控采集间隔（秒）
+metrics_interval_secs = 1
+# 文件变化监听延迟（毫秒，避免频繁触发）
+file_changes_delay_ms = 100
+# 进程扫描间隔（秒）
+process_scan_interval_secs = 2
+# 服务状态检查间隔（秒）
+service_status_interval_secs = 5

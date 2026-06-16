@@ -1,3 +1,9 @@
+# ── Node.js ──
+node_modules
+dist
+dist-ssr
+*.local
+
 # Logs
 logs
 *.log
@@ -7,16 +13,175 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
-*.local
+# ── Rust ──
+# 编译产物
+target/
+**/*.rs.bk
+*.pdb
 
-# Editor directories and files
+# Cargo 锁文件（库项目可以忽略，应用项目建议保留）
+# Cargo.lock
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# ── Tauri ──
+# Tauri 构建产物
+src-tauri/target/
+
+# ── 操作系统 ──
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# ── IDE 和编辑器 ──
+# VSCode
 .vscode/*
 !.vscode/extensions.json
-.idea
-.DS_Store
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+
+# JetBrains IDEs
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# Vim
+*.swp
+*.swo
+*.swn
+*~
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# ── 构建工具 ──
+# Webpack
+webpack-cache/
+
+# Vite
+.vite/
+
+# ── 临时文件 ──
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+*.orig
+
+# ── 证书和密钥（敏感信息）─
+*.pem
+*.key
+*.crt
+*.cer
+*.der
+*.p12
+*.pfx
+cert.pem
+key.pem
+
+# ── 其他 ──
+# 测试覆盖率
+coverage/
+.nyc_output/
+
+# 环境变量文件
+.env
+.env.local
+.env.*.local
+
+# 打包文件
+*.zip
+*.tar
+*.tar.gz
+*.rar
+*.7z
+
+# 可执行文件
+*.exe
+*.dll
+*.so
+*.dylib
+*.app
+
+# 数据库文件
+*.db
+*.sqlite
+*.sqlite3
+
+# 缓存文件
+.cache/
+.parcel-cache/
+
+# 调试文件
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# 编辑器特定文件
 *.suo
 *.ntvs*
 *.njsproj
