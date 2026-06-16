@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useServerManager } from "../context/ServerManager";
+import { PLACEHOLDER } from "../utils/offlineDefaults";
 import "./FileManager.css";
 
 export interface FileEntry {
@@ -84,17 +85,26 @@ function formatDate(iso: string): string {
 
 type ViewMode = "list" | "grid";
 
-export function FileManager() {
-  const { activeServerId } = useServerManager();
+/** 父级预加载注入的初始数据。存在时 FileManager 跳过首次加载，直接展示数据 */
+interface FileManagerProps {
+  initialData?: {
+    username: string | null;
+    currentPath: string;
+    entries: FileEntry[];
+    mounts: MountInfo[];
+    sidebarSections: SidebarSection[];
+  } | null;
+}
 
-  // 路径系统：区分本地模式和远程模式
-  const IS_WIN_LOCAL = typeof navigator !== "undefined" && navigator.platform.startsWith("Win");  // 本地客户端平台
-  const IS_WIN = !activeServerId && IS_WIN_LOCAL;  // 只有在本地模式下才使用 Windows 路径格式
+export function FileManager({ initialData }: FileManagerProps = {}) {
+  const { activeServerId, servers, connectServer } = useServerManager();
 
-  const [currentPath, setCurrentPath] = useState(() => {
-    // 初始状态：根据本地客户端平台判断
-    return IS_WIN_LOCAL ? "C:\\Users" : "/home";
-  });
+  // ── 离线状态判断 ─────────────────────────────────────
+  // 无活跃连接 = 离线模式（显示空状态占位符，而非空白或本地文件）
+  const isOffline = !activeServerId;
+
+  // 路径系统：始终使用 Linux 远程路径格式（远程 Linux 服务器控制工具）
+  const [currentPath, setCurrentPath] = useState(() => "/home");
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -103,7 +113,6 @@ export function FileManager() {
   const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [history, setHistory] = useState<string[]>([currentPath]);
   const [historyIdx, setHistoryIdx] = useState(0);
-  const pathSep = IS_WIN ? "\\" : "/";  // 路径分隔符：根据模式判断
   const [contextMenu, setContextMenu] = useState<{
     x: number; y: number; entry: FileEntry;
   } | null>(null);
@@ -148,9 +157,8 @@ export function FileManager() {
           path,
         });
       } else {
-        // 本地模式：直接读取本地文件系统
-        console.log("[FileManager] 本地模式，调用 read_dir");
-        resp = await invoke<ReadDirResponse>("read_dir", { path });
+        // 离线模式：不加载本地数据
+        resp = null;
       }
 
       if (resp && resp.entries) {
@@ -170,11 +178,29 @@ export function FileManager() {
     }
   }, [activeServerId]);
 
-  // HOME_PATH：根据模式判断
-  const HOME_PATH = activeServerId ? "/home" : (IS_WIN_LOCAL ? "C:\\Users" : "/home");
+  // ── 父级数据注入：优先使用预加载数据 ─────────────────
+  // 当 Desktop 通过 usePreloader 预加载完成后注入 initialData 时，
+  // 直接初始化所有状态，跳过后续的首次加载 useEffect
+  useEffect(() => {
+    if (initialData) {
+      console.log("[FileManager] 使用父级注入的初始数据");
+      setUsername(initialData.username);
+      setCurrentPath(initialData.currentPath);
+      setEntries(initialData.entries);
+      setMounts(initialData.mounts);
+      setSidebarSections(initialData.sidebarSections);
+      setHistory([initialData.currentPath]);
+      setPathInput(initialData.currentPath);
+      setLoading(false);
+    }
+  }, [initialData]);
+
+  // HOME_PATH：远程 Linux 默认路径
+  const HOME_PATH = "/home";
 
   // 获取远程服务器用户名
   useEffect(() => {
+    if (initialData) return; // 有注入数据时跳过，已通过 initialData 初始化
     console.log("[FileManager] 获取用户名 useEffect, activeServerId:", activeServerId);
     if (activeServerId) {
       // 连接建立后，获取用户名
@@ -189,13 +215,14 @@ export function FileManager() {
           setUsername("user");  // 默认值
         });
     } else {
-      console.log("[FileManager] 本地模式，清空用户名");
-      setUsername(null);  // 本地模式清空用户名
+      // 离线模式：清空用户名
+      setUsername(null);
     }
-  }, [activeServerId]);
+  }, [activeServerId, initialData]);
 
   // Initial load
   useEffect(() => {
+    if (initialData) return; // 有注入数据时跳过，已通过 initialData 初始化
     console.log("[FileManager] 初始加载 useEffect, activeServerId:", activeServerId, "username:", username);
     if (activeServerId && username) {
       // 远程模式：有用户名后，加载初始目录
@@ -203,16 +230,16 @@ export function FileManager() {
       console.log("[FileManager] 远程模式，加载路径:", homePath);
       loadDir(homePath);
     } else if (!activeServerId) {
-      // 本地模式：使用默认路径
-      console.log("[FileManager] 本地模式，加载路径:", HOME_PATH);
-      loadDir(HOME_PATH);
+      // 离线模式：不加载（显示离线占位符）
+      console.log("[FileManager] 离线模式，不加载");
     } else {
       console.log("[FileManager] 等待用户名...");
     }
-  }, [activeServerId, username, loadDir, HOME_PATH]);
+  }, [activeServerId, username, loadDir, HOME_PATH, initialData]);
 
   // 获取挂载点列表
   useEffect(() => {
+    if (initialData) return; // 有注入数据时跳过，已通过 initialData 初始化
     console.log("[FileManager] 获取挂载点 useEffect, activeServerId:", activeServerId);
     if (activeServerId) {
       // 远程模式：获取挂载点列表
@@ -227,13 +254,14 @@ export function FileManager() {
           setMounts([]);  // 默认空列表
         });
     } else {
-      console.log("[FileManager] 本地模式，清空挂载点");
-      setMounts([]);  // 本地模式清空挂载点
+      // 离线模式：清空挂载点
+      setMounts([]);
     }
-  }, [activeServerId]);
+  }, [activeServerId, initialData]);
 
   // 生成侧边栏
   useEffect(() => {
+    if (initialData) return; // 有注入数据时跳过，已通过 initialData 初始化
     console.log("[FileManager] 生成侧边栏 useEffect, activeServerId:", activeServerId, "username:", username, "mounts:", mounts.length);
     if (activeServerId && username) {
       // 远程模式：生成远程侧边栏
@@ -267,19 +295,12 @@ export function FileManager() {
       ];
       console.log("[FileManager] 远程侧边栏生成完成:", sections);
       setSidebarSections(sections);
-    } else if (!activeServerId) {
-      // 本地模式：使用本地侧边栏
+    } else {
+      // 离线模式：使用默认 Linux 侧边栏（保持 UI 结构一致）
       const sections: SidebarSection[] = [
         {
           title: "位置",
-          items: IS_WIN ? [
-            { icon: "🏠", label: "主目录", path: "C:\\Users", type: "bookmark" },
-            { icon: "📄", label: "文档", path: "C:\\Users\\Public\\Documents", type: "bookmark" },
-            { icon: "⬇️", label: "下载", path: "C:\\Users\\Public\\Downloads", type: "bookmark" },
-            { icon: "🖼️", label: "图片", path: "C:\\Users\\Public\\Pictures", type: "bookmark" },
-            { icon: "🎵", label: "音乐", path: "C:\\Users\\Public\\Music", type: "bookmark" },
-            { icon: "🎬", label: "视频", path: "C:\\Users\\Public\\Videos", type: "bookmark" },
-          ] : [
+          items: [
             { icon: "🏠", label: "主目录", path: "/home", type: "bookmark" },
             { icon: "📄", label: "文档", path: "/home/Documents", type: "bookmark" },
             { icon: "⬇️", label: "下载", path: "/home/Downloads", type: "bookmark" },
@@ -295,10 +316,51 @@ export function FileManager() {
           ]
         }
       ];
-      console.log("[FileManager] 本地侧边栏生成完成:", sections);
       setSidebarSections(sections);
     }
-  }, [activeServerId, username, mounts]);
+  }, [activeServerId, username, mounts, initialData]);
+
+  // ── 断连即时响应 ─────────────────────────────────────
+  // 当 activeServerId 从有值变为 null（断连），立即清空数据并显示离线占位符
+  useEffect(() => {
+    if (!activeServerId) {
+      // 断连：立即重置为离线状态（不清空侧边栏，保留 UI 结构）
+      setEntries([]);
+      setError(null);
+      setLoading(false);
+      setSelectedIdx(null);
+      setContextMenu(null);
+      console.log("[FileManager] 检测到断连，切换到离线模式");
+    }
+  }, [activeServerId]);
+
+  // ── 连接即时响应：清空旧本地数据 ─────────────────────
+  // 当 activeServerId 从 null 变为有值（从离线/本地→远程连接），
+  // 立即清空残留的本地模式数据，避免显示 C:\ 路径或旧文件列表
+  // 后续的 username/mounts/sidebar/loadDir useEffect 会自动填充远程数据
+  const prevServerIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const wasOffline = !prevServerIdRef.current;
+    const nowConnected = !!activeServerId;
+    if (wasOffline && nowConnected) {
+      // 清空所有本地模式的残留数据
+      setEntries([]);
+      setError(null);
+      setLoading(false);
+      setSelectedIdx(null);
+      setContextMenu(null);
+      setUsername(null);  // 清空，让 username useEffect 重新获取
+      setMounts([]);
+      setSidebarSections([]);
+      // 重置路径为 Linux 远程格式（避免 C:\ 残留）
+      setCurrentPath("/home");
+      setHistory(["/home"]);
+      setHistoryIdx(0);
+      setPathInput("/home");
+      console.log("[FileManager] 检测到新连接，已清空本地残留数据");
+    }
+    prevServerIdRef.current = activeServerId;
+  }, [activeServerId]);
 
   // 同步路径输入框
   useEffect(() => {
@@ -335,26 +397,15 @@ export function FileManager() {
 
   // ── Navigation ──────────────────────────────────────
   const navigateTo = useCallback((path: string) => {
-    // 清理路径：移除多余的斜杠
-    let cleanPath = path;
-    if (!IS_WIN) {
-      // Linux: 移除多余的斜杠，但保留根目录的斜杠
-      cleanPath = path.replace(/\/+/g, "/");
-      // 确保路径以斜杠开头（除非是空路径）
-      if (cleanPath.length > 0 && !cleanPath.startsWith("/")) {
-        cleanPath = "/" + cleanPath;
-      }
-      // 空路径默认为根目录
-      if (cleanPath === "") {
-        cleanPath = "/";
-      }
-    } else {
-      // Windows: 移除多余的反斜杠
-      cleanPath = path.replace(/\\+/g, "\\");
-      // 确保路径格式正确（例如 C:\）
-      if (cleanPath.length > 0 && !cleanPath.includes(":")) {
-        cleanPath = "C:" + cleanPath;
-      }
+    // 清理路径：Linux 格式，移除多余的斜杠
+    let cleanPath = path.replace(/\/+/g, "/");
+    // 确保路径以斜杠开头（除非是空路径）
+    if (cleanPath.length > 0 && !cleanPath.startsWith("/")) {
+      cleanPath = "/" + cleanPath;
+    }
+    // 空路径默认为根目录
+    if (cleanPath === "") {
+      cleanPath = "/";
     }
 
     console.log("[FileManager] navigateTo: 输入路径:", path, "清理后:", cleanPath);
@@ -374,16 +425,8 @@ export function FileManager() {
   }, [history, historyIdx, loadDir]);
 
   const goUp = useCallback(() => {
-    if (IS_WIN) {
-      // Windows: "C:\Users\foo" -> "C:\Users"
-      const parts = currentPath.split("\\").filter(Boolean);
-      if (parts.length <= 1) return; // Already at root like "C:"
-      const parent = parts.slice(0, -1).join("\\");
-      navigateTo(parent);
-    } else {
-      const parent = currentPath.split("/").slice(0, -1).join("/") || "/";
-      navigateTo(parent);
-    }
+    const parent = currentPath.split("/").slice(0, -1).join("/") || "/";
+    navigateTo(parent);
   }, [currentPath, navigateTo]);
 
   const goForward = useCallback(() => {
@@ -396,8 +439,8 @@ export function FileManager() {
   // Double-click entry
   const handleOpen = useCallback((entry: FileEntry) => {
     if (entry.is_dir) {
-      const sep = IS_WIN ? "\\" : "/";
-      const newPath = currentPath === "/" || (IS_WIN && currentPath.endsWith(":"))
+      const sep = "/";
+      const newPath = currentPath === "/"
         ? `${currentPath}${sep}${entry.name}`
         : `${currentPath}${sep}${entry.name}`;
       navigateTo(newPath);
@@ -406,12 +449,6 @@ export function FileManager() {
       console.log(`[FileManager] Open file: ${currentPath}/${entry.name}`);
     }
   }, [currentPath, navigateTo]);
-
-  // Breadcrumb click
-  const handleCrumbClick = useCallback((idx: number) => {
-    const targetPath = pathParts.slice(0, idx + 1).join(pathSep);
-    navigateTo(IS_WIN ? targetPath : "/" + targetPath);
-  }, [currentPath, navigateTo, pathSep]);
 
   // ── Properties Dialog ────────────────────────────────
   const showProperties = useCallback((entry: FileEntry) => {
@@ -424,9 +461,9 @@ export function FileManager() {
     const name = prompt("新建文件夹名称:");
     if (!name || name.trim() === "") return;
 
-    // 构建新路径
-    const sep = IS_WIN ? "\\" : "/";
-    const newPath = currentPath === "/" || (IS_WIN && currentPath.endsWith(":"))
+    // 构建新路径（Linux 格式）
+    const sep = "/";
+    const newPath = currentPath === "/"
       ? `${currentPath}${sep}${name.trim()}`
       : `${currentPath}${sep}${name.trim()}`;
 
@@ -436,8 +473,7 @@ export function FileManager() {
       if (activeServerId) {
         await invoke("remote_mkdir", { serverId: activeServerId, path: newPath });
       } else {
-        // 本地模式（暂不支持）
-        alert("本地模式暂不支持文件操作");
+        alert("请先连接到远程服务器");
         return;
       }
 
@@ -468,13 +504,13 @@ export function FileManager() {
       return;
     }
 
-    // 构建路径
-    const sep = IS_WIN ? "\\" : "/";
-    const oldPath = currentPath === "/" || (IS_WIN && currentPath.endsWith(":"))
+    // 构建路径（Linux 格式）
+    const sep = "/";
+    const oldPath = currentPath === "/"
       ? `${currentPath}${sep}${editingEntry.name}`
       : `${currentPath}${sep}${editingEntry.name}`;
 
-    const newPath = currentPath === "/" || (IS_WIN && currentPath.endsWith(":"))
+    const newPath = currentPath === "/"
       ? `${currentPath}${sep}${trimmedName}`
       : `${currentPath}${sep}${trimmedName}`;
 
@@ -488,7 +524,7 @@ export function FileManager() {
           newPath
         });
       } else {
-        alert("本地模式暂不支持文件操作");
+        alert("请先连接到远程服务器");
         setEditingEntry(null);
         setEditingName("");
         return;
@@ -530,9 +566,9 @@ export function FileManager() {
     const confirmed = confirm(`确定删除 "${entry.name}"?\n\n${entry.is_dir ? "这将删除文件夹及其所有内容。" : "此操作无法撤销。"}`);
     if (!confirmed) return;
 
-    // 构建路径
-    const sep = IS_WIN ? "\\" : "/";
-    const path = currentPath === "/" || (IS_WIN && currentPath.endsWith(":"))
+    // 构建路径（Linux 格式）
+    const sep = "/";
+    const path = currentPath === "/"
       ? `${currentPath}${sep}${entry.name}`
       : `${currentPath}${sep}${entry.name}`;
 
@@ -542,7 +578,7 @@ export function FileManager() {
       if (activeServerId) {
         await invoke("remote_delete", { serverId: activeServerId, path });
       } else {
-        alert("本地模式暂不支持文件操作");
+        alert("请先连接到远程服务器");
         return;
       }
 
@@ -589,9 +625,6 @@ export function FileManager() {
     }
   }, [entries, selectedIdx, goUp, handleOpen, editingEntry]);
 
-  // ── Breadcrumb parts ─────────────────────────────────
-  const pathParts = currentPath.split(pathSep).filter(Boolean);
-
   // ── Stats ────────────────────────────────────────────
   const dirCount = entries.filter(e => e.is_dir).length;
   const fileCount = entries.filter(e => !e.is_dir).length;
@@ -614,7 +647,7 @@ export function FileManager() {
           onKeyDown={handlePathInputKeyDown}
           onFocus={handlePathInputFocus}
           onBlur={handlePathInputBlur}
-          placeholder={IS_WIN ? "C:\\Users" : "/home"}
+          placeholder="/home"
           title="输入路径并按 Enter 跳转"
         />
 
@@ -666,7 +699,46 @@ export function FileManager() {
 
         {/* Main Area */}
         <div className="fm-main" ref={mainRef}>
-          {loading ? (
+          {isOffline ? (
+            /* ── 离线空状态 ─────────────────────────────── */
+            <div className="fm-offline">
+              <div className="offline-icon">📡</div>
+              <div className="offline-title">无远程连接</div>
+              <div className="offline-desc">请先连接到远程服务器以浏览远程文件系统。</div>
+
+              {servers.length > 0 ? (
+                <div className="offline-servers">
+                  <div className="offline-servers-label">可用服务器</div>
+                  {servers.map((server) => (
+                    <button
+                      key={server.id}
+                      className="offline-server-btn"
+                      onClick={() => connectServer(server.id)}
+                      disabled={server.status === "connecting"}
+                    >
+                      <span className="osb-status">
+                        {server.status === "connected" ? "🟢" :
+                         server.status === "connecting" ? "🟡" :
+                         server.status === "error" ? "🔴" : "⚪"}
+                      </span>
+                      <span className="osb-info">
+                        <span className="osb-name">{server.name || server.host}</span>
+                        <span className="osb-host">{server.host}:{server.port}</span>
+                      </span>
+                      <span className="osb-action">
+                        {server.status === "connecting" ? "连接中..." : "连接"}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="offline-no-servers">
+                  <span>暂无已配置的服务器</span>
+                  <span>请前往设置面板添加远程服务器</span>
+                </div>
+              )}
+            </div>
+          ) : loading ? (
             <div className="fm-loading">
               <div className="spinner" />
               加载中...
@@ -804,8 +876,8 @@ export function FileManager() {
 
       {/* Status Bar */}
       <div className="fm-statusbar">
-        <span>{dirCount} 个文件夹, {fileCount} 个文件</span>
-        <span>总大小: {formatSize(totalSize)}</span>
+        <span>{isOffline ? `${PLACEHOLDER} 个文件夹, ${PLACEHOLDER} 个文件` : `${dirCount} 个文件夹, ${fileCount} 个文件`}</span>
+        <span>总大小: {isOffline ? PLACEHOLDER : formatSize(totalSize)}</span>
       </div>
 
       {/* Context Menu */}
@@ -831,9 +903,9 @@ export function FileManager() {
 
           {/* 其他操作 */}
           <div className="ctx-item" onClick={() => {
-            // 复制路径到剪贴板
-            const sep = IS_WIN ? "\\" : "/";
-            const path = currentPath === "/" || (IS_WIN && currentPath.endsWith(":"))
+            // 复制路径到剪贴板（Linux 格式）
+            const sep = "/";
+            const path = currentPath === "/"
               ? `${currentPath}${sep}${contextMenu.entry.name}`
               : `${currentPath}${sep}${contextMenu.entry.name}`;
             navigator.clipboard.writeText(path);

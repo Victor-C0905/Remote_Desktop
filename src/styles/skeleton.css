@@ -1,0 +1,137 @@
+/* ── 骨架屏基础样式 ────────────────────────────────────── */
+/* 用于数据加载期间的占位展示，消除页面闪动 (FOUC)              */
+
+/* ── 通用 Shimmer 动画 ──────────────────────────────── */
+
+@keyframes skeleton-shimmer {
+  0% { background-position: -200px 0; }
+  100% { background-position: calc(200px + 100%) 0; }
+}
+
+@keyframes skeleton-cursor-blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+
+.skeleton-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--card-bg, #f0f0f0) 25%,
+    var(--border-color, rgba(0, 0, 0, 0.08)) 50%,
+    var(--card-bg, #f0f0f0) 75%
+  );
+  background-size: 200px 100%;
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
+  border-radius: var(--radius-sm, 8px);
+}
+
+/* ── FileManager 骨架屏 ─────────────────────────────── */
+
+.fm-skeleton {
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+}
+
+.fm-skeleton-sidebar {
+  width: 200px;
+  flex-shrink: 0;
+  padding: 12px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  border-right: 1px solid var(--border-color, rgba(0, 0, 0, 0.15));
+  background: var(--sidebar-bg, #ebebeb);
+}
+
+.fm-skeleton-section-title {
+  height: 16px;
+  width: 60px;
+  margin-bottom: 8px;
+}
+
+.fm-skeleton-sidebar-item {
+  height: 28px;
+  width: 80%;
+  border-radius: 6px;
+}
+
+.fm-skeleton-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 16px;
+  gap: 4px;
+}
+
+.fm-skeleton-row {
+  height: 36px;
+  width: 100%;
+  border-radius: 6px;
+}
+
+/* ── Terminal 骨架屏 ─────────────────────────────────── */
+
+.terminal-skeleton {
+  flex: 1;
+  background: #1e1e1e;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding: 12px 16px;
+  position: relative;
+  overflow: hidden;
+}
+
+.terminal-skeleton-line {
+  height: 18px;
+  width: 60%;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  margin-bottom: 4px;
+}
+
+.terminal-skeleton-cursor {
+  display: inline-block;
+  width: 8px;
+  height: 16px;
+  background: #4ec9b0;
+  animation: skeleton-cursor-blink 1s step-end infinite;
+  vertical-align: text-bottom;
+  margin-left: 4px;
+}
+
+/* ── SystemMonitor 骨架屏 ────────────────────────────── */
+
+.sm-skeleton-content {
+  flex: 1;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.sm-skeleton-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.sm-skeleton-tab {
+  height: 32px;
+  width: 70px;
+  border-radius: 6px;
+}
+
+.sm-skeleton-card {
+  height: 140px;
+  width: 100%;
+  border-radius: 12px;
+}
+
+.sm-skeleton-bar {
+  height: 24px;
+  width: 100%;
+  border-radius: 6px;
+  margin-bottom: 8px;
+}

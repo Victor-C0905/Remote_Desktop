@@ -2,6 +2,14 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useServerManager } from "../context/ServerManager";
 import { listen } from "@tauri-apps/api/event";
 import { SUBSCRIPTION_CONFIG } from "../config/subscription";
+import {
+  OFFLINE_METRICS,
+  formatBytesSafe,
+  formatPercentSafe,
+  formatUptimeSafe,
+  formatSpeedSafe,
+} from "../utils/offlineDefaults";
+import { MonitorSkeleton } from "../components/skeleton/MonitorSkeleton";
 import "./SystemMonitor.css";
 
 interface MetricsSnapshot {
@@ -45,33 +53,8 @@ function formatBytes(bytes: number): string {
   return (bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1) + " " + units[i];
 }
 
-function formatUptime(seconds: number): string {
-  const days = Math.floor(seconds / 86400);
-  const hours = Math.floor((seconds % 86400) / 3600);
-  const mins = Math.floor((seconds % 3600) / 60);
-  if (days > 0) return `${days} 天 ${hours}:${mins.toString().padStart(2, "0")}`;
-  return `${hours}:${mins.toString().padStart(2, "0")}`;
-}
-
 function formatPercent(value: number): string {
   return value.toFixed(1) + "%";
-}
-
-function generateDemoMetrics(): MetricsSnapshot {
-  return {
-    cpu_percent: Math.random() * 30 + 15,
-    mem_used_bytes: Math.floor(Math.random() * 2 + 3) * 1024 * 1024 * 1024,
-    mem_total_bytes: 8 * 1024 * 1024 * 1024,
-    swap_used_bytes: Math.floor(Math.random() * 512) * 1024 * 1024,
-    disks: [
-      { mount_point: "/", total_bytes: 100 * 1024 * 1024 * 1024, used_bytes: 67 * 1024 * 1024 * 1024 },
-      { mount_point: "/var", total_bytes: 200 * 1024 * 1024 * 1024, used_bytes: 64 * 1024 * 1024 * 1024 },
-      { mount_point: "/home", total_bytes: 50 * 1024 * 1024 * 1024, used_bytes: 28 * 1024 * 1024 * 1024 },
-    ],
-    network_rx_bytes: Math.floor(Math.random() * 1.5 + 0.5) * 1024 * 1024,
-    network_tx_bytes: Math.floor(Math.random() * 500 + 100) * 1024,
-    uptime_secs: Math.floor(Math.random() * 3600 * 24 * 10 + 3600 * 24 * 5),
-  };
 }
 
 function generateDemoProcesses(): ProcessInfo[] {
@@ -151,10 +134,13 @@ export function SystemMonitor() {
   const { activeServerId } = useServerManager();
 
   const [activeTab, setActiveTab] = useState<TabId>("resources");
-  const [metrics, setMetrics] = useState<MetricsSnapshot>(generateDemoMetrics());
-  const [processes, setProcesses] = useState<ProcessInfo[]>(generateDemoProcesses());
+  // 永远不为 null：离线时 = OFFLINE_METRICS，在线时 = 真实数据
+  const [metrics, setMetrics] = useState<MetricsSnapshot | typeof OFFLINE_METRICS>(OFFLINE_METRICS);
+  const [processes, setProcesses] = useState<ProcessInfo[]>([]);
   const [processSort, setProcessSort] = useState<"cpu" | "mem" | "pid">("cpu");
   const [selectedPid, setSelectedPid] = useState<number | null>(null);
+  // 是否已收到过真实在线数据（用于区分「从未连接」和「断连后」）
+  const [hasReceivedData, setHasReceivedData] = useState(false);
 
   const HISTORY_LENGTH = SUBSCRIPTION_CONFIG.HISTORY_LENGTH; // 使用配置的历史长度
 
@@ -174,6 +160,27 @@ export function SystemMonitor() {
   const [networkRxSpeed, setNetworkRxSpeed] = useState<number>(0); // bytes/s
   const [networkTxSpeed, setNetworkTxSpeed] = useState<number>(0); // bytes/s
 
+  // ── 连接状态变化：断连时立即切到离线占位符 ─────────
+  useEffect(() => {
+    if (!activeServerId) {
+      // 断连/无连接 → 立即切换为离线占位符（同步，UI 即时响应）
+      setMetrics(OFFLINE_METRICS);
+      setProcesses([]);
+      setHasReceivedData(false);
+      // 清空历史数据（重连后重新积累）
+      cpuHistoryRef.current = [];
+      memHistoryRef.current = [];
+      setCpuHistory([]);
+      setMemHistory([]);
+      // 重置网络速率计算
+      lastNetworkRxRef.current = 0;
+      lastNetworkTxRef.current = 0;
+      lastNetworkTimeRef.current = 0;
+      setNetworkRxSpeed(0);
+      setNetworkTxSpeed(0);
+    }
+  }, [activeServerId]);
+
   // 监听系统指标事件（由 ServerManager 自动订阅）
   useEffect(() => {
     if (!activeServerId) return;
@@ -189,12 +196,16 @@ export function SystemMonitor() {
               network_tx_bytes: newMetrics.network_tx_bytes,
             });
             setMetrics(newMetrics);
+            // 标记已收到在线数据（用于 UI 区分「从未连接」和「断连后」）
+            if (!hasReceivedData) {
+              setHasReceivedData(true);
+            }
             const now = Date.now();
 
             // 使用环形缓冲区更新历史数据
             const cpuPoint = { time: now, value: newMetrics.cpu_percent };
-            const memPercent = (newMetrics.mem_used_bytes / newMetrics.mem_total_bytes) * 100;
-            const memPoint = { time: now, value: memPercent };
+            const _memPercent = (newMetrics.mem_used_bytes / newMetrics.mem_total_bytes) * 100;
+            const memPoint = { time: now, value: _memPercent };
 
             // 更新环形缓冲区
             if (cpuHistoryRef.current.length < HISTORY_LENGTH) {
@@ -273,12 +284,20 @@ export function SystemMonitor() {
     return sorted;
   }, [processes, processSort]);
 
-  const memPercent = (metrics.mem_used_bytes / metrics.mem_total_bytes) * 100;
-  const swapPercent = metrics.swap_used_bytes > 0 ? 0 : 0;
+  // ── 离线判断 ──
+  const isOffline = '_offline' in metrics && (metrics as typeof OFFLINE_METRICS)._offline === true;
+
+  // ── 三层状态门控 ─────────────────────────────────────
+  // 状态机: 骨架屏(加载中) → 真实数据(在线) → 离线占位符(断连/无连接)
+  //   - 无 activeServerId        → 离线占位符（—）
+  //   - 有 activeServerId 但未收到数据 → 骨架屏（shimmer）
+  //   - 有 activeServerId 且已收到数据 → 真实内容
+  const showSkeleton = !!activeServerId && !hasReceivedData;
+  const showOffline = !activeServerId;
 
   return (
     <div className="sm">
-      {/* Header Bar */}
+      {/* Header Bar — 始终渲染（不受门控影响） */}
       <div className="sm-headerbar">
         <div className="sm-tabs">
           <button
@@ -304,9 +323,24 @@ export function SystemMonitor() {
         <button className="sm-menu-btn" title="菜单">⋮</button>
       </div>
 
-      {/* Content */}
+      {/* Content — 三层状态门控 */}
       <div className="sm-content">
-        {activeTab === "processes" && (
+        {showOffline ? (
+          /* 层 3: 离线占位符（无连接/断连后） */
+          <div className="sm-offline-state">
+            <MonitorSkeleton />
+            <div className="sm-offline-overlay">
+              <div className="offline-badge">📡 未连接</div>
+              <div className="offline-hint">连接到远程服务器以查看系统监控数据</div>
+            </div>
+          </div>
+        ) : showSkeleton ? (
+          /* 层 1: 骨架屏（有连接但等待首条数据） */
+          <MonitorSkeleton />
+        ) : (
+          /* 层 2: 真实数据内容（已收到在线数据） */
+          <>
+            {activeTab === "processes" && (
           <div className="sm-processes">
             <div className="sm-process-header">
               <span className="sm-ph-pid" onClick={() => setProcessSort("pid")}>
@@ -332,8 +366,8 @@ export function SystemMonitor() {
                   <span className="sm-pr-pid">{proc.pid}</span>
                   <span className="sm-pr-name">{proc.name}</span>
                   <span className="sm-pr-user">{proc.user}</span>
-                  <span className="sm-pr-cpu">{formatPercent(proc.cpu_percent)}</span>
-                  <span className="sm-pr-mem">{formatPercent(proc.mem_percent)}</span>
+                  <span className="sm-pr-cpu">{formatPercentSafe(proc.cpu_percent, isOffline)}</span>
+                  <span className="sm-pr-mem">{formatPercentSafe(proc.mem_percent, isOffline)}</span>
                   <span className="sm-pr-state">{proc.state}</span>
                 </div>
               ))}
@@ -354,7 +388,7 @@ export function SystemMonitor() {
                   <MiniChart data={cpuHistory} color="#3584e4" height={60} max={100} />
                 </div>
                 <div className="sm-res-stats">
-                  <span className="sm-res-value">{formatPercent(metrics.cpu_percent)}</span>
+                  <span className="sm-res-value">{formatPercentSafe(metrics.cpu_percent, isOffline)}</span>
                   <span className="sm-res-label">当前使用率</span>
                 </div>
               </div>
@@ -365,8 +399,8 @@ export function SystemMonitor() {
                   <MiniChart data={memHistory} color="#33d17a" height={60} max={100} />
                 </div>
                 <div className="sm-res-stats">
-                  <span className="sm-res-value">{formatBytes(metrics.mem_used_bytes)}</span>
-                  <span className="sm-res-label">/ {formatBytes(metrics.mem_total_bytes)}</span>
+                  <span className="sm-res-value">{formatBytesSafe(metrics.mem_used_bytes, isOffline)}</span>
+                  <span className="sm-res-label">/ {formatBytesSafe(metrics.mem_total_bytes, isOffline)}</span>
                 </div>
               </div>
             </div>
@@ -375,26 +409,36 @@ export function SystemMonitor() {
               <div className="sm-res-bar-card">
                 <div className="sm-bar-header">
                   <span className="sm-bar-title">内存</span>
-                  <span className="sm-bar-value">{formatPercent(memPercent)}</span>
+                  <span className="sm-bar-value">{formatPercentSafe(
+                    metrics.mem_total_bytes > 0 ? (metrics.mem_used_bytes / metrics.mem_total_bytes) * 100 : 0,
+                    isOffline
+                  )}</span>
                 </div>
                 <div className="sm-bar-track">
-                  <div className="sm-bar-fill" style={{ width: `${memPercent}%`, background: "#33d17a" }} />
+                  <div
+                    className="sm-bar-fill"
+                    style={{
+                      width: isOffline ? '0%' : `${(metrics.mem_used_bytes / Math.max(metrics.mem_total_bytes, 1)) * 100}%`,
+                      background: "#33d17a",
+                      opacity: isOffline ? 0.3 : 1,
+                    }}
+                  />
                 </div>
                 <div className="sm-bar-detail">
-                  {formatBytes(metrics.mem_used_bytes)} / {formatBytes(metrics.mem_total_bytes)}
+                  {formatBytesSafe(metrics.mem_used_bytes, isOffline)} / {formatBytesSafe(metrics.mem_total_bytes, isOffline)}
                 </div>
               </div>
 
               <div className="sm-res-bar-card">
                 <div className="sm-bar-header">
                   <span className="sm-bar-title">交换</span>
-                  <span className="sm-bar-value">{formatPercent(swapPercent)}</span>
+                  <span className="sm-bar-value">{formatPercentSafe(0, isOffline)}</span>
                 </div>
                 <div className="sm-bar-track">
-                  <div className="sm-bar-fill" style={{ width: `${swapPercent}%`, background: "#e8a416" }} />
+                  <div className="sm-bar-fill" style={{ width: '0%', background: "#e8a416", opacity: isOffline ? 0.3 : 1 }} />
                 </div>
                 <div className="sm-bar-detail">
-                  {formatBytes(metrics.swap_used_bytes)} / —
+                  {formatBytesSafe(metrics.swap_used_bytes, isOffline)} / —
                 </div>
               </div>
             </div>
@@ -406,12 +450,12 @@ export function SystemMonitor() {
                   <div className="sm-net-item">
                     <span className="sm-net-icon">↓</span>
                     <span className="sm-net-label">接收</span>
-                    <span className="sm-net-value">{formatBytes(networkRxSpeed)}/s</span>
+                    <span className="sm-net-value">{formatSpeedSafe(networkRxSpeed, isOffline)}</span>
                   </div>
                   <div className="sm-net-item">
                     <span className="sm-net-icon">↑</span>
                     <span className="sm-net-label">发送</span>
-                    <span className="sm-net-value">{formatBytes(networkTxSpeed)}/s</span>
+                    <span className="sm-net-value">{formatSpeedSafe(networkTxSpeed, isOffline)}</span>
                   </div>
                 </div>
               </div>
@@ -419,36 +463,46 @@ export function SystemMonitor() {
               <div className="sm-res-card">
                 <div className="sm-res-title">运行时间</div>
                 <div className="sm-res-stats sm-res-stats-center">
-                  <span className="sm-res-value sm-res-value-large">{formatUptime(metrics.uptime_secs)}</span>
+                  <span className="sm-res-value sm-res-value-large">{formatUptimeSafe(metrics.uptime_secs, isOffline)}</span>
                 </div>
               </div>
             </div>
 
             <div className="sm-res-section sm-res-disks">
               <div className="sm-res-title-section">磁盘用量</div>
-              {metrics.disks.map((disk) => {
-                const percent = (disk.used_bytes / disk.total_bytes) * 100;
-                return (
-                  <div key={disk.mount_point} className="sm-disk-item">
-                    <div className="sm-bar-header">
-                      <span className="sm-bar-title">{disk.mount_point}</span>
-                      <span className="sm-bar-value">{formatPercent(percent)}</span>
+              {isOffline ? (
+                <div style={{ padding: '16px 0', color: 'var(--text-disabled)', textAlign: 'center' }}>
+                  无数据（未连接）
+                </div>
+              ) : metrics.disks.length === 0 ? (
+                <div style={{ padding: '16px 0', color: 'var(--text-secondary)', textAlign: 'center' }}>
+                  暂无磁盘信息
+                </div>
+              ) : (
+                metrics.disks.map((disk) => {
+                  const percent = (disk.used_bytes / disk.total_bytes) * 100;
+                  return (
+                    <div key={disk.mount_point} className="sm-disk-item">
+                      <div className="sm-bar-header">
+                        <span className="sm-bar-title">{disk.mount_point}</span>
+                        <span className="sm-bar-value">{formatPercent(percent)}</span>
+                      </div>
+                      <div className="sm-bar-track">
+                        <div
+                          className="sm-bar-fill"
+                          style={{
+                            width: `${percent}%`,
+                            background: percent > 80 ? "#e01b24" : percent > 60 ? "#e8a416" : "#3584e4",
+                          }}
+                        />
+                      </div>
+                      <div className="sm-bar-detail">
+                        {formatBytes(disk.used_bytes)} / {formatBytes(disk.total_bytes)}
+                      </div>
                     </div>
-                    <div className="sm-bar-track">
-                      <div
-                        className="sm-bar-fill"
-                        style={{
-                          width: `${percent}%`,
-                          background: percent > 80 ? "#e01b24" : percent > 60 ? "#e8a416" : "#3584e4",
-                        }}
-                      />
-                    </div>
-                    <div className="sm-bar-detail">
-                      {formatBytes(disk.used_bytes)} / {formatBytes(disk.total_bytes)}
-                    </div>
-                  </div>
-                );
-              })}
+                  );
+                })
+              )}
             </div>
           </div>
         )}
@@ -464,6 +518,12 @@ export function SystemMonitor() {
               <span className="sm-fs-avail">可用</span>
             </div>
             <div className="sm-fs-list">
+              {isOffline ? (
+                <div className="sm-fs-row" style={{ justifyContent: 'center', color: 'var(--text-disabled)', padding: '20px 0' }}>
+                  无数据（未连接）
+                </div>
+              ) : (
+              <>
               {metrics.disks.map((disk) => (
                 <div key={disk.mount_point} className="sm-fs-row">
                   <span className="sm-fs-device">/dev/sda{metrics.disks.indexOf(disk) + 1}</span>
@@ -482,8 +542,12 @@ export function SystemMonitor() {
                 <span className="sm-fs-used">128 MB</span>
                 <span className="sm-fs-avail">3.9 GB</span>
               </div>
+              </>
+              )}
             </div>
           </div>
+        )}
+          </>
         )}
       </div>
     </div>

@@ -407,3 +407,44 @@
   font-size: var(--font-small);
   font-variant-numeric: tabular-nums;
 }
+
+/* ── Offline State (离线状态：骨架屏 + 覆盖层) ───────── */
+.sm-offline-state {
+  position: relative;
+}
+
+.sm-offline-state .offline-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: rgba(250, 250, 250, 0.85);
+  z-index: 10;
+  animation: offlineOverlayIn 200ms var(--ease-out);
+}
+
+@keyframes offlineOverlayIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.offline-badge {
+  font-size: 13pt;
+  font-weight: 700;
+  color: var(--text-primary);
+  background: var(--card-bg);
+  padding: 6px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+}
+
+.offline-hint {
+  font-size: var(--font-body);
+  color: var(--text-secondary);
+}

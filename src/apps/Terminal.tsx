@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useServerManager } from "../context/ServerManager";
 import { useSettingsStore } from "../stores/settingsStore";
+import { TerminalSkeleton } from "../components/skeleton/TerminalSkeleton";
+import { PLACEHOLDER } from "../utils/offlineDefaults";
 import "./Terminal.css";
 
 interface TabInfo {
@@ -380,35 +382,6 @@ export function TerminalApp() {
   const activeTab = tabs.find((t) => t.id === activeTabId);
   const isConnected = activeTab?.ptyId !== null && activeTab?.ptyId !== undefined;
 
-  // ── Fallback: simple textarea terminal ──────────
-  const renderFallbackTerminal = () => (
-    <div className="terminal-fallback">
-      <div className="terminal-fallback-output" />
-      <div className="terminal-fallback-input">
-        <span className="prompt">user@gnome-remote:~$</span>
-        <input
-          className="fallback-input"
-          type="text"
-          autoFocus
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              const target = e.target as HTMLInputElement;
-              const cmd = target.value;
-              target.value = "";
-              const outputEl = document.querySelector(".terminal-fallback-output");
-              if (outputEl) {
-                const line = document.createElement("div");
-                line.textContent = `$ ${cmd}`;
-                outputEl.appendChild(line);
-                outputEl.scrollTop = outputEl.scrollHeight;
-              }
-            }
-          }}
-        />
-      </div>
-    </div>
-  );
-
   return (
     <div className="terminal-app">
       {/* Tab Bar */}
@@ -436,23 +409,46 @@ export function TerminalApp() {
       {/* Terminal Content */}
       <div className="terminal-container">
         {xtermAvailable && xtermModules ? (
-          tabs.map((tab) => (
-            <div
-              key={tab.id}
-              className="terminal-instance"
-              ref={(el) => {
-                if (el && !xtermRefs.current.has(tab.id) && xtermModules) {
-                  createTerminal(tab.id, el);
-                }
-              }}
-              style={{
-                display: tab.id === activeTabId ? "block" : "none",
-                height: "100%",
-              }}
-            />
-          ))
+          !activeServerId && tabs.length > 0 ? (
+            /* 断连状态：显示提示消息 */
+            <div className="terminal-skeleton" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'center' }}>
+              <div style={{
+                color: '#e8a416',
+                fontSize: 14,
+                fontFamily: "'Source Code Pro', monospace",
+                lineHeight: 1.8,
+                width: '100%',
+                padding: '0 16px',
+              }}>
+                <div>{'\u26A0\uFE0F'} Connection lost</div>
+                <div style={{ color: 'rgba(255,255,255,0.4)', marginTop: 4 }}>The remote session has been disconnected.</div>
+                <div style={{ color: 'rgba(255,255,255,0.4)' }}>Reconnect to the server to continue.</div>
+                <div style={{ marginTop: 12, color: 'rgba(255,255,255,0.25)' }}>{PLACEHOLDER}</div>
+              </div>
+            </div>
+          ) : tabs.length === 0 ? (
+            /* 无标签页：显示骨架屏 */
+            <TerminalSkeleton />
+          ) : (
+            /* 正常终端实例 */
+            tabs.map((tab) => (
+              <div
+                key={tab.id}
+                className="terminal-instance"
+                ref={(el) => {
+                  if (el && !xtermRefs.current.has(tab.id) && xtermModules) {
+                    createTerminal(tab.id, el);
+                  }
+                }}
+                style={{
+                  display: tab.id === activeTabId ? "block" : "none",
+                  height: "100%",
+                }}
+              />
+            ))
+          )
         ) : (
-          renderFallbackTerminal()
+          <TerminalSkeleton />
         )}
       </div>
 

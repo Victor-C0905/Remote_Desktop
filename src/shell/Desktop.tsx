@@ -6,6 +6,9 @@ import { Settings } from "../apps/Settings";
 import { NotificationCenter, NotificationBadge } from "./NotificationCenter";
 import { useGlobalShortcuts, createAppShortcuts } from "../hooks/useGlobalShortcuts";
 import { ServerManagerProvider, useServerManager, getStatusColor } from "../context/ServerManager";
+import { formatBytesSafe, formatPercentSafe } from "../utils/offlineDefaults";
+import { usePreloader } from "../hooks/usePreloader";
+import { FileManagerSkeleton } from "../components/skeleton/FileManagerSkeleton";
 import { WallpaperProvider, useWallpaper, getWallpaperStyle } from "../context/WallpaperContext";
 import { listen } from "@tauri-apps/api/event";
 import "./Desktop.css";
@@ -52,6 +55,10 @@ interface WindowState {
   appId: string;
   title: string;
   minimized: boolean;
+  /** 预加载状态：loading=显示骨架屏, ready=数据就绪可渲染, error=加载失败 */
+  preloadState: 'loading' | 'ready' | 'error';
+  /** 预加载完成后的注入数据（仅 FileManager 使用） */
+  preloadData: any;
 }
 
 export function Desktop() {
@@ -76,6 +83,9 @@ function DesktopContent() {
 
   const { activeServer } = useServerManager();
   const { wallpaper } = useWallpaper();
+
+  // ── FileManager 预加载器 ──
+  const preloader = usePreloader();
 
   // Clock
   useEffect(() => {
@@ -118,7 +128,16 @@ function DesktopContent() {
     };
   }, [activeServer?.id]);
 
-  const openApp = useCallback((appId: string) => {
+  // ── 断连时立即清空状态栏 metrics ────────────────────
+  // 当 activeServer 消失（断连/切换服务器）时，同步清空 metrics 数据
+  // 确保 TopBar 即时从 "CPU 23.5%" 切换到 "CPU —%"
+  useEffect(() => {
+    if (!activeServer?.id) {
+      setMetrics(null);
+    }
+  }, [activeServer?.id]);
+
+  const openApp = useCallback(async (appId: string) => {
     setOverviewVisible(false);
 
     const titles: Record<string, string> = {
@@ -128,6 +147,7 @@ function DesktopContent() {
       settings: "设置",
     };
 
+    // 如果窗口已存在，直接聚焦
     if (windows.some((w) => w.appId === appId)) {
       const existing = windows.find((w) => w.appId === appId);
       if (existing) {
@@ -139,15 +159,48 @@ function DesktopContent() {
       return;
     }
 
+    // 1. 先创建窗口框架（preloadState='loading'，显示骨架屏）
     const newWindow: WindowState = {
       id: `win-${appId}-${Date.now()}`,
       appId,
       title: titles[appId] || appId,
       minimized: false,
+      preloadState: 'loading',
+      preloadData: null,
     };
     setWindows((ws) => [...ws, newWindow]);
     setActiveWindowId(newWindow.id);
-  }, [windows]);
+
+    // 2. FileManager 走预加载通道：等待数据就绪后再渲染
+    if (appId === 'files') {
+      try {
+        await preloader.preload(activeServer?.id ?? null);
+        setWindows((ws) =>
+          ws.map((w) =>
+            w.id === newWindow.id
+              ? { ...w, preloadState: 'ready', preloadData: preloader.data }
+              : w
+          )
+        );
+      } catch {
+        console.error("[Desktop] FileManager 预加载失败");
+        setWindows((ws) =>
+          ws.map((w) =>
+            w.id === newWindow.id
+              ? { ...w, preloadState: 'error' }
+              : w
+          )
+        );
+      }
+    } else {
+      // 其他应用：无需父级预加载，直接标记 ready（组件内部自行处理骨架屏）
+      setWindows((ws) =>
+        ws.map((w) =>
+          w.id === newWindow.id ? { ...w, preloadState: 'ready' } : w
+        )
+      );
+    }
+  }, [windows, preloader, activeServer?.id]);
 
   // Global shortcuts
   const shortcuts = createAppShortcuts(
@@ -181,16 +234,37 @@ function DesktopContent() {
     setActiveWindowId(windowId);
   };
 
-  // Render app content
-  const renderAppContent = (appId: string) => {
+  // Render app content（根据 preloadState 决定展示真实组件还是骨架屏）
+  const renderAppContent = (appId: string, win: WindowState) => {
     switch (appId) {
-      case "files":
-        return <FileManager />;
-      case "terminal":
+      case 'files':
+        if (win.preloadState === 'error') {
+          return (
+            <div className="fm" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12, height: '100%' }}>
+              <div style={{ fontSize: 36 }}>⚠️</div>
+              <div>数据加载失败</div>
+              <button
+                onClick={() => {
+                  preloader.preload(activeServer?.id ?? null).then(() => {
+                    setWindows(ws => ws.map(w =>
+                      w.id === win.id ? { ...w, preloadState: 'ready', preloadData: preloader.data } : w
+                    ));
+                  });
+                }}
+                style={{ padding: '6px 16px', borderRadius: 8, cursor: 'pointer', border: '1px solid var(--border-color)' }}
+              >重试</button>
+            </div>
+          );
+        }
+        if (win.preloadState !== 'ready') {
+          return <FileManagerSkeleton />;
+        }
+        return <FileManager initialData={win.preloadData} />;
+      case 'terminal':
         return <TerminalApp />;
-      case "monitor":
+      case 'monitor':
         return <SystemMonitor />;
-      case "settings":
+      case 'settings':
         return <Settings />;
       default:
         return <div>Unknown app</div>;
@@ -232,12 +306,10 @@ function DesktopContent() {
           )}
         </div>
         <div className="spacer" />
-        {metrics && (
-          <div className="metrics">
-            <span>CPU {metrics.cpu_percent.toFixed(1)}%</span>
-            <span>MEM {(metrics.mem_used_bytes / (1024 * 1024 * 1024)).toFixed(1)}G / {(metrics.mem_total_bytes / (1024 * 1024 * 1024)).toFixed(1)}G</span>
-          </div>
-        )}
+        <div className="metrics">
+          <span>CPU {formatPercentSafe(metrics?.cpu_percent ?? 0, !metrics)}</span>
+          <span>MEM {formatBytesSafe(metrics?.mem_used_bytes ?? 0, !metrics)} / {formatBytesSafe(metrics?.mem_total_bytes ?? 0, !metrics)}</span>
+        </div>
         <div className="separator" />
         <span className="clock">{clock}</span>
         <button
@@ -288,7 +360,7 @@ function DesktopContent() {
                 <div className="awt-spacer" />
               </div>
               <div className="app-window-content">
-                {renderAppContent(win.appId)}
+                {renderAppContent(win.appId, win)}
               </div>
             </div>
           )
