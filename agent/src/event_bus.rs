@@ -2,51 +2,64 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, broadcast};
 use serde_json::Value;
 
-type EventCallback = Arc<dyn Fn(Value) + Send + Sync>;
+/// 事件数据
+#[derive(Debug, Clone)]
+pub struct Event {
+    pub event_type: String,
+    pub data: Value,
+    pub timestamp: u64,
+}
 
 /// 事件总线，用于发布和订阅事件
 pub struct EventBus {
-    subscribers: Arc<RwLock<HashMap<String, Vec<EventCallback>>>>,
+    // 广播通道（用于事件推送）
+    broadcaster: broadcast::Sender<Event>,
 }
 
 impl EventBus {
     pub fn new() -> Self {
+        // 创建广播通道，容量为 100
+        let (tx, _) = broadcast::channel(100);
         Self {
-            subscribers: Arc::new(RwLock::new(HashMap::new())),
+            broadcaster: tx,
         }
     }
 
     /// 发布事件
     pub async fn publish(&self, event_type: &str, data: Value) {
-        let subs = self.subscribers.read().await;
-        if let Some(callbacks) = subs.get(event_type) {
-            for callback in callbacks {
-                callback(data.clone());
-            }
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        let event = Event {
+            event_type: event_type.to_string(),
+            data,
+            timestamp,
+        };
+
+        // 广播事件
+        if let Err(e) = self.broadcaster.send(event) {
+            tracing::warn!("广播事件失败: {}", e);
         }
     }
 
-    /// 订阅事件
-    pub async fn subscribe(&self, event_type: &str, callback: EventCallback) {
-        let mut subs = self.subscribers.write().await;
-        subs.entry(event_type.to_string())
-            .or_insert_with(Vec::new)
-            .push(callback);
+    /// 订阅事件（返回接收器）
+    pub fn subscribe(&self) -> broadcast::Receiver<Event> {
+        self.broadcaster.subscribe()
     }
 
-    /// 取消订阅（移除所有该类型的订阅）
-    pub async fn unsubscribe_all(&self, event_type: &str) {
-        let mut subs = self.subscribers.write().await;
-        subs.remove(event_type);
+    /// 检查是否有订阅者（通过广播通道的 receiver_count）
+    pub fn has_subscribers(&self) -> bool {
+        self.broadcaster.receiver_count() > 0
     }
 
-    /// 检查是否有订阅者
-    pub async fn has_subscribers(&self, event_type: &str) -> bool {
-        let subs = self.subscribers.read().await;
-        subs.get(event_type).map(|v| !v.is_empty()).unwrap_or(false)
+    /// 获取订阅者数量
+    pub fn subscriber_count(&self) -> usize {
+        self.broadcaster.receiver_count()
     }
 }
 
