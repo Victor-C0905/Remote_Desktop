@@ -3,7 +3,9 @@ use clap::Parser;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod cert;
+mod collectors;
 mod config;
+mod event_bus;
 mod handler;
 mod protocol;
 mod server;

@@ -1,6 +1,57 @@
 // agent/src/protocol.rs
 use serde::{Deserialize, Serialize};
 
+/// 订阅类型枚举
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(tag = "type", content = "params")]
+pub enum SubscriptionType {
+    // 系统监控
+    #[serde(rename = "metrics")]
+    Metrics {
+        interval_secs: Option<u64>, // 可选，默认使用配置值
+    },
+
+    // 文件变化监控（后续实现）
+    #[serde(rename = "file_changes")]
+    FileChanges {
+        path: String,
+        recursive: Option<bool>,
+    },
+
+    // 进程事件（后续实现）
+    #[serde(rename = "process_events")]
+    ProcessEvents {
+        interval_secs: Option<u64>,
+    },
+
+    // 应用日志（后续实现）
+    #[serde(rename = "app_logs")]
+    AppLogs {
+        app_name: String,
+        level: Option<String>,
+    },
+
+    // 服务状态（后续实现）
+    #[serde(rename = "service_status")]
+    ServiceStatus {
+        service: String,
+        interval_secs: Option<u64>,
+    },
+}
+
+impl SubscriptionType {
+    /// 获取订阅类型名称
+    pub fn type_name(&self) -> String {
+        match self {
+            SubscriptionType::Metrics { .. } => "metrics",
+            SubscriptionType::FileChanges { .. } => "file_changes",
+            SubscriptionType::ProcessEvents { .. } => "process_events",
+            SubscriptionType::AppLogs { .. } => "app_logs",
+            SubscriptionType::ServiceStatus { .. } => "service_status",
+        }.to_string()
+    }
+}
+
 /// 消息信封,包含请求 ID 和 payload
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Envelope {
@@ -68,6 +119,30 @@ pub enum Payload {
     #[serde(rename = "delete_resp")]
     DeleteResponse { success: bool },
 
+    #[serde(rename = "mkdir")]
+    MkdirRequest { path: String },
+
+    #[serde(rename = "mkdir_resp")]
+    MkdirResponse { success: bool, path: String },
+
+    #[serde(rename = "rename")]
+    RenameRequest { old_path: String, new_path: String },
+
+    #[serde(rename = "rename_resp")]
+    RenameResponse { success: bool, old_path: String, new_path: String },
+
+    #[serde(rename = "copy")]
+    CopyRequest { src: String, dst: String },
+
+    #[serde(rename = "copy_resp")]
+    CopyResponse { success: bool, src: String, dst: String },
+
+    #[serde(rename = "move")]
+    MoveRequest { src: String, dst: String },
+
+    #[serde(rename = "move_resp")]
+    MoveResponse { success: bool, src: String, dst: String },
+
     #[serde(rename = "terminal_spawn")]
     TerminalSpawnRequest { shell: String, cols: u16, rows: u16 },
 
@@ -88,6 +163,41 @@ pub enum Payload {
 
     #[serde(rename = "mounts_resp")]
     MountsResponse { mounts: Vec<MountInfo> },
+
+    // 新增：通用订阅
+    #[serde(rename = "subscribe")]
+    Subscribe {
+        server_id: String,
+        types: Vec<SubscriptionType>, // 支持同时订阅多种类型
+    },
+
+    // 新增：通用取消订阅
+    #[serde(rename = "unsubscribe")]
+    Unsubscribe {
+        server_id: String,
+        types: Vec<SubscriptionType>, // 支持取消部分订阅
+    },
+
+    // 新增：通用事件推送
+    #[serde(rename = "event")]
+    Event {
+        event_type: String,           // "metrics" / "file_changes" / ...
+        data: serde_json::Value,      // 事件数据（动态类型）
+        timestamp: u64,               // 事件时间戳
+    },
+
+    // 新增：订阅确认
+    #[serde(rename = "subscribe_ack")]
+    SubscribeAck {
+        success: bool,
+        subscribed_types: Vec<SubscriptionType>,
+    },
+
+    // 新增：取消订阅确认
+    #[serde(rename = "unsubscribe_ack")]
+    UnsubscribeAck {
+        success: bool,
+    },
 
     #[serde(rename = "error")]
     Error { code: i32, message: String },

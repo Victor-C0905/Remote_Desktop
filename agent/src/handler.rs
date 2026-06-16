@@ -101,6 +101,89 @@ pub fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig) -> Envelope {
             }
         }
 
+        Payload::MkdirRequest { path } => {
+            tracing::info!("创建目录请求: {}", path);
+            match handle_mkdir(path, cfg) {
+                Ok(created_path) => {
+                    tracing::info!("创建目录成功: {}", created_path);
+                    Envelope::new(
+                        envelope.request_id,
+                        Payload::MkdirResponse {
+                            success: true,
+                            path: created_path,
+                        },
+                    )
+                }
+                Err(e) => {
+                    tracing::error!("创建目录失败: {} - {}", path, e);
+                    error_response(envelope.request_id, &e)
+                }
+            }
+        }
+
+        Payload::RenameRequest { old_path, new_path } => {
+            tracing::info!("重命名请求: {} -> {}", old_path, new_path);
+            match handle_rename(old_path, new_path, cfg) {
+                Ok((old, new)) => {
+                    tracing::info!("重命名成功: {} -> {}", old, new);
+                    Envelope::new(
+                        envelope.request_id,
+                        Payload::RenameResponse {
+                            success: true,
+                            old_path: old,
+                            new_path: new,
+                        },
+                    )
+                }
+                Err(e) => {
+                    tracing::error!("重命名失败: {} - {}", old_path, e);
+                    error_response(envelope.request_id, &e)
+                }
+            }
+        }
+
+        Payload::CopyRequest { src, dst } => {
+            tracing::info!("复制请求: {} -> {}", src, dst);
+            match handle_copy(src, dst, cfg) {
+                Ok((s, d)) => {
+                    tracing::info!("复制成功: {} -> {}", s, d);
+                    Envelope::new(
+                        envelope.request_id,
+                        Payload::CopyResponse {
+                            success: true,
+                            src: s,
+                            dst: d,
+                        },
+                    )
+                }
+                Err(e) => {
+                    tracing::error!("复制失败: {} - {}", src, e);
+                    error_response(envelope.request_id, &e)
+                }
+            }
+        }
+
+        Payload::MoveRequest { src, dst } => {
+            tracing::info!("移动请求: {} -> {}", src, dst);
+            match handle_move(src, dst, cfg) {
+                Ok((s, d)) => {
+                    tracing::info!("移动成功: {} -> {}", s, d);
+                    Envelope::new(
+                        envelope.request_id,
+                        Payload::MoveResponse {
+                            success: true,
+                            src: s,
+                            dst: d,
+                        },
+                    )
+                }
+                Err(e) => {
+                    tracing::error!("移动失败: {} - {}", src, e);
+                    error_response(envelope.request_id, &e)
+                }
+            }
+        }
+
         Payload::MetricsSubscribeRequest {} => {
             match collect_metrics() {
                 Ok(metrics) => Envelope::new(
@@ -319,6 +402,120 @@ fn handle_delete(path: &str, cfg: &AgentConfig) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn handle_mkdir(path: &str, cfg: &AgentConfig) -> Result<String, String> {
+    // 如果 allowed_paths 不为空，则检查白名单
+    // 如果 allowed_paths 为空，则不限制，依赖 Linux 文件系统权限
+    if !cfg.security.allowed_paths.is_empty() {
+        let allowed = cfg
+            .security
+            .allowed_paths
+            .iter()
+            .any(|prefix| path.starts_with(prefix));
+        if !allowed {
+            return Err(format!("访问被拒绝: 不在允许的路径列表中 ({})", path));
+        }
+    }
+
+    fs::create_dir_all(path)
+        .map_err(|e| {
+            let error_msg = e.to_string();
+            if error_msg.contains("Permission denied") {
+                format!("权限不足: 无法创建目录 '{}' (需要相应的 Linux 用户权限)", path)
+            } else {
+                format!("无法创建目录 '{}': {}", path, e)
+            }
+        })?;
+
+    Ok(path.to_string())
+}
+
+fn handle_rename(old_path: &str, new_path: &str, cfg: &AgentConfig) -> Result<(String, String), String> {
+    // 如果 allowed_paths 不为空，则检查白名单
+    // 如果 allowed_paths 为空，则不限制，依赖 Linux 文件系统权限
+    if !cfg.security.allowed_paths.is_empty() {
+        let allowed_old = cfg
+            .security
+            .allowed_paths
+            .iter()
+            .any(|prefix| old_path.starts_with(prefix));
+        let allowed_new = cfg
+            .security
+            .allowed_paths
+            .iter()
+            .any(|prefix| new_path.starts_with(prefix));
+        if !allowed_old || !allowed_new {
+            return Err(format!("访问被拒绝: 不在允许的路径列表中"));
+        }
+    }
+
+    fs::rename(old_path, new_path)
+        .map_err(|e| {
+            let error_msg = e.to_string();
+            if error_msg.contains("Permission denied") {
+                format!("权限不足: 无法重命名 '{}' (需要相应的 Linux 用户权限)", old_path)
+            } else {
+                format!("无法重命名 '{}': {}", old_path, e)
+            }
+        })?;
+
+    Ok((old_path.to_string(), new_path.to_string()))
+}
+
+fn handle_copy(src: &str, dst: &str, cfg: &AgentConfig) -> Result<(String, String), String> {
+    // 如果 allowed_paths 不为空，则检查白名单
+    // 如果 allowed_paths 为空，则不限制，依赖 Linux 文件系统权限
+    if !cfg.security.allowed_paths.is_empty() {
+        let allowed_src = cfg
+            .security
+            .allowed_paths
+            .iter()
+            .any(|prefix| src.starts_with(prefix));
+        let allowed_dst = cfg
+            .security
+            .allowed_paths
+            .iter()
+            .any(|prefix| dst.starts_with(prefix));
+        if !allowed_src || !allowed_dst {
+            return Err(format!("访问被拒绝: 不在允许的路径列表中"));
+        }
+    }
+
+    // 检查源文件是否存在
+    let metadata = fs::metadata(src)
+        .map_err(|e| {
+            let error_msg = e.to_string();
+            if error_msg.contains("Permission denied") {
+                format!("权限不足: 无法访问源文件 '{}' (需要相应的 Linux 用户权限)", src)
+            } else if error_msg.contains("No such file") {
+                format!("源文件 '{}' 不存在", src)
+            } else {
+                format!("无法访问源文件 '{}': {}", src, e)
+            }
+        })?;
+
+    // 只支持文件复制，不支持目录复制
+    if metadata.is_dir() {
+        return Err(format!("不支持复制目录 '{}' (请使用移动功能)", src));
+    }
+
+    fs::copy(src, dst)
+        .map_err(|e| {
+            let error_msg = e.to_string();
+            if error_msg.contains("Permission denied") {
+                format!("权限不足: 无法复制 '{}' (需要相应的 Linux 用户权限)", src)
+            } else {
+                format!("无法复制 '{}': {}", src, e)
+            }
+        })?;
+
+    Ok((src.to_string(), dst.to_string()))
+}
+
+fn handle_move(src: &str, dst: &str, cfg: &AgentConfig) -> Result<(String, String), String> {
+    // move 本质上是 rename
+    handle_rename(src, dst, cfg)
 }
 
 #[cfg(unix)]

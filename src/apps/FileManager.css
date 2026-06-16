@@ -301,6 +301,24 @@
   white-space: nowrap;
 }
 
+/* Inline Editing Input (List View) */
+.fm-list .fm-list-row .file-name .fn-edit-input {
+  /* 移除固定宽度，使用 inline style 的动态宽度 */
+  padding: 1px 2px;  /* 减小 padding，减少视觉偏移 */
+  font-size: var(--font-body);
+  font-family: inherit;
+  border: 1px solid var(--accent-bg);  /* 减小 border，减少视觉偏移 */
+  border-radius: 3px;  /* 减小圆角，配合更细的 border */
+  background: var(--view-bg);
+  color: var(--text-primary);
+  outline: none;
+}
+
+.fm-list .fm-list-row .file-name .fn-edit-input:focus {
+  border-color: var(--accent-bg);
+  box-shadow: 0 0 0 1px var(--accent-bg);
+}
+
 .fm-list .fm-list-row .file-size,
 .fm-list .fm-list-row .file-mtime,
 .fm-list .fm-list-row .file-perm {
@@ -353,6 +371,25 @@
   line-height: 1.2;
   max-height: 2.4em;
   overflow: hidden;
+}
+
+/* Inline Editing Input (Grid View) */
+.fm-grid .fm-grid-item .gi-edit-input {
+  /* 移除固定宽度，使用 inline style 的动态宽度 */
+  padding: 1px 2px;  /* 减小 padding，减少视觉偏移 */
+  font-size: var(--font-small);
+  font-family: inherit;
+  border: 1px solid var(--accent-bg);  /* 减小 border，减少视觉偏移 */
+  border-radius: 3px;  /* 减小圆角，配合更细的 border */
+  background: var(--view-bg);
+  color: var(--text-primary);
+  outline: none;
+  text-align: center;
+}
+
+.fm-grid .fm-grid-item .gi-edit-input:focus {
+  border-color: var(--accent-bg);
+  box-shadow: 0 0 0 1px var(--accent-bg);
 }
 
 /* ── Context Menu ─────────────────────────────────────── */
