@@ -167,6 +167,13 @@ export function SystemMonitor() {
   const [cpuHistory, setCpuHistory] = useState<HistoryPoint[]>([]);
   const [memHistory, setMemHistory] = useState<HistoryPoint[]>([]);
 
+  // 网络速率计算：存储上一次的网络字节数和时间戳
+  const lastNetworkRxRef = useRef<number>(0);
+  const lastNetworkTxRef = useRef<number>(0);
+  const lastNetworkTimeRef = useRef<number>(0);
+  const [networkRxSpeed, setNetworkRxSpeed] = useState<number>(0); // bytes/s
+  const [networkTxSpeed, setNetworkTxSpeed] = useState<number>(0); // bytes/s
+
   // 监听系统指标事件（由 ServerManager 自动订阅）
   useEffect(() => {
     if (!activeServerId) return;
@@ -177,6 +184,10 @@ export function SystemMonitor() {
         (event) => {
           if (event.payload.server_id === activeServerId && event.payload.event_type === 'metrics') {
             const newMetrics = event.payload.data;
+            console.log('收到系统指标:', {
+              network_rx_bytes: newMetrics.network_rx_bytes,
+              network_tx_bytes: newMetrics.network_tx_bytes,
+            });
             setMetrics(newMetrics);
             const now = Date.now();
 
@@ -198,6 +209,33 @@ export function SystemMonitor() {
             // 触发重新渲染（复制数组）
             setCpuHistory([...cpuHistoryRef.current]);
             setMemHistory([...memHistoryRef.current]);
+
+            // 计算网络速率（bytes/s）
+            const timeDiff = (now - lastNetworkTimeRef.current) / 1000; // 秒
+            if (timeDiff > 0 && lastNetworkTimeRef.current > 0) {
+              const rxDiff = newMetrics.network_rx_bytes - lastNetworkRxRef.current;
+              const txDiff = newMetrics.network_tx_bytes - lastNetworkTxRef.current;
+
+              // 避免负数（可能是网络接口重启或计数器重置）
+              const rxSpeed = rxDiff > 0 ? rxDiff / timeDiff : 0;
+              const txSpeed = txDiff > 0 ? txDiff / timeDiff : 0;
+
+              console.log('网络速率计算:', {
+                rxDiff,
+                txDiff,
+                timeDiff,
+                rxSpeed,
+                txSpeed,
+              });
+
+              setNetworkRxSpeed(rxSpeed);
+              setNetworkTxSpeed(txSpeed);
+            }
+
+            // 更新上一次的值
+            lastNetworkRxRef.current = newMetrics.network_rx_bytes;
+            lastNetworkTxRef.current = newMetrics.network_tx_bytes;
+            lastNetworkTimeRef.current = now;
           }
         }
       );
@@ -368,12 +406,12 @@ export function SystemMonitor() {
                   <div className="sm-net-item">
                     <span className="sm-net-icon">↓</span>
                     <span className="sm-net-label">接收</span>
-                    <span className="sm-net-value">{formatBytes(metrics.network_rx_bytes)}/s</span>
+                    <span className="sm-net-value">{formatBytes(networkRxSpeed)}/s</span>
                   </div>
                   <div className="sm-net-item">
                     <span className="sm-net-icon">↑</span>
                     <span className="sm-net-label">发送</span>
-                    <span className="sm-net-value">{formatBytes(metrics.network_tx_bytes)}/s</span>
+                    <span className="sm-net-value">{formatBytes(networkTxSpeed)}/s</span>
                   </div>
                 </div>
               </div>
