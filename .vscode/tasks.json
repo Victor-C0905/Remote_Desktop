@@ -1,0 +1,191 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build-agent",
+            "type": "shell",
+            "command": "cargo",
+            "args": ["build"],
+            "options": {
+                "cwd": "${workspaceFolder}/agent"
+            },
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "silent",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "problemMatcher": "$rustc",
+            "detail": "构建 GNOME Remote Agent"
+        },
+        {
+            "label": "run-agent",
+            "type": "shell",
+            "command": "cargo",
+            "args": ["run"],
+            "options": {
+                "cwd": "${workspaceFolder}/agent"
+            },
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "new",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "isBackground": true,
+            "problemMatcher": {
+                "owner": "rust",
+                "pattern": {
+                    "regexp": "^(warning|error)(?:\\[(.*?)\\])?:\\s+(.*)$",
+                    "severity": 1,
+                    "message": 3
+                },
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": "^\\s*Compiling",
+                    "endsPattern": "^\\s*(Finished|error)"
+                }
+            },
+            "detail": "运行 GNOME Remote Agent"
+        },
+        {
+            "label": "run-agent-detached",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-Command",
+                "Start-Process -FilePath 'cargo' -ArgumentList 'run' -WorkingDirectory '${workspaceFolder}/agent' -RedirectStandardOutput 'agent.log' -RedirectStandardError 'agent.log'"
+            ],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "silent",
+                "focus": false,
+                "panel": "new",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "detail": "后台运行 GNOME Remote Agent"
+        },
+        {
+            "label": "kill-agent",
+            "type": "shell",
+            "command": "taskkill",
+            "args": ["/F", "/IM", "agent.exe"],
+            "options": {
+                "cwd": "${workspaceFolder}/agent"
+            },
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "silent",
+                "focus": false,
+                "panel": "new",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "detail": "终止 Agent 进程"
+        },
+        {
+            "label": "run-tauri-dev",
+            "type": "shell",
+            "command": "npm",
+            "args": ["run", "tauri", "dev"],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "new",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "isBackground": true,
+            "problemMatcher": {
+                "owner": "rust",
+                "pattern": {
+                    "regexp": "^(warning|error)(?:\\[(.*?)\\])?:\\s+(.*)$",
+                    "severity": 1,
+                    "message": 3
+                },
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": "^\\s*Compiling",
+                    "endsPattern": "^\\s*(Finished|error|Listening)"
+                }
+            },
+            "detail": "运行 Tauri 开发服务器"
+        },
+        {
+            "label": "build-tauri",
+            "type": "shell",
+            "command": "npm",
+            "args": ["run", "tauri", "build"],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "silent",
+                "focus": false,
+                "panel": "new",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "problemMatcher": "$rustc",
+            "detail": "构建 Tauri 应用"
+        },
+        {
+            "label": "clean-build",
+            "type": "shell",
+            "command": "cargo",
+            "args": ["clean"],
+            "options": {
+                "cwd": "${workspaceFolder}/agent"
+            },
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "silent",
+                "focus": false,
+                "panel": "new",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "problemMatcher": [],
+            "detail": "清理构建缓存"
+        },
+        {
+            "label": "rebuild-agent",
+            "type": "shell",
+            "command": "cargo",
+            "args": ["build"],
+            "options": {
+                "cwd": "${workspaceFolder}/agent"
+            },
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "silent",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "problemMatcher": "$rustc",
+            "detail": "重新构建 Agent",
+            "dependsOn": ["clean-build"],
+            "dependsOrder": "sequence"
+        }
+    ]
+}

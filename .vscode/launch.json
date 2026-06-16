@@ -1,0 +1,94 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run GNOME Remote Agent",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--package",
+                    "gnome-remote-agent",
+                    "--bin",
+                    "agent"
+                ],
+                "filter": {
+                    "name": "agent",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}/agent",
+            "stopOnEntry": false,
+            "showDisassembly": "never",
+            "evaluateForHovers": true,
+            "console": "integratedTerminal",
+            "internalConsoleOptions": "openOnSessionStart",
+            "reuseWindows": "prompt"
+        },
+        {
+            "name": "Debug GNOME Remote Agent",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--package",
+                    "gnome-remote-agent",
+                    "--bin",
+                    "agent",
+                    "--features",
+                    "debug"
+                ],
+                "filter": {
+                    "name": "agent",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}/agent",
+            "stopOnEntry": false,
+            "showDisassembly": "never",
+            "evaluateForHovers": true,
+            "console": "integratedTerminal",
+            "internalConsoleOptions": "openOnSessionStart",
+            "reuseWindows": "prompt"
+        },
+        {
+            "name": "Run Tauri App (Development)",
+            "type": "shell",
+            "request": "launch",
+            "command": "npm run tauri dev",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "new",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "problemMatcher": "$rustc",
+            "reuseWindows": "prompt"
+        }
+    ],
+    "compounds": [
+        {
+            "name": "Full Debug (Agent + Tauri)",
+            "configurations": [
+                "Run GNOME Remote Agent"
+            ],
+            "stopAll": true,
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "new",
+                "showReuseMessage": true,
+                "clear": false
+            }
+        }
+    ]
+}
