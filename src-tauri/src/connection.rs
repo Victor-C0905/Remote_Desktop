@@ -315,10 +315,22 @@ pub async fn remote_connect(
         let conn_clone = conn.clone();
         
         tokio::spawn(async move {
-            // 心跳任务：每10秒发送 ping 保持连接活跃
+            // ── 心跳任务（Watchdog）：快速检测连接断开 ────────
+            // 业界标准（TeamViewer/AnyDesk 级别）：
+            //   - 间隔 2s：每 2 秒发一次 Ping 探测连接活性
+            //   - 超时 3s：等待 Pong 响应的最长时间
+            //   - 最坏延迟：2s(间隔) + 3s(超时) = **5s**
+            //   - 最佳延迟：idle_timeout(5s) 或 conn.closed() 瞬间触发
+            //
+            // 双重保障机制：
+            //   路径 A: 心跳 Ping/Pong → 应用层检测 (2+3=5s)
+            //   路径 B: QUIC idle_timeout(5s) → 传输层自动关闭 → conn.closed() (5s)
+            //   哪条路径先触发，哪条先通知前端
             let heartbeat_tx = tx.clone();
+            let heartbeat_app = app_handle.clone();
+            let heartbeat_server_id = server_id_clone.clone();
             let heartbeat_task = tokio::spawn(async move {
-                let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
                 loop {
                     interval.tick().await;
                     let now = std::time::SystemTime::now()
@@ -328,15 +340,30 @@ pub async fn remote_connect(
                     let envelope = Envelope::new(0, Payload::Ping { timestamp: now });
                     let (response_tx, response_rx) = tokio::sync::oneshot::channel();
                     if heartbeat_tx.send(ClientRequest::Send { envelope, response_tx }).await.is_ok() {
-                        // 等待响应，超时则认为连接有问题
-                        if response_rx.await.is_err() {
-                            tracing::warn!("心跳超时，连接可能已断开");
-                            break;
+                        // 显式超时 3s：等待 Pong 响应，超时即判定连接异常
+                        match tokio::time::timeout(
+                            std::time::Duration::from_secs(3),
+                            response_rx,
+                        ).await {
+                            Ok(Ok(_)) => { /* Pong 正常收到，连接存活 */ }
+                            Ok(Err(e)) => {
+                                tracing::warn!("心跳发送失败，连接可能已断开: {}", e);
+                                break;
+                            }
+                            Err(_) => {
+                                // 超时未收到 Pong → 连接已死（对端无响应）
+                                tracing::warn!("Ping 超时 (3s)，连接无响应: {}", heartbeat_server_id);
+                                break;
+                            }
                         }
                     } else {
+                        tracing::warn!("心跳通道已关闭: {}", heartbeat_server_id);
                         break;
                     }
                 }
+                // 心跳失败 → 立即通知前端断连（不等主循环清理）
+                tracing::info!("Watchdog 检测到连接丢失，通知前端: {}", heartbeat_server_id);
+                let _ = heartbeat_app.emit("connection-lost", &heartbeat_server_id);
             });
             
             // 连接状态监听任务
@@ -868,10 +895,21 @@ fn build_quic_client_config() -> Result<quinn::ClientConfig, String> {
         .with_custom_certificate_verifier(std::sync::Arc::new(SkipCertVerification))
         .with_no_client_auth();
 
-    Ok(quinn::ClientConfig::new(std::sync::Arc::new(
+    // 传输层配置：设置 idle_timeout 以快速检测死连接
+    // idle_timeout: 5 秒无数据收发 → QUIC 自动关闭连接
+    // 配合心跳(2s)使用：心跳每 2s 发一次，若 5s 内无响应说明连接已死
+    let mut transport = quinn::TransportConfig::default();
+    if let Ok(timeout) = quinn::IdleTimeout::try_from(std::time::Duration::from_secs(5)) {
+        transport.max_idle_timeout(Some(timeout));
+    }
+
+    let mut client = quinn::ClientConfig::new(std::sync::Arc::new(
         quinn::crypto::rustls::QuicClientConfig::try_from(crypto)
             .map_err(|e| format!("QUIC TLS 配置错误: {}", e))?
-    )))
+    ));
+    client.transport_config(std::sync::Arc::new(transport));
+
+    Ok(client)
 }
 
 #[derive(Debug)]

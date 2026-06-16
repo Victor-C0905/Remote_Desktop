@@ -568,3 +568,140 @@
 .pd-footer button:hover {
   background: var(--accent-hover);
 }
+
+/* ── Offline Empty State (离线空状态) ─────────────────── */
+.fm-offline {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 12px;
+  padding: 32px;
+  animation: offlineFadeIn 200ms var(--ease-out);
+}
+
+@keyframes offlineFadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.fm-offline .offline-icon {
+  font-size: 56px;
+  line-height: 1;
+  opacity: 0.6;
+}
+
+.fm-offline .offline-title {
+  font-size: 15pt;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.fm-offline .offline-desc {
+  font-size: var(--font-body);
+  color: var(--text-secondary);
+  text-align: center;
+  max-width: 320px;
+  line-height: 1.5;
+}
+
+/* 可用服务器列表 */
+.fm-offline .offline-servers {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  max-width: 360px;
+  margin-top: 8px;
+}
+
+.fm-offline .offline-servers-label {
+  font-size: var(--font-small);
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-align: left;
+  width: 100%;
+  padding: 0 4px;
+}
+
+/* 服务器连接按钮 */
+.fm-offline .offline-server-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 14px;
+  background: var(--view-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 150ms var(--ease-out);
+  text-align: left;
+}
+
+.fm-offline .offline-server-btn:hover:not(:disabled) {
+  border-color: var(--accent-bg);
+  background: rgba(53, 132, 228, 0.06);
+}
+
+.fm-offline .offline-server-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.fm-offline .offline-server-btn .osb-status {
+  font-size: 16px;
+  flex-shrink: 0;
+  width: 20px;
+  text-align: center;
+}
+
+.fm-offline .offline-server-btn .osb-info {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.fm-offline .offline-server-btn .osb-name {
+  font-size: var(--font-body);
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-offline .offline-server-btn .osb-host {
+  font-size: var(--font-small);
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-offline .offline-server-btn .osb-action {
+  font-size: var(--font-body);
+  color: var(--accent-bg);
+  font-weight: 500;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.fm-offline .offline-server-btn:disabled .osb-action {
+  color: var(--text-disabled);
+}
+
+/* 无服务器提示 */
+.fm-offline .offline-no-servers {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 16px 24px;
+  background: var(--card-bg);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-body);
+  color: var(--text-secondary);
+}

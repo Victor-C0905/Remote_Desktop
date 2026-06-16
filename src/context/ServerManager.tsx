@@ -58,7 +58,6 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
     updateServer,
     setActiveServerId,
     setServerStatus,
-    resetAllStatus,
   } = useServersStore();
 
   const activeServer = servers.find((s) => s.id === activeServerId) || null;
@@ -171,18 +170,15 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
   }, [servers, activeServerId, setServerStatus, setActiveServerId]);
 
   const disconnectServer = useCallback(async (id: string) => {
-    // 断开连接前，先取消订阅
-    try {
-      await invoke('unsubscribe', {
-        serverId: id,
-        types: [{ type: 'metrics', params: { interval_secs: 1 } }]
-      });
-      console.log("[ServerManager] 系统指标订阅已取消");
-    } catch (e) {
-      console.warn("[ServerManager] 取消订阅失败:", e);
-    }
+    // 取消订阅（不阻塞：后台任务的清理由 remote_disconnect 的 abort 接管）
+    invoke('unsubscribe', {
+      serverId: id,
+      types: [{ type: 'metrics', params: { interval_secs: 1 } }]
+    }).catch((e) => {
+      console.warn("[ServerManager] 取消订阅失败（非关键）:", e);
+    });
 
-    // 断开连接
+    // 断开连接（不等待 unsubscribe 完成，后端 Disconnect 会清理所有子任务）
     try {
       await invoke("remote_disconnect", { serverId: id });
     } catch (e) {
