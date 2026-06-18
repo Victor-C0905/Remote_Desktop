@@ -195,13 +195,15 @@ pub fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig) -> Envelope {
         }
 
         Payload::TerminalSpawnRequest { shell, cols, rows } => {
-            tracing::info!("终端请求: shell={}, cols={}, rows={} (未实现)", shell, cols, rows);
-            error_response(envelope.request_id, "终端功能尚未实现")
+            tracing::info!("终端请求: shell={}, cols={}, rows={}", shell, cols, rows);
+            // 终端创建需要在 QUIC Stream 异步处理（持久双向隧道）
+            error_response(envelope.request_id, "终端创建需要在 QUIC Stream 异步处理")
         }
 
         Payload::TerminalData { session_id, data, is_input } => {
-            tracing::debug!("终端数据: session={}, len={}, is_input={} (未实现)", session_id, data.len(), is_input);
-            error_response(envelope.request_id, "终端功能尚未实现")
+            tracing::debug!("终端数据: session={}, len={}, is_input={}", session_id, data.len(), is_input);
+            // 终端数据需要在持久 Stream 中处理
+            error_response(envelope.request_id, "终端数据需要在持久 Stream 中处理")
         }
 
         Payload::GetCurrentUser => {

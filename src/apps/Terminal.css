@@ -1,6 +1,6 @@
 /* ============================================================
-   Terminal App — GNOME Terminal Style
-   Dark background, green prompt, tabbed interface
+   Terminal App — GNOME Terminal 风格
+   重点：彻底隔离 xterm.js 不受全局 CSS (box-sizing / user-select / margin / padding) 影响
    ============================================================ */
 
 .terminal-app {
@@ -8,8 +8,166 @@
   flex-direction: column;
   height: 100%;
   background: #1e1e1e;
-  color: #ffffff;
+}
+
+/* ── Header Bar ─────────────────────────────────────────────── */
+.terminal-header-bar {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--headerbar-bg);
+  border-bottom: 1px solid var(--border-color);
+  gap: 8px;
+  z-index: 10;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.header-button {
+  padding: 4px 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  border-radius: var(--radius-xs);
+  font-size: 13px;
+}
+
+.header-button:hover {
+  background: var(--card-bg);
+}
+
+/* ── Search Bar ─────────────────────────────────────────────── */
+.terminal-search-bar {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--card-bg);
+  border-bottom: 1px solid var(--border-color);
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.search-input {
+  flex: 1;
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  background: var(--view-bg);
+  color: var(--text-primary);
+  border-radius: var(--radius-xs);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  /* 搜索框需要能够选中 */
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.search-input:focus {
+  outline: 2px solid var(--accent-bg);
+  outline-offset: -2px;
+}
+
+.search-button {
+  padding: 4px 12px;
+  border: none;
+  background: var(--accent-bg);
+  color: #fff;
+  cursor: pointer;
+  border-radius: var(--radius-xs);
+  font-size: 13px;
+}
+
+.search-button:hover {
+  background: var(--accent-hover);
+}
+
+/* ── Settings Panel ─────────────────────────────────────────────── */
+.terminal-settings-panel {
+  position: fixed;
+  top: 96px;
+  right: 12px;
+  width: 300px;
+  padding: 16px;
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  z-index: 100;
+  box-shadow: var(--shadow-popup);
+}
+
+.settings-label {
+  display: flex;
+  align-items: center;
+  margin-bottom: 12px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: var(--font-ui);
+}
+
+.settings-slider {
+  flex: 1;
+  margin: 0 8px;
+}
+
+.settings-value {
+  min-width: 30px;
+  text-align: right;
   font-family: var(--font-mono);
+}
+
+.settings-checkbox {
+  margin-left: 8px;
+}
+
+.settings-close-button {
+  width: 100%;
+  padding: 8px;
+  border: none;
+  background: var(--accent-bg);
+  color: #fff;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  margin-top: 12px;
+  font-size: 13px;
+}
+
+.settings-close-button:hover {
+  background: var(--accent-hover);
+}
+
+/* ── Context Menu ─────────────────────────────────────────────── */
+.terminal-context-menu {
+  position: fixed;
+  padding: 6px 0;
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  z-index: 200;
+  min-width: 160px;
+  box-shadow: var(--shadow-popup);
+}
+
+.menu-item {
+  display: block;
+  width: 100%;
+  padding: 8px 16px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+  font-size: 13px;
+  font-family: var(--font-ui);
+}
+
+.menu-item:hover {
+  background: var(--card-hover);
+}
+
+.menu-divider {
+  margin: 4px 0;
+  border: none;
+  border-top: 1px solid var(--border-color);
 }
 
 /* ── Tab Bar ─────────────────────────────────────────────── */
@@ -17,11 +175,14 @@
   display: flex;
   align-items: center;
   height: 36px;
-  background: #303030;
-  border-bottom: 1px solid #3d3d3d;
+  background: var(--headerbar-bg);
+  border-bottom: 1px solid var(--border-color);
   padding: 0 4px;
   gap: 2px;
   flex-shrink: 0;
+  z-index: 10;
+  position: relative;
+  overflow-x: auto;
 }
 
 .terminal-tab {
@@ -29,28 +190,34 @@
   align-items: center;
   gap: 6px;
   padding: 4px 12px;
-  font-size: 11px;
-  color: rgba(255, 255, 255, 0.6);
+  height: 28px;
+  font-size: 12px;
+  color: var(--text-secondary);
   border-radius: var(--radius-xs) var(--radius-xs) 0 0;
   cursor: pointer;
-  transition: all var(--duration-fast) var(--ease-out);
   border: none;
   background: transparent;
-  max-width: 180px;
+  max-width: 200px;
+  min-width: 100px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .terminal-tab:hover {
-  background: rgba(255, 255, 255, 0.06);
-  color: rgba(255, 255, 255, 0.85);
+  background: var(--card-bg);
+  color: var(--text-primary);
 }
 
 .terminal-tab.active {
-  background: #1e1e1e;
-  color: #ffffff;
+  background: var(--view-bg);
+  color: var(--text-primary);
+  border-bottom: 2px solid var(--accent-bg);
 }
 
 .terminal-tab .tab-icon {
   font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--accent-bg);
 }
 
 .terminal-tab .tab-label {
@@ -58,29 +225,33 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--font-ui);
+  flex: 1;
+  text-align: left;
 }
 
 .terminal-tab .tab-close {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
   border: none;
   background: transparent;
-  color: rgba(255, 255, 255, 0.4);
+  color: var(--text-secondary);
   font-size: 14px;
   line-height: 1;
   cursor: pointer;
   padding: 0;
   margin-left: 4px;
   flex-shrink: 0;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .terminal-tab .tab-close:hover {
-  background: rgba(255, 255, 255, 0.15);
-  color: #ffffff;
+  background: var(--card-hover);
+  color: var(--text-primary);
 }
 
 .terminal-new-tab {
@@ -92,91 +263,121 @@
   border-radius: var(--radius-xs);
   border: none;
   background: transparent;
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--text-secondary);
   font-size: 18px;
   cursor: pointer;
   margin-left: 2px;
+  flex-shrink: 0;
 }
 
 .terminal-new-tab:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: #ffffff;
+  background: var(--card-bg);
+  color: var(--text-primary);
 }
 
-/* ── Terminal Container ──────────────────────────────────── */
+/* ═════════════════════════════════════════════════════════════
+   核心修复：Terminal Container & xterm.js 隔离
+   ═════════════════════════════════════════════════════════════ */
+
 .terminal-container {
   flex: 1;
-  padding: 4px 0 0 4px;
+  position: relative;
+  min-height: 0;
   overflow: hidden;
+  background: #1e1e1e;
 }
 
+/* xterm.js 需要一个明确尺寸的容器 */
 .terminal-instance {
-  height: 100%;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 0;
+  margin: 0;
+  background: #1e1e1e;
+  /* 不允许全局 margin/padding 影响 */
 }
 
-/* xterm.js overrides for GNOME Terminal look */
+/* ── 最关键：隔离 xterm.js DOM 树不受全局样式影响 ──────
+   全局 CSS 中的以下规则会破坏 xterm.js：
+     *, *::before, *::after {
+       box-sizing: border-box;    ← 破坏列宽计算
+       margin: 0;
+       padding: 0;
+       user-select: none;         ← 影响文本选择/输入
+     }
+*/
+
+.terminal-instance,
+.terminal-instance *,
+.terminal-instance *::before,
+.terminal-instance *::after {
+  box-sizing: content-box !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border-width: 0 !important;
+  letter-spacing: 0 !important;
+  text-shadow: none !important;
+  word-spacing: 0 !important;
+  font-variant-ligatures: none !important;
+  font-variant-numeric: normal !important;
+  font-variant: normal !important;
+  text-rendering: optimizeLegibility !important;
+  -webkit-font-smoothing: antialiased !important;
+  -moz-osx-font-smoothing: grayscale !important;
+  transform: none !important;
+}
+
+/* 恢复 xterm 自身需要的 user-select（允许选择终端文本） */
 .terminal-instance .xterm {
-  height: 100%;
-  padding: 4px;
+  height: 100% !important;
+  width: 100% !important;
+  display: block !important;
+  user-select: text !important;
+  -webkit-user-select: text !important;
 }
 
 .terminal-instance .xterm-viewport {
-  /* GNOME Terminal uses a very dark, slightly warm background */
   background: #1e1e1e !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  width: 100% !important;
+  height: 100% !important;
 }
 
 .terminal-instance .xterm-screen {
-  height: 100%;
+  top: 0 !important;
+  left: 0 !important;
+  position: relative !important;
 }
 
-/* Scrollbar inside terminal */
-.terminal-instance .xterm-viewport::-webkit-scrollbar {
-  width: 8px;
+.terminal-instance .xterm-text-layer,
+.terminal-instance .xterm-selection-layer,
+.terminal-instance .xterm-rows {
+  user-select: text !important;
+  -webkit-user-select: text !important;
 }
 
-.terminal-instance .xterm-viewport::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
-  border-radius: var(--radius-pill);
-}
-
-.terminal-instance .xterm-viewport::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.25);
-}
-
-/* ── Status Bar ──────────────────────────────────────────── */
-.terminal-status-bar {
-  display: flex;
-  align-items: center;
-  height: 24px;
-  padding: 0 8px;
-  background: #303030;
-  border-top: 1px solid #3d3d3d;
-  font-size: 11px;
-  color: rgba(255, 255, 255, 0.5);
-  gap: 12px;
-  flex-shrink: 0;
-  font-family: var(--font-ui);
-}
-
-.terminal-status-bar .status-item {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.terminal-status-bar .status-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #4ec9b0; /* Connected: green-ish */
-}
-
-.terminal-status-bar .status-dot.disconnected {
-  background: #e01b24; /* Disconnected: red */
-}
-
-.terminal-status-bar .status-spacer {
-  flex: 1;
+/* 让 xterm 的隐藏辅助 textarea 能接收键盘事件（IME/中文输入） */
+.terminal-instance .xterm-helper-textarea {
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  opacity: 0 !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  border: none !important;
+  outline: none !important;
+  resize: none !important;
+  color: transparent !important;
+  background: transparent !important;
+  z-index: -1 !important;
+  /* 关键：允许键盘/IME，但是不可见 */
+  user-select: text !important;
+  -webkit-user-select: text !important;
 }
 
 /* ── Empty State ─────────────────────────────────────────── */
@@ -186,7 +387,7 @@
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: rgba(255, 255, 255, 0.3);
+  color: var(--text-secondary);
   gap: 12px;
 }
 
@@ -195,61 +396,11 @@
 }
 
 .terminal-empty .empty-text {
-  font-size: var(--font-body);
+  font-size: 14px;
   font-family: var(--font-ui);
 }
 
 .terminal-empty .empty-hint {
-  font-size: var(--font-small);
-  color: rgba(255, 255, 255, 0.2);
-}
-
-/* ── Fallback Terminal (no xterm.js) ────────────────────── */
-.terminal-fallback {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  background: #1e1e1e;
-  color: #ffffff;
-  font-family: var(--font-mono);
-  padding: 8px;
-}
-
-.terminal-fallback-output {
-  flex: 1;
-  overflow-y: auto;
-  white-space: pre-wrap;
-  word-break: break-all;
-  font-size: 13px;
-  line-height: 1.4;
-  color: rgba(255, 255, 255, 0.85);
-}
-
-.terminal-fallback-output div {
-  margin-bottom: 2px;
-}
-
-.terminal-fallback-input {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 0;
-  border-top: 1px solid #3d3d3d;
-}
-
-.terminal-fallback-input .prompt {
-  color: #4ec9b0;
-  font-size: 13px;
-  white-space: nowrap;
-}
-
-.terminal-fallback-input .fallback-input {
-  flex: 1;
-  background: transparent;
-  border: none;
-  outline: none;
-  color: #ffffff;
-  font-family: var(--font-mono);
-  font-size: 13px;
-  caret-color: #4ec9b0;
+  font-size: 12px;
+  color: var(--text-disabled);
 }
