@@ -7,6 +7,7 @@ import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
+import { SearchAddon } from '@xterm/addon-search';
 // xterm.js 基础样式（必须导入，否则 canvas/text-layer 无法正确定位）
 import '@xterm/xterm/css/xterm.css';
 import { useServerManager } from '../context/ServerManager';
@@ -42,6 +43,8 @@ interface TerminalInstanceProps {
   activeServerPort: number | null;
   fontSize: number;
   cursorBlink: boolean;
+  // callback: terminal 实例创建后通知父组件（用于复制/粘贴）
+  onTerminalReady?: (terminal: Terminal, sessionId: string | null, searchAddon: SearchAddon) => void;
 }
 
 function TerminalInstance({
@@ -51,10 +54,12 @@ function TerminalInstance({
   activeServerPort,
   fontSize,
   cursorBlink,
+  onTerminalReady,
 }: TerminalInstanceProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const searchAddonRef = useRef<SearchAddon | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const unlistenRefs = useRef<UnlistenFn[]>([]);
   const [initializationStatus, setInitializationStatus] = useState<string>('等待容器挂载...');
@@ -88,33 +93,43 @@ function TerminalInstance({
 
       // 2. 加载 FitAddon（响应式布局）
       const fitAddon = new FitAddon();
-      terminal.loadAddon(fitAddon);
+      terminal.loadAddon(fitAddon as any);
       fitAddonRef.current = fitAddon;
 
       // 3. 加载 WebLinksAddon（URL 可点击）
-      try { terminal.loadAddon(new WebLinksAddon()); } catch (e) { console.warn('[Terminal] WebLinksAddon 加载失败:', e); }
+      try { terminal.loadAddon(new WebLinksAddon() as any); } catch (e) { console.warn('[Terminal] WebLinksAddon 加载失败:', e); }
 
-      // 4. 挂载到 DOM
+      // 4. 加载 SearchAddon（搜索功能）
+      const searchAddon = new SearchAddon();
+      terminal.loadAddon(searchAddon as any);
+      searchAddonRef.current = searchAddon;
+
+      // 5. 挂载到 DOM
       terminal.open(container);
       console.log('[Terminal] ✅ xterm 已挂载到 DOM');
 
-      // 5. 等待下一帧，让浏览器完成 flex 布局后再 fit()
+      // 6. 等待下一帧，让浏览器完成 flex 布局后再 fit()
       requestAnimationFrame(async () => {
         try {
           fitAddon.fit();
           console.log('[Terminal] ✅ fit() 完成，cols:', terminal.cols, 'rows:', terminal.rows);
 
-          // 6. 尝试连接远程 PTY 或启动演示模式
+          // 7. 尝试连接远程 PTY 或启动演示模式
           if (activeServerId) {
             setInitializationStatus('连接远程终端...');
-            await connectRemotePty(terminal, activeServerId, activeServerName, activeServerHost, activeServerPort);
+            await connectRemotePty(terminal, activeServerId, activeServerName, activeServerHost, activeServerPort, sessionIdRef, unlistenRefs);
           } else {
             setInitializationStatus('演示模式');
             terminal.write('[演示模式] 未连接远程服务器\r\n');
             runDemoShell(terminal);
           }
 
-          // 7. 聚焦
+          // 8. 通知父组件 terminal 已就绪（用于复制/粘贴/搜索）
+          if (onTerminalReady) {
+            onTerminalReady(terminal, sessionIdRef.current, searchAddon);
+          }
+
+          // 9. 聚焦
           terminal.focus();
           console.log('[Terminal] ✅ 初始化完成');
         } catch (err) {
@@ -124,6 +139,10 @@ function TerminalInstance({
           terminal.write(`\x1b[31m[连接失败]\x1b[0m ${err}\r\n`);
           terminal.write('[演示模式] 输入 help 查看可用命令\r\n');
           runDemoShell(terminal);
+          // 即使失败也通知父组件（演示模式可用）
+          if (onTerminalReady) {
+            onTerminalReady(terminal, null, searchAddon);
+          }
         }
       });
 
@@ -198,7 +217,9 @@ async function connectRemotePty(
   serverName: string | null,
   serverHost: string | null,
   serverPort: number | null,
-): Promise<void> {
+  sessionIdRef: React.MutableRefObject<string | null>,
+  unlistenRefs: React.MutableRefObject<UnlistenFn[]>,
+): Promise<string> {
   // 1. 创建远程终端会话
   const result = await invoke<{ session_id: string }>('remote_spawn_terminal', {
     serverId: serverId,
@@ -208,7 +229,8 @@ async function connectRemotePty(
   });
 
   const sessionId = result.session_id;
-  // 存储 sessionId（通过闭包传递给 resize 处理）
+  // 存储 sessionId（通过 ref 传递给父组件）
+  sessionIdRef.current = sessionId;
   (terminal as any).__sessionId = sessionId;
 
   console.log('[Terminal] ✅ 远程终端创建成功:', sessionId);
@@ -228,6 +250,7 @@ async function connectRemotePty(
       }
     }
   );
+  unlistenRefs.current.push(unlistenOutput);
 
   // 4. 监听终端断连事件
   const unlistenDisconnect = await listen<{ session_id: string }>(
@@ -235,16 +258,19 @@ async function connectRemotePty(
     (event) => {
       if (event.payload.session_id === sessionId) {
         terminal.write('\r\n\x1b[31m[远程终端断开]\x1b[0m\r\n');
-        unlistenOutput();
-        unlistenDisconnect();
+        // 移除所有监听器
+        unlistenRefs.current.forEach(fn => fn());
+        unlistenRefs.current = [];
+        sessionIdRef.current = null;
         (terminal as any).__sessionId = null;
       }
     }
   );
+  unlistenRefs.current.push(unlistenDisconnect);
 
   // 5. 设置键盘输入处理
-  terminal.onData((data: string) => {
-    const sid = (terminal as any).__sessionId;
+  const onDataDisposable = terminal.onData((data: string) => {
+    const sid = sessionIdRef.current;
     if (sid) {
       const bytes = new TextEncoder().encode(data);
       invoke('remote_terminal_write', {
@@ -254,10 +280,12 @@ async function connectRemotePty(
       }).catch(e => console.warn('[Terminal] 写入失败:', e));
     }
   });
+  // 存储 disposable 以便 cleanup
+  unlistenRefs.current.push(() => onDataDisposable.dispose());
 
   // 6. 设置 resize 处理
-  terminal.onResize(({ cols, rows }) => {
-    const sid = (terminal as any).__sessionId;
+  const onResizeDisposable = terminal.onResize(({ cols, rows }) => {
+    const sid = sessionIdRef.current;
     if (sid) {
       invoke('remote_terminal_resize', {
         sessionId: sid,
@@ -267,6 +295,9 @@ async function connectRemotePty(
       }).catch(e => console.warn('[Terminal] resize 失败:', e));
     }
   });
+  unlistenRefs.current.push(() => onResizeDisposable.dispose());
+
+  return sessionId;
 }
 
 // ===================================================================
@@ -357,6 +388,11 @@ export function TerminalApp() {
   const [cursorBlink, setCursorBlink] = useState(true);
   const [searchText, setSearchText] = useState('');
 
+  // ── 活动终端的 refs（用于复制/粘贴/搜索）────────────────────────
+  const activeTerminalRef = useRef<Terminal | null>(null);
+  const activeSessionIdRef = useRef<string | null>(null);
+  const activeSearchAddonRef = useRef<SearchAddon | null>(null);
+
   // ── 首次打开：创建第一个 tab ─────────────────────────────────
   useEffect(() => {
     if (tabs.length === 0) {
@@ -384,16 +420,170 @@ export function TerminalApp() {
     }
   };
 
-  // ── 右键菜单 ────────────────────────────────────────────────
-  const handleContextMenu = (e: React.MouseEvent) => {
+  // ── 右键菜单（GNOME Terminal 风格：选中后右键直接复制，未选中时显示粘贴菜单）────────────────
+  const handleContextMenu = async (e: React.MouseEvent) => {
     e.preventDefault();
-    setContextMenu({ x: e.clientX, y: e.clientY });
+    const terminal = activeTerminalRef.current;
+
+    if (terminal) {
+      const selection = terminal.getSelection();
+      if (selection) {
+        // 有选中文本：直接复制，不显示菜单
+        try {
+          await navigator.clipboard.writeText(selection);
+          console.log('[Terminal] ✅ 已复制选中文本到剪贴板');
+        } catch (err) {
+          console.warn('[Terminal] ❌ 复制失败:', err);
+        }
+        // 清除选中
+        terminal.clearSelection();
+        setContextMenu(null);
+      } else {
+        // 无选中文本：显示粘贴菜单
+        setContextMenu({ x: e.clientX, y: e.clientY });
+      }
+    } else {
+      setContextMenu({ x: e.clientX, y: e.clientY });
+    }
   };
 
-  const handleCopy = () => { setContextMenu(null); };
-  const handlePaste = () => { setContextMenu(null); };
+  // ── 复制功能 ────────────────────────────────────────────────
+  const handleCopy = async () => {
+    const terminal = activeTerminalRef.current;
+    if (terminal) {
+      const selection = terminal.getSelection();
+      if (selection) {
+        try {
+          await navigator.clipboard.writeText(selection);
+          console.log('[Terminal] ✅ 已复制到剪贴板');
+        } catch (e) {
+          console.warn('[Terminal] ❌ 复制失败:', e);
+        }
+      }
+    }
+    setContextMenu(null);
+  };
 
-  const handleSearch = () => { setContextMenu(null); };
+  // ── 粘贴功能 ────────────────────────────────────────────────
+  const handlePaste = async () => {
+    const terminal = activeTerminalRef.current;
+    const sessionId = activeSessionIdRef.current;
+    if (!terminal) return;
+
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) {
+        if (sessionId && activeServerId) {
+          // 远程模式：发送到 PTY
+          const bytes = new TextEncoder().encode(text);
+          await invoke('remote_terminal_write', {
+            sessionId,
+            data: Array.from(bytes),
+            serverId: activeServerId,
+          });
+          console.log('[Terminal] ✅ 已粘贴到远程终端');
+        } else {
+          // 演示模式：直接写入（模拟输入）
+          terminal.write(text);
+          console.log('[Terminal] ✅ 已粘贴到演示终端');
+        }
+      }
+    } catch (e) {
+      console.warn('[Terminal] ❌ 粘贴失败:', e);
+    }
+    setContextMenu(null);
+  };
+
+  // ── 搜索功能 ────────────────────────────────────────────────
+  const handleSearch = () => {
+    const searchAddon = activeSearchAddonRef.current;
+    if (searchAddon && searchText) {
+      try {
+        searchAddon.findNext(searchText, {
+          caseSensitive: false,
+          wholeWord: false,
+        });
+        console.log('[Terminal] ✅ 搜索:', searchText);
+      } catch (e) {
+        console.warn('[Terminal] ❌ 搜索失败:', e);
+      }
+    }
+    setContextMenu(null);
+  };
+
+  // ── 搜索上一个/下一个 ────────────────────────────────────────
+  const handleSearchPrev = () => {
+    const searchAddon = activeSearchAddonRef.current;
+    if (searchAddon && searchText) {
+      searchAddon.findPrevious(searchText, { caseSensitive: false, wholeWord: false });
+    }
+  };
+
+  const handleSearchNext = () => {
+    const searchAddon = activeSearchAddonRef.current;
+    if (searchAddon && searchText) {
+      searchAddon.findNext(searchText, { caseSensitive: false, wholeWord: false });
+    }
+  };
+
+  // ── 快捷键系统 ────────────────────────────────────────────────
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ctrl+Shift+C: 复制
+      if (e.ctrlKey && e.shiftKey && e.key.toUpperCase() === 'C') {
+        e.preventDefault();
+        handleCopy();
+        return;
+      }
+      // Ctrl+Shift+V: 粘贴
+      if (e.ctrlKey && e.shiftKey && e.key.toUpperCase() === 'V') {
+        e.preventDefault();
+        handlePaste();
+        return;
+      }
+      // Ctrl+Shift+F: 搜索
+      if (e.ctrlKey && e.shiftKey && e.key.toUpperCase() === 'F') {
+        e.preventDefault();
+        setShowSearch(v => !v);
+        return;
+      }
+      // Ctrl+Shift+T: 新建标签
+      if (e.ctrlKey && e.shiftKey && e.key.toUpperCase() === 'T') {
+        e.preventDefault();
+        handleNewTab();
+        return;
+      }
+      // Ctrl+Shift+W: 关闭标签
+      if (e.ctrlKey && e.shiftKey && e.key.toUpperCase() === 'W') {
+        e.preventDefault();
+        if (activeTabId) handleCloseTab(activeTabId);
+        return;
+      }
+      // Ctrl+Tab: 下一个标签
+      if (e.ctrlKey && e.key === 'Tab' && !e.shiftKey) {
+        e.preventDefault();
+        const idx = tabs.findIndex(t => t.id === activeTabId);
+        if (idx >= 0 && tabs.length > 1) {
+          const nextIdx = (idx + 1) % tabs.length;
+          setActiveTabId(tabs[nextIdx].id);
+        }
+        return;
+      }
+      // Ctrl+Shift+Tab: 上一个标签
+      if (e.ctrlKey && e.shiftKey && e.key === 'Tab') {
+        e.preventDefault();
+        const idx = tabs.findIndex(t => t.id === activeTabId);
+        if (idx >= 0 && tabs.length > 1) {
+          const prevIdx = (idx - 1 + tabs.length) % tabs.length;
+          setActiveTabId(tabs[prevIdx].id);
+        }
+        return;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [tabs, activeTabId, activeServerId, searchText]);
 
   return (
     <div className="terminal-app" onClick={() => { if (contextMenu) setContextMenu(null); }}>
@@ -432,9 +622,14 @@ export function TerminalApp() {
             className="search-input"
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') handleSearch();
+            }}
             autoFocus
             placeholder="在终端中搜索..."
           />
+          <button className="search-button" onClick={handleSearchPrev} title="上一个">↑</button>
+          <button className="search-button" onClick={handleSearchNext} title="下一个">↓</button>
           <button className="search-button" onClick={handleSearch}>查找</button>
           <button className="search-button" onClick={() => setShowSearch(false)}>关闭</button>
         </div>
@@ -460,6 +655,12 @@ export function TerminalApp() {
               activeServerPort={activeServer?.port || null}
               fontSize={fontSize}
               cursorBlink={cursorBlink}
+              onTerminalReady={(terminal, sessionId, searchAddon) => {
+                // 更新 refs（所有 tab 都更新，但只有活动 tab 的 terminal 可见）
+                activeTerminalRef.current = terminal;
+                activeSessionIdRef.current = sessionId;
+                activeSearchAddonRef.current = searchAddon;
+              }}
             />
           </div>
         ))}
@@ -500,10 +701,9 @@ export function TerminalApp() {
         </div>
       )}
 
-      {/* Context Menu */}
+      {/* Context Menu（只在未选中时显示，提供粘贴选项）*/}
       {contextMenu && (
         <div className="terminal-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(e) => e.stopPropagation()}>
-          <button className="menu-item" onClick={handleCopy}>复制</button>
           <button className="menu-item" onClick={handlePaste}>粘贴</button>
           <hr className="menu-divider" />
           <button className="menu-item" onClick={() => { setShowSearch(true); setContextMenu(null); }}>搜索</button>
