@@ -149,6 +149,12 @@ pub enum Payload {
     #[serde(rename = "terminal_spawn_resp")]
     TerminalSpawnResponse { session_id: String },
 
+    #[serde(rename = "terminal_resize")]
+    TerminalResizeRequest { session_id: String, cols: u16, rows: u16 },
+
+    #[serde(rename = "terminal_resize_resp")]
+    TerminalResizeResponse,
+
     #[serde(rename = "terminal_data")]
     TerminalData { session_id: String, data: Vec<u8>, is_input: bool },
 

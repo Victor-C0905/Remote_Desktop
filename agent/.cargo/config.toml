@@ -1,0 +1,7 @@
+# 使用官方源（稳定）
+[source.crates-io]
+
+[net]
+retry = 10
+offline = false
+git-fetch-with-cli = true

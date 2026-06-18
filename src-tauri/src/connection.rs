@@ -81,6 +81,10 @@ pub enum Payload {
     TerminalSpawnRequest { shell: String, cols: u16, rows: u16 },
     #[serde(rename = "terminal_spawn_resp")]
     TerminalSpawnResponse { session_id: String },
+    #[serde(rename = "terminal_resize")]
+    TerminalResizeRequest { session_id: String, cols: u16, rows: u16 },
+    #[serde(rename = "terminal_resize_resp")]
+    TerminalResizeResponse,
     #[serde(rename = "terminal_data")]
     TerminalData { session_id: String, data: Vec<u8>, is_input: bool },
     #[serde(rename = "get_current_user")]
@@ -205,15 +209,15 @@ impl Envelope {
 // ── 连接管理器 ───────────────────────────────────────
 
 pub struct ConnectionManager {
-    connections: Mutex<HashMap<String, ActiveConnection>>,
+    pub connections: Mutex<HashMap<String, ActiveConnection>>,
     request_counter: Mutex<u32>,
 }
 
-struct ActiveConnection {
+pub struct ActiveConnection {
     info: ConnectionInfo,
     tx: mpsc::Sender<ClientRequest>,
     // QUIC Connection（用于创建持久 Stream）
-    quic_conn: Option<Arc<quinn::Connection>>,
+    pub quic_conn: Option<Arc<quinn::Connection>>,
     // 持久 Stream 监听任务
     subscription_task: Option<tokio::task::JoinHandle<()>>,
 }
@@ -234,7 +238,7 @@ impl ConnectionManager {
         }
     }
 
-    fn next_request_id(&self) -> u32 {
+    pub fn next_request_id(&self) -> u32 {
         let mut counter = self.request_counter.lock().unwrap();
         *counter += 1;
         *counter

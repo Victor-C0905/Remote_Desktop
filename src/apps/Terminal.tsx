@@ -1,471 +1,405 @@
-import { useState, useEffect, useCallback, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { useServerManager } from "../context/ServerManager";
-import { useSettingsStore } from "../stores/settingsStore";
-import { TerminalSkeleton } from "../components/skeleton/TerminalSkeleton";
-import { PLACEHOLDER } from "../utils/offlineDefaults";
-import "./Terminal.css";
+// src/apps/Terminal.tsx - GNOME Terminal 风格终端
+// 标准 xterm.js 集成：每个 tab 一个独立子组件，由 React 生命周期管理
+import React, { useEffect, useRef, useState } from 'react';
+import { Terminal } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import { WebLinksAddon } from '@xterm/addon-web-links';
+// xterm.js 基础样式（必须导入，否则 canvas/text-layer 无法正确定位）
+import '@xterm/xterm/css/xterm.css';
+import { useServerManager } from '../context/ServerManager';
+import './Terminal.css';
 
-interface TabInfo {
-  id: string;
-  label: string;
-  ptyId: string | null;
-  xtermReady: boolean;
-}
-
-const GNOME_THEME = {
-  bg: "#1e1e1e",
-  fg: "#ffffff",
-  cursor: "#4ec9b0",
-  green: "#4e9a06",
-  blue: "#3465a4",
-  yellow: "#c4a000",
-  red: "#cc0000",
+// ── GNOME Terminal 主题 ────────────────────────────────────────────
+const GNOME_TERMINAL_THEME = {
+  background: '#1e1e1e',
+  foreground: '#ffffff',
+  cursor: '#4ec9b0',
+  cursorAccent: '#1e1e1e',
+  selectionBackground: '#264f78',
 };
 
-function getPrompt(): string {
-  return `\x1b[1;32muser@gnome-remote\x1b[0m:\x1b[1;34m~\x1b[0m$ `;
+// ── Tab 元数据 ────────────────────────────────────────────────────
+interface TerminalTabMeta {
+  id: string;
+  label: string;
 }
 
-function processDemoCommand(cmd: string): string {
-  const trimmed = cmd.trim().toLowerCase();
-  if (!trimmed) return getPrompt();
+let tabIdCounter = 0;
+const newTabId = () => `tab-${++tabIdCounter}`;
 
-  switch (trimmed) {
-    case "help":
-      return [
-        "\x1b[1m可用命令 (演示模式):\x1b[0m",
-        "  help      — 显示此帮助",
-        "  uname     — 显示系统信息",
-        "  whoami    — 显示当前用户",
-        "  ls        — 列出文件",
-        "  date      — 显示日期时间",
-        "  uptime    — 显示运行时间",
-        "  neofetch  — 系统信息概览",
-        "  clear     — 清屏",
-        "",
-        getPrompt(),
-      ].join("\r\n");
-
-    case "uname":
-    case "uname -a":
-      return "GNOME-Remote 0.1.0 (demo) x86_64 GNU/Linux\r\n" + getPrompt();
-
-    case "whoami":
-      return "user\r\n" + getPrompt();
-
-    case "ls":
-      return [
-        "\x1b[1;34mDocuments/\x1b[0m  \x1b[1;34mDownloads/\x1b[0m  \x1b[1;34mPictures/\x1b[0m",
-        "\x1b[1;34m.config/\x1b[0m    \x1b[1;34m.ssh/\x1b[0m       note.txt",
-        "config.toml  README.md",
-        getPrompt(),
-      ].join("\r\n");
-
-    case "date":
-      return new Date().toString() + "\r\n" + getPrompt();
-
-    case "uptime":
-      return " " + new Date().toLocaleTimeString() + " up 42 days, 3:17, 1 user\r\n" + getPrompt();
-
-    case "clear":
-      return "\x1b[2J\x1b[H" + getPrompt();
-
-    case "neofetch":
-      return [
-        "\x1b[1;32m       _,met$$$$$gg.          \x1b[0m \x1b[1muser@gnome-remote\x1b[0m",
-        "\x1b[1;32m    ,g$$$$$$$$$$$$$$$P.        \x1b[0m ──────────────────",
-        "\x1b[1;32m  ,g$$P\"     \"\"\"Y$$.\"\".       \x1b[0m \x1b[1mOS:\x1b[0m GNOME Remote 0.1.0",
-        "\x1b[1;32m ,$$P'               `$$$.      \x1b[0m \x1b[1mKernel:\x1b[0m Tauri 2.0 + React",
-        "\x1b[1;32m',$$P       ,ggs.     `$$b:    \x1b[0m \x1b[1mShell:\x1b[0m xterm.js 5.5",
-        "\x1b[1;32m`d$$'     ,$P\"'   .    $$$     \x1b[0m \x1b[1mTerminal:\x1b[0m GNOME Terminal",
-        "\x1b[1;32m $$P      d$'     ,    $$P     \x1b[0m \x1b[1mCPU:\x1b[0m Rust (quinn QUIC)",
-        "\x1b[1;32m $$;      Y$b._   _,d$P'       \x1b[0m \x1b[1mMemory:\x1b[0m ~8MB Agent",
-        "\x1b[1;32m Y$$.    `.`\"Y$$$$P\"'          \x1b[0m",
-        "\x1b[1;32m  `Y$b                        \x1b[0m \x1b[1;31m■\x1b[1;32m■\x1b[1;33m■\x1b[1;34m■\x1b[1;35m■\x1b[1;36m■\x1b[1;37m■\x1b[0m",
-        "",
-        getPrompt(),
-      ].join("\r\n");
-
-    default:
-      return `\x1b[33m命令未找到: ${cmd}\x1b[0m\r\n输入 \x1b[1mhelp\x1b[0m 查看可用命令\r\n` + getPrompt();
-  }
+// ===================================================================
+// TerminalInstance: 单个终端实例（每个 tab 一个）
+// - 由 React 生命周期管理 xterm 的创建、配置、释放
+// - 用独立组件 + ref 保证容器挂载到 DOM 后才初始化终端
+// ===================================================================
+interface TerminalInstanceProps {
+  activeServerName: string | null;
+  activeServerHost: string | null;
+  activeServerPort: number | null;
+  fontSize: number;
+  cursorBlink: boolean;
 }
 
-/* ── Component ───────────────────────────────────────── */
+function TerminalInstance({
+  activeServerName,
+  activeServerHost,
+  activeServerPort,
+  fontSize,
+  cursorBlink,
+}: TerminalInstanceProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const terminalRef = useRef<Terminal | null>(null);
+  const fitAddonRef = useRef<FitAddon | null>(null);
+  const [initializationStatus, setInitializationStatus] = useState<string>('等待容器挂载...');
 
-export function TerminalApp() {
-  const { activeServerId, activeServer } = useServerManager();
-  
-  const [tabs, setTabs] = useState<TabInfo[]>([
-    { id: "tab-0", label: "终端 1", ptyId: null, xtermReady: false },
-  ]);
-  const [activeTabId, setActiveTabId] = useState("tab-0");
-  const [xtermAvailable, setXtermAvailable] = useState(false);
-  const terminalFontSize = useSettingsStore((state) => state.terminalFontSize);
-  const [xtermModules, setXtermModules] = useState<{
-    Terminal: any;
-    FitAddon: any;
-    WebLinksAddon: any;
-  } | null>(null);
-  const xtermRefs = useRef<Map<string, any>>(new Map());
-  const fitAddonRefs = useRef<Map<string, any>>(new Map());
-  const containerRefs = useRef<Map<string, HTMLDivElement>>(new Map());
-  const tabCounterRef = useRef(1);
-
-  // ── Load xterm dynamically ──────────────────────
+  // ── 创建 xterm 实例：保证容器挂载到 DOM 后才执行 ──────────
   useEffect(() => {
-    (async () => {
-      try {
-        const xterm = await import("@xterm/xterm");
-        const fit = await import("@xterm/addon-fit");
-        const weblinks = await import("@xterm/addon-web-links");
-        setXtermModules({
-          Terminal: xterm.Terminal,
-          FitAddon: fit.FitAddon,
-          WebLinksAddon: weblinks.WebLinksAddon,
-        });
-        setXtermAvailable(true);
-      } catch {
-        setXtermAvailable(false);
-        console.warn("[Terminal] xterm.js not available, using fallback");
-      }
-    })();
-  }, []);
-
-  // ── 动态更新所有终端实例的字体大小 ───────────
-  useEffect(() => {
-    localStorage.setItem("gnome-remote-terminal-font", terminalFontSize.toString());
-    xtermRefs.current.forEach((term) => {
-      if (term && term.options) {
-        term.options.fontSize = terminalFontSize;
-      }
-    });
-    fitAddonRefs.current.forEach((fit) => {
-      if (fit) try { fit.fit(); } catch {}
-    });
-  }, [terminalFontSize]);
-
-  // ── GNOME Terminal theme ──────────────────────
-  const GNOME_TERMINAL_THEME = {
-    background: GNOME_THEME.bg,
-    foreground: GNOME_THEME.fg,
-    cursor: GNOME_THEME.cursor,
-    cursorAccent: GNOME_THEME.bg,
-    selectionBackground: "rgba(78, 201, 176, 0.3)",
-    selectionForeground: "#ffffff",
-    black: "#1e1e1e",
-    red: "#cc0000",
-    green: "#4e9a06",
-    yellow: "#c4a000",
-    blue: "#3465a4",
-    magenta: "#75507b",
-    cyan: "#06989a",
-    white: "#d3d7cf",
-    brightBlack: "#555753",
-    brightRed: "#ef2929",
-    brightGreen: "#8ae234",
-    brightYellow: "#fce94f",
-    brightBlue: "#729fcf",
-    brightMagenta: "#ad7fa8",
-    brightCyan: "#34e2e2",
-    brightWhite: "#eeeeec",
-  };
-
-  // ── Create xterm instance ──────────────────────
-  const createTerminal = useCallback(
-    (tabId: string, container: HTMLDivElement) => {
-      if (!xtermModules) return;
-
-      // Clean up existing
-      const existing = xtermRefs.current.get(tabId);
-      if (existing) {
-        existing.dispose();
-        xtermRefs.current.delete(tabId);
-        fitAddonRefs.current.delete(tabId);
-      }
-
-      const term = new xtermModules.Terminal({
-        theme: GNOME_TERMINAL_THEME,
-        fontFamily: "'Source Code Pro', 'Cascadia Code', monospace",
-        fontSize: terminalFontSize,
-        lineHeight: 1.2,
-        cursorBlink: true,
-        cursorStyle: "block",
-        scrollback: 5000,
-        allowProposedApi: true,
-      });
-
-      const fitAddon = new xtermModules.FitAddon();
-      const webLinksAddon = new xtermModules.WebLinksAddon();
-
-      term.loadAddon(fitAddon);
-      term.loadAddon(webLinksAddon);
-      term.open(container);
-      fitAddon.fit();
-
-      xtermRefs.current.set(tabId, term);
-      fitAddonRefs.current.set(tabId, fitAddon);
-      containerRefs.current.set(tabId, container);
-
-      // ── Input ──────────────────────────────
-      let currentLine = "";
-      term.onData((data: string) => {
-        if (data === "\r") {
-          term.write("\r\n");
-          const output = processDemoCommand(currentLine);
-          if (output.startsWith("\x1b[2J")) {
-            term.clear();
-          }
-          term.write(output);
-          currentLine = "";
-        } else if (data === "\x7f") {
-          if (currentLine.length > 0) {
-            currentLine = currentLine.slice(0, -1);
-            term.write("\b \b");
-          }
-        } else if (data === "\x03") {
-          term.write("^C\r\n");
-          currentLine = "";
-          term.write(getPrompt());
-        } else if (data >= " ") {
-          currentLine += data;
-          term.write(data);
-        }
-      });
-
-      // Welcome
-      term.writeln("\x1b[1mGNOME Remote Terminal\x1b[0m");
-      term.writeln("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      term.writeln("");
-
-      // Try PTY
-      spawnPty(tabId, term);
-    },
-    [xtermModules]
-  );
-
-  // ── Spawn PTY via Tauri command ────────────────
-  const spawnPty = async (tabId: string, term: any) => {
-    // 远程模式：终端功能尚未实现
-    if (activeServerId) {
-      term.writeln("\x1b[1;33m⚠️ 远程终端功能尚未实现\x1b[0m");
-      term.writeln("");
-      term.writeln("\x1b[1m远程 PTY 需要在 Linux Agent 上实现:\x1b[0m");
-      term.writeln("  • forkpty + bash");
-      term.writeln("  • QUIC Stream 原始字节隧道");
-      term.writeln("  • 多终端会话管理");
-      term.writeln("");
-      term.writeln(`当前连接: \x1b[1;34m${activeServer?.host || activeServerId}\x1b[0m`);
-      term.writeln("");
-      term.writeln("\x1b[33m[演示模式]\x1b[0m 输入 \x1b[1mhelp\x1b[0m 查看可用命令");
-      term.writeln("");
-      term.write(getPrompt());
-      setTabs((prev) =>
-        prev.map((t) => (t.id === tabId ? { ...t, xtermReady: true } : t))
-      );
+    const container = containerRef.current;
+    if (!container) {
+      setInitializationStatus('❌ 容器 ref 为空');
       return;
     }
 
-    // 本地模式：尝试使用本地 PTY
+    // 清理容器（防止 StrictMode 下重复挂载导致脏 DOM）
+    while (container.firstChild) {
+      container.removeChild(container.firstChild);
+    }
+
     try {
-      const result = await invoke<{ pty_id: string }>("spawn_terminal", {
-        shell: "",
-        cols: 80,
-        rows: 24,
+      console.log('[Terminal] 开始创建 xterm 实例，容器尺寸:', container.offsetWidth, 'x', container.offsetHeight);
+
+      // 1. 创建 xterm 实例
+      const terminal = new Terminal({
+        theme: GNOME_TERMINAL_THEME,
+        fontFamily: 'Consolas, "Source Code Pro", monospace',
+        fontSize: fontSize,
+        cursorBlink: cursorBlink,
+        scrollback: 5000,
+        allowProposedApi: true,
       });
-      setTabs((prev) =>
-        prev.map((t) =>
-          t.id === tabId ? { ...t, ptyId: result.pty_id, xtermReady: true } : t
-        )
-      );
-      pollPtyOutput(result.pty_id, term);
-    } catch {
-      term.writeln("\x1b[33m[演示模式]\x1b[0m PTY 不可用，使用本地回显");
-      term.writeln("输入 \x1b[1mhelp\x1b[0m 查看可用命令");
-      term.writeln("");
-      term.write(getPrompt());
-      setTabs((prev) =>
-        prev.map((t) => (t.id === tabId ? { ...t, xtermReady: true } : t))
-      );
+      terminalRef.current = terminal;
+
+      // 2. 加载 FitAddon（响应式布局）
+      const fitAddon = new FitAddon();
+      terminal.loadAddon(fitAddon);
+      fitAddonRef.current = fitAddon;
+
+      // 3. 加载 WebLinksAddon（URL 可点击）
+      try { terminal.loadAddon(new WebLinksAddon()); } catch (e) { console.warn('[Terminal] WebLinksAddon 加载失败:', e); }
+
+      // 4. 挂载到 DOM
+      terminal.open(container);
+      console.log('[Terminal] ✅ xterm 已挂载到 DOM');
+
+      // 5. 等待下一帧，让浏览器完成 flex 布局后再 fit()
+      requestAnimationFrame(() => {
+        try {
+          fitAddon.fit();
+          console.log('[Terminal] ✅ fit() 完成，cols:', terminal.cols, 'rows:', terminal.rows);
+          setInitializationStatus(`✅ 就绪 (${terminal.cols} x ${terminal.rows})`);
+
+          // 6. 写入初始内容
+          if (activeServerName && activeServerHost) {
+            terminal.write(`[远程] 已连接到 ${activeServerName} (${activeServerHost}:${activeServerPort || '?'})\r\n`);
+            terminal.write('(QUIC 代理未就绪，当前以演示模式运行)\r\n\r\n');
+          }
+          // 演示模式 shell
+          runDemoShell(terminal);
+
+          // 7. 聚焦
+          terminal.focus();
+          console.log('[Terminal] ✅ 写入初始内容 + 聚焦完成');
+        } catch (err) {
+          console.error('[Terminal] ❌ fit() 或 write() 失败:', err);
+          setInitializationStatus('❌ fit/write 失败: ' + err);
+        }
+      });
+
+      // 8. resize 监听
+      const onResize = () => {
+        try { fitAddonRef.current?.fit(); } catch (_) {}
+      };
+      window.addEventListener('resize', onResize);
+
+      // ── Cleanup: 组件卸载时释放 ───────────────────────
+      return () => {
+        window.removeEventListener('resize', onResize);
+        try { terminal.dispose(); } catch (_) {}
+        terminalRef.current = null;
+        fitAddonRef.current = null;
+        while (container.firstChild) {
+          container.removeChild(container.firstChild);
+        }
+      };
+    } catch (err) {
+      console.error('[Terminal] ❌ 初始化失败:', err);
+      setInitializationStatus('❌ 初始化失败: ' + err);
+      // 兜底：在容器中显示错误
+      container.innerHTML = `<div style="color:#ff4444;padding:12px;font-family:monospace;">终端初始化失败: ${err}</div>`;
+    }
+  }, []); // 🔑 空依赖 = 只在挂载时执行一次（StrictMode 下会 mount→unmount→mount，但 cleanup 会 dispose）
+
+  // ── fontSize / cursorBlink 变更 ───────────────────────
+  useEffect(() => {
+    const t = terminalRef.current;
+    if (!t) return;
+    t.options.fontSize = fontSize;
+    t.options.cursorBlink = cursorBlink;
+    try { fitAddonRef.current?.fit(); } catch (_) {}
+  }, [fontSize, cursorBlink]);
+
+  // 渲染一个简单的容器 div，由 ref 传递给 xterm.js
+  return (
+    <div
+      ref={containerRef}
+      className="terminal-instance"
+      data-status={initializationStatus}
+    />
+  );
+}
+
+// ===================================================================
+// 演示模式 shell
+// ===================================================================
+function runDemoShell(terminal: Terminal): void {
+  let cwd = '~';
+  let buffer = '';
+  const username = 'user';
+  const hostname = 'gnome-remote';
+
+  const writePrompt = () => terminal.write(`\r\n\x1b[32m${username}@${hostname}\x1b[0m:\x1b[34m${cwd}\x1b[0m$ `);
+
+  const commands: Record<string, () => void> = {
+    help: () => terminal.write('\r\n可用命令：help, echo, ls, pwd, cd, clear, date, whoami, exit\r\n'),
+    ls: () => terminal.write('\r\nDesktop  Documents  Downloads  Music  Pictures  Videos  Projects\r\n'),
+    pwd: () => terminal.write(`\r\n/home/${username}${cwd === '~' ? '' : '/' + cwd}\r\n`),
+    whoami: () => terminal.write(`\r\n${username}\r\n`),
+    date: () => terminal.write(`\r\n${new Date().toString()}\r\n`),
+    clear: () => terminal.clear(),
+    exit: () => terminal.write('\r\n[演示模式已结束，关闭此标签或新建标签继续]\r\n'),
+  };
+
+  terminal.write('[演示模式] 输入 help 查看可用命令\r\n');
+  writePrompt();
+
+  terminal.onData((data) => {
+    if (data === '\r') {
+      const cmd = buffer.trim();
+      buffer = '';
+      if (cmd) {
+        const [name, ...args] = cmd.split(/\s+/);
+        if (name === 'echo') terminal.write(`\r\n${args.join(' ')}\r\n`);
+        else if (name === 'cd') { cwd = args[0] || '~'; terminal.write('\r\n'); }
+        else if (commands[name]) commands[name]();
+        else terminal.write(`\r\n${name}: command not found\r\n`);
+      } else {
+        terminal.write('\r\n');
+      }
+      writePrompt();
+    } else if (data === '\u007F' || data === '\b') {
+      // 删除键：同步删除 buffer 和终端显示
+      if (buffer.length > 0) {
+        const lastChar = buffer[buffer.length - 1];
+        buffer = buffer.slice(0, -1);
+        // 根据字符宽度决定删除多少列（中文等宽字符占 2 列）
+        const charWidth = isWideChar(lastChar) ? 2 : 1;
+        for (let i = 0; i < charWidth; i++) {
+          terminal.write('\b \b');
+        }
+      }
+    } else if (data.charCodeAt(0) < 32) {
+      // 忽略其他控制字符
+    } else {
+      // 正常字符输入（包括 IME 输入的多字符文本）
+      buffer += data;
+      terminal.write(data);
+    }
+  });
+}
+
+// 判断字符是否为宽字符（CJK 字符在终端中通常占 2 列）
+function isWideChar(char: string): boolean {
+  const code = char.charCodeAt(0);
+  // CJK Unified Ideographs: U+4E00 - U+9FFF
+  // CJK Unified Ideographs Extension A: U+3400 - U+4DBF
+  // 全角符号等
+  return (
+    (code >= 0x4E00 && code <= 0x9FFF) ||
+    (code >= 0x3400 && code <= 0x4DBF) ||
+    (code >= 0xFF00 && code <= 0xFFEF) ||
+    (code >= 0x3000 && code <= 0x303F)
+  );
+}
+
+// ===================================================================
+// TerminalApp: 主组件（管理多个 tab、header、设置等 UI shell）
+// ===================================================================
+export function TerminalApp() {
+  const { activeServer } = useServerManager();
+  const [tabs, setTabs] = useState<TerminalTabMeta[]>([]);
+  const [activeTabId, setActiveTabId] = useState<string | null>(null);
+  const [showSearch, setShowSearch] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [fontSize, setFontSize] = useState(14);
+  const [cursorBlink, setCursorBlink] = useState(true);
+  const [searchText, setSearchText] = useState('');
+
+  // ── 首次打开：创建第一个 tab ─────────────────────────────────
+  useEffect(() => {
+    if (tabs.length === 0) {
+      const id = newTabId();
+      setTabs([{ id, label: activeServer?.name || '本地演示' }]);
+      setActiveTabId(id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── 新建 tab ─────────────────────────────────────────────────
+  const handleNewTab = () => {
+    const id = newTabId();
+    setTabs((prev) => [...prev, { id, label: activeServer?.name || '本地演示' }]);
+    setActiveTabId(id);
+  };
+
+  // ── 关闭 tab ─────────────────────────────────────────────────
+  const handleCloseTab = (id: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const remaining = tabs.filter((t) => t.id !== id);
+    setTabs(remaining);
+    if (activeTabId === id) {
+      setActiveTabId(remaining.length > 0 ? remaining[remaining.length - 1].id : null);
     }
   };
 
-  // ── Poll PTY output ─────────────────────────────
-  const pollPtyOutput = async (ptyId: string, term: any) => {
-    const poll = async () => {
-      try {
-        const result = await invoke<{ data: string }>("terminal_read", {
-          pty_id: ptyId,
-          _timeout_ms: 100,
-        });
-        if (result.data) {
-          const bytes = atob(result.data);
-          term.write(bytes);
-        }
-      } catch {
-        term.writeln("\r\n\x1b[31m[连接断开]\x1b[0m");
-        return;
-      }
-      requestAnimationFrame(poll);
-    };
-    poll();
+  // ── 右键菜单 ────────────────────────────────────────────────
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY });
   };
 
-  // ── Add tab ─────────────────────────────────────
-  const addTab = useCallback(() => {
-    tabCounterRef.current += 1;
-    const newTab: TabInfo = {
-      id: `tab-${Date.now()}`,
-      label: `终端 ${tabCounterRef.current}`,
-      ptyId: null,
-      xtermReady: false,
-    };
-    setTabs((prev) => [...prev, newTab]);
-    setActiveTabId(newTab.id);
-  }, []);
+  const handleCopy = () => { setContextMenu(null); };
+  const handlePaste = () => { setContextMenu(null); };
 
-  // ── Close tab ──────────────────────────────────
-  const closeTab = useCallback(
-    (tabId: string, e?: React.MouseEvent) => {
-      e?.stopPropagation();
-      const term = xtermRefs.current.get(tabId);
-      if (term) {
-        term.dispose();
-        xtermRefs.current.delete(tabId);
-        fitAddonRefs.current.delete(tabId);
-        containerRefs.current.delete(tabId);
-      }
-      setTabs((prev) => {
-        const next = prev.filter((t) => t.id !== tabId);
-        if (activeTabId === tabId && next.length > 0) {
-          setActiveTabId(next[next.length - 1].id);
-        }
-        if (next.length === 0) {
-          const fresh: TabInfo = {
-            id: `tab-${Date.now()}`,
-            label: "终端 1",
-            ptyId: null,
-            xtermReady: false,
-          };
-          tabCounterRef.current = 1;
-          setActiveTabId(fresh.id);
-          return [fresh];
-        }
-        return next;
-      });
-    },
-    [activeTabId]
-  );
-
-  // ── Resize ────────────────────────────────────
-  useEffect(() => {
-    const handleResize = () => {
-      fitAddonRefs.current.forEach((addon) => {
-        try { addon.fit(); } catch { /* ignore */ }
-      });
-    };
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, []);
-
-  // ── Cleanup ────────────────────────────────────
-  useEffect(() => {
-    return () => {
-      xtermRefs.current.forEach((term) => term.dispose());
-      xtermRefs.current.clear();
-      fitAddonRefs.current.clear();
-      containerRefs.current.clear();
-    };
-  }, []);
-
-  const activeTab = tabs.find((t) => t.id === activeTabId);
-  const isConnected = activeTab?.ptyId !== null && activeTab?.ptyId !== undefined;
+  const handleSearch = () => { setContextMenu(null); };
 
   return (
-    <div className="terminal-app">
+    <div className="terminal-app" onClick={() => { if (contextMenu) setContextMenu(null); }}>
+      {/* Header Bar */}
+      <div className="terminal-header-bar">
+        <button className="header-button" onClick={handleNewTab} title="新建标签">+ 新建</button>
+        <button className="header-button" onClick={() => setShowSearch((v) => !v)} title="搜索">🔍</button>
+        <button className="header-button" onClick={() => setShowSettings((v) => !v)} title="设置">⚙️</button>
+        <div style={{ flex: 1 }} />
+        <span className="header-button" style={{ color: '#888', cursor: 'default' }}>
+          {activeServer ? `● 已连接 ${activeServer.name}` : '○ 本地演示模式'}
+        </span>
+      </div>
+
       {/* Tab Bar */}
       <div className="terminal-tab-bar">
         {tabs.map((tab) => (
           <button
             key={tab.id}
-            className={`terminal-tab${tab.id === activeTabId ? " active" : ""}`}
+            className={`terminal-tab ${tab.id === activeTabId ? 'active' : ''}`}
             onClick={() => setActiveTabId(tab.id)}
           >
-            <span className="tab-icon">⌘</span>
+            <span className="tab-icon">$</span>
             <span className="tab-label">{tab.label}</span>
-            {tabs.length > 1 && (
-              <button className="tab-close" onClick={(e) => closeTab(tab.id, e)}>
-                ×
-              </button>
-            )}
+            <span className="tab-close" onClick={(e) => handleCloseTab(tab.id, e)} title="关闭标签">×</span>
           </button>
         ))}
-        <button className="terminal-new-tab" onClick={addTab} title="新建终端">
-          +
-        </button>
+        <button className="terminal-new-tab" onClick={handleNewTab} title="新建标签">+</button>
       </div>
 
-      {/* Terminal Content */}
-      <div className="terminal-container">
-        {xtermAvailable && xtermModules ? (
-          !activeServerId && tabs.length > 0 ? (
-            /* 断连状态：显示提示消息 */
-            <div className="terminal-skeleton" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'center' }}>
-              <div style={{
-                color: '#e8a416',
-                fontSize: 14,
-                fontFamily: "'Source Code Pro', monospace",
-                lineHeight: 1.8,
-                width: '100%',
-                padding: '0 16px',
-              }}>
-                <div>{'\u26A0\uFE0F'} Connection lost</div>
-                <div style={{ color: 'rgba(255,255,255,0.4)', marginTop: 4 }}>The remote session has been disconnected.</div>
-                <div style={{ color: 'rgba(255,255,255,0.4)' }}>Reconnect to the server to continue.</div>
-                <div style={{ marginTop: 12, color: 'rgba(255,255,255,0.25)' }}>{PLACEHOLDER}</div>
-              </div>
-            </div>
-          ) : tabs.length === 0 ? (
-            /* 无标签页：显示骨架屏 */
-            <TerminalSkeleton />
-          ) : (
-            /* 正常终端实例 */
-            tabs.map((tab) => (
-              <div
-                key={tab.id}
-                className="terminal-instance"
-                ref={(el) => {
-                  if (el && !xtermRefs.current.has(tab.id) && xtermModules) {
-                    createTerminal(tab.id, el);
-                  }
-                }}
-                style={{
-                  display: tab.id === activeTabId ? "block" : "none",
-                  height: "100%",
-                }}
+      {/* Search Bar */}
+      {showSearch && (
+        <div className="terminal-search-bar">
+          <span style={{ color: '#888', fontSize: 12 }}>搜索:</span>
+          <input
+            className="search-input"
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            autoFocus
+            placeholder="在终端中搜索..."
+          />
+          <button className="search-button" onClick={handleSearch}>查找</button>
+          <button className="search-button" onClick={() => setShowSearch(false)}>关闭</button>
+        </div>
+      )}
+
+      {/* Terminal Containers —— 每个 tab 一个 TerminalInstance 子组件 */}
+      <div className="terminal-container" onContextMenu={handleContextMenu}>
+        {tabs.map((tab) => (
+          <div
+            key={tab.id}
+            style={{
+              position: 'absolute',
+              inset: 0,
+              display: tab.id === activeTabId ? 'block' : 'none',
+            }}
+          >
+            {/* 只在 active tab 上挂载 TerminalInstance —— 非活动 tab 只占位，不初始化 xterm */}
+            {tab.id === activeTabId && (
+              <TerminalInstance
+                activeServerName={activeServer?.name || null}
+                activeServerHost={activeServer?.host || null}
+                activeServerPort={activeServer?.port || null}
+                fontSize={fontSize}
+                cursorBlink={cursorBlink}
               />
-            ))
-          )
-        ) : (
-          <TerminalSkeleton />
+            )}
+          </div>
+        ))}
+        {tabs.length === 0 && (
+          <div className="terminal-empty">
+            <div className="empty-icon">🖥️</div>
+            <div className="empty-text">没有打开的终端</div>
+            <div className="empty-hint">点击"+ 新建"启动一个新的终端</div>
+          </div>
         )}
       </div>
 
-      {/* Status Bar */}
-      <div className="terminal-status-bar">
-        <div className="status-item">
-          <div className={`status-dot${isConnected ? "" : " disconnected"}`} />
-          <span>{isConnected ? "已连接" : xtermAvailable ? "演示模式" : "xterm 未安装"}</span>
+      {/* Settings Panel */}
+      {showSettings && (
+        <div className="terminal-settings-panel" onClick={(e) => e.stopPropagation()}>
+          <label className="settings-label">
+            字号:
+            <input
+              type="range"
+              className="settings-slider"
+              min={10}
+              max={24}
+              value={fontSize}
+              onChange={(e) => setFontSize(Number(e.target.value))}
+            />
+            <span className="settings-value">{fontSize}</span>
+          </label>
+          <label className="settings-label">
+            光标闪烁:
+            <input
+              type="checkbox"
+              className="settings-checkbox"
+              checked={cursorBlink}
+              onChange={(e) => setCursorBlink(e.target.checked)}
+            />
+          </label>
+          <button className="settings-close-button" onClick={() => setShowSettings(false)}>关闭</button>
         </div>
-        <div className="status-item">
-          <span>{activeTab?.label}</span>
+      )}
+
+      {/* Context Menu */}
+      {contextMenu && (
+        <div className="terminal-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(e) => e.stopPropagation()}>
+          <button className="menu-item" onClick={handleCopy}>复制</button>
+          <button className="menu-item" onClick={handlePaste}>粘贴</button>
+          <hr className="menu-divider" />
+          <button className="menu-item" onClick={() => { setShowSearch(true); setContextMenu(null); }}>搜索</button>
+          <button className="menu-item" onClick={() => { setShowSettings(true); setContextMenu(null); }}>设置</button>
         </div>
-        <div className="status-spacer" />
-        <div className="status-item">
-          <span>{xtermAvailable ? "xterm.js" : "fallback"}</span>
-        </div>
-      </div>
+      )}
     </div>
   );
 }
+
+export default Terminal

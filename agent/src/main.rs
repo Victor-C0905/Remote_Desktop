@@ -11,6 +11,7 @@ mod handler;
 mod protocol;
 mod server;
 mod subscription;
+mod pty;
 
 #[derive(Parser, Debug)]
 #[command(name = "gnome-remote-agent")]
@@ -57,9 +58,12 @@ async fn main() -> Result<()> {
     let event_bus = Arc::new(event_bus::EventBus::new());
     let subscription_manager = Arc::new(subscription::SubscriptionManager::new(cfg.clone(), event_bus.clone()));
 
+    // 创建 PTY 管理器
+    let pty_manager = Arc::new(pty::PtyManager::new());
+
     let key_clone = key.clone_key();
     tokio::try_join!(
-        server::quic::run(cfg.clone(), cert.clone(), key_clone, subscription_manager.clone(), event_bus.clone()),
+        server::quic::run(cfg.clone(), cert.clone(), key_clone, subscription_manager.clone(), event_bus.clone(), pty_manager.clone()),
         server::websocket::run(cfg.clone(), cert, key),
     )?;
 

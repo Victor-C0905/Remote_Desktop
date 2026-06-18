@@ -1,8 +1,10 @@
 use serde::Serialize;
 use std::fs;
+use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
 mod connection;
+mod terminal;
 
 /* ── Shared Types ────────────────────────────────────────── */
 
@@ -364,6 +366,7 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .manage(pty::PtyManager::new())
         .manage(connection::ConnectionManager::new())
+        .manage(Arc::new(terminal::TerminalStreamManager::new()))
         .invoke_handler(tauri::generate_handler![
             read_dir, stat_file, read_file_text,
             pty::spawn_terminal,
@@ -387,6 +390,10 @@ pub fn run() {
             connection::remote_move,
             connection::subscribe,
             connection::unsubscribe,
+            terminal::remote_spawn_terminal,
+            terminal::remote_terminal_write,
+            terminal::remote_terminal_close,
+            terminal::remote_terminal_resize,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
