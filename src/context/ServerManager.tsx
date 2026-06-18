@@ -149,13 +149,11 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
       setActiveServerId(id);
 
       // 连接成功后，自动订阅系统指标（长期状态）
-      console.log("[ServerManager] 自动订阅系统指标");
       try {
         await invoke('subscribe', {
           serverId: id,
           types: [{ type: 'metrics', params: { interval_secs: 1 } }]
         });
-        console.log("[ServerManager] 系统指标订阅成功");
       } catch (e) {
         console.warn("[ServerManager] 系统指标订阅失败:", e);
       }

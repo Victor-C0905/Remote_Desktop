@@ -191,10 +191,6 @@ export function SystemMonitor() {
         (event) => {
           if (event.payload.server_id === activeServerId && event.payload.event_type === 'metrics') {
             const newMetrics = event.payload.data;
-            console.log('收到系统指标:', {
-              network_rx_bytes: newMetrics.network_rx_bytes,
-              network_tx_bytes: newMetrics.network_tx_bytes,
-            });
             setMetrics(newMetrics);
             // 标记已收到在线数据（用于 UI 区分「从未连接」和「断连后」）
             if (!hasReceivedData) {
