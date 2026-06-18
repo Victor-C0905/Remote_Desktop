@@ -1,6 +1,9 @@
 // src/apps/Terminal.tsx - GNOME Terminal 风格终端
 // 标准 xterm.js 集成：每个 tab 一个独立子组件，由 React 生命周期管理
+// 支持远程 PTY 连接（通过 QUIC Stream）和本地演示模式
 import React, { useEffect, useRef, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
@@ -30,9 +33,10 @@ const newTabId = () => `tab-${++tabIdCounter}`;
 // ===================================================================
 // TerminalInstance: 单个终端实例（每个 tab 一个）
 // - 由 React 生命周期管理 xterm 的创建、配置、释放
-// - 用独立组件 + ref 保证容器挂载到 DOM 后才初始化终端
+// - 支持远程 PTY 连接（通过 QUIC Stream）和本地演示模式
 // ===================================================================
 interface TerminalInstanceProps {
+  activeServerId: string | null;
   activeServerName: string | null;
   activeServerHost: string | null;
   activeServerPort: number | null;
@@ -41,6 +45,7 @@ interface TerminalInstanceProps {
 }
 
 function TerminalInstance({
+  activeServerId,
   activeServerName,
   activeServerHost,
   activeServerPort,
@@ -50,9 +55,11 @@ function TerminalInstance({
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const sessionIdRef = useRef<string | null>(null);
+  const unlistenRefs = useRef<UnlistenFn[]>([]);
   const [initializationStatus, setInitializationStatus] = useState<string>('等待容器挂载...');
 
-  // ── 创建 xterm 实例：保证容器挂载到 DOM 后才执行 ──────────
+  // ── 创建 xterm 实例并连接远程 PTY ──────────
   useEffect(() => {
     const container = containerRef.current;
     if (!container) {
@@ -92,38 +99,63 @@ function TerminalInstance({
       console.log('[Terminal] ✅ xterm 已挂载到 DOM');
 
       // 5. 等待下一帧，让浏览器完成 flex 布局后再 fit()
-      requestAnimationFrame(() => {
+      requestAnimationFrame(async () => {
         try {
           fitAddon.fit();
           console.log('[Terminal] ✅ fit() 完成，cols:', terminal.cols, 'rows:', terminal.rows);
-          setInitializationStatus(`✅ 就绪 (${terminal.cols} x ${terminal.rows})`);
 
-          // 6. 写入初始内容
-          if (activeServerName && activeServerHost) {
-            terminal.write(`[远程] 已连接到 ${activeServerName} (${activeServerHost}:${activeServerPort || '?'})\r\n`);
-            terminal.write('(QUIC 代理未就绪，当前以演示模式运行)\r\n\r\n');
+          // 6. 尝试连接远程 PTY 或启动演示模式
+          if (activeServerId) {
+            setInitializationStatus('连接远程终端...');
+            await connectRemotePty(terminal, activeServerId, activeServerName, activeServerHost, activeServerPort);
+          } else {
+            setInitializationStatus('演示模式');
+            terminal.write('[演示模式] 未连接远程服务器\r\n');
+            runDemoShell(terminal);
           }
-          // 演示模式 shell
-          runDemoShell(terminal);
 
           // 7. 聚焦
           terminal.focus();
-          console.log('[Terminal] ✅ 写入初始内容 + 聚焦完成');
+          console.log('[Terminal] ✅ 初始化完成');
         } catch (err) {
-          console.error('[Terminal] ❌ fit() 或 write() 失败:', err);
-          setInitializationStatus('❌ fit/write 失败: ' + err);
+          console.error('[Terminal] ❌ 初始化失败:', err);
+          setInitializationStatus('❌ 初始化失败: ' + err);
+          // 回退到演示模式
+          terminal.write(`\x1b[31m[连接失败]\x1b[0m ${err}\r\n`);
+          terminal.write('[演示模式] 输入 help 查看可用命令\r\n');
+          runDemoShell(terminal);
         }
       });
 
-      // 8. resize 监听
+      // 8. resize 监听（同步到远程 PTY）
       const onResize = () => {
-        try { fitAddonRef.current?.fit(); } catch (_) {}
+        try {
+          fitAddonRef.current?.fit();
+          // 同步 resize 到远程 PTY
+          if (sessionIdRef.current && terminalRef.current) {
+            invoke('remote_terminal_resize', {
+              sessionId: sessionIdRef.current,
+              cols: terminalRef.current.cols,
+              rows: terminalRef.current.rows,
+            }).catch(e => console.warn('[Terminal] resize 同步失败:', e));
+          }
+        } catch (_) {}
       };
       window.addEventListener('resize', onResize);
 
       // ── Cleanup: 组件卸载时释放 ───────────────────────
       return () => {
         window.removeEventListener('resize', onResize);
+        // 取消事件监听
+        unlistenRefs.current.forEach(fn => fn());
+        unlistenRefs.current = [];
+        // 关闭远程终端会话
+        if (sessionIdRef.current) {
+          invoke('remote_terminal_close', { sessionId: sessionIdRef.current })
+            .catch(e => console.warn('[Terminal] 关闭远程终端失败:', e));
+          sessionIdRef.current = null;
+        }
+        // 释放 xterm
         try { terminal.dispose(); } catch (_) {}
         terminalRef.current = null;
         fitAddonRef.current = null;
@@ -134,10 +166,9 @@ function TerminalInstance({
     } catch (err) {
       console.error('[Terminal] ❌ 初始化失败:', err);
       setInitializationStatus('❌ 初始化失败: ' + err);
-      // 兜底：在容器中显示错误
       container.innerHTML = `<div style="color:#ff4444;padding:12px;font-family:monospace;">终端初始化失败: ${err}</div>`;
     }
-  }, []); // 🔑 空依赖 = 只在挂载时执行一次（StrictMode 下会 mount→unmount→mount，但 cleanup 会 dispose）
+  }, [activeServerId, activeServerName, activeServerHost, activeServerPort]);
 
   // ── fontSize / cursorBlink 变更 ───────────────────────
   useEffect(() => {
@@ -148,7 +179,7 @@ function TerminalInstance({
     try { fitAddonRef.current?.fit(); } catch (_) {}
   }, [fontSize, cursorBlink]);
 
-  // 渲染一个简单的容器 div，由 ref 传递给 xterm.js
+  // 渲染容器 div
   return (
     <div
       ref={containerRef}
@@ -156,6 +187,86 @@ function TerminalInstance({
       data-status={initializationStatus}
     />
   );
+}
+
+// ===================================================================
+// 连接远程 PTY
+// ===================================================================
+async function connectRemotePty(
+  terminal: Terminal,
+  serverId: string,
+  serverName: string | null,
+  serverHost: string | null,
+  serverPort: number | null,
+): Promise<void> {
+  // 1. 创建远程终端会话
+  const result = await invoke<{ session_id: string }>('remote_spawn_terminal', {
+    serverId: serverId,
+    shell: '',  // 使用默认 shell
+    cols: terminal.cols,
+    rows: terminal.rows,
+  });
+
+  const sessionId = result.session_id;
+  // 存储 sessionId（通过闭包传递给 resize 处理）
+  (terminal as any).__sessionId = sessionId;
+
+  console.log('[Terminal] ✅ 远程终端创建成功:', sessionId);
+
+  // 2. 显示连接信息
+  terminal.write(`\x1b[1;32m✅ 远程终端已连接\x1b[0m\r\n`);
+  terminal.write(`服务器: \x1b[1;34m${serverName || serverHost}:${serverPort || 8443}\x1b[0m\r\n`);
+  terminal.write(`Session: ${sessionId}\r\n\r\n`);
+
+  // 3. 监听终端输出事件
+  const unlistenOutput = await listen<{ session_id: string; data: number[] }>(
+    'terminal-output',
+    (event) => {
+      if (event.payload.session_id === sessionId) {
+        const bytes = new Uint8Array(event.payload.data);
+        terminal.write(bytes);
+      }
+    }
+  );
+
+  // 4. 监听终端断连事件
+  const unlistenDisconnect = await listen<{ session_id: string }>(
+    'terminal-disconnected',
+    (event) => {
+      if (event.payload.session_id === sessionId) {
+        terminal.write('\r\n\x1b[31m[远程终端断开]\x1b[0m\r\n');
+        unlistenOutput();
+        unlistenDisconnect();
+        (terminal as any).__sessionId = null;
+      }
+    }
+  );
+
+  // 5. 设置键盘输入处理
+  terminal.onData((data: string) => {
+    const sid = (terminal as any).__sessionId;
+    if (sid) {
+      const bytes = new TextEncoder().encode(data);
+      invoke('remote_terminal_write', {
+        sessionId: sid,
+        data: Array.from(bytes),
+        serverId: serverId,  // 后端需要此参数（虽然不使用）
+      }).catch(e => console.warn('[Terminal] 写入失败:', e));
+    }
+  });
+
+  // 6. 设置 resize 处理
+  terminal.onResize(({ cols, rows }) => {
+    const sid = (terminal as any).__sessionId;
+    if (sid) {
+      invoke('remote_terminal_resize', {
+        sessionId: sid,
+        cols: cols,
+        rows: rows,
+        serverId: serverId,  // 后端需要此参数
+      }).catch(e => console.warn('[Terminal] resize 失败:', e));
+    }
+  });
 }
 
 // ===================================================================
@@ -236,6 +347,7 @@ function isWideChar(char: string): boolean {
 // ===================================================================
 export function TerminalApp() {
   const { activeServer } = useServerManager();
+  const activeServerId = activeServer?.id || null;
   const [tabs, setTabs] = useState<TerminalTabMeta[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [showSearch, setShowSearch] = useState(false);
@@ -329,6 +441,7 @@ export function TerminalApp() {
       )}
 
       {/* Terminal Containers —— 每个 tab 一个 TerminalInstance 子组件 */}
+      {/* 所有 tab 都保持挂载，通过 display 控制显示，避免切换时卸载导致会话丢失 */}
       <div className="terminal-container" onContextMenu={handleContextMenu}>
         {tabs.map((tab) => (
           <div
@@ -339,16 +452,15 @@ export function TerminalApp() {
               display: tab.id === activeTabId ? 'block' : 'none',
             }}
           >
-            {/* 只在 active tab 上挂载 TerminalInstance —— 非活动 tab 只占位，不初始化 xterm */}
-            {tab.id === activeTabId && (
-              <TerminalInstance
-                activeServerName={activeServer?.name || null}
-                activeServerHost={activeServer?.host || null}
-                activeServerPort={activeServer?.port || null}
-                fontSize={fontSize}
-                cursorBlink={cursorBlink}
-              />
-            )}
+            <TerminalInstance
+              key={tab.id}
+              activeServerId={activeServerId}
+              activeServerName={activeServer?.name || null}
+              activeServerHost={activeServer?.host || null}
+              activeServerPort={activeServer?.port || null}
+              fontSize={fontSize}
+              cursorBlink={cursorBlink}
+            />
           </div>
         ))}
         {tabs.length === 0 && (
