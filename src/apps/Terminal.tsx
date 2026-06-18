@@ -428,22 +428,19 @@ export function TerminalApp() {
     if (terminal) {
       const selection = terminal.getSelection();
       if (selection) {
-        // 有选中文本：直接复制，不显示菜单
+        // 有选中文本：直接复制
         try {
           await navigator.clipboard.writeText(selection);
           console.log('[Terminal] ✅ 已复制选中文本到剪贴板');
         } catch (err) {
           console.warn('[Terminal] ❌ 复制失败:', err);
         }
-        // 清除选中
         terminal.clearSelection();
-        setContextMenu(null);
       } else {
-        // 无选中文本：显示粘贴菜单
-        setContextMenu({ x: e.clientX, y: e.clientY });
+        // 无选中文本：直接粘贴
+        await handlePaste();
       }
-    } else {
-      setContextMenu({ x: e.clientX, y: e.clientY });
+      terminal.focus();
     }
   };
 
@@ -474,16 +471,19 @@ export function TerminalApp() {
       const text = await navigator.clipboard.readText();
       if (text) {
         if (sessionId && activeServerId) {
-          // 远程模式：发送到 PTY
-          const bytes = new TextEncoder().encode(text);
+          // 远程模式：使用 Bracketed Paste Mode
+          // \x1b[200~ 开始粘贴序列 → 文本内容 → \x1b[201~ 结束粘贴序列
+          // 这样 bash/readline 知道这是粘贴内容，会正确处理多行（不自动执行）
+          const pasteData = '\x1b[200~' + text + '\x1b[201~';
+          const bytes = new TextEncoder().encode(pasteData);
           await invoke('remote_terminal_write', {
             sessionId,
             data: Array.from(bytes),
             serverId: activeServerId,
           });
-          console.log('[Terminal] ✅ 已粘贴到远程终端');
+          console.log('[Terminal] ✅ 已粘贴到远程终端（bracketed paste mode）');
         } else {
-          // 演示模式：直接写入（模拟输入）
+          // 演示模式：直接写入
           terminal.write(text);
           console.log('[Terminal] ✅ 已粘贴到演示终端');
         }
@@ -492,6 +492,8 @@ export function TerminalApp() {
       console.warn('[Terminal] ❌ 粘贴失败:', e);
     }
     setContextMenu(null);
+    // 粘贴后重新聚焦终端，避免需要手动点击
+    terminal.focus();
   };
 
   // ── 搜索功能 ────────────────────────────────────────────────
