@@ -10,6 +10,7 @@ import { formatBytesSafe, formatPercentSafe } from "../utils/offlineDefaults";
 import { usePreloader } from "../hooks/usePreloader";
 import { FileManagerSkeleton } from "../components/skeleton/FileManagerSkeleton";
 import { WallpaperProvider, useWallpaper, getWallpaperStyle } from "../context/WallpaperContext";
+import { DraggableWindow } from "../components/DraggableWindow";
 import { listen } from "@tauri-apps/api/event";
 import "./Desktop.css";
 
@@ -59,6 +60,12 @@ interface WindowState {
   preloadState: 'loading' | 'ready' | 'error';
   /** 预加载完成后的注入数据（仅 FileManager 使用） */
   preloadData: any;
+  /** 窗口位置 */
+  position: { x: number; y: number };
+  /** 窗口大小 */
+  size: { width: number; height: number };
+  /** 激活时间戳，用于排序（最后激活的窗口在最上层） */
+  activatedAt: number;
 }
 
 export function Desktop() {
@@ -147,17 +154,30 @@ function DesktopContent() {
       settings: "设置",
     };
 
-    // 如果窗口已存在，直接聚焦
+    // GNOME 标准：如果窗口已存在，点击 Dock 恢复时自动置顶
     if (windows.some((w) => w.appId === appId)) {
       const existing = windows.find((w) => w.appId === appId);
       if (existing) {
+        // 恢复最小化窗口时，自动置顶（更新 activatedAt）
         setWindows((ws) =>
-          ws.map((w) => (w.id === existing.id ? { ...w, minimized: false } : w))
+          ws.map((w) => (w.id === existing.id ? { ...w, minimized: false, activatedAt: Date.now() } : w))
         );
         setActiveWindowId(existing.id);
       }
       return;
     }
+
+    // 计算初始位置（避免重叠）
+    const existingWindows = windows.filter(w => !w.minimized);
+    const offset = existingWindows.length * 30;
+
+    // 获取应用默认尺寸
+    const defaultSizes: Record<string, { width: number; height: number }> = {
+      files: { width: 900, height: 650 },
+      terminal: { width: 850, height: 550 },
+      monitor: { width: 900, height: 650 },
+      settings: { width: 700, height: 550 },
+    };
 
     // 1. 先创建窗口框架（preloadState='loading'，显示骨架屏）
     const newWindow: WindowState = {
@@ -167,6 +187,9 @@ function DesktopContent() {
       minimized: false,
       preloadState: 'loading',
       preloadData: null,
+      position: { x: 100 + offset, y: 100 + offset },
+      size: defaultSizes[appId] || { width: 800, height: 600 },
+      activatedAt: Date.now(), // 初始化激活时间戳
     };
     setWindows((ws) => [...ws, newWindow]);
     setActiveWindowId(newWindow.id);
@@ -228,8 +251,10 @@ function DesktopContent() {
   };
 
   const focusWindow = (windowId: string) => {
+    // GNOME 标准：点击窗口 → raise + focus
+    // 恢复最小化窗口时，自动置顶（更新 activatedAt）
     setWindows((ws) =>
-      ws.map((w) => (w.id === windowId ? { ...w, minimized: false } : w))
+      ws.map((w) => (w.id === windowId ? { ...w, minimized: false, activatedAt: Date.now() } : w))
     );
     setActiveWindowId(windowId);
   };
@@ -271,12 +296,20 @@ function DesktopContent() {
     }
   };
 
-  // Sort windows: active on top
+  // Sort windows: based on activation order (last activated on top)
+  // 窗口根据激活时间戳排序，最后激活的窗口在最上层
   const sortedWindows = [...windows].sort((a, b) => {
-    if (a.id === activeWindowId) return 1;
-    if (b.id === activeWindowId) return -1;
-    return 0;
+    // 按激活时间戳升序排序（最早激活的在前面，最近激活的在后面）
+    // React 渲染顺序：前面的先渲染（底层），后面的后渲染（上层）
+    const result = a.activatedAt - b.activatedAt;
+    // 调试信息：查看窗口排序
+    console.log(`[Desktop] 窗口排序: ${a.title}(${a.activatedAt}) vs ${b.title}(${b.activatedAt}) = ${result}`);
+    return result;
   });
+
+  // 调试信息：查看排序后的窗口顺序
+  console.log('[Desktop] 排序后的窗口:', sortedWindows.map(w => `${w.title}(${w.activatedAt})`));
+  console.log('[Desktop] 当前激活窗口:', activeWindowId);
 
   return (
     <div className="shell">
@@ -290,8 +323,8 @@ function DesktopContent() {
         </button>
         <div className="separator" />
         <div className="connection-indicator">
-          <div 
-            className="connection-dot" 
+          <div
+            className="connection-dot"
             style={{ background: activeServer ? getStatusColor(activeServer.status) : "#9a9996" }}
           />
           <span>
@@ -338,33 +371,40 @@ function DesktopContent() {
         </div>
 
         {/* Application Windows */}
-        {sortedWindows.map((win) => (
-          !win.minimized && (
-            <div
+        {/* z-index 分配策略：
+            - 活动窗口: z-index: 90（最上层）
+            - 其他窗口: 根据激活时间戳排序，最近激活的在上层
+            - 简化逻辑：直接根据 activatedAt 排序分配 z-index
+        */}
+        {/* Application Windows */}
+        {/* z-index 分配策略（不重新排序，避免 DOM 移动导致事件丢失）：
+            - activatedAt 最大值 → z-index: 90（最上层）
+            - 其他窗口：根据原始顺序递增（10, 20, 30...）
+        */}
+        {(() => {
+          const visibleWindows = windows.filter(w => !w.minimized);
+          // 找出 activatedAt 最大的窗口（活动窗口）
+          const maxActivatedAt = visibleWindows.length > 0 
+            ? Math.max(...visibleWindows.map(w => w.activatedAt)) 
+            : 0;
+          
+          // 不重新排序，保持 DOM 树顺序不变，避免事件丢失
+          return visibleWindows.map((win, index) => (
+            <DraggableWindow
               key={win.id}
-              className={`app-window${win.id === activeWindowId ? " active" : ""}`}
-              onMouseDown={() => focusWindow(win.id)}
+              title={win.title}
+              isActive={win.activatedAt === maxActivatedAt}
+              onClose={() => closeWindow(win.id)}
+              onMinimize={() => minimizeWindow(win.id)}
+              onFocus={() => focusWindow(win.id)}
+              initialPosition={win.position}
+              initialSize={win.size}
+              zIndex={win.activatedAt === maxActivatedAt ? 90 : 10 + index * 10}
             >
-              <div className="app-window-titlebar" data-tauri-drag-region>
-                <div className="awt-btns">
-                  <button
-                    className="awt-btn close"
-                    onClick={(e) => { e.stopPropagation(); closeWindow(win.id); }}
-                  />
-                  <button
-                    className="awt-btn minimize"
-                    onClick={(e) => { e.stopPropagation(); minimizeWindow(win.id); }}
-                  />
-                </div>
-                <span className="awt-title">{win.title}</span>
-                <div className="awt-spacer" />
-              </div>
-              <div className="app-window-content">
-                {renderAppContent(win.appId, win)}
-              </div>
-            </div>
-          )
-        ))}
+              {renderAppContent(win.appId, win)}
+            </DraggableWindow>
+          ));
+        })()}
 
         {/* Dock */}
         <div className="dock-container">
