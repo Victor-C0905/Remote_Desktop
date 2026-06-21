@@ -3,7 +3,7 @@
   height: 100%;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow: visible; /* 允许窗口在整个屏幕内移动 */
 }
 
 /* ── Top Bar ──────────────────────────────────────────── */
@@ -109,7 +109,7 @@
 .desktop-area {
   flex: 1;
   position: relative;
-  overflow: hidden;
+  overflow: visible; /* 允许窗口在整个屏幕内移动 */
 }
 
 .desktop-icons {
@@ -307,8 +307,9 @@
 /* ── Application Windows ──────────────────────────────── */
 .app-window {
   position: absolute;
-  top: 32px;
-  left: 80px;
+  /* 移除 CSS 中的 top/left，由 transform 控制 */
+  top: 0;
+  left: 0;
   width: calc(100% - 160px);
   height: calc(100% - 112px);
   background: var(--window-bg);
@@ -317,19 +318,52 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  z-index: 10;
-  animation: windowOpen 200ms var(--ease-out);
+  /* 移除 CSS 中的 z-index，由 inline style 控制 */
+  /* 移除默认边框，只在选中时显示 */
+  border: none;
+  /* 移除 CSS 动画，使用 React 动画避免 transform 冲突 */
+  /* animation: windowOpen 200ms var(--ease-out); */
+  /* GPU 加速优化 */
+  will-change: transform;
+  /* 移除 box-shadow 和 border 的 transition，避免切换时的割裂感 */
+  transition: opacity 0.2s ease-out;
 }
 
 .app-window.active {
-  z-index: 20;
-  box-shadow: var(--shadow-overview);
+  /* 移除 CSS 中的 z-index，由 inline style 控制 */
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  /* 取消边框，只使用阴影区分活动窗口 */
+  border: none;
 }
 
-@keyframes windowOpen {
+/* 拖拽时的视觉反馈 */
+.app-window.dragging {
+  opacity: 0.95;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.25);
+  cursor: move;
+  /* 提升性能：禁用过渡动画 */
+  transition: none;
+}
+
+/* 拖拽结束时的平滑过渡 */
+.app-window:not(.dragging) {
+  opacity: 1;
+  /* 移除 box-shadow 和 border 的 transition，避免切换时的割裂感 */
+  transition: opacity 0.3s ease-out;
+}
+
+/* 非激活窗口的样式 */
+.app-window:not(.active) {
+  /* 移除 CSS 中的 z-index，由 inline style 控制 */
+  box-shadow: var(--shadow-popup);
+  border: none;
+}
+
+/* 移除 @keyframes windowOpen，使用 React 动画避免 transform 冲突 */
+/* @keyframes windowOpen {
   from { opacity: 0; transform: scale(0.96); }
   to   { opacity: 1; transform: scale(1); }
-}
+} */
 
 .app-window-titlebar {
   height: var(--headerbar-height);
@@ -340,16 +374,14 @@
   padding: 0 12px;
   gap: 8px;
   flex-shrink: 0;
-  cursor: default;
-  -webkit-app-region: drag;
-  app-region: drag;
+  cursor: move;
+  /* 移除 app-region: drag，使用 JavaScript 拖拽 */
 }
 
 .app-window-titlebar .awt-btns,
 .app-window-titlebar .awt-title,
 .app-window-titlebar button {
-  -webkit-app-region: no-drag;
-  app-region: no-drag;
+  cursor: default;
 }
 
 .awt-btns {
