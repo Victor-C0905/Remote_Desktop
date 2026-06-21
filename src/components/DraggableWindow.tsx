@@ -241,15 +241,10 @@ export function DraggableWindow({
           userSelect: "none",
         }}
       >
+        <div className="awt-spacer" />
+        <span className="awt-title">{title}</span>
         <div className="awt-btns">
-          <button
-            className="awt-btn close"
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              onClose();
-            }}
-          />
+          {/* GNOME 标准：黄绿红顺序（最小化、全屏、关闭） */}
           <button
             className="awt-btn minimize"
             onMouseDown={(e) => e.stopPropagation()}
@@ -257,10 +252,27 @@ export function DraggableWindow({
               e.stopPropagation();
               onMinimize();
             }}
+            title="最小化"
+          />
+          <button
+            className="awt-btn maximize"
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              // TODO: 全屏功能
+            }}
+            title="全屏"
+          />
+          <button
+            className="awt-btn close"
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose();
+            }}
+            title="关闭"
           />
         </div>
-        <span className="awt-title">{title}</span>
-        <div className="awt-spacer" />
       </div>
 
       {/* Content */}
