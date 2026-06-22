@@ -19,6 +19,7 @@
   padding: 0 12px;
   gap: 6px;
   flex-shrink: 0;
+  position: relative;
 }
 
 .fm-headerbar .nav-btn {
@@ -704,4 +705,51 @@
   border-radius: var(--radius-sm);
   font-size: var(--font-body);
   color: var(--text-secondary);
+}
+
+/* ── Path Suggestions ─────────────────────────────────── */
+
+/* 建议列表容器 */
+.fm-suggestions {
+  position: absolute;
+  top: var(--headerbar-height);  /* 紧贴 headerbar 下方 */
+  left: 84px;  /* 对齐输入框左侧（3个nav-btn * 28px + gap） */
+  width: calc(100% - 200px);  /* 减去左右按钮区域 */
+  background: var(--view-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 100;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+/* 建议项 */
+.fm-suggestion-item {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  gap: 8px;
+  cursor: pointer;
+  transition: background 0.1s ease-out;
+}
+
+.fm-suggestion-item:hover {
+  background: var(--card-bg);
+}
+
+.fm-suggestion-item.selected {
+  background: var(--accent-bg);
+  color: var(--accent-fg);
+}
+
+/* 建议项图标 */
+.fm-suggestion-icon {
+  font-size: 16px;
+}
+
+/* 建议项文本 */
+.fm-suggestion-text {
+  font-size: var(--font-body);
+  flex: 1;
 }

@@ -96,6 +96,12 @@ pub enum Payload {
     #[serde(rename = "mounts_resp")]
     MountsResponse { mounts: Vec<MountInfo> },
 
+    // 新增：路径建议
+    #[serde(rename = "get_path_suggestions")]
+    GetPathSuggestionsRequest { path: String },
+    #[serde(rename = "path_suggestions_resp")]
+    PathSuggestionsResponse { suggestions: Vec<String> },
+
     // 新增：通用订阅
     #[serde(rename = "subscribe")]
     Subscribe {
@@ -519,6 +525,16 @@ pub async fn remote_get_mounts(server_id: String, app: tauri::AppHandle) -> Resu
     let resp = remote_send(server_id, Payload::GetMounts, app).await?;
     match resp.payload {
         Payload::MountsResponse { mounts } => Ok(mounts),
+        Payload::Error { message, .. } => Err(message),
+        _ => Err("意外响应".into()),
+    }
+}
+
+#[tauri::command]
+pub async fn remote_get_path_suggestions(server_id: String, path: String, app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    let resp = remote_send(server_id, Payload::GetPathSuggestionsRequest { path }, app).await?;
+    match resp.payload {
+        Payload::PathSuggestionsResponse { suggestions } => Ok(suggestions),
         Payload::Error { message, .. } => Err(message),
         _ => Err("意外响应".into()),
     }

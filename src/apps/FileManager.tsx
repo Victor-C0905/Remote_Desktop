@@ -130,6 +130,11 @@ export function FileManager({ initialData }: FileManagerProps = {}) {
   const [pathInput, setPathInput] = useState(currentPath);
   const [isEditingPath, setIsEditingPath] = useState(false);
 
+  // 路径建议列表状态
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [selectedSuggestionIdx, setSelectedSuggestionIdx] = useState<number | null>(null);
+
   const loadDir = useCallback(async (path: string) => {
     setLoading(true);
     setError(null);
@@ -175,6 +180,58 @@ export function FileManager({ initialData }: FileManagerProps = {}) {
       setEntries([]);
     } finally {
       setLoading(false);
+    }
+  }, [activeServerId]);
+
+  // ── Path Suggestions ───────────────────────────────────
+  const fetchSuggestions = useCallback(async (path: string) => {
+    if (!activeServerId || path === "") {
+      setSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+
+    try {
+      // 解析路径：获取父目录和当前输入的部分名称
+      // 例如：输入 "/home/us" → 父目录 "/home"，部分名称 "us"
+      const parts = path.split("/").filter(p => p !== "");
+      const parentPath = parts.length === 0 ? "/" : "/" + parts.slice(0, -1).join("/");
+      const partialName = parts.length === 0 ? "" : parts[parts.length - 1];
+
+      console.log("[FileManager] fetchSuggestions: 输入路径:", path, "父目录:", parentPath, "部分名称:", partialName);
+
+      // 调用 remote_read_dir 获取父目录的文件列表
+      const resp = await invoke<ReadDirResponse>("remote_read_dir", {
+        serverId: activeServerId,
+        path: parentPath,
+      });
+
+      // 过滤出匹配部分名称的目录
+      const suggestions: string[] = [];
+      for (const entry of resp.entries) {
+        // 只建议目录（不包括文件）
+        if (!entry.is_dir) continue;
+
+        // 匹配部分名称（如果部分名称为空，建议所有目录）
+        if (partialName === "" || entry.name.startsWith(partialName)) {
+          // 构建完整路径
+          const fullPath = parentPath === "/" ? `/${entry.name}` : `${parentPath}/${entry.name}`;
+          suggestions.push(fullPath);
+
+          // 最多 10 个建议
+          if (suggestions.length >= 10) break;
+        }
+      }
+
+      console.log("[FileManager] fetchSuggestions: 建议列表:", suggestions);
+
+      setSuggestions(suggestions);
+      setShowSuggestions(suggestions.length > 0);
+      setSelectedSuggestionIdx(null);
+    } catch (err) {
+      console.error("[FileManager] 获取建议失败:", err);
+      setSuggestions([]);
+      setShowSuggestions(false);
     }
   }, [activeServerId]);
 
@@ -369,20 +426,53 @@ export function FileManager({ initialData }: FileManagerProps = {}) {
     }
   }, [currentPath, isEditingPath]);
 
+  // 防抖：输入停止 300ms 后获取建议或导航
+  useEffect(() => {
+    if (!isEditingPath || pathInput === currentPath) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      // 获取路径建议
+      fetchSuggestions(pathInput);
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [pathInput, isEditingPath, currentPath, fetchSuggestions]);
+
   // 处理路径输入
   const handlePathInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setPathInput(e.target.value);
   };
 
   const handlePathInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") {
+    // 如果建议列表显示且有选中项，按 Enter 选择建议项
+    if (e.key === "Enter" && showSuggestions && selectedSuggestionIdx !== null) {
       e.preventDefault();
+      handleSelectSuggestion(suggestions[selectedSuggestionIdx]);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      setShowSuggestions(false);
       setIsEditingPath(false);
       navigateTo(pathInput);
     } else if (e.key === "Escape") {
       e.preventDefault();
+      setShowSuggestions(false);
       setIsEditingPath(false);
       setPathInput(currentPath);
+    } else if (e.key === "Tab" && suggestions.length > 0) {
+      e.preventDefault();
+      handleSelectSuggestion(suggestions[0]);
+    } else if (e.key === "ArrowDown" && showSuggestions) {
+      e.preventDefault();
+      setSelectedSuggestionIdx(prev =>
+        prev === null ? 0 : Math.min(prev + 1, suggestions.length - 1)
+      );
+    } else if (e.key === "ArrowUp" && showSuggestions) {
+      e.preventDefault();
+      setSelectedSuggestionIdx(prev =>
+        prev === null ? suggestions.length - 1 : Math.max(prev - 1, 0)
+      );
     }
   };
 
@@ -416,6 +506,13 @@ export function FileManager({ initialData }: FileManagerProps = {}) {
     setHistoryIdx(newHistory.length - 1);
     loadDir(cleanPath);
   }, [history, historyIdx, loadDir]);
+
+  const handleSelectSuggestion = useCallback((suggestion: string) => {
+    setPathInput(suggestion);
+    setShowSuggestions(false);
+    setIsEditingPath(false);
+    navigateTo(suggestion);
+  }, [navigateTo]);
 
   const goBack = useCallback(() => {
     if (historyIdx > 0) {
@@ -608,6 +705,9 @@ export function FileManager({ initialData }: FileManagerProps = {}) {
 
   // ── Keyboard ─────────────────────────────────────────
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    // 如果正在编辑路径，不处理任何全局键盘事件
+    if (isEditingPath) return;
+
     // 如果正在编辑文件名，不处理任何键盘事件（编辑输入框会处理）
     if (editingEntry) return;
 
@@ -623,7 +723,7 @@ export function FileManager({ initialData }: FileManagerProps = {}) {
       e.preventDefault();
       setSelectedIdx(prev => Math.max((prev ?? 0) - 1, 0));
     }
-  }, [entries, selectedIdx, goUp, handleOpen, editingEntry]);
+  }, [entries, selectedIdx, goUp, handleOpen, editingEntry, isEditingPath]);
 
   // ── Stats ────────────────────────────────────────────
   const dirCount = entries.filter(e => e.is_dir).length;
@@ -650,6 +750,23 @@ export function FileManager({ initialData }: FileManagerProps = {}) {
           placeholder="/home"
           title="输入路径并按 Enter 跳转"
         />
+
+        {/* 建议列表 */}
+        {showSuggestions && suggestions.length > 0 && (
+          <div className="fm-suggestions">
+            {suggestions.map((suggestion, idx) => (
+              <div
+                key={idx}
+                className={`fm-suggestion-item${selectedSuggestionIdx === idx ? " selected" : ""}`}
+                onClick={() => handleSelectSuggestion(suggestion)}
+                onMouseEnter={() => setSelectedSuggestionIdx(idx)}
+              >
+                <span className="fm-suggestion-icon">📁</span>
+                <span className="fm-suggestion-text">{suggestion}</span>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* View Toggle */}
         <div className="view-toggle">
