@@ -146,8 +146,8 @@ function TerminalInstance({
         }
       });
 
-      // 8. resize 监听（同步到远程 PTY）
-      const onResize = () => {
+      // 8. ResizeObserver：监听容器尺寸变化（覆盖浏览器窗口调整 + DraggableWindow 拖拽调整）
+      const resizeObserver = new ResizeObserver(() => {
         try {
           fitAddonRef.current?.fit();
           // 同步 resize 到远程 PTY
@@ -159,12 +159,12 @@ function TerminalInstance({
             }).catch(e => console.warn('[Terminal] resize 同步失败:', e));
           }
         } catch (_) {}
-      };
-      window.addEventListener('resize', onResize);
+      });
+      resizeObserver.observe(container);
 
       // ── Cleanup: 组件卸载时释放 ───────────────────────
       return () => {
-        window.removeEventListener('resize', onResize);
+        resizeObserver.disconnect();
         // 取消事件监听
         unlistenRefs.current.forEach(fn => fn());
         unlistenRefs.current = [];
