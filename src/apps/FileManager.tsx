@@ -500,7 +500,9 @@ export function FileManager({ initialData }: FileManagerProps = {}) {
     } else if (e.key === "Enter") {
       e.preventDefault();
       setShowSuggestions(false);
-      setIsEditingPath(false);
+      // 注意：不在此处设置 setIsEditingPath(false)
+      // 过早设为 false 会导致 useEffect 在异步导航期间覆盖用户输入，造成删除异常
+      // 统一在导航完成后通过 blur() 触发 handlePathInputBlur 清理
 
       // 格式化路径
       const cleanPath = normalizePath(pathInput);
@@ -510,12 +512,15 @@ export function FileManager({ initialData }: FileManagerProps = {}) {
           serverId: activeServerId,
           path: cleanPath,
         });
-        // 路径存在：正常导航
+        // 路径存在：正常导航（navigateTo → loadDir → setCurrentPath 更新完毕）
         navigateTo(cleanPath);
+        // 导航完成后主动失焦，由 handlePathInputBlur 统一清理（同步 pathInput + 关闭编辑模式）
+        pathInputRef.current?.blur();
       } catch {
         // 路径不存在：弹窗提示，恢复为当前路径（正确格式）
         setPathErrorDialog(`路径不存在: ${cleanPath}`);
-        setPathInput(currentPath);
+        // 同样通过失焦统一处理，blur handler 会将 pathInput 恢复为 currentPath
+        pathInputRef.current?.blur();
       }
     } else if (e.key === "Escape") {
       e.preventDefault();
@@ -589,8 +594,11 @@ export function FileManager({ initialData }: FileManagerProps = {}) {
   const handleSelectSuggestion = useCallback((suggestion: string) => {
     setPathInput(suggestion);
     setShowSuggestions(false);
-    setIsEditingPath(false);
-    navigateTo(suggestion);
+    // 不在此处 setIsEditingPath(false)，与 Enter 保持一致：通过 blur() 统一清理
+    navigateTo(suggestion).then(() => {
+      // 导航完成后主动失焦，由 handlePathInputBlur 统一处理
+      pathInputRef.current?.blur();
+    });
   }, [navigateTo]);
 
   const goBack = useCallback(() => {
