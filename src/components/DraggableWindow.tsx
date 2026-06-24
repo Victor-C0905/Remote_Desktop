@@ -369,10 +369,11 @@ export function DraggableWindow({
         style={{
           position: "absolute",
           right: 0,
-          top: 48,
+          top: 0, // 在 HeaderBar 上方，避免被 HeaderBar 的 onMouseDown 覆盖
           width: 16,
           height: 16,
           cursor: "ne-resize",
+          zIndex: 1, // 确保 resize handle 在 HeaderBar 上方
         }}
         onMouseDown={(e) => handleResizeStart(e, "ne")}
       />
