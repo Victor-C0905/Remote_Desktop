@@ -16,9 +16,9 @@
 .skeleton-shimmer {
   background: linear-gradient(
     90deg,
-    var(--card-bg, #f0f0f0) 25%,
+    var(--card-bg, #faf5f3) 25%,      /* 内容区 fallback（最浅） */
     var(--border-color, rgba(0, 0, 0, 0.08)) 50%,
-    var(--card-bg, #f0f0f0) 75%
+    var(--card-bg, #faf5f3) 75%       /* 内容区 fallback（最浅） */
   );
   background-size: 200px 100%;
   animation: skeleton-shimmer 1.5s ease-in-out infinite;
@@ -41,7 +41,7 @@
   flex-direction: column;
   gap: 16px;
   border-right: 1px solid var(--border-color, rgba(0, 0, 0, 0.15));
-  background: var(--sidebar-bg, #ebebeb);
+  background: var(--sidebar-bg, #f5f0e6);  /* 侧边栏 fallback（中等） */
 }
 
 .fm-skeleton-section-title {

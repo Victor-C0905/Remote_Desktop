@@ -188,11 +188,11 @@
 }
 
 .nc-unread {
-  background: rgba(53, 132, 228, 0.08);
+  background: var(--card-bg);  /* 暖灰背景 */
 }
 
 .nc-unread:hover {
-  background: rgba(53, 132, 228, 0.15);
+  background: var(--card-hover);  /* 暖灰悬停 */
 }
 
 .nc-notif-icon {

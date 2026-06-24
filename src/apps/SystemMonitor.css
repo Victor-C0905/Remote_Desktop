@@ -424,7 +424,8 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
-  background: rgba(250, 250, 250, 0.85);
+  background: var(--view-bg);  /* 使用暖灰背景 */
+  opacity: 0.85;  /* 85% 透明度 */
   z-index: 10;
   animation: offlineOverlayIn 200ms var(--ease-out);
 }
