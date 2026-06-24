@@ -95,10 +95,16 @@
   user-select: none;
 }
 
-/* ── Path Input ─────────────────────────────────────────── */
-.fm-path-input {
+/* ── Path Input Container ─────────────────────────────────── */
+.fm-path-input-container {
   flex: 1;
   min-width: 0;
+  position: relative;  /* 建议列表相对定位基准 */
+}
+
+/* ── Path Input ─────────────────────────────────────────── */
+.fm-path-input {
+  width: 100%;
   height: 32px;
   padding: 0 12px;
   background: var(--view-bg);
@@ -252,13 +258,14 @@
   display: grid;
   grid-template-columns: 1fr 80px 120px 100px;
   gap: 8px;
-  padding: 4px 12px;
-  border-bottom: 1px solid var(--border-color);
+  /* border-bottom: 1px solid var(--border-color); */  /* 隐藏下方线条 */
   font-size: var(--font-small);
   font-weight: 600;
   color: var(--text-secondary);
   position: sticky;
-  top: 0;
+  top: -8px;  /* 负边距抵消 fm-main 的 padding，让 header 覆盖空白区域 */
+  margin: -8px -8px 0 -8px;  /* 负边距扩展到 fm-main 边缘 */
+  padding: 12px 20px;  /* 上下 12px (4+8), 左右 20px (12+8) 补偿负边距 */
   background: var(--window-bg);
   z-index: 5;
 }
@@ -570,6 +577,80 @@
   background: var(--accent-hover);
 }
 
+/* ── Path Error Dialog (路径不存在弹窗 - 模态) ─────────────────── */
+/* 遮罩层：覆盖整个文件管理器，阻止点击穿透 */
+.fm-path-error-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* 阻止所有交互 */
+  pointer-events: auto;
+}
+
+/* 弹窗本身：允许交互 */
+.fm-path-error-dialog {
+  position: relative;
+  width: 400px;
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 20px;
+  box-shadow: var(--shadow-popup);
+  /* 允许弹窗内的交互 */
+  pointer-events: auto;
+}
+
+.ped-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.ped-icon {
+  font-size: 22px;
+}
+
+.ped-title {
+  font-size: 14pt;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ped-message {
+  color: var(--text-secondary);
+  font-size: var(--font-body);
+  margin-bottom: 16px;
+  padding: 8px 12px;
+  background: var(--view-bg);
+  border-radius: var(--radius-xs);
+  word-break: break-all;
+}
+
+.ped-footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.ped-footer button {
+  padding: 6px 20px;
+  background: var(--accent-bg);
+  color: var(--accent-fg);
+  border: none;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  font-size: var(--font-body);
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.ped-footer button:hover {
+  background: var(--accent-hover);
+}
+
 /* ── Offline Empty State (离线空状态) ─────────────────── */
 .fm-offline {
   display: flex;
@@ -709,15 +790,16 @@
 
 /* ── Path Suggestions ─────────────────────────────────── */
 
-/* 建议列表容器 */
+/* 建议列表容器 — 位于地址栏正下方，宽度匹配 */
 .fm-suggestions {
   position: absolute;
-  top: var(--headerbar-height);  /* 紧贴 headerbar 下方 */
-  left: 84px;  /* 对齐输入框左侧（3个nav-btn * 28px + gap） */
-  width: calc(100% - 200px);  /* 减去左右按钮区域 */
-  background: var(--view-bg);
+  top: 100%;  /* 紧贴地址栏下方 */
+  left: 0;
+  width: 100%;  /* 宽度匹配地址栏 */
+  margin-top: 4px;  /* 与地址栏间隔 4px */
+  background: rgba(255, 255, 255, 0.85);  /* 85% 透明度 */
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);  /* 四个角都圆角 */
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   z-index: 100;
   max-height: 300px;
