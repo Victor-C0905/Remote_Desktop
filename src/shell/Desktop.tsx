@@ -10,6 +10,8 @@ import { formatBytesSafe, formatPercentSafe } from "../utils/offlineDefaults";
 import { usePreloader } from "../hooks/usePreloader";
 import { FileManagerSkeleton } from "../components/skeleton/FileManagerSkeleton";
 import { WallpaperProvider, useWallpaper, getWallpaperStyle } from "../context/WallpaperContext";
+import { useSettingsStore } from "../stores/settingsStore";
+import { useTheme } from "../hooks/useTheme";
 import { DraggableWindow } from "../components/DraggableWindow";
 import { listen } from "@tauri-apps/api/event";
 import "./Desktop.css";
@@ -90,6 +92,10 @@ function DesktopContent() {
 
   const { activeServer } = useServerManager();
   const { wallpaper } = useWallpaper();
+
+  // 全局主题应用（确保所有窗口都使用正确的主题 CSS 变量）
+  const { themeId, accentColorId } = useSettingsStore();
+  useTheme(themeId, accentColorId);
 
   // ── FileManager 预加载器 ──
   const preloader = usePreloader();

@@ -3,7 +3,6 @@ import { useServerManager, formatLastConnected, getStatusIcon, getStatusColor } 
 import { useWallpaper, getPresetWallpaperName, getWallpaperStyle } from "../context/WallpaperContext";
 import { PRESET_WALLPAPERS } from "../stores/wallpaperStore";
 import { useSettingsStore } from "../stores/settingsStore";
-import { useTheme } from "../hooks/useTheme";
 import { themes, accentColors } from "../config/themes";
 import { ThemeId, AccentColorId } from "../config/themes";
 import "./Settings.css";
@@ -256,8 +255,8 @@ export function Settings() {
     setAccentColorId,
   } = useSettingsStore();
 
-  // 应用主题（暗色模式由 themeId === 'dark' 自动判断）
-  useTheme(themeId, accentColorId);
+  // 主题已由 Desktop.tsx 全局应用，此处不再重复调用
+  // useTheme(themeId, accentColorId);
 
   const handleAddServer = (name: string, host: string, port: number, token: string) => {
     addServer({ name, host, port, token });
