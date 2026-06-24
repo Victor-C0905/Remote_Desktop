@@ -135,7 +135,35 @@ export function FileManager({ initialData }: FileManagerProps = {}) {
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [selectedSuggestionIdx, setSelectedSuggestionIdx] = useState<number | null>(null);
 
-  const loadDir = useCallback(async (path: string) => {
+  // 路径不存在时的错误弹窗
+  const [pathErrorDialog, setPathErrorDialog] = useState<string | null>(null);
+
+  // 输入框 ref（用于检测点击位置）
+  const pathInputRef = useRef<HTMLInputElement>(null);
+
+  // 全局点击监听：点击外部时让输入框失焦
+  // 失焦功能：始终监听，不依赖 showSuggestions（保持功能原子性）
+  useEffect(() => {
+    const handleGlobalClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+
+      // 点击不在输入框和建议列表内时，让输入框失焦
+      if (
+        pathInputRef.current &&
+        !pathInputRef.current.contains(target) &&
+        !target.closest(".fm-suggestions")
+      ) {
+        // 触发 blur，让 handlePathInputBlur 统一处理所有失焦逻辑
+        pathInputRef.current.blur();
+      }
+    };
+
+    // 使用 window + capture 确保能捕获到所有点击（包括标题栏）
+    window.addEventListener("mousedown", handleGlobalClick, { capture: true });
+    return () => window.removeEventListener("mousedown", handleGlobalClick, { capture: true });
+  }, []); // ❌ 不依赖 showSuggestions，让失焦功能始终工作
+
+  const loadDir = useCallback(async (path: string): Promise<boolean> => {
     setLoading(true);
     setError(null);
     setSelectedIdx(null);
@@ -147,9 +175,6 @@ export function FileManager({ initialData }: FileManagerProps = {}) {
       activeServerId,
       isRemote: !!activeServerId,
     });
-
-    // 无论成功或失败，都更新当前路径
-    setCurrentPath(path);
 
     try {
       let resp: ReadDirResponse | null = null;
@@ -175,9 +200,14 @@ export function FileManager({ initialData }: FileManagerProps = {}) {
       } else {
         setEntries(getDemoEntries(path));
       }
+
+      // 成功后才更新当前路径（确保路径确实存在）
+      setCurrentPath(path);
+      return true;
     } catch (e: any) {
       setError(e.toString());
       setEntries([]);
+      return false;
     } finally {
       setLoading(false);
     }
@@ -192,11 +222,22 @@ export function FileManager({ initialData }: FileManagerProps = {}) {
     }
 
     try {
-      // 解析路径：获取父目录和当前输入的部分名称
-      // 例如：输入 "/home/us" → 父目录 "/home"，部分名称 "us"
-      const parts = path.split("/").filter(p => p !== "");
-      const parentPath = parts.length === 0 ? "/" : "/" + parts.slice(0, -1).join("/");
-      const partialName = parts.length === 0 ? "" : parts[parts.length - 1];
+      // 解析路径：
+      // - 路径以 "/" 结尾：显示该目录下的所有子目录（如 "/home/vic/" → 显示 "/home/vic" 的子目录）
+      // - 路径不以 "/" 结尾：显示父目录下匹配部分名称的子目录（如 "/home/us" → 显示 "/home" 下以 "us" 开头的目录）
+      let parentPath: string;
+      let partialName: string;
+
+      if (path.endsWith("/")) {
+        // 以 "/" 结尾：parentPath 是去掉末尾 "/" 的路径本身，partialName 为空
+        parentPath = path.slice(0, -1) || "/";
+        partialName = "";
+      } else {
+        // 不以 "/" 结尾：按原逻辑处理
+        const parts = path.split("/").filter(p => p !== "");
+        parentPath = parts.length === 0 ? "/" : "/" + parts.slice(0, -1).join("/");
+        partialName = parts.length === 0 ? "" : parts[parts.length - 1];
+      }
 
       console.log("[FileManager] fetchSuggestions: 输入路径:", path, "父目录:", parentPath, "部分名称:", partialName);
 
@@ -442,10 +483,16 @@ export function FileManager({ initialData }: FileManagerProps = {}) {
 
   // 处理路径输入
   const handlePathInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setPathInput(e.target.value);
+    const value = e.target.value;
+    setPathInput(value);
+
+    // 输入以 "/" 结尾时立即展开建议（跳过防抖）
+    if (value.endsWith("/") && activeServerId) {
+      fetchSuggestions(value);
+    }
   };
 
-  const handlePathInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handlePathInputKeyDown = async (e: React.KeyboardEvent<HTMLInputElement>) => {
     // 如果建议列表显示且有选中项，按 Enter 选择建议项
     if (e.key === "Enter" && showSuggestions && selectedSuggestionIdx !== null) {
       e.preventDefault();
@@ -454,7 +501,24 @@ export function FileManager({ initialData }: FileManagerProps = {}) {
       e.preventDefault();
       setShowSuggestions(false);
       setIsEditingPath(false);
-      navigateTo(pathInput);
+
+      // 先纯验证路径是否存在（不改变任何 UI 状态）
+      let cleanPath = pathInput.replace(/\/+/g, "/");
+      if (cleanPath.length > 0 && !cleanPath.startsWith("/")) cleanPath = "/" + cleanPath;
+      if (cleanPath === "") cleanPath = "/";
+
+      try {
+        await invoke<ReadDirResponse>("remote_read_dir", {
+          serverId: activeServerId,
+          path: cleanPath,
+        });
+        // 路径存在：正常导航
+        navigateTo(cleanPath);
+      } catch {
+        // 路径不存在：弹窗提示，页面和路径完全不变
+        setPathErrorDialog(`路径不存在: ${pathInput}`);
+        setPathInput(currentPath); // 输入框恢复为当前路径
+      }
     } else if (e.key === "Escape") {
       e.preventDefault();
       setShowSuggestions(false);
@@ -482,11 +546,12 @@ export function FileManager({ initialData }: FileManagerProps = {}) {
 
   const handlePathInputBlur = () => {
     setIsEditingPath(false);
+    setShowSuggestions(false);  // 失焦时收起建议列表
     setPathInput(currentPath);
   };
 
   // ── Navigation ──────────────────────────────────────
-  const navigateTo = useCallback((path: string) => {
+  const navigateTo = useCallback(async (path: string): Promise<boolean> => {
     // 清理路径：Linux 格式，移除多余的斜杠
     let cleanPath = path.replace(/\/+/g, "/");
     // 确保路径以斜杠开头（除非是空路径）
@@ -500,11 +565,15 @@ export function FileManager({ initialData }: FileManagerProps = {}) {
 
     console.log("[FileManager] navigateTo: 输入路径:", path, "清理后:", cleanPath);
 
-    const newHistory = history.slice(0, historyIdx + 1);
-    newHistory.push(cleanPath);
-    setHistory(newHistory);
-    setHistoryIdx(newHistory.length - 1);
-    loadDir(cleanPath);
+    const success = await loadDir(cleanPath);
+    if (success) {
+      // 成功后才更新导航历史
+      const newHistory = history.slice(0, historyIdx + 1);
+      newHistory.push(cleanPath);
+      setHistory(newHistory);
+      setHistoryIdx(newHistory.length - 1);
+    }
+    return success;
   }, [history, historyIdx, loadDir]);
 
   const handleSelectSuggestion = useCallback((suggestion: string) => {
@@ -738,35 +807,41 @@ export function FileManager({ initialData }: FileManagerProps = {}) {
         <button className="nav-btn" onClick={goForward} disabled={historyIdx >= history.length - 1} title="前进">→</button>
         <button className="nav-btn" onClick={goUp} title="上级目录">↑</button>
 
-        {/* Path Input */}
-        <input
-          type="text"
-          className="fm-path-input"
-          value={pathInput}
-          onChange={handlePathInputChange}
-          onKeyDown={handlePathInputKeyDown}
-          onFocus={handlePathInputFocus}
-          onBlur={handlePathInputBlur}
-          placeholder="/home"
-          title="输入路径并按 Enter 跳转"
-        />
+        {/* Path Input Container */}
+        <div className="fm-path-input-container">
+          <input
+            ref={pathInputRef}
+            type="text"
+            className="fm-path-input"
+            value={pathInput}
+            onChange={handlePathInputChange}
+            onKeyDown={handlePathInputKeyDown}
+            onFocus={handlePathInputFocus}
+            onBlur={handlePathInputBlur}
+            placeholder="/home"
+            title="输入路径并按 Enter 跳转"
+          />
 
-        {/* 建议列表 */}
-        {showSuggestions && suggestions.length > 0 && (
-          <div className="fm-suggestions">
-            {suggestions.map((suggestion, idx) => (
-              <div
-                key={idx}
-                className={`fm-suggestion-item${selectedSuggestionIdx === idx ? " selected" : ""}`}
-                onClick={() => handleSelectSuggestion(suggestion)}
-                onMouseEnter={() => setSelectedSuggestionIdx(idx)}
-              >
-                <span className="fm-suggestion-icon">📁</span>
-                <span className="fm-suggestion-text">{suggestion}</span>
-              </div>
-            ))}
-          </div>
-        )}
+          {/* 建议列表 — 位于地址栏正下方 */}
+          {showSuggestions && suggestions.length > 0 && (
+            <div className="fm-suggestions">
+              {suggestions.map((suggestion, idx) => (
+                <div
+                  key={idx}
+                  className={`fm-suggestion-item${selectedSuggestionIdx === idx ? " selected" : ""}`}
+                  onMouseDown={(e) => {
+                    e.preventDefault();  // 阻止默认行为，防止触发 blur
+                    handleSelectSuggestion(suggestion);
+                  }}
+                  onMouseEnter={() => setSelectedSuggestionIdx(idx)}
+                >
+                  <span className="fm-suggestion-icon">📁</span>
+                  <span className="fm-suggestion-text">{suggestion}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
 
         {/* View Toggle */}
         <div className="view-toggle">
@@ -1037,6 +1112,22 @@ export function FileManager({ initialData }: FileManagerProps = {}) {
           <div className="ctx-separator" />
           <div className="ctx-item" onClick={() => { showProperties(contextMenu.entry); setContextMenu(null); }}>
             <span className="ctx-icon">ℹ️</span> 属性
+          </div>
+        </div>
+      )}
+
+      {/* Path Error Dialog — 路径不存在时弹窗提示（模态） */}
+      {pathErrorDialog && (
+        <div className="fm-path-error-overlay">
+          <div className="fm-path-error-dialog">
+            <div className="ped-header">
+              <span className="ped-icon">⚠️</span>
+              <span className="ped-title">路径不存在</span>
+            </div>
+            <div className="ped-message">{pathErrorDialog}</div>
+            <div className="ped-footer">
+              <button autoFocus onClick={() => setPathErrorDialog(null)}>确定</button>
+            </div>
           </div>
         </div>
       )}

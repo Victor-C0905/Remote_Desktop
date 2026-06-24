@@ -6,7 +6,6 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
-import { WebLinksAddon } from '@xterm/addon-web-links';
 import { SearchAddon } from '@xterm/addon-search';
 // xterm.js 基础样式（必须导入，否则 canvas/text-layer 无法正确定位）
 import '@xterm/xterm/css/xterm.css';
@@ -96,25 +95,22 @@ function TerminalInstance({
       terminal.loadAddon(fitAddon as any);
       fitAddonRef.current = fitAddon;
 
-      // 3. 加载 WebLinksAddon（URL 可点击）
-      try { terminal.loadAddon(new WebLinksAddon() as any); } catch (e) { console.warn('[Terminal] WebLinksAddon 加载失败:', e); }
-
-      // 4. 加载 SearchAddon（搜索功能）
+      // 3. 加载 SearchAddon（搜索功能）
       const searchAddon = new SearchAddon();
       terminal.loadAddon(searchAddon as any);
       searchAddonRef.current = searchAddon;
 
-      // 5. 挂载到 DOM
+      // 4. 挂载到 DOM
       terminal.open(container);
       console.log('[Terminal] ✅ xterm 已挂载到 DOM');
 
-      // 6. 等待下一帧，让浏览器完成 flex 布局后再 fit()
+      // 5. 等待下一帧，让浏览器完成 flex 布局后再 fit()
       requestAnimationFrame(async () => {
         try {
           fitAddon.fit();
           console.log('[Terminal] ✅ fit() 完成，cols:', terminal.cols, 'rows:', terminal.rows);
 
-          // 7. 尝试连接远程 PTY 或启动演示模式
+          // 6. 尝试连接远程 PTY 或启动演示模式
           if (activeServerId) {
             setInitializationStatus('连接远程终端...');
             await connectRemotePty(terminal, activeServerId, activeServerName, activeServerHost, activeServerPort, sessionIdRef, unlistenRefs);
@@ -124,12 +120,12 @@ function TerminalInstance({
             runDemoShell(terminal);
           }
 
-          // 8. 通知父组件 terminal 已就绪（用于复制/粘贴/搜索）
+          // 7. 通知父组件 terminal 已就绪（用于复制/粘贴/搜索）
           if (onTerminalReady) {
             onTerminalReady(terminal, sessionIdRef.current, searchAddon);
           }
 
-          // 9. 聚焦
+          // 8. 聚焦
           terminal.focus();
           console.log('[Terminal] ✅ 初始化完成');
         } catch (err) {

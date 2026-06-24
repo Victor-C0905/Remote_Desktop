@@ -60,16 +60,16 @@ export function DraggableWindow({
     e.preventDefault();
     e.stopPropagation(); // 阻止事件传播，防止触发外部窗口移动
     setIsDragging(true);
-    
+
     // 点击 titlebar 时，触发窗口置顶（GNOME 标准：点击窗口 → raise + focus）
     onFocus();
-    
+
     // 记录拖拽起始位置
     dragStartPos.current = {
       x: e.clientX - position.x,
       y: e.clientY - position.y,
     };
-    
+
     // 初始化临时位置
     dragPositionRef.current = position;
   }, [position, onFocus]);
