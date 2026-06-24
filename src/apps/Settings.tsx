@@ -3,6 +3,9 @@ import { useServerManager, formatLastConnected, getStatusIcon, getStatusColor } 
 import { useWallpaper, getPresetWallpaperName, getWallpaperStyle } from "../context/WallpaperContext";
 import { PRESET_WALLPAPERS } from "../stores/wallpaperStore";
 import { useSettingsStore } from "../stores/settingsStore";
+import { useTheme } from "../hooks/useTheme";
+import { themes, accentColors } from "../config/themes";
+import { ThemeId, AccentColorId } from "../config/themes";
 import "./Settings.css";
 
 /* ── Types ─────────────────────────────────────────────── */
@@ -238,7 +241,23 @@ export function Settings() {
   } = useWallpaper();
 
   // 使用 Zustand settingsStore
-  const { theme, setTheme, accentColor, setAccentColor, fontSize, setFontSize, terminalFontSize, setTerminalFontSize } = useSettingsStore();
+  const {
+    theme,
+    setTheme,
+    accentColor,
+    setAccentColor,
+    fontSize,
+    setFontSize,
+    terminalFontSize,
+    setTerminalFontSize,
+    themeId,
+    setThemeId,
+    accentColorId,
+    setAccentColorId,
+  } = useSettingsStore();
+
+  // 应用主题（暗色模式由 themeId === 'dark' 自动判断）
+  useTheme(themeId, accentColorId);
 
   const handleAddServer = (name: string, host: string, port: number, token: string) => {
     addServer({ name, host, port, token });
@@ -421,76 +440,95 @@ export function Settings() {
         );
 
       case "appearance":
+        const currentTheme = themes[themeId];
         return (
           <div className="st-section">
             <div className="st-section-title">外观设置</div>
 
-            {/* Theme */}
+            {/* 主题选择 */}
             <div className="st-card">
               <div className="st-card-header">主题</div>
-              <div className="st-theme-toggle">
-                <button
-                  className={`st-theme-btn ${theme === "light" ? "active" : ""}`}
-                  onClick={() => setTheme("light")}
-                >
-                  <span className="st-theme-icon">☀️</span>
-                  <span className="st-theme-label">亮色</span>
-                </button>
-                <button
-                  className={`st-theme-btn ${theme === "dark" ? "active" : ""}`}
-                  onClick={() => setTheme("dark")}
-                >
-                  <span className="st-theme-icon">🌙</span>
-                  <span className="st-theme-label">暗色</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Accent Color */}
-            <div className="st-card">
-              <div className="st-card-header">强调色</div>
-              <div className="st-accent-colors">
-                {["#3584e4", "#2ec27e", "#e66100", "#c061cb", "#f6d32d", "#26a269"].map(color => (
-                  <button
-                    key={color}
-                    className={`st-accent-btn ${accentColor === color ? "selected" : ""}`}
-                    style={{ background: color }}
-                    onClick={() => setAccentColor(color)}
-                  />
+              <div className="st-theme-options">
+                {Object.entries(themes).map(([id, theme]) => (
+                  <div
+                    key={id}
+                    className={`st-theme-option ${themeId === id ? "selected" : ""}`}
+                    onClick={() => {
+                      setThemeId(id as ThemeId);
+                      // 切换到纸张主题时，默认选中绿色强调色
+                      if (id === 'paper') {
+                        setAccentColorId('paperAccent');
+                      } else {
+                        // 切换到其他主题时，清除强调色选择
+                        setAccentColorId(null);
+                      }
+                    }}
+                    title={theme.name}
+                  >
+                    <div className="st-theme-preview" style={{ background: theme.lightColors.viewBg }}>
+                      <div className="st-theme-preview-header" style={{ background: theme.lightColors.headerbarBg }} />
+                      <div className="st-theme-preview-sidebar" style={{ background: theme.lightColors.sidebarBg }} />
+                      <div className="st-theme-preview-card" style={{ background: theme.lightColors.cardBg }} />
+                    </div>
+                  </div>
                 ))}
               </div>
             </div>
 
-            {/* Font Size */}
+            {/* 强调色选择（仅当主题支持可选强调色时显示） */}
+            {currentTheme.accentColorOptions && (
+              <div className="st-card">
+                <div className="st-card-header">强调色</div>
+                <div className="st-accent-options">
+                  {currentTheme.accentColorOptions.map((option) => (
+                    <div
+                      key={option}
+                      className={`st-accent-option ${accentColorId === option ? "selected" : ""}`}
+                      onClick={() => setAccentColorId(option)}
+                    >
+                      <div
+                        className="st-accent-preview"
+                        style={{ background: accentColors[option].light }}
+                      />
+                      <div className="st-accent-name">
+                        {option === "warmBlue" ? "暖蓝色" : "绿色"}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* 字体大小 */}
             <div className="st-card">
               <div className="st-card-header">字体大小</div>
               <div className="st-slider-row">
                 <span className="st-slider-label">界面字体</span>
-                <input 
-                  type="range" 
-                  min="8" 
-                  max="14" 
-                  value={fontSize} 
-                  onChange={(e) => setFontSize(parseInt(e.target.value))} 
-                  className="st-slider" 
+                <input
+                  type="range"
+                  min="8"
+                  max="14"
+                  value={fontSize}
+                  onChange={(e) => setFontSize(parseInt(e.target.value))}
+                  className="st-slider"
                 />
                 <span className="st-slider-value">{fontSize}pt</span>
               </div>
               <div className="st-slider-row">
                 <span className="st-slider-label">终端字体</span>
-                <input 
-                  type="range" 
-                  min="10" 
-                  max="16" 
-                  value={terminalFontSize} 
-                  onChange={(e) => setTerminalFontSize(parseInt(e.target.value))} 
-                  className="st-slider" 
+                <input
+                  type="range"
+                  min="10"
+                  max="16"
+                  value={terminalFontSize}
+                  onChange={(e) => setTerminalFontSize(parseInt(e.target.value))}
+                  className="st-slider"
                 />
                 <span className="st-slider-value">{terminalFontSize}pt</span>
               </div>
             </div>
 
-            {/* Wallpaper */}
+            {/* 壁纸 */}
             <div className="st-card">
               <div className="st-card-header">壁纸</div>
               <div className="st-wallpaper-grid">
@@ -518,7 +556,7 @@ export function Settings() {
               </div>
               {wallpaper.type === "custom" && wallpaper.customPath && (
                 <div className="st-wallpaper-preview">
-                  <div 
+                  <div
                     className="st-wallpaper-preview-img"
                     style={getWallpaperStyle(wallpaper)}
                   />

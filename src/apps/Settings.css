@@ -369,7 +369,7 @@
   width: 150px;
   height: 4px;
   appearance: none;
-  background: var(--card-bg);
+  background: var(--slider-track-bg);
   border-radius: var(--radius-pill);
   cursor: pointer;
 }
@@ -378,9 +378,14 @@
   appearance: none;
   width: 16px;
   height: 16px;
-  background: var(--accent-bg);
+  background: var(--slider-thumb-bg);
   border-radius: 50%;
   cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.st-slider::-webkit-slider-thumb:hover {
+  background: var(--slider-active-bg);
 }
 
 .st-slider-value {
@@ -809,4 +814,102 @@
   font-size: var(--font-small);
   color: var(--text-secondary);
   text-align: center;
+}
+
+/* ── 多主题系统 ──────────────────────────────────────── */
+
+/* 主题选择 */
+.st-theme-options {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.st-theme-option {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-xs);
+  padding: 2px;
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out);
+  background: var(--card-bg);
+}
+
+.st-theme-option:hover {
+  border-color: var(--accent-bg);
+  background: var(--card-hover);
+}
+
+.st-theme-option.selected {
+  border-color: var(--accent-bg);
+  background: rgba(53, 132, 228, 0.08);
+}
+
+.st-theme-preview {
+  height: 48px;
+  border-radius: var(--radius-xs);
+  position: relative;
+  overflow: hidden;
+}
+
+.st-theme-preview-header {
+  height: 12px;
+  width: 100%;
+  position: absolute;
+  top: 0;
+}
+
+.st-theme-preview-sidebar {
+  width: 24px;
+  height: 36px;
+  position: absolute;
+  left: 0;
+  top: 12px;
+}
+
+.st-theme-preview-card {
+  height: 24px;
+  width: 36px;
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  border-radius: var(--radius-xs);
+}
+
+/* 强调色选择 */
+.st-accent-options {
+  display: flex;
+  gap: 8px;
+}
+
+.st-accent-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out);
+  background: var(--card-bg);
+}
+
+.st-accent-option:hover {
+  border-color: var(--accent-bg);
+  background: var(--card-hover);
+}
+
+.st-accent-option.selected {
+  border-color: var(--accent-bg);
+  background: rgba(53, 132, 228, 0.08);
+}
+
+.st-accent-preview {
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-pill);
+}
+
+.st-accent-name {
+  font-size: var(--font-small);
+  color: var(--text-primary);
 }

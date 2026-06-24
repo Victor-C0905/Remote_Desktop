@@ -797,10 +797,11 @@
   left: 0;
   width: 100%;  /* 宽度匹配地址栏 */
   margin-top: 4px;  /* 与地址栏间隔 4px */
-  background: rgba(255, 255, 255, 0.85);  /* 85% 透明度 */
+  background: var(--view-bg);  /* 使用暖灰背景 */
+  opacity: 0.85;  /* 85% 透明度 */
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);  /* 四个角都圆角 */
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  box-shadow: var(--shadow-popup);  /* 使用 CSS 变量 */
   z-index: 100;
   max-height: 300px;
   overflow-y: auto;
