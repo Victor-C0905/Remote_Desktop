@@ -502,10 +502,8 @@ export function FileManager({ initialData }: FileManagerProps = {}) {
       setShowSuggestions(false);
       setIsEditingPath(false);
 
-      // 先纯验证路径是否存在（不改变任何 UI 状态）
-      let cleanPath = pathInput.replace(/\/+/g, "/");
-      if (cleanPath.length > 0 && !cleanPath.startsWith("/")) cleanPath = "/" + cleanPath;
-      if (cleanPath === "") cleanPath = "/";
+      // 格式化路径
+      const cleanPath = normalizePath(pathInput);
 
       try {
         await invoke<ReadDirResponse>("remote_read_dir", {
@@ -515,9 +513,9 @@ export function FileManager({ initialData }: FileManagerProps = {}) {
         // 路径存在：正常导航
         navigateTo(cleanPath);
       } catch {
-        // 路径不存在：弹窗提示，页面和路径完全不变
-        setPathErrorDialog(`路径不存在: ${pathInput}`);
-        setPathInput(currentPath); // 输入框恢复为当前路径
+        // 路径不存在：弹窗提示，恢复为当前路径（正确格式）
+        setPathErrorDialog(`路径不存在: ${cleanPath}`);
+        setPathInput(currentPath);
       }
     } else if (e.key === "Escape") {
       e.preventDefault();
@@ -544,16 +542,14 @@ export function FileManager({ initialData }: FileManagerProps = {}) {
     setIsEditingPath(true);
   };
 
-  const handlePathInputBlur = () => {
-    setIsEditingPath(false);
-    setShowSuggestions(false);  // 失焦时收起建议列表
-    setPathInput(currentPath);
-  };
-
-  // ── Navigation ──────────────────────────────────────
-  const navigateTo = useCallback(async (path: string): Promise<boolean> => {
-    // 清理路径：Linux 格式，移除多余的斜杠
+  // 路径格式化函数：确保路径格式正确
+  const normalizePath = useCallback((path: string): string => {
+    // 移除多余的斜杠
     let cleanPath = path.replace(/\/+/g, "/");
+    // 移除末尾的斜杠（除非是根目录）
+    if (cleanPath.length > 1 && cleanPath.endsWith("/")) {
+      cleanPath = cleanPath.slice(0, -1);
+    }
     // 确保路径以斜杠开头（除非是空路径）
     if (cleanPath.length > 0 && !cleanPath.startsWith("/")) {
       cleanPath = "/" + cleanPath;
@@ -562,6 +558,20 @@ export function FileManager({ initialData }: FileManagerProps = {}) {
     if (cleanPath === "") {
       cleanPath = "/";
     }
+    return cleanPath;
+  }, []);
+
+  const handlePathInputBlur = () => {
+    setIsEditingPath(false);
+    setShowSuggestions(false);  // 失焦时收起建议列表
+    // 恢复为当前路径（currentPath 总是正确格式）
+    setPathInput(currentPath);
+  };
+
+  // ── Navigation ──────────────────────────────────────
+  const navigateTo = useCallback(async (path: string): Promise<boolean> => {
+    // 格式化路径
+    const cleanPath = normalizePath(path);
 
     console.log("[FileManager] navigateTo: 输入路径:", path, "清理后:", cleanPath);
 
@@ -574,7 +584,7 @@ export function FileManager({ initialData }: FileManagerProps = {}) {
       setHistoryIdx(newHistory.length - 1);
     }
     return success;
-  }, [history, historyIdx, loadDir]);
+  }, [history, historyIdx, loadDir, normalizePath]);
 
   const handleSelectSuggestion = useCallback((suggestion: string) => {
     setPathInput(suggestion);
