@@ -47,7 +47,7 @@ export function useWindowChannel() {
    * Send to a specific window
    */
   const sendTo = <T extends CustomEventType>(
-    targetWindowId: string,
+    _targetWindowId: string,
     eventType: T,
     payload: EventPayloadMap[T],
     sourceWindowId: string

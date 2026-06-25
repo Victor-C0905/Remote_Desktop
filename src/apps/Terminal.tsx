@@ -145,38 +145,78 @@ function TerminalInstance({
         }
       });
 
-      // 8. ResizeObserver：监听容器尺寸变化（覆盖浏览器窗口调整 + DraggableWindow 拖拽调整）
+      // ── Resize 处理 ───────────────────────
+      // 策略：只在松开鼠标时触发 resize（调整过程中不触发）
+      // 1. ResizeObserver 只记录尺寸变化（不执行 resize）
+      // 2. mouseup 事件触发时立即执行 resize + 远程同步
+
+      let lastCols = terminal.cols;
+      let lastRows = terminal.rows;
+      let containerWidth = container.offsetWidth;
+      let containerHeight = container.offsetHeight;
+
+      // ResizeObserver：只记录尺寸变化（不执行 resize）
       const resizeObserver = new ResizeObserver(() => {
-        try {
-          fitAddonRef.current?.fit();
-          // 同步 resize 到远程 PTY
-          if (sessionIdRef.current && terminalRef.current) {
-            invoke('remote_terminal_resize', {
-              sessionId: sessionIdRef.current,
-              cols: terminalRef.current.cols,
-              rows: terminalRef.current.rows,
-            }).catch(e => console.warn('[Terminal] resize 同步失败:', e));
-          }
-        } catch (_) {}
+        containerWidth = container.offsetWidth;
+        containerHeight = container.offsetHeight;
       });
       resizeObserver.observe(container);
 
-      // ── Cleanup: 组件卸载时释放 ───────────────────────
-      return () => {
+      // mouseup 事件：松开鼠标时立即执行 resize
+      const handleMouseUp = () => {
+        try {
+          fitAddonRef.current?.fit();
+
+          const terminal = terminalRef.current;
+          const sessionId = sessionIdRef.current;
+
+          if (terminal && sessionId && activeServerId) {
+            // 只在尺寸真正变化时才同步远程
+            if (terminal.cols !== lastCols || terminal.rows !== lastRows) {
+              lastCols = terminal.cols;
+              lastRows = terminal.rows;
+
+              console.log('[Terminal] resize:', terminal.cols, 'x', terminal.rows);
+
+              // 立即同步远程 PTY（无延时）
+              invoke('remote_terminal_resize', {
+                sessionId: sessionId,
+                cols: terminal.cols,
+                rows: terminal.rows,
+                serverId: activeServerId,
+              }).catch(e => console.warn('[Terminal] resize 同步失败:', e));
+            }
+          }
+        } catch (_) {}
+      };
+
+      // 监听全局 mouseup 事件（松开鼠标时触发）
+      window.addEventListener('mouseup', handleMouseUp);
+
+      // 存储 disposable 以便 cleanup
+      unlistenRefs.current.push(() => {
         resizeObserver.disconnect();
-        // 取消事件监听
+        window.removeEventListener('mouseup', handleMouseUp);
+      });
+
+      return () => {
+        // 清理所有监听器和观察器
         unlistenRefs.current.forEach(fn => fn());
         unlistenRefs.current = [];
+
         // 关闭远程终端会话
         if (sessionIdRef.current) {
           invoke('remote_terminal_close', { sessionId: sessionIdRef.current })
             .catch(e => console.warn('[Terminal] 关闭远程终端失败:', e));
           sessionIdRef.current = null;
         }
+
         // 释放 xterm
         try { terminal.dispose(); } catch (_) {}
         terminalRef.current = null;
         fitAddonRef.current = null;
+
+        // 清理 DOM
         while (container.firstChild) {
           container.removeChild(container.firstChild);
         }
@@ -267,32 +307,25 @@ async function connectRemotePty(
   );
   unlistenRefs.current.push(unlistenDisconnect);
 
-  // 5. 设置键盘输入处理
+  // 5. 设置键盘输入处理（在发送输入前先同步 resize）
   const onDataDisposable = terminal.onData((data: string) => {
     const sid = sessionIdRef.current;
     if (sid) {
+      // 发送用户输入
       const bytes = new TextEncoder().encode(data);
       invoke('remote_terminal_write', {
         sessionId: sid,
         data: Array.from(bytes),
-        serverId: serverId,  // 后端需要此参数（虽然不使用）
+        serverId: serverId,
       }).catch(e => console.warn('[Terminal] 写入失败:', e));
     }
   });
   // 存储 disposable 以便 cleanup
   unlistenRefs.current.push(() => onDataDisposable.dispose());
 
-  // 6. 设置 resize 处理
+  // 6. resize 事件监听器（仅用于日志，远程同步由 handleResize 处理）
   const onResizeDisposable = terminal.onResize(({ cols, rows }) => {
-    const sid = sessionIdRef.current;
-    if (sid) {
-      invoke('remote_terminal_resize', {
-        sessionId: sid,
-        cols: cols,
-        rows: rows,
-        serverId: serverId,  // 后端需要此参数
-      }).catch(e => console.warn('[Terminal] resize 失败:', e));
-    }
+    console.log('[Terminal] 本地 resize:', cols, 'x', rows);
   });
   unlistenRefs.current.push(() => onResizeDisposable.dispose());
 
