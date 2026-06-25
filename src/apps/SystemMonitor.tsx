@@ -10,6 +10,7 @@ import {
   formatSpeedSafe,
 } from "../utils/offlineDefaults";
 import { MonitorSkeleton } from "../components/skeleton/MonitorSkeleton";
+// import { useWindowState } from "../window-system/hooks/useWindowState"; // 未来集成时使用
 import "./SystemMonitor.css";
 
 interface MetricsSnapshot {
@@ -130,7 +131,9 @@ function MiniChart({ data, color, height, max }: MiniChartProps) {
 
 /* ── Main Component ───────────────────────────────────── */
 
-export function SystemMonitor() {
+export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
+  // 窗口系统集成（未来可能需要使用 windowState）
+  // const windowState = useWindowState(windowId);
   const { activeServerId } = useServerManager();
 
   const [activeTab, setActiveTab] = useState<TabId>("resources");

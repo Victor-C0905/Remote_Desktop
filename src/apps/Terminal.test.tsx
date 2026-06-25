@@ -20,23 +20,23 @@ vi.mock('../context/ServerManager', () => ({
 
 describe('TerminalApp', () => {
   it('renders terminal app', () => {
-    render(<TerminalApp />);
+    render(<TerminalApp windowId="test-window-1" />);
     expect(screen.getByRole('button', { name: '新建标签页' })).toBeInTheDocument();
   });
 
   it('renders header bar', () => {
-    render(<TerminalApp />);
+    render(<TerminalApp windowId="test-window-2" />);
     expect(screen.getByRole('button', { name: '搜索' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '设置' })).toBeInTheDocument();
   });
 
   it('renders tab bar', () => {
-    render(<TerminalApp />);
+    render(<TerminalApp windowId="test-window-3" />);
     expect(screen.getByText('终端 1')).toBeInTheDocument();
   });
 
   it('renders terminal container', () => {
-    const { container } = render(<TerminalApp />);
+    const { container } = render(<TerminalApp windowId="test-window-4" />);
     expect(container.querySelector('.terminal-container')).toBeInTheDocument();
   });
 });

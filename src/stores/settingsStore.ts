@@ -98,7 +98,7 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
       onRehydrateStorage: () => (state) => {
         if (state) {
           // 迁移旧的主题 ID 到新的
-          if (state.themeId === 'warmOriginal' || state.themeId === 'warmEnhanced') {
+          if ((state.themeId as string) === 'warmOriginal' || (state.themeId as string) === 'warmEnhanced') {
             state.themeId = 'paper';
           }
 
