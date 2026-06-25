@@ -23,7 +23,11 @@
 
 .sm-tabs {
   display: flex;
-  gap: 2px;
+  gap: 6px;  /* ✅ 修改：从 2px 改为 6px */
+  overflow-x: auto;  /* ✅ 新增：横向滚动支持 */
+  overflow-y: hidden;  /* ✅ 新增：禁止纵向滚动 */
+  scrollbar-width: thin;  /* ✅ 新增：细滚动条 */
+  scrollbar-color: var(--border-color) transparent;  /* ✅ 新增：滚动条颜色 */
 }
 
 .sm-tab {
@@ -36,6 +40,9 @@
   border-radius: var(--radius-xs);
   cursor: pointer;
   transition: all var(--duration-fast) var(--ease-out);
+  flex-shrink: 0;  /* ✅ 新增：禁止收缩 */
+  min-width: 80px;  /* ✅ 新增：固定最小宽度 */
+  white-space: nowrap;  /* ✅ 新增：禁止换行 */
 }
 
 .sm-tab:hover {
@@ -46,6 +53,24 @@
 .sm-tab.active {
   background: var(--accent-bg);
   color: var(--accent-fg);
+}
+
+/* ✅ 新增：WebKit 滚动条样式 */
+.sm-tabs::-webkit-scrollbar {
+  height: 4px;
+}
+
+.sm-tabs::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sm-tabs::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: var(--radius-pill);
+}
+
+.sm-tabs::-webkit-scrollbar-thumb:hover {
+  background: rgba(0,0,0,0.2);
 }
 
 .sm-headerbar-spacer {

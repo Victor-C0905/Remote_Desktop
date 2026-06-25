@@ -301,15 +301,15 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
               <div className="st-current-connection">
                 <div className="st-conn-row">
                   <span className="st-conn-label text-label">主机</span>
-                  <span className="st-conn-value">{activeServer?.host || "未连接"}</span>
+                  <span className="st-conn-value st-conn-value-host">{activeServer?.host || "未连接"}</span>
                 </div>
                 <div className="st-conn-row">
                   <span className="st-conn-label text-label">端口</span>
-                  <span className="st-conn-value">{activeServer?.port || "—"} (QUIC)</span>
+                  <span className="st-conn-value st-conn-value-port">{activeServer?.port || "—"} (QUIC)</span>
                 </div>
                 <div className="st-conn-row">
                   <span className="st-conn-label text-label">状态</span>
-                  <span className="st-conn-value">
+                  <span className="st-conn-value st-conn-value-status">
                     <span 
                       className="st-status-dot" 
                       style={{ background: activeServer ? getStatusColor(activeServer.status) : "#9a9996" }}
@@ -322,7 +322,7 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                 {activeServer?.status === "connected" && (
                   <div className="st-conn-row">
                     <span className="st-conn-label text-label">延迟</span>
-                    <span className="st-conn-value">6 ms</span>
+                    <span className="st-conn-value st-conn-value-latency">6 ms</span>
                   </div>
                 )}
                 {activeServer?.error && (

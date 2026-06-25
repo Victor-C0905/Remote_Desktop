@@ -53,7 +53,7 @@
   align-items: center;
   gap: 2px;
   flex: 1;
-  min-width: 0;
+  min-width: 200px; /* ✅ 修改：从 0 改为 200px */
   padding: 0 8px;
   height: 32px;
   background: var(--view-bg);
@@ -249,7 +249,7 @@
   overflow-y: auto;
   overflow-x: hidden;
   padding: 8px;
-  min-width: 0;
+  min-width: 500px; /* ✅ 修改：从 0 改为 500px（最小可读宽度） */
 }
 
 /* List View */
@@ -259,7 +259,7 @@
 
 .fm-list .fm-list-header {
   display: grid;
-  grid-template-columns: 1fr 80px 120px 100px;
+  grid-template-columns: minmax(200px, 1fr) 80px 120px 100px; /* ✅ 修改：第一列使用 minmax */
   gap: 8px;
   /* border-bottom: 1px solid var(--border-color); */  /* 隐藏下方线条 */
   font-size: var(--font-small);
@@ -275,7 +275,7 @@
 
 .fm-list .fm-list-row {
   display: grid;
-  grid-template-columns: 1fr 80px 120px 100px;
+  grid-template-columns: minmax(200px, 1fr) 80px 120px 100px; /* ✅ 修改：第一列使用 minmax */
   gap: 8px;
   padding: 6px 12px;
   border-radius: var(--radius-xs);
@@ -297,7 +297,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  min-width: 0;
+  min-width: 200px; /* ✅ 修改：从 0 改为 200px */
   overflow: hidden;
 }
 

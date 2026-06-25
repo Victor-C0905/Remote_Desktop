@@ -119,6 +119,8 @@
   font-size: var(--font-body);
   font-weight: 500;
   white-space: nowrap;
+  overflow: hidden; /* ✅ 新增：隐藏溢出 */
+  text-overflow: ellipsis; /* ✅ 新增：显示省略号 */
 }
 
 /* ── Main Area ───────────────────────────────────────── */
@@ -127,7 +129,7 @@
   overflow-y: auto;
   overflow-x: hidden;
   padding: 16px 24px;
-  min-width: 0; /* 关键：允许 flex 子项收缩到小于内容宽度 */
+  min-width: 400px; /* ✅ 修改：从 0 改为 400px（最小可读宽度） */
 }
 
 .st-section {
@@ -140,6 +142,9 @@
   font-weight: 700;
   color: var(--text-primary);
   margin-bottom: 16px;
+  white-space: nowrap; /* ✅ 新增：禁止换行 */
+  overflow: hidden; /* ✅ 新增：隐藏溢出 */
+  text-overflow: ellipsis; /* ✅ 新增：显示省略号 */
 }
 
 /* ── Cards ───────────────────────────────────────────── */
@@ -150,7 +155,7 @@
   padding: 16px;
   margin-bottom: 16px;
   overflow: hidden; /* 防止内容溢出卡片 */
-  min-width: 0; /* 允许在 flex 容器中收缩 */
+  min-width: 300px; /* ✅ 修改：从 0 改为 300px（卡片最小宽度） */
 }
 
 .st-card-header {
@@ -215,6 +220,7 @@
   flex-shrink: 0;
 }
 
+/* ── Connection Values (根据内容类型设置最小宽度) ── */
 .st-conn-value {
   font-size: var(--font-body);
   color: var(--text-primary);
@@ -222,6 +228,30 @@
   align-items: center;
   gap: 6px;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right; /* ✅ 新增：右对齐 */
+  justify-content: flex-end; /* ✅ 新增：内容靠右 */
+}
+
+/* 主机名：较长最小宽度 */
+.st-conn-value-host {
+  min-width: 150px; /* ✅ 新增：主机名最小宽度 */
+}
+
+/* 端口：中等最小宽度 */
+.st-conn-value-port {
+  min-width: 80px; /* ✅ 新增：端口最小宽度 */
+}
+
+/* 状态：较短最小宽度 */
+.st-conn-value-status {
+  min-width: 60px; /* ✅ 新增：状态最小宽度 */
+}
+
+/* 延迟：最短最小宽度 */
+.st-conn-value-latency {
+  min-width: 50px; /* ✅ 新增：延迟最小宽度 */
 }
 
 .st-status-dot {
@@ -254,7 +284,7 @@
   border-radius: var(--radius-xs);
   cursor: pointer;
   transition: background var(--duration-fast) var(--ease-out);
-  min-width: 0;
+  min-width: 350px; /* ✅ 修改：从 0 改为 350px，确保背景色完全覆盖整条信息 */
 }
 
 .st-server-item:hover {
@@ -281,14 +311,18 @@
 .st-server-name {
   font-weight: 500;
   flex: 1;
-  min-width: 0;
+  min-width: 100px; /* ✅ 新增：设置最小宽度，防止被遮盖 */
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .st-server-host {
-  flex-shrink: 0;
+  flex-shrink: 1; /* ✅ 修改：从 0 改为 1，允许收缩 */
+  min-width: 80px; /* ✅ 新增：设置最小宽度 */
+  overflow: hidden; /* ✅ 新增：隐藏溢出 */
+  text-overflow: ellipsis; /* ✅ 新增：显示省略号 */
+  white-space: nowrap; /* ✅ 新增：禁止换行 */
 }
 
 .st-server-item.selected .st-server-host {
@@ -299,7 +333,10 @@
   font-size: var(--font-small);
   color: var(--text-secondary);
   white-space: nowrap;
-  flex-shrink: 0;
+  flex-shrink: 1; /* ✅ 修改：从 0 改为 1，允许收缩 */
+  min-width: 60px; /* ✅ 新增：设置最小宽度 */
+  overflow: hidden; /* ✅ 新增：隐藏溢出 */
+  text-overflow: ellipsis; /* ✅ 新增：显示省略号 */
 }
 
 .st-server-item.selected .st-server-time {
