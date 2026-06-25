@@ -178,7 +178,7 @@
   background: var(--headerbar-bg);
   border-bottom: 1px solid var(--border-color);
   padding: 0 4px;
-  gap: 2px;
+  gap: 6px;  /* ✅ 修改：从 2px 改为 6px */
   flex-shrink: 0;
   z-index: 10;
   position: relative;
@@ -218,9 +218,9 @@
   border: none;
   background: transparent;
   max-width: 180px;
-  min-width: 60px;
+  min-width: 100px;  /* ✅ 修改：从 60px 改为 100px */
   white-space: nowrap;
-  flex-shrink: 1;
+  flex-shrink: 0;  /* ✅ 修改：从 1 改为 0 */
   flex-grow: 0;
 }
 
