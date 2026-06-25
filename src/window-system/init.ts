@@ -18,7 +18,7 @@ export function initWindowRegistry(registry: WindowRegistry): void {
     title: '终端',
     icon: '🖥️',
     defaultSize: { width: 850, height: 550 },
-    minSize: { width: 400, height: 300 },
+    minSize: { width: 600, height: 400 },  // 增加最小尺寸，防止 xterm.js 显示异常
     allowMultipleInstances: true,
     component: TerminalApp,
   });

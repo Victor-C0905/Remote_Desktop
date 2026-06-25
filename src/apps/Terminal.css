@@ -183,13 +183,33 @@
   z-index: 10;
   position: relative;
   overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-color) transparent;
+}
+
+.terminal-tab-bar::-webkit-scrollbar {
+  height: 4px;
+}
+
+.terminal-tab-bar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.terminal-tab-bar::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: var(--radius-pill);
+}
+
+.terminal-tab-bar::-webkit-scrollbar-thumb:hover {
+  background: rgba(0,0,0,0.2);
 }
 
 .terminal-tab {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 12px;
+  gap: 4px;
+  padding: 4px 8px;
   height: 28px;
   font-size: 12px;
   color: var(--text-secondary);
@@ -197,10 +217,11 @@
   cursor: pointer;
   border: none;
   background: transparent;
-  max-width: 200px;
-  min-width: 100px;
+  max-width: 180px;
+  min-width: 60px;
   white-space: nowrap;
-  flex-shrink: 0;
+  flex-shrink: 1;
+  flex-grow: 0;
 }
 
 .terminal-tab:hover {
@@ -215,9 +236,12 @@
 }
 
 .terminal-tab .tab-icon {
-  font-size: 12px;
+  font-size: 11px;
   font-family: var(--font-mono);
   color: var(--accent-bg);
+  flex-shrink: 0;
+  width: 14px;
+  text-align: center;
 }
 
 .terminal-tab .tab-label {
@@ -227,26 +251,29 @@
   font-family: var(--font-ui);
   flex: 1;
   text-align: left;
+  min-width: 0;
 }
 
 .terminal-tab .tab-close {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   border-radius: 50%;
   border: none;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 14px;
+  font-size: 12px;
   line-height: 1;
   cursor: pointer;
   padding: 0;
-  margin-left: 4px;
+  margin-left: 2px;
   flex-shrink: 0;
   user-select: none;
   -webkit-user-select: none;
+  opacity: 0.7;
+  transition: opacity 0.15s ease-out;
 }
 
 .terminal-tab .tab-close:hover {
@@ -282,9 +309,12 @@
 .terminal-container {
   flex: 1;
   position: relative;
-  min-height: 0;
+  min-height: 200px;  /* 设置最小高度，防止窗口过小导致 xterm.js 异常 */
+  min-width: 400px;   /* 设置最小宽度，确保至少能显示合理的列数 */
   overflow: hidden;
   background: #1e1e1e;
+  display: flex;
+  flex-direction: column;
 }
 
 /* xterm.js 需要一个明确尺寸的容器 */
@@ -297,7 +327,9 @@
   padding: 0;
   margin: 0;
   background: #1e1e1e;
-  /* 不允许全局 margin/padding 影响 */
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
 }
 
 /* ── 最关键：隔离 xterm.js DOM 树不受全局样式影响 ──────
