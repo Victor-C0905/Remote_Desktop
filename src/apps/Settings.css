@@ -7,6 +7,8 @@
   flex-direction: column;
   height: 100%;
   background: var(--window-bg);
+  position: relative; /* 作为模态框的定位容器 */
+  overflow: hidden; /* 限制子元素在可视区域内 */
 }
 
 /* ── Header Bar ──────────────────────────────────────── */
@@ -74,6 +76,7 @@
   display: flex;
   flex: 1;
   overflow: hidden;
+  min-width: 0; /* 允许 flex 子项收缩 */
 }
 
 /* ── Sidebar ─────────────────────────────────────────── */
@@ -115,17 +118,21 @@
 .st-sb-label {
   font-size: var(--font-body);
   font-weight: 500;
+  white-space: nowrap;
 }
 
 /* ── Main Area ───────────────────────────────────────── */
 .st-main {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 16px 24px;
+  min-width: 0; /* 关键：允许 flex 子项收缩到小于内容宽度 */
 }
 
 .st-section {
   max-width: 600px;
+  width: 100%; /* 不超过父容器宽度 */
 }
 
 .st-section-title {
@@ -142,12 +149,11 @@
   border-radius: var(--radius-md);
   padding: 16px;
   margin-bottom: 16px;
+  overflow: hidden; /* 防止内容溢出卡片 */
+  min-width: 0; /* 允许在 flex 容器中收缩 */
 }
 
 .st-card-header {
-  font-size: var(--font-body);
-  font-weight: 600;
-  color: var(--text-primary);
   margin-bottom: 12px;
 }
 
@@ -205,6 +211,8 @@
 .st-conn-label {
   font-size: var(--font-small);
   color: var(--text-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .st-conn-value {
@@ -213,6 +221,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
 }
 
 .st-status-dot {
@@ -245,6 +254,7 @@
   border-radius: var(--radius-xs);
   cursor: pointer;
   transition: background var(--duration-fast) var(--ease-out);
+  min-width: 0;
 }
 
 .st-server-item:hover {
@@ -261,6 +271,7 @@
   height: 8px;
   border-radius: 50%;
   background: #e01b24;
+  flex-shrink: 0;
 }
 
 .st-server-status.connected {
@@ -270,11 +281,14 @@
 .st-server-name {
   font-weight: 500;
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .st-server-host {
-  font-size: var(--font-small);
-  color: var(--text-secondary);
+  flex-shrink: 0;
 }
 
 .st-server-item.selected .st-server-host {
@@ -284,6 +298,8 @@
 .st-server-time {
   font-size: var(--font-small);
   color: var(--text-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .st-server-item.selected .st-server-time {
@@ -325,6 +341,7 @@
 
 .st-theme-label {
   font-size: var(--font-small);
+  white-space: nowrap;
 }
 
 /* ── Accent Colors ──────────────────────────────────── */
@@ -363,6 +380,7 @@
   font-size: var(--font-body);
   color: var(--text-primary);
   flex: 1;
+  white-space: nowrap;
 }
 
 .st-slider {
@@ -389,8 +407,6 @@
 }
 
 .st-slider-value {
-  font-size: var(--font-small);
-  color: var(--text-secondary);
   min-width: 50px;
   text-align: right;
 }
@@ -404,8 +420,6 @@
 }
 
 .st-option-label {
-  font-size: var(--font-body);
-  color: var(--text-primary);
 }
 
 .st-select {
@@ -457,8 +471,6 @@
 }
 
 .st-shortcut-action {
-  font-size: var(--font-body);
-  color: var(--text-primary);
 }
 
 .st-shortcut-key {
@@ -490,8 +502,6 @@
 }
 
 .st-about-version {
-  font-size: var(--font-body);
-  color: var(--text-secondary);
   margin-bottom: 12px;
 }
 
@@ -530,16 +540,15 @@
 .st-tech-name {
   font-size: var(--font-small);
   color: var(--text-secondary);
+  white-space: nowrap;
 }
 
 .st-tech-value {
-  font-size: var(--font-body);
-  color: var(--text-primary);
 }
 
 /* ── Modal ───────────────────────────────────────────── */
 .st-modal-overlay {
-  position: fixed;
+  position: absolute;
   top: 0;
   left: 0;
   width: 100%;
@@ -630,6 +639,7 @@
   font-size: var(--font-small);
   font-weight: 600;
   color: var(--text-secondary);
+  white-space: nowrap;
 }
 
 .st-form-input {
@@ -661,7 +671,8 @@
 .st-server-actions {
   display: flex;
   gap: 4px;
-  margin-left: 8px;
+  margin-left: 4px;
+  flex-shrink: 0; /* 按钮组不收缩 */
 }
 
 .st-server-action-btn {
@@ -811,8 +822,6 @@
 }
 
 .st-wallpaper-preview-label {
-  font-size: var(--font-small);
-  color: var(--text-secondary);
   text-align: center;
 }
 
@@ -910,6 +919,4 @@
 }
 
 .st-accent-name {
-  font-size: var(--font-small);
-  color: var(--text-primary);
 }

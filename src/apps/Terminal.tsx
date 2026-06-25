@@ -1,6 +1,7 @@
 // src/apps/Terminal.tsx - GNOME Terminal 风格终端
 // 标准 xterm.js 集成：每个 tab 一个独立子组件，由 React 生命周期管理
 // 支持远程 PTY 连接（通过 QUIC Stream）和本地演示模式
+// 集成窗口系统：每个窗口实例独立状态，支持多窗口运行
 import React, { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
@@ -10,6 +11,8 @@ import { SearchAddon } from '@xterm/addon-search';
 // xterm.js 基础样式（必须导入，否则 canvas/text-layer 无法正确定位）
 import '@xterm/xterm/css/xterm.css';
 import { useServerManager } from '../context/ServerManager';
+// import { useWindowState } from '../window-system/hooks/useWindowState'; // 未来集成时使用
+import { useWindowEvent } from '../window-system/hooks/useWindowEvent';
 import './Terminal.css';
 
 // ── GNOME Terminal 主题 ────────────────────────────────────────────
@@ -372,9 +375,15 @@ function isWideChar(char: string): boolean {
 // ===================================================================
 // TerminalApp: 主组件（管理多个 tab、header、设置等 UI shell）
 // ===================================================================
-export function TerminalApp() {
+export function TerminalApp({ windowId }: { windowId: string }) {
+  // ── 窗口系统集成 ────────────────────────────────────────────────────
+  // 获取窗口状态（title、position、size、focused 等）
+  // 用于窗口系统集成，确保每个窗口实例正确连接到窗口管理器
+  // const windowState = useWindowState(windowId); // 未来集成时使用
   const { activeServer } = useServerManager();
   const activeServerId = activeServer?.id || null;
+
+  // ── 窗口实例独立状态（每个窗口实例有自己的 tabs、设置等）────────────
   const [tabs, setTabs] = useState<TerminalTabMeta[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [showSearch, setShowSearch] = useState(false);
@@ -582,6 +591,24 @@ export function TerminalApp() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [tabs, activeTabId, activeServerId, searchText]);
+
+  // ── 窗口事件监听（窗口系统集成）───────────────────────────────────────
+  // 监听窗口获得焦点事件：自动聚焦活动的终端
+  useWindowEvent('window:focused', (event) => {
+    if (event.windowId === windowId) {
+      console.log('[Terminal] 窗口获得焦点，自动聚焦终端');
+      activeTerminalRef.current?.focus();
+    }
+  });
+
+  // 监听窗口尺寸变化事件：触发终端 fit()（ResizeObserver 已处理，此处作为补充）
+  useWindowEvent('window:resized', (event) => {
+    if (event.windowId === windowId) {
+      console.log('[Terminal] 窗口尺寸变化，触发终端 fit()');
+      // ResizeObserver 已经在 TerminalInstance 中处理，这里不需要额外操作
+      // 但可以添加一些额外的逻辑，比如记录窗口尺寸等
+    }
+  });
 
   return (
     <div className="terminal-app" onClick={() => { if (contextMenu) setContextMenu(null); }}>

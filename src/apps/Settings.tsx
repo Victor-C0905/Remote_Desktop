@@ -4,7 +4,8 @@ import { useWallpaper, getPresetWallpaperName, getWallpaperStyle } from "../cont
 import { PRESET_WALLPAPERS } from "../stores/wallpaperStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import { themes, accentColors } from "../config/themes";
-import { ThemeId, AccentColorId } from "../config/themes";
+import { ThemeId } from "../config/themes";
+// import { useWindowState } from "../window-system/hooks/useWindowState"; // 未来集成时使用
 import "./Settings.css";
 
 /* ── Types ─────────────────────────────────────────────── */
@@ -66,7 +67,7 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
         </div>
         <form className="st-modal-body" onSubmit={handleSubmit}>
           <div className="st-form-row">
-            <label className="st-form-label">服务器名称</label>
+            <label className="st-form-label text-label">服务器名称</label>
             <input
               type="text"
               className="st-form-input"
@@ -77,7 +78,7 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
             />
           </div>
           <div className="st-form-row">
-            <label className="st-form-label">主机地址</label>
+            <label className="st-form-label text-label">主机地址</label>
             <input
               type="text"
               className="st-form-input"
@@ -161,7 +162,7 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
         </div>
         <form className="st-modal-body" onSubmit={handleSubmit}>
           <div className="st-form-row">
-            <label className="st-form-label">服务器名称</label>
+            <label className="st-form-label text-label">服务器名称</label>
             <input
               type="text"
               className="st-form-input"
@@ -172,7 +173,7 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
             />
           </div>
           <div className="st-form-row">
-            <label className="st-form-label">主机地址</label>
+            <label className="st-form-label text-label">主机地址</label>
             <input
               type="text"
               className="st-form-input"
@@ -214,7 +215,9 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
 
 /* ── Main Component ─────────────────────────────────── */
 
-export function Settings() {
+export function Settings({ windowId: _windowId }: { windowId: string }) {
+  // 窗口系统集成（未来可能需要使用 windowState）
+  // const windowState = useWindowState(windowId);
   const [activeSection, setActiveSection] = useState<SettingsSection>("connection");
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
@@ -241,10 +244,6 @@ export function Settings() {
 
   // 使用 Zustand settingsStore
   const {
-    theme,
-    setTheme,
-    accentColor,
-    setAccentColor,
     fontSize,
     setFontSize,
     terminalFontSize,
@@ -294,22 +293,22 @@ export function Settings() {
       case "connection":
         return (
           <div className="st-section">
-            <div className="st-section-title">连接服务器配置</div>
+            <div className="st-section-title text-heading">连接服务器配置</div>
 
             {/* Current Connection */}
             <div className="st-card">
-              <div className="st-card-header">当前连接</div>
+              <div className="st-card-header text-title">当前连接</div>
               <div className="st-current-connection">
                 <div className="st-conn-row">
-                  <span className="st-conn-label">主机</span>
+                  <span className="st-conn-label text-label">主机</span>
                   <span className="st-conn-value">{activeServer?.host || "未连接"}</span>
                 </div>
                 <div className="st-conn-row">
-                  <span className="st-conn-label">端口</span>
+                  <span className="st-conn-label text-label">端口</span>
                   <span className="st-conn-value">{activeServer?.port || "—"} (QUIC)</span>
                 </div>
                 <div className="st-conn-row">
-                  <span className="st-conn-label">状态</span>
+                  <span className="st-conn-label text-label">状态</span>
                   <span className="st-conn-value">
                     <span 
                       className="st-status-dot" 
@@ -322,7 +321,7 @@ export function Settings() {
                 </div>
                 {activeServer?.status === "connected" && (
                   <div className="st-conn-row">
-                    <span className="st-conn-label">延迟</span>
+                    <span className="st-conn-label text-label">延迟</span>
                     <span className="st-conn-value">6 ms</span>
                   </div>
                 )}
@@ -352,12 +351,12 @@ export function Settings() {
 
             {/* Saved Servers */}
             <div className="st-card">
-              <div className="st-card-header">已保存的服务器</div>
+              <div className="st-card-header text-title">已保存的服务器</div>
               <div className="st-server-list">
                 {servers.length === 0 ? (
                   <div className="st-server-empty">
                     <span>暂无保存的服务器</span>
-                    <span className="st-server-empty-hint">点击下方按钮添加</span>
+                    <span className="st-server-empty-hint text-caption">点击下方按钮添加</span>
                   </div>
                 ) : (
                   servers.map(server => (
@@ -442,11 +441,11 @@ export function Settings() {
         const currentTheme = themes[themeId];
         return (
           <div className="st-section">
-            <div className="st-section-title">外观设置</div>
+            <div className="st-section-title text-heading">外观设置</div>
 
             {/* 主题选择 */}
             <div className="st-card">
-              <div className="st-card-header">主题</div>
+              <div className="st-card-header text-title">主题</div>
               <div className="st-theme-options">
                 {Object.entries(themes).map(([id, theme]) => (
                   <div
@@ -477,7 +476,7 @@ export function Settings() {
             {/* 强调色选择（仅当主题支持可选强调色时显示） */}
             {currentTheme.accentColorOptions && (
               <div className="st-card">
-                <div className="st-card-header">强调色</div>
+                <div className="st-card-header text-title">强调色</div>
                 <div className="st-accent-options">
                   {currentTheme.accentColorOptions.map((option) => (
                     <div
@@ -500,9 +499,9 @@ export function Settings() {
 
             {/* 字体大小 */}
             <div className="st-card">
-              <div className="st-card-header">字体大小</div>
+              <div className="st-card-header text-title">字体大小</div>
               <div className="st-slider-row">
-                <span className="st-slider-label">界面字体</span>
+                <span className="st-slider-label text-body">界面字体</span>
                 <input
                   type="range"
                   min="8"
@@ -514,7 +513,7 @@ export function Settings() {
                 <span className="st-slider-value">{fontSize}pt</span>
               </div>
               <div className="st-slider-row">
-                <span className="st-slider-label">终端字体</span>
+                <span className="st-slider-label text-body">终端字体</span>
                 <input
                   type="range"
                   min="10"
@@ -529,7 +528,7 @@ export function Settings() {
 
             {/* 壁纸 */}
             <div className="st-card">
-              <div className="st-card-header">壁纸</div>
+              <div className="st-card-header text-title">壁纸</div>
               <div className="st-wallpaper-grid">
                 {Object.keys(PRESET_WALLPAPERS).map(presetId => (
                   <button
@@ -571,15 +570,15 @@ export function Settings() {
           <div className="st-section">
             <div className="st-section-title">快捷键</div>
             <div className="st-card">
-              <div className="st-card-header">全局快捷键</div>
+              <div className="st-card-header text-title">全局快捷键</div>
               <div className="st-shortcut-list">
                 <div className="st-shortcut-row">
-                  <span className="st-shortcut-action">打开活动概览</span>
+                  <span className="st-shortcut-action text-body">打开活动概览</span>
                   <span className="st-shortcut-key">Super</span>
                 </div>
                 <div className="st-shortcut-row">
                   <span className="st-shortcut-action">打开文件管理器</span>
-                  <span className="st-shortcut-key">Super + 1</span>
+                  <span className="st-shortcut-key text-mono">Super + 1</span>
                 </div>
                 <div className="st-shortcut-row">
                   <span className="st-shortcut-action">打开终端</span>
@@ -590,11 +589,11 @@ export function Settings() {
                   <span className="st-shortcut-key">Super + 3</span>
                 </div>
                 <div className="st-shortcut-row">
-                  <span className="st-shortcut-action">打开设置</span>
+                  <span className="st-shortcut-action text-body">打开设置</span>
                   <span className="st-shortcut-key">Super + 4</span>
                 </div>
                 <div className="st-shortcut-row">
-                  <span className="st-shortcut-action">切换终端标签</span>
+                  <span className="st-shortcut-action text-body">切换终端标签</span>
                   <span className="st-shortcut-key">Ctrl + Tab</span>
                 </div>
               </div>
@@ -605,22 +604,22 @@ export function Settings() {
       case "files":
         return (
           <div className="st-section">
-            <div className="st-section-title">文件管理设置</div>
+            <div className="st-section-title text-heading">文件管理设置</div>
             <div className="st-card">
-              <div className="st-card-header">默认视图</div>
+              <div className="st-card-header text-title">默认视图</div>
               <div className="st-option-row">
-                <span className="st-option-label">默认视图模式</span>
+                <span className="st-option-label text-body">默认视图模式</span>
                 <select className="st-select">
                   <option>列表视图</option>
                   <option>网格视图</option>
                 </select>
               </div>
               <div className="st-option-row">
-                <span className="st-option-label">显示隐藏文件</span>
+                <span className="st-option-label text-body">显示隐藏文件</span>
                 <input type="checkbox" className="st-checkbox" />
               </div>
               <div className="st-option-row">
-                <span className="st-option-label">排序方式</span>
+                <span className="st-option-label text-body">排序方式</span>
                 <select className="st-select">
                   <option>名称</option>
                   <option>大小</option>
@@ -629,9 +628,9 @@ export function Settings() {
               </div>
             </div>
             <div className="st-card">
-              <div className="st-card-header">传输设置</div>
+              <div className="st-card-header text-title">传输设置</div>
               <div className="st-option-row">
-                <span className="st-option-label">最大传输大小</span>
+                <span className="st-option-label text-body">最大传输大小</span>
                 <input type="number" className="st-input" defaultValue="1000" />
                 <span className="st-input-unit">MB</span>
               </div>
@@ -644,7 +643,7 @@ export function Settings() {
           <div className="st-section">
             <div className="st-section-title">终端设置</div>
             <div className="st-card">
-              <div className="st-card-header">配色方案</div>
+              <div className="st-card-header text-title">配色方案</div>
               <div className="st-theme-toggle">
                 <button className="st-theme-btn active">
                   <span className="st-theme-icon">⬛</span>
@@ -661,9 +660,9 @@ export function Settings() {
               </div>
             </div>
             <div className="st-card">
-              <div className="st-card-header">终端选项</div>
+              <div className="st-card-header text-title">终端选项</div>
               <div className="st-option-row">
-                <span className="st-option-label">光标样式</span>
+                <span className="st-option-label text-body">光标样式</span>
                 <select className="st-select">
                   <option>方块</option>
                   <option>竖线</option>
@@ -671,13 +670,13 @@ export function Settings() {
                 </select>
               </div>
               <div className="st-option-row">
-                <span className="st-option-label">光标闪烁</span>
+                <span className="st-option-label text-body">光标闪烁</span>
                 <input type="checkbox" className="st-checkbox" defaultChecked />
               </div>
               <div className="st-option-row">
-                <span className="st-option-label">滚动缓冲区</span>
+                <span className="st-option-label text-body">滚动缓冲区</span>
                 <input type="number" className="st-input" defaultValue="5000" />
-                <span className="st-input-unit">行</span>
+                <span className="st-input-unit text-caption">行</span>
               </div>
             </div>
           </div>
@@ -686,31 +685,31 @@ export function Settings() {
       case "notifications":
         return (
           <div className="st-section">
-            <div className="st-section-title">通知设置</div>
+            <div className="st-section-title text-heading">通知设置</div>
             <div className="st-card">
-              <div className="st-card-header">通知类型</div>
+              <div className="st-card-header text-title">通知类型</div>
               <div className="st-option-row">
-                <span className="st-option-label">系统监控警报</span>
+                <span className="st-option-label text-body">系统监控警报</span>
                 <input type="checkbox" className="st-checkbox" defaultChecked />
               </div>
               <div className="st-option-row">
-                <span className="st-option-label">文件操作完成</span>
+                <span className="st-option-label text-body">文件操作完成</span>
                 <input type="checkbox" className="st-checkbox" defaultChecked />
               </div>
               <div className="st-option-row">
-                <span className="st-option-label">连接状态变化</span>
+                <span className="st-option-label text-body">连接状态变化</span>
                 <input type="checkbox" className="st-checkbox" defaultChecked />
               </div>
             </div>
             <div className="st-card">
-              <div className="st-card-header">警报阈值</div>
+              <div className="st-card-header text-title">警报阈值</div>
               <div className="st-slider-row">
-                <span className="st-slider-label">CPU 使用率警报</span>
+                <span className="st-slider-label text-body">CPU 使用率警报</span>
                 <input type="range" min="50" max="100" defaultValue="80" className="st-slider" />
                 <span className="st-slider-value">80%</span>
               </div>
               <div className="st-slider-row">
-                <span className="st-slider-label">磁盘使用率警报</span>
+                <span className="st-slider-label text-body">磁盘使用率警报</span>
                 <input type="range" min="50" max="100" defaultValue="90" className="st-slider" />
                 <span className="st-slider-value">90%</span>
               </div>
@@ -721,7 +720,7 @@ export function Settings() {
       case "about":
         return (
           <div className="st-section">
-            <div className="st-section-title">关于</div>
+            <div className="st-section-title text-heading">关于</div>
             <div className="st-card st-about-card">
               <div className="st-about-logo">🖥️</div>
               <div className="st-about-name">GNOME Remote</div>
@@ -736,7 +735,7 @@ export function Settings() {
               </div>
             </div>
             <div className="st-card">
-              <div className="st-card-header">技术栈</div>
+              <div className="st-card-header text-title">技术栈</div>
               <div className="st-tech-list">
                 <div className="st-tech-item">
                   <span className="st-tech-name">前端框架</span>
@@ -747,11 +746,11 @@ export function Settings() {
                   <span className="st-tech-value">Tauri 2.x (Rust)</span>
                 </div>
                 <div className="st-tech-item">
-                  <span className="st-tech-name">终端模拟</span>
-                  <span className="st-tech-value">xterm.js 5.5</span>
+                  <span className="st-tech-name text-label">终端模拟</span>
+                  <span className="st-tech-value text-caption">xterm.js 5.5</span>
                 </div>
                 <div className="st-tech-item">
-                  <span className="st-tech-name">设计系统</span>
+                  <span className="st-tech-name text-label">设计系统</span>
                   <span className="st-tech-value">GNOME Adwaita</span>
                 </div>
               </div>
@@ -787,7 +786,7 @@ export function Settings() {
               onClick={() => setActiveSection(item.id)}
             >
               <span className="st-sb-icon">{item.icon}</span>
-              <span className="st-sb-label">{item.label}</span>
+              <span className="st-sb-label text-label">{item.label}</span>
             </div>
           ))}
         </div>

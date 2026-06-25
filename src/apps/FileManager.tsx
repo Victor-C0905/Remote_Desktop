@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useServerManager } from "../context/ServerManager";
 import { PLACEHOLDER } from "../utils/offlineDefaults";
+import { useWindowState } from "../window-system/hooks/useWindowState";
 import "./FileManager.css";
 
 export interface FileEntry {
@@ -85,18 +86,25 @@ function formatDate(iso: string): string {
 
 type ViewMode = "list" | "grid";
 
-/** 父级预加载注入的初始数据。存在时 FileManager 跳过首次加载，直接展示数据 */
+/** FileManager 应用组件
+ *  集成窗口系统：
+ *  - 使用 useWindowState(windowId) 获取窗口状态
+ *  - 从窗口状态的 preloadData 获取初始数据
+ *  - 单实例应用（allowMultipleInstances: false）
+ */
 interface FileManagerProps {
-  initialData?: {
-    username: string | null;
-    currentPath: string;
-    entries: FileEntry[];
-    mounts: MountInfo[];
-    sidebarSections: SidebarSection[];
-  } | null;
+  windowId: string;
+  preloadData?: any;  // 由 Desktop 通过窗口状态注入
 }
 
-export function FileManager({ initialData }: FileManagerProps = {}) {
+export function FileManager({ windowId, preloadData }: FileManagerProps) {
+  // ── 窗口系统集成 ─────────────────────────────────────
+  // 获取窗口状态（包含 preloadData）
+  const windowState = useWindowState(windowId);
+
+  // 从窗口状态获取预加载数据（优先使用 windowState.preloadData）
+  const initialData = windowState.preloadData || preloadData;
+
   const { activeServerId, servers, connectServer } = useServerManager();
 
   // ── 离线状态判断 ─────────────────────────────────────

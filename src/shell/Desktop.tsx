@@ -13,6 +13,7 @@ import { WallpaperProvider, useWallpaper, getWallpaperStyle } from "../context/W
 import { useSettingsStore } from "../stores/settingsStore";
 import { useTheme } from "../hooks/useTheme";
 import { DraggableWindow } from "../components/DraggableWindow";
+import { WindowManagerProvider, useWindowManager } from "../window-system/WindowManagerContext";
 import { listen } from "@tauri-apps/api/event";
 import "./Desktop.css";
 
@@ -52,29 +53,13 @@ const DOCK_APPS: DesktopApp[] = [
   { id: "settings", icon: "⚙️",  label: "设置" },
 ];
 
-// Active window in the desktop
-interface WindowState {
-  id: string;
-  appId: string;
-  title: string;
-  minimized: boolean;
-  /** 预加载状态：loading=显示骨架屏, ready=数据就绪可渲染, error=加载失败 */
-  preloadState: 'loading' | 'ready' | 'error';
-  /** 预加载完成后的注入数据（仅 FileManager 使用） */
-  preloadData: any;
-  /** 窗口位置 */
-  position: { x: number; y: number };
-  /** 窗口大小 */
-  size: { width: number; height: number };
-  /** 激活时间戳，用于排序（最后激活的窗口在最上层） */
-  activatedAt: number;
-}
-
 export function Desktop() {
   return (
     <ServerManagerProvider>
       <WallpaperProvider>
-        <DesktopContent />
+        <WindowManagerProvider>
+          <DesktopContent />
+        </WindowManagerProvider>
       </WallpaperProvider>
     </ServerManagerProvider>
   );
@@ -87,11 +72,10 @@ function DesktopContent() {
   const criticalNotifications = 1;
   const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
   const [clock, setClock] = useState("");
-  const [windows, setWindows] = useState<WindowState[]>([]);
-  const [activeWindowId, setActiveWindowId] = useState<string | null>(null);
 
   const { activeServer } = useServerManager();
   const { wallpaper } = useWallpaper();
+  const manager = useWindowManager();
 
   // 全局主题应用（确保所有窗口都使用正确的主题 CSS 变量）
   const { themeId, accentColorId } = useSettingsStore();
@@ -153,83 +137,33 @@ function DesktopContent() {
   const openApp = useCallback(async (appId: string) => {
     setOverviewVisible(false);
 
-    const titles: Record<string, string> = {
-      files: "文件管理器",
-      terminal: "终端",
-      monitor: "系统监控",
-      settings: "设置",
-    };
-
     // GNOME 标准：如果窗口已存在，点击 Dock 恢复时自动置顶
-    if (windows.some((w) => w.appId === appId)) {
-      const existing = windows.find((w) => w.appId === appId);
-      if (existing) {
-        // 恢复最小化窗口时，自动置顶（更新 activatedAt）
-        setWindows((ws) =>
-          ws.map((w) => (w.id === existing.id ? { ...w, minimized: false, activatedAt: Date.now() } : w))
-        );
-        setActiveWindowId(existing.id);
-      }
+    const existingWindows = manager.getByAppId(appId);
+    if (existingWindows.length > 0) {
+      const existing = existingWindows[0];
+      manager.focus(existing.id);
       return;
     }
 
-    // 计算初始位置（避免重叠）
-    const existingWindows = windows.filter(w => !w.minimized);
-    const offset = existingWindows.length * 30;
-
-    // 获取应用默认尺寸
-    const defaultSizes: Record<string, { width: number; height: number }> = {
-      files: { width: 900, height: 650 },
-      terminal: { width: 850, height: 550 },
-      monitor: { width: 900, height: 650 },
-      settings: { width: 700, height: 550 },
-    };
-
-    // 1. 先创建窗口框架（preloadState='loading'，显示骨架屏）
-    const newWindow: WindowState = {
-      id: `win-${appId}-${Date.now()}`,
-      appId,
-      title: titles[appId] || appId,
-      minimized: false,
-      preloadState: 'loading',
-      preloadData: null,
-      position: { x: 100 + offset, y: 100 + offset },
-      size: defaultSizes[appId] || { width: 800, height: 600 },
-      activatedAt: Date.now(), // 初始化激活时间戳
-    };
-    setWindows((ws) => [...ws, newWindow]);
-    setActiveWindowId(newWindow.id);
-
-    // 2. FileManager 走预加载通道：等待数据就绪后再渲染
+    // FileManager 需要预加载
     if (appId === 'files') {
       try {
         await preloader.preload(activeServer?.id ?? null);
-        setWindows((ws) =>
-          ws.map((w) =>
-            w.id === newWindow.id
-              ? { ...w, preloadState: 'ready', preloadData: preloader.data }
-              : w
-          )
-        );
+        await manager.create(appId, {
+          serverId: activeServer?.id,
+          preloadData: preloader.data,
+        });
       } catch {
         console.error("[Desktop] FileManager 预加载失败");
-        setWindows((ws) =>
-          ws.map((w) =>
-            w.id === newWindow.id
-              ? { ...w, preloadState: 'error' }
-              : w
-          )
-        );
+        // 创建窗口但标记为错误状态
+        const win = await manager.create(appId, { serverId: activeServer?.id });
+        win.setPreloadState('error');
       }
     } else {
-      // 其他应用：无需父级预加载，直接标记 ready（组件内部自行处理骨架屏）
-      setWindows((ws) =>
-        ws.map((w) =>
-          w.id === newWindow.id ? { ...w, preloadState: 'ready' } : w
-        )
-      );
+      // 其他应用：直接创建
+      await manager.create(appId, { serverId: activeServer?.id });
     }
-  }, [windows, preloader, activeServer?.id]);
+  }, [manager, preloader, activeServer?.id, setOverviewVisible]);
 
   // Global shortcuts
   const shortcuts = createAppShortcuts(
@@ -240,33 +174,10 @@ function DesktopContent() {
   );
   useGlobalShortcuts(shortcuts);
 
-  const closeWindow = (windowId: string) => {
-    setWindows((ws) => ws.filter((w) => w.id !== windowId));
-    if (activeWindowId === windowId) {
-      setActiveWindowId(null);
-    }
-  };
-
-  const minimizeWindow = (windowId: string) => {
-    setWindows((ws) =>
-      ws.map((w) => (w.id === windowId ? { ...w, minimized: true } : w))
-    );
-    if (activeWindowId === windowId) {
-      setActiveWindowId(null);
-    }
-  };
-
-  const focusWindow = (windowId: string) => {
-    // GNOME 标准：点击窗口 → raise + focus
-    // 恢复最小化窗口时，自动置顶（更新 activatedAt）
-    setWindows((ws) =>
-      ws.map((w) => (w.id === windowId ? { ...w, minimized: false, activatedAt: Date.now() } : w))
-    );
-    setActiveWindowId(windowId);
-  };
-
   // Render app content（根据 preloadState 决定展示真实组件还是骨架屏）
-  const renderAppContent = (appId: string, win: WindowState) => {
+  const renderAppContent = (appId: string, win: ReturnType<typeof manager.getById>) => {
+    if (!win) return null;
+
     switch (appId) {
       case 'files':
         if (win.preloadState === 'error') {
@@ -277,9 +188,7 @@ function DesktopContent() {
               <button
                 onClick={() => {
                   preloader.preload(activeServer?.id ?? null).then(() => {
-                    setWindows(ws => ws.map(w =>
-                      w.id === win.id ? { ...w, preloadState: 'ready', preloadData: preloader.data } : w
-                    ));
+                    win.setPreloadData(preloader.data);
                   });
                 }}
                 style={{ padding: '6px 16px', borderRadius: 8, cursor: 'pointer', border: '1px solid var(--border-color)' }}
@@ -290,32 +199,21 @@ function DesktopContent() {
         if (win.preloadState !== 'ready') {
           return <FileManagerSkeleton />;
         }
-        return <FileManager initialData={win.preloadData} />;
+        return <FileManager windowId={win.id} preloadData={win.preloadData} />;
       case 'terminal':
-        return <TerminalApp />;
+        return <TerminalApp windowId={win.id} />;
       case 'monitor':
-        return <SystemMonitor />;
+        return <SystemMonitor windowId={win.id} />;
       case 'settings':
-        return <Settings />;
+        return <Settings windowId={win.id} />;
       default:
         return <div>Unknown app</div>;
     }
   };
 
-  // Sort windows: based on activation order (last activated on top)
-  // 窗口根据激活时间戳排序，最后激活的窗口在最上层
-  const sortedWindows = [...windows].sort((a, b) => {
-    // 按激活时间戳升序排序（最早激活的在前面，最近激活的在后面）
-    // React 渲染顺序：前面的先渲染（底层），后面的后渲染（上层）
-    const result = a.activatedAt - b.activatedAt;
-    // 调试信息：查看窗口排序
-    console.log(`[Desktop] 窗口排序: ${a.title}(${a.activatedAt}) vs ${b.title}(${b.activatedAt}) = ${result}`);
-    return result;
-  });
-
-  // 调试信息：查看排序后的窗口顺序
-  console.log('[Desktop] 排序后的窗口:', sortedWindows.map(w => `${w.title}(${w.activatedAt})`));
-  console.log('[Desktop] 当前激活窗口:', activeWindowId);
+  // 获取所有窗口（由 WindowManager 管理）
+  const windows = manager.getAll();
+  const activeWindow = manager.getActive();
 
   return (
     <div className="shell">
@@ -380,43 +278,40 @@ function DesktopContent() {
         {/* z-index 分配策略：
             - 活动窗口: z-index: 90（最上层）
             - 其他窗口: 根据激活时间戳排序，最近激活的在上层
-            - 简化逻辑：直接根据 activatedAt 排序分配 z-index
-        */}
-        {/* Application Windows */}
-        {/* z-index 分配策略（不重新排序，避免 DOM 移动导致事件丢失）：
-            - activatedAt 最大值 → z-index: 90（最上层）
-            - 其他窗口：根据原始顺序递增（10, 20, 30...）
         */}
         {(() => {
           const visibleWindows = windows.filter(w => !w.minimized);
-          // 找出 activatedAt 最大的窗口（活动窗口）
-          const maxActivatedAt = visibleWindows.length > 0 
-            ? Math.max(...visibleWindows.map(w => w.activatedAt)) 
-            : 0;
-          
+
           // 不重新排序，保持 DOM 树顺序不变，避免事件丢失
-          return visibleWindows.map((win, index) => (
-            <DraggableWindow
-              key={win.id}
-              title={win.title}
-              isActive={win.activatedAt === maxActivatedAt}
-              onClose={() => closeWindow(win.id)}
-              onMinimize={() => minimizeWindow(win.id)}
-              onFocus={() => focusWindow(win.id)}
-              initialPosition={win.position}
-              initialSize={win.size}
-              zIndex={win.activatedAt === maxActivatedAt ? 90 : 10 + index * 10}
-            >
-              {renderAppContent(win.appId, win)}
-            </DraggableWindow>
-          ));
+          return visibleWindows.map((win, index) => {
+            const app = manager.getApp(win.appId);
+            if (!app) return null;
+
+            return (
+              <DraggableWindow
+                key={win.id}
+                title={app.title}
+                isActive={win.id === activeWindow?.id}
+                onClose={() => manager.close(win.id)}
+                onMinimize={() => manager.minimize(win.id)}
+                onFocus={() => manager.focus(win.id)}
+                initialPosition={win.position}
+                initialSize={win.size}
+                minWidth={app.minSize.width}
+                minHeight={app.minSize.height}
+                zIndex={win.id === activeWindow?.id ? 90 : 10 + index * 10}
+              >
+                {renderAppContent(win.appId, win)}
+              </DraggableWindow>
+            );
+          });
         })()}
 
         {/* Dock */}
         <div className="dock-container">
           <div className="dock">
             {DOCK_APPS.map((app) => {
-              const isOpen = windows.some((w) => w.appId === app.id);
+              const isOpen = manager.getByAppId(app.id).length > 0;
               return (
                 <div
                   key={app.id}

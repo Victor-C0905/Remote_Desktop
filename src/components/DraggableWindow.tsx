@@ -82,14 +82,18 @@ export function DraggableWindow({
       const newX = e.clientX - dragStartPos.current.x;
       const newY = e.clientY - dragStartPos.current.y;
 
-      // 放宽边界限制，允许窗口在更大范围内移动
-      // 窗口可以移动到屏幕边缘，但保留一些可见区域
-      const maxX = window.innerWidth - 100; // 保留至少 100px 可见
-      const maxY = window.innerHeight - 100; // 保留至少 100px 可见
+      // 获取父容器尺寸，限制窗口在父容器内
+      const parentEl = windowRef.current?.parentElement;
+      const parentWidth = parentEl?.clientWidth || window.innerWidth;
+      const parentHeight = parentEl?.clientHeight || window.innerHeight;
+
+      // 窗口必须完全在父容器内可见
+      const maxX = parentWidth - size.width;
+      const maxY = parentHeight - size.height;
       
-      // 最小边界：窗口不能完全移出屏幕顶部和左侧
-      const minX = -size.width + 100; // 保留至少 100px 可见
-      const minY = -size.height + 100; // 保留至少 100px 可见
+      // 最小边界：窗口不能移出父容器
+      const minX = 0;
+      const minY = 0;
 
       const boundedX = Math.max(minX, Math.min(newX, maxX));
       const boundedY = Math.max(minY, Math.min(newY, maxY));
@@ -165,25 +169,34 @@ export function DraggableWindow({
 
       let newWidth = resizeStartPos.current.width;
       let newHeight = resizeStartPos.current.height;
-      let newX = resizeStartPos.current.posX; // 使用 resize 开始时的位置
+      let newX = resizeStartPos.current.posX;
       let newY = resizeStartPos.current.posY;
+
+      // 获取父容器尺寸，限制窗口在父容器内
+      const parentEl = windowRef.current?.parentElement;
+      const parentWidth = parentEl?.clientWidth || window.innerWidth;
+      const parentHeight = parentEl?.clientHeight || window.innerHeight;
 
       // 根据调整方向计算新尺寸和位置
       if (resizeDirection.includes("e")) {
-        newWidth = Math.max(minWidth, resizeStartPos.current.width + deltaX);
+        const maxWidth = parentWidth - newX;
+        newWidth = Math.max(minWidth, Math.min(maxWidth, resizeStartPos.current.width + deltaX));
       }
       if (resizeDirection.includes("w")) {
         const widthDelta = Math.min(deltaX, resizeStartPos.current.width - minWidth);
         newWidth = resizeStartPos.current.width - widthDelta;
-        newX = resizeStartPos.current.posX + widthDelta; // 使用 resize 开始时的位置
+        const newXCandidate = resizeStartPos.current.posX + widthDelta;
+        newX = Math.max(0, newXCandidate);
       }
       if (resizeDirection.includes("s")) {
-        newHeight = Math.max(minHeight, resizeStartPos.current.height + deltaY);
+        const maxHeight = parentHeight - newY;
+        newHeight = Math.max(minHeight, Math.min(maxHeight, resizeStartPos.current.height + deltaY));
       }
       if (resizeDirection.includes("n")) {
         const heightDelta = Math.min(deltaY, resizeStartPos.current.height - minHeight);
         newHeight = resizeStartPos.current.height - heightDelta;
-        newY = resizeStartPos.current.posY + heightDelta; // 使用 resize 开始时的位置
+        const newYCandidate = resizeStartPos.current.posY + heightDelta;
+        newY = Math.max(0, newYCandidate);
       }
 
       setSize({ width: newWidth, height: newHeight });
