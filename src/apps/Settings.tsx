@@ -365,12 +365,10 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                       className={`st-server-item ${activeServerId === server.id ? "selected" : ""}`}
                       onClick={() => handleOpenEditModal(server)}
                     >
-                      <span 
-                        className="st-server-status" 
+                      <span
+                        className="st-server-status"
                         style={{ background: getStatusColor(server.status) }}
-                      >
-                        {getStatusIcon(server.status)}
-                      </span>
+                      />
                       <span className="st-server-name">{server.name}</span>
                       <span className="st-server-host">{server.host}</span>
                       <span className="st-server-time">{formatLastConnected(server.lastConnected)}</span>
