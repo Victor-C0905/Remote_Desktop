@@ -137,10 +137,11 @@ function DesktopContent() {
   const openApp = useCallback(async (appId: string) => {
     setOverviewVisible(false);
 
-    // GNOME 标准：如果窗口已存在，点击 Dock 恢复时自动置顶
+    // GNOME 标准:如果窗口已存在(包括最小化的窗口),点击 Dock 恢复时自动置顶
     const existingWindows = manager.getByAppId(appId);
     if (existingWindows.length > 0) {
       const existing = existingWindows[0];
+      // 如果窗口被最小化,focus() 会自动恢复它
       manager.focus(existing.id);
       return;
     }
@@ -160,7 +161,7 @@ function DesktopContent() {
         win.setPreloadState('error');
       }
     } else {
-      // 其他应用：直接创建
+      // 其他应用:直接创建
       await manager.create(appId, { serverId: activeServer?.id });
     }
   }, [manager, preloader, activeServer?.id, setOverviewVisible]);
@@ -278,23 +279,40 @@ function DesktopContent() {
         {/* z-index 分配策略：
             - 活动窗口: z-index: 90（最上层）
             - 其他窗口: 根据激活时间戳排序，最近激活的在上层
+            - 最小化窗口: 保持渲染但隐藏(display: none),保留内部状态
         */}
         {(() => {
-          const visibleWindows = windows.filter(w => !w.minimized);
+          // 不过滤最小化窗口,保持所有窗口渲染以保留内部状态
+          const allWindows = windows;
 
           // 不重新排序，保持 DOM 树顺序不变，避免事件丢失
-          return visibleWindows.map((win, index) => {
+          return allWindows.map((win, index) => {
             const app = manager.getApp(win.appId);
             if (!app) return null;
 
             return (
               <DraggableWindow
-                key={win.id}
+                key={win.id} // 使用稳定的 key,不包含 minimized 状态,避免重新挂载
                 title={app.title}
                 isActive={win.id === activeWindow?.id}
+                isMinimized={win.minimized} // 新增:传递最小化状态
                 onClose={() => manager.close(win.id)}
                 onMinimize={() => manager.minimize(win.id)}
                 onFocus={() => manager.focus(win.id)}
+                onPositionChange={(pos) => {
+                  // 同步位置变化到 Window 对象
+                  const window = manager.getById(win.id);
+                  if (window) {
+                    window.setPosition(pos);
+                  }
+                }}
+                onSizeChange={(size) => {
+                  // 同步大小变化到 Window 对象
+                  const window = manager.getById(win.id);
+                  if (window) {
+                    window.setSize(size);
+                  }
+                }}
                 initialPosition={win.position}
                 initialSize={win.size}
                 minWidth={app.minSize.width}

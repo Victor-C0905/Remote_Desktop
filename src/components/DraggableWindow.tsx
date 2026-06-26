@@ -3,15 +3,18 @@ import { useState, useRef, useEffect, useCallback } from "react";
 interface DraggableWindowProps {
   title: string;
   isActive: boolean;
+  isMinimized?: boolean; // 新增:最小化状态
   onClose: () => void;
   onMinimize: () => void;
   onFocus: () => void;
+  onPositionChange?: (position: { x: number; y: number }) => void; // 新增:位置变化回调
+  onSizeChange?: (size: { width: number; height: number }) => void; // 新增:大小变化回调
   children: React.ReactNode;
   initialPosition?: { x: number; y: number };
   initialSize?: { width: number; height: number };
   minWidth?: number;
   minHeight?: number;
-  zIndex?: number; // 窗口层级，由父组件根据激活顺序动态分配
+  zIndex?: number; // 窗口层级,由父组件根据激活顺序动态分配
 }
 
 /**
@@ -21,15 +24,18 @@ interface DraggableWindowProps {
 export function DraggableWindow({
   title,
   isActive,
+  isMinimized = false,
   onClose,
   onMinimize,
   onFocus,
+  onPositionChange,
+  onSizeChange,
   children,
   initialPosition = { x: 50, y: 50 },
   initialSize = { width: 800, height: 600 },
   minWidth = 400,
   minHeight = 300,
-  zIndex = 10, // 默认 z-index，低于 top-bar(100) 和 dock(50)
+  zIndex = 10, // 默认 z-index,低于 top-bar(100) 和 dock(50)
 }: DraggableWindowProps) {
   const [position, setPosition] = useState(initialPosition);
   const [size, setSize] = useState(initialSize);
@@ -41,9 +47,11 @@ export function DraggableWindow({
   const windowRef = useRef<HTMLDivElement>(null);
   const dragStartPos = useRef({ x: 0, y: 0 });
   const resizeStartPos = useRef({ x: 0, y: 0, width: 0, height: 0, posX: 0, posY: 0 }); // 添加 posX 和 posY
-  
+
   // 使用 ref 存储拖拽时的临时位置，避免频繁触发 React 重渲染
   const dragPositionRef = useRef({ x: 0, y: 0 });
+  // 使用 ref 存储调整大小时的临时位置和大小
+  const resizeDataRef = useRef({ x: 0, y: 0, width: 0, height: 0 });
   // requestAnimationFrame ID，用于取消动画帧
   const rafIdRef = useRef<number | null>(null);
 
@@ -54,6 +62,19 @@ export function DraggableWindow({
     }, 200);
     return () => clearTimeout(timer);
   }, []);
+
+  // 当窗口从最小化恢复时,同步 Window 对象保存的位置和大小
+  // 保存之前的最小化状态,用于检测恢复
+  const prevMinimizedRef = useRef(isMinimized);
+  useEffect(() => {
+    // 检测从最小化恢复(从 true 变为 false)
+    if (prevMinimizedRef.current && !isMinimized) {
+      // 恢复时同步 Window 对象的位置和大小
+      setPosition(initialPosition);
+      setSize(initialSize);
+    }
+    prevMinimizedRef.current = isMinimized;
+  }, [isMinimized, initialPosition, initialSize]);
 
   // 拖拽开始
   const handleDragStart = useCallback((e: React.MouseEvent) => {
@@ -122,9 +143,14 @@ export function DraggableWindow({
         rafIdRef.current = null;
       }
 
-      // 拖拽结束时，更新 state（触发一次重渲染）
+      // 拖拽结束时,更新 state(触发一次重渲染)
       setPosition(dragPositionRef.current);
       setIsDragging(false);
+
+      // 同步位置到 Window 对象
+      if (onPositionChange) {
+        onPositionChange(dragPositionRef.current);
+      }
     };
 
     // 使用 passive 事件监听器，提升性能
@@ -201,11 +227,22 @@ export function DraggableWindow({
 
       setSize({ width: newWidth, height: newHeight });
       setPosition({ x: newX, y: newY });
+
+      // 存储到 ref,供 handleMouseUp 使用
+      resizeDataRef.current = { x: newX, y: newY, width: newWidth, height: newHeight };
     };
 
     const handleMouseUp = () => {
       setIsResizing(false);
       setResizeDirection(null);
+
+      // 同步位置和大小到 Window 对象(使用 ref 中的最终值)
+      if (onPositionChange) {
+        onPositionChange({ x: resizeDataRef.current.x, y: resizeDataRef.current.y });
+      }
+      if (onSizeChange) {
+        onSizeChange({ width: resizeDataRef.current.width, height: resizeDataRef.current.height });
+      }
     };
 
     document.addEventListener("mousemove", handleMouseMove);
@@ -228,6 +265,7 @@ export function DraggableWindow({
         width: size.width,
         height: size.height,
         zIndex: zIndex, // 使用动态 z-index，确保活动窗口在最上层
+        display: isMinimized ? "none" : "block", // 最小化时隐藏,但保持 DOM 结构
         cursor: isDragging ? "move" : "default",
         // 使用 transform 代替 left/top，性能更好（GPU 加速）
         // 同时包含 translate 和 scale，避免 CSS 动画冲突
