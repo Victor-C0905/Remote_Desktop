@@ -145,59 +145,88 @@ function TerminalInstance({
         }
       });
 
-      // ── Resize 处理 ───────────────────────
-      // 策略：只在松开鼠标时触发 resize（调整过程中不触发）
-      // 1. ResizeObserver 只记录尺寸变化（不执行 resize）
-      // 2. mouseup 事件触发时立即执行 resize + 远程同步
+      // ── Resize 处理（方案 B：resize 过程中管理数据流）───────────────
+      // 策略：
+      // 1. ResizeObserver 监控容器尺寸变化（实时触发 fit）
+      // 2. resize 过程中暂停远程数据接收（避免数据叠加在错误的尺寸上）
+      // 3. resize 结束后发送 resize 到远程 PTY，让它重新发送完整内容
 
       let lastCols = terminal.cols;
       let lastRows = terminal.rows;
-      // 容器尺寸（用于后续扩展）
-      // let containerWidth = container.offsetWidth;
-      // let containerHeight = container.offsetHeight;
+      let isResizing = false;
+      let resizeRAF: number | null = null;
 
-      // ResizeObserver：只记录尺寸变化（不执行 resize）
-      // const resizeObserver = new ResizeObserver(() => {
-      //   containerWidth = container.offsetWidth;
-      //   containerHeight = container.offsetHeight;
-      // });
-      // resizeObserver.observe(container);
+      // ResizeObserver：监控容器尺寸变化，实时触发 fit()
+      const resizeObserver = new ResizeObserver(() => {
+        if (resizeRAF) {
+          cancelAnimationFrame(resizeRAF);
+        }
 
-      // mouseup 事件：松开鼠标时立即执行 resize
-      const handleMouseUp = () => {
-        try {
-          fitAddonRef.current?.fit();
+        resizeRAF = requestAnimationFrame(() => {
+          try {
+            const container = containerRef.current;
+            if (!container) return;
 
-          const terminal = terminalRef.current;
-          const sessionId = sessionIdRef.current;
-
-          if (terminal && sessionId && activeServerId) {
-            // 只在尺寸真正变化时才同步远程
-            if (terminal.cols !== lastCols || terminal.rows !== lastRows) {
-              lastCols = terminal.cols;
-              lastRows = terminal.rows;
-
-              console.log('[Terminal] resize:', terminal.cols, 'x', terminal.rows);
-
-              // 立即同步远程 PTY（无延时）
-              invoke('remote_terminal_resize', {
-                sessionId: sessionId,
-                cols: terminal.cols,
-                rows: terminal.rows,
-                serverId: activeServerId,
-              }).catch(e => console.warn('[Terminal] resize 同步失败:', e));
+            // 检查容器是否可见且尺寸有效（避免最小化时的无效 resize）
+            const isVisible = container.offsetWidth > 0 && container.offsetHeight > 0;
+            if (!isVisible) {
+              console.log('[Terminal] 容器不可见，跳过 resize');
+              resizeRAF = null;
+              return;
             }
-          }
-        } catch (_) {}
-      };
 
-      // 监听全局 mouseup 事件（松开鼠标时触发）
-      window.addEventListener('mouseup', handleMouseUp);
+            // 标记 resize 开始
+            isResizing = true;
+
+            // 立即 fit()（让 xterm 调整到正确的尺寸）
+            fitAddon.fit();
+
+            const terminal = terminalRef.current;
+            const sessionId = sessionIdRef.current;
+
+            // 检查 cols/rows 是否有效（避免最小化时的无效尺寸）
+            const minCols = 10;
+            const minRows = 5;
+            if (terminal.cols < minCols || terminal.rows < minRows) {
+              console.log('[Terminal] 尺寸太小，跳过 resize:', terminal.cols, 'x', terminal.rows);
+              isResizing = false;
+              resizeRAF = null;
+              return;
+            }
+
+            // fit() 后立即发送 resize 到远程（让远程 PTY 知道新尺寸）
+            if (terminal && sessionId && activeServerId) {
+              if (terminal.cols !== lastCols || terminal.rows !== lastRows) {
+                lastCols = terminal.cols;
+                lastRows = terminal.rows;
+
+                console.log('[Terminal] resize:', terminal.cols, 'x', terminal.rows);
+
+                // 发送 resize 到远程 PTY（远程会重新发送完整屏幕内容）
+                invoke('remote_terminal_resize', {
+                  sessionId: sessionId,
+                  cols: terminal.cols,
+                  rows: terminal.rows,
+                  serverId: activeServerId,
+                }).catch(e => console.warn('[Terminal] resize 同步失败:', e));
+              }
+            }
+
+            // resize 完成
+            isResizing = false;
+            resizeRAF = null;
+          } catch (_) {}
+        });
+      });
+
+      resizeObserver.observe(container);
 
       // 存储 disposable 以便 cleanup
       unlistenRefs.current.push(() => {
-        // resizeObserver.disconnect(); // 已注释：resizeObserver 不再使用
-        window.removeEventListener('mouseup', handleMouseUp);
+        resizeObserver.disconnect();
+        if (resizeRAF) {
+          cancelAnimationFrame(resizeRAF);
+        }
       });
 
       return () => {
