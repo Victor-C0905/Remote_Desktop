@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useServerManager } from "../context/ServerManager";
 import { PLACEHOLDER } from "../utils/offlineDefaults";
 import { useWindowState } from "../window-system/hooks/useWindowState";
+import { AppLayout } from "../components/app-shell";
 import "./FileManager.css";
 
 export interface FileEntry {
@@ -127,7 +128,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   const [propertiesEntry, setPropertiesEntry] = useState<FileEntry | null>(null);
   const [editingEntry, setEditingEntry] = useState<FileEntry | null>(null);  // 正在编辑的文件
   const [editingName, setEditingName] = useState<string>("");  // 编辑中的新名称
-  const mainRef = useRef<HTMLDivElement>(null);
+  // ✅ 移除 mainRef，因为fm-main容器已被AppLayout替代
   const clickTimerRef = useRef<number | null>(null);  // 单击延迟定时器（防止双击误触发）
 
   // 侧边栏状态
@@ -826,98 +827,104 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   const totalSize = entries.filter(e => !e.is_dir).reduce((s, e) => s + e.size, 0);
 
   return (
-    <div className="fm" onKeyDown={handleKeyDown} tabIndex={0}>
-      {/* Header Bar */}
-      <div className="fm-headerbar">
-        <button className="nav-btn" onClick={goBack} disabled={historyIdx <= 0} title="后退">←</button>
-        <button className="nav-btn" onClick={goForward} disabled={historyIdx >= history.length - 1} title="前进">→</button>
-        <button className="nav-btn" onClick={goUp} title="上级目录">↑</button>
-
-        {/* Path Input Container */}
-        <div className="fm-path-input-container">
-          <input
-            ref={pathInputRef}
-            type="text"
-            className="fm-path-input"
-            value={pathInput}
-            onChange={handlePathInputChange}
-            onKeyDown={handlePathInputKeyDown}
-            onFocus={handlePathInputFocus}
-            onBlur={handlePathInputBlur}
-            placeholder="/home"
-            title="输入路径并按 Enter 跳转"
-          />
-
-          {/* 建议列表 — 位于地址栏正下方 */}
-          {showSuggestions && suggestions.length > 0 && (
-            <div className="fm-suggestions">
-              {suggestions.map((suggestion, idx) => (
-                <div
-                  key={idx}
-                  className={`fm-suggestion-item${selectedSuggestionIdx === idx ? " selected" : ""}`}
-                  onMouseDown={(e) => {
-                    e.preventDefault();  // 阻止默认行为，防止触发 blur
-                    handleSelectSuggestion(suggestion);
-                  }}
-                  onMouseEnter={() => setSelectedSuggestionIdx(idx)}
-                >
-                  <span className="fm-suggestion-icon">📁</span>
-                  <span className="fm-suggestion-text">{suggestion}</span>
-                </div>
-              ))}
+    <div className="fm-app" onKeyDown={handleKeyDown} tabIndex={0}>
+      {/* ✅ 使用AppLayout抽象层，简化CSS层级 */}
+      <AppLayout
+        sidebar={
+          /* Sidebar */
+          <div className="fm-sidebar">
+            {sidebarSections.map((section, sectionIdx) => (
+              <div key={sectionIdx} className="sidebar-section">
+                <div className="sidebar-section-title">{section.title}</div>
+                {section.items.map((item, itemIdx) => (
+                  <div
+                    key={`${sectionIdx}-${itemIdx}`}
+                    className={`sidebar-item${currentPath === item.path ? " active" : ""}`}
+                    onClick={() => navigateTo(item.path)}
+                  >
+                    <span className="si-icon">{item.icon}</span>
+                    <span className="si-label">{item.label}</span>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        }
+        toolbar={
+          /* Toolbar - 原HeaderBar功能移到这里 */
+          <div className="fm-toolbar">
+            {/* Navigation */}
+            <div className="fm-toolbar-nav">
+              <button className="fm-toolbar-btn" onClick={goBack} disabled={historyIdx <= 0} title="后退">←</button>
+              <button className="fm-toolbar-btn" onClick={goForward} disabled={historyIdx >= history.length - 1} title="前进">→</button>
+              <button className="fm-toolbar-btn" onClick={goUp} title="上级目录">↑</button>
             </div>
-          )}
-        </div>
 
-        {/* View Toggle */}
-        <div className="view-toggle">
-          <button
-            className={viewMode === "list" ? "active" : ""}
-            onClick={() => setViewMode("list")}
-            title="列表视图"
-          >☰</button>
-          <button
-            className={viewMode === "grid" ? "active" : ""}
-            onClick={() => setViewMode("grid")}
-            title="网格视图"
-          >⊞</button>
-        </div>
+            {/* Path Input */}
+            <div className="fm-toolbar-path">
+              <input
+                ref={pathInputRef}
+                type="text"
+                className="fm-path-input"
+                value={pathInput}
+                onChange={handlePathInputChange}
+                onKeyDown={handlePathInputKeyDown}
+                onFocus={handlePathInputFocus}
+                onBlur={handlePathInputBlur}
+                placeholder="/home"
+                title="输入路径并按 Enter 跳转"
+              />
 
-        {/* New Folder Button */}
-        <button
-          className="nav-btn"
-          onClick={handleMkdir}
-          title="新建文件夹"
-          disabled={!activeServerId}
-        >📁+</button>
-
-        <button className="search-btn" title="搜索">🔍</button>
-      </div>
-
-      {/* Content */}
-      <div className="fm-content">
-        {/* Sidebar */}
-        <div className="fm-sidebar">
-          {sidebarSections.map((section, sectionIdx) => (
-            <div key={sectionIdx} className="sidebar-section">
-              <div className="sidebar-section-title">{section.title}</div>
-              {section.items.map((item, itemIdx) => (
-                <div
-                  key={`${sectionIdx}-${itemIdx}`}
-                  className={`sidebar-item${currentPath === item.path ? " active" : ""}`}
-                  onClick={() => navigateTo(item.path)}
-                >
-                  <span className="si-icon">{item.icon}</span>
-                  <span className="si-label">{item.label}</span>
+              {/* Suggestions Dropdown */}
+              {showSuggestions && suggestions.length > 0 && (
+                <div className="fm-suggestions">
+                  {suggestions.map((suggestion, idx) => (
+                    <div
+                      key={idx}
+                      className={`fm-suggestion-item${selectedSuggestionIdx === idx ? " selected" : ""}`}
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        handleSelectSuggestion(suggestion);
+                      }}
+                      onMouseEnter={() => setSelectedSuggestionIdx(idx)}
+                    >
+                      <span className="fm-suggestion-icon">📁</span>
+                      <span className="fm-suggestion-text">{suggestion}</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              )}
             </div>
-          ))}
-        </div>
 
-        {/* Main Area */}
-        <div className="fm-main" ref={mainRef}>
-          {isOffline ? (
+            {/* Actions */}
+            <div className="fm-toolbar-actions">
+              <button
+                className="fm-toolbar-btn"
+                onClick={handleMkdir}
+                title="新建文件夹"
+                disabled={!activeServerId}
+              >📁+</button>
+              <button className="fm-toolbar-btn" title="搜索">🔍</button>
+            </div>
+
+            {/* View Toggle */}
+            <div className="fm-toolbar-view">
+              <button
+                className={`fm-toolbar-btn ${viewMode === "list" ? "active" : ""}`}
+                onClick={() => setViewMode("list")}
+                title="列表视图"
+              >☰</button>
+              <button
+                className={`fm-toolbar-btn ${viewMode === "grid" ? "active" : ""}`}
+                onClick={() => setViewMode("grid")}
+                title="网格视图"
+              >⊞</button>
+            </div>
+          </div>
+        }
+      >
+        {/* File List Content（AppLayout自动处理滚动） */}
+        {isOffline ? (
             /* ── 离线空状态 ─────────────────────────────── */
             <div className="fm-offline">
               <div className="offline-icon">📡</div>
@@ -1089,8 +1096,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
               ))}
             </div>
           )}
-        </div>
-      </div>
+        </AppLayout>
 
       {/* Status Bar */}
       <div className="fm-statusbar">

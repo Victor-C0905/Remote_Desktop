@@ -1,50 +1,69 @@
 /* ============================================================
-   FileManager — GNOME Nautilus Style
+   FileManager — GNOME Nautilus Style（无HeaderBar版本）
    ============================================================ */
 
-.fm {
+/* ── App Container ───────────────────────────────────── */
+.fm-app {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: var(--window-bg);
+  min-height: 0; /* ✅ 建立 flex 约束链，确保子元素滚动正常 */
+  background: var(--ovelis-window-bg);
 }
 
-/* ── Header Bar (Nautilus CSD) ────────────────────────── */
-.fm-headerbar {
-  height: var(--headerbar-height);
-  background: var(--headerbar-bg);
-  border-bottom: 1px solid var(--border-color);
+/* ── Toolbar（替代原HeaderBar）───────────────────────── */
+.fm-toolbar {
+  height: 40px;
+  background: var(--ovelis-view-bg);
+  border-bottom: 1px solid var(--ovelis-border-color);
   display: flex;
   align-items: center;
-  padding: 0 12px;
-  gap: 6px;
+  padding: 0 8px;
+  gap: 8px;
   flex-shrink: 0;
+}
+
+.fm-toolbar-nav,
+.fm-toolbar-actions,
+.fm-toolbar-view {
+  display: flex;
+  gap: 4px;
+}
+
+.fm-toolbar-path {
+  flex: 1;
+  min-width: 200px;
   position: relative;
 }
 
-.fm-headerbar .nav-btn {
-  width: 32px;
-  height: 32px;
+.fm-toolbar-btn {
+  width: 28px;
+  height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
   background: none;
   border: none;
   border-radius: var(--radius-xs);
-  color: var(--text-secondary);
+  color: var(--ovelis-text-secondary);
   cursor: pointer;
-  font-size: 16px;
+  font-size: 14px;
   transition: background var(--duration-fast) var(--ease-out);
 }
 
-.fm-headerbar .nav-btn:hover:not(:disabled) {
-  background: var(--border-color);
-  color: var(--text-primary);
+.fm-toolbar-btn:hover:not(:disabled) {
+  background: var(--ovelis-border-color);
+  color: var(--ovelis-text-primary);
 }
 
-.fm-headerbar .nav-btn:disabled {
+.fm-toolbar-btn:disabled {
   opacity: 0.35;
   cursor: default;
+}
+
+.fm-toolbar-btn.active {
+  background: var(--ovelis-accent-bg);
+  color: var(--ovelis-text-on-accent);
 }
 
 /* ── Breadcrumb ──────────────────────────────────────── */
@@ -56,8 +75,8 @@
   min-width: 200px; /* ✅ 修改：从 0 改为 200px */
   padding: 0 8px;
   height: 32px;
-  background: var(--view-bg);
-  border: 1px solid var(--border-color);
+  background: var(--ovelis-view-bg);
+  border: 1px solid var(--ovelis-border-color);
   border-radius: var(--radius-sm);
   overflow: hidden;
 }
@@ -65,7 +84,7 @@
 .fm-breadcrumb .crumb {
   background: none;
   border: none;
-  color: var(--accent-bg);
+  color: var(--ovelis-accent-bg);
   font-family: var(--font-ui);
   font-size: var(--font-body);
   cursor: pointer;
@@ -76,11 +95,11 @@
 }
 
 .fm-breadcrumb .crumb:hover {
-  background: var(--border-color);
+  background: var(--ovelis-border-color);
 }
 
 .fm-breadcrumb .crumb.current {
-  color: var(--text-primary);
+  color: var(--ovelis-text-primary);
   cursor: default;
   font-weight: 600;
 }
@@ -90,7 +109,7 @@
 }
 
 .fm-breadcrumb .sep {
-  color: var(--text-disabled);
+  color: var(--ovelis-text-disabled);
   font-size: var(--font-small);
   user-select: none;
 }
@@ -107,90 +126,29 @@
   width: 100%;
   height: 32px;
   padding: 0 12px;
-  background: var(--view-bg);
-  border: 1px solid var(--border-color);
+  background: var(--ovelis-view-bg);
+  border: 1px solid var(--ovelis-border-color);
   border-radius: var(--radius-sm);
   font-family: var(--font-ui);
   font-size: var(--font-body);
-  color: var(--text-primary);
+  color: var(--ovelis-text-primary);
   outline: none;
   transition: border-color var(--duration-fast) var(--ease-out);
 }
 
 .fm-path-input:focus {
-  border-color: var(--accent-bg);
+  border-color: var(--ovelis-accent-bg);
 }
 
 .fm-path-input::placeholder {
-  color: var(--text-disabled);
-}
-
-/* ── View Toggle ──────────────────────────────────────── */
-.fm-headerbar .view-toggle {
-  display: flex;
-  background: var(--view-bg);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-xs);
-  overflow: hidden;
-}
-
-.fm-headerbar .view-toggle button {
-  width: 32px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: none;
-  border: none;
-  color: var(--text-secondary);
-  cursor: pointer;
-  font-size: 14px;
-  transition: background var(--duration-fast) var(--ease-out);
-}
-
-.fm-headerbar .view-toggle button:hover {
-  background: var(--border-color);
-}
-
-.fm-headerbar .view-toggle button.active {
-  background: var(--accent-bg);
-  color: var(--accent-fg);
-}
-
-.fm-headerbar .search-btn {
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: none;
-  border: none;
-  border-radius: var(--radius-xs);
-  color: var(--text-secondary);
-  cursor: pointer;
-  font-size: 16px;
-  transition: background var(--duration-fast) var(--ease-out);
-}
-
-.fm-headerbar .search-btn:hover {
-  background: var(--border-color);
+  color: var(--ovelis-text-disabled);
 }
 
 /* ── Content Area ─────────────────────────────────────── */
-.fm-content {
-  display: flex;
-  flex: 1;
-  overflow: hidden;
-  min-width: 0;
-}
-
-/* ── Sidebar ─────────────────────────────────────────── */
 .fm-sidebar {
-  width: var(--sidebar-width);
-  background: var(--sidebar-bg);
-  border-right: 1px solid var(--sidebar-border);
-  overflow-y: auto;
-  flex-shrink: 0;
+  /* ✅ 不设置width，由AppLayout的style={{ width }}控制 */
+  background: var(--ovelis-sidebar-bg);
+  /* ✅ 不设置border-right，AppLayout的.app-sidebar已设置 */
   padding: 8px 0;
 }
 
@@ -202,7 +160,7 @@
 .fm-sidebar .sidebar-section-title {
   font-size: var(--font-small);
   font-weight: 700;
-  color: var(--text-secondary);
+  color: var(--ovelis-text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
   padding: 4px 8px;
@@ -216,18 +174,18 @@
   padding: 6px 8px;
   border-radius: var(--radius-xs);
   cursor: pointer;
-  color: var(--sidebar-fg);
+  color: var(--ovelis-sidebar-fg);
   font-size: var(--font-body);
   transition: background var(--duration-fast) var(--ease-out);
 }
 
 .fm-sidebar .sidebar-item:hover {
-  background: var(--border-color);
+  background: var(--ovelis-border-color);
 }
 
 .fm-sidebar .sidebar-item.active {
-  background: var(--accent-bg);
-  color: var(--accent-fg);
+  background: var(--ovelis-accent-bg);
+  color: var(--ovelis-accent-fg);
 }
 
 .fm-sidebar .sidebar-item .si-icon {
@@ -244,13 +202,6 @@
 }
 
 /* ── File List / Grid Area ───────────────────────────── */
-.fm-main {
-  flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding: 8px;
-  min-width: 500px; /* ✅ 修改：从 0 改为 500px（最小可读宽度） */
-}
 
 /* List View */
 .fm-list {
@@ -259,17 +210,15 @@
 
 .fm-list .fm-list-header {
   display: grid;
-  grid-template-columns: minmax(200px, 1fr) 80px 120px 100px; /* ✅ 修改：第一列使用 minmax */
+  grid-template-columns: minmax(200px, 1fr) 80px 120px 100px;
   gap: 8px;
-  /* border-bottom: 1px solid var(--border-color); */  /* 隐藏下方线条 */
   font-size: var(--font-small);
   font-weight: 600;
-  color: var(--text-secondary);
+  color: var(--ovelis-text-secondary);
   position: sticky;
-  top: -8px;  /* 负边距抵消 fm-main 的 padding，让 header 覆盖空白区域 */
-  margin: -8px -8px 0 -8px;  /* 负边距扩展到 fm-main 边缘 */
-  padding: 12px 20px;  /* 上下 12px (4+8), 左右 20px (12+8) 补偿负边距 */
-  background: var(--window-bg);
+  top: 0; /* ✅ AppLayout无padding，直接sticky到顶部 */
+  padding: 8px 12px;
+  background: var(--ovelis-window-bg);
   z-index: 5;
 }
 
@@ -285,12 +234,12 @@
 }
 
 .fm-list .fm-list-row:hover {
-  background: var(--card-bg);
+  background: var(--ovelis-card-bg);
 }
 
 .fm-list .fm-list-row.selected {
-  background: var(--accent-bg);
-  color: var(--accent-fg);
+  background: var(--ovelis-accent-bg);
+  color: var(--ovelis-accent-fg);
 }
 
 .fm-list .fm-list-row .file-name {
@@ -318,23 +267,23 @@
   padding: 1px 2px;  /* 减小 padding，减少视觉偏移 */
   font-size: var(--font-body);
   font-family: inherit;
-  border: 1px solid var(--accent-bg);  /* 减小 border，减少视觉偏移 */
+  border: 1px solid var(--ovelis-accent-bg);  /* 减小 border，减少视觉偏移 */
   border-radius: 3px;  /* 减小圆角，配合更细的 border */
-  background: var(--view-bg);
-  color: var(--text-primary);
+  background: var(--ovelis-view-bg);
+  color: var(--ovelis-text-primary);
   outline: none;
 }
 
 .fm-list .fm-list-row .file-name .fn-edit-input:focus {
-  border-color: var(--accent-bg);
-  box-shadow: 0 0 0 1px var(--accent-bg);
+  border-color: var(--ovelis-accent-bg);
+  box-shadow: 0 0 0 1px var(--ovelis-accent-bg);
 }
 
 .fm-list .fm-list-row .file-size,
 .fm-list .fm-list-row .file-mtime,
 .fm-list .fm-list-row .file-perm {
   font-size: var(--font-small);
-  color: var(--text-secondary);
+  color: var(--ovelis-text-secondary);
 }
 
 .fm-list .fm-list-row.selected .file-size,
@@ -363,12 +312,12 @@
 }
 
 .fm-grid .fm-grid-item:hover {
-  background: var(--card-bg);
+  background: var(--ovelis-card-bg);
 }
 
 .fm-grid .fm-grid-item.selected {
-  background: var(--accent-bg);
-  color: var(--accent-fg);
+  background: var(--ovelis-accent-bg);
+  color: var(--ovelis-accent-fg);
 }
 
 .fm-grid .fm-grid-item .gi-icon {
@@ -390,25 +339,25 @@
   padding: 1px 2px;  /* 减小 padding，减少视觉偏移 */
   font-size: var(--font-small);
   font-family: inherit;
-  border: 1px solid var(--accent-bg);  /* 减小 border，减少视觉偏移 */
+  border: 1px solid var(--ovelis-accent-bg);  /* 减小 border，减少视觉偏移 */
   border-radius: 3px;  /* 减小圆角，配合更细的 border */
-  background: var(--view-bg);
-  color: var(--text-primary);
+  background: var(--ovelis-view-bg);
+  color: var(--ovelis-text-primary);
   outline: none;
   text-align: center;
 }
 
 .fm-grid .fm-grid-item .gi-edit-input:focus {
-  border-color: var(--accent-bg);
-  box-shadow: 0 0 0 1px var(--accent-bg);
+  border-color: var(--ovelis-accent-bg);
+  box-shadow: 0 0 0 1px var(--ovelis-accent-bg);
 }
 
 /* ── Context Menu ─────────────────────────────────────── */
 .fm-context-menu {
   position: fixed;
   min-width: 180px;
-  background: var(--view-bg);
-  border: 1px solid var(--border-color);
+  background: var(--ovelis-view-bg);
+  border: 1px solid var(--ovelis-border-color);
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-popup);
   z-index: 300;
@@ -428,13 +377,13 @@
   padding: 6px 16px;
   font-size: var(--font-body);
   cursor: pointer;
-  color: var(--text-primary);
+  color: var(--ovelis-text-primary);
   transition: background var(--duration-fast) var(--ease-out);
 }
 
 .fm-context-menu .ctx-item:hover {
-  background: var(--accent-bg);
-  color: var(--accent-fg);
+  background: var(--ovelis-accent-bg);
+  color: var(--ovelis-accent-fg);
 }
 
 .fm-context-menu .ctx-item .ctx-icon {
@@ -445,20 +394,20 @@
 
 .fm-context-menu .ctx-separator {
   height: 1px;
-  background: var(--border-color);
+  background: var(--ovelis-border-color);
   margin: 4px 0;
 }
 
 /* ── Status Bar ──────────────────────────────────────── */
 .fm-statusbar {
   height: 28px;
-  background: var(--headerbar-bg);
-  border-top: 1px solid var(--border-color);
+  background: var(--ovelis-headerbar-bg);
+  border-top: 1px solid var(--ovelis-border-color);
   display: flex;
   align-items: center;
   padding: 0 12px;
   font-size: var(--font-small);
-  color: var(--text-secondary);
+  color: var(--ovelis-text-secondary);
   gap: 16px;
   flex-shrink: 0;
 }
@@ -470,7 +419,7 @@
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: var(--text-disabled);
+  color: var(--ovelis-text-disabled);
   gap: 8px;
 }
 
@@ -489,7 +438,7 @@
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: var(--text-secondary);
+  color: var(--ovelis-text-secondary);
   gap: 8px;
   font-size: var(--font-body);
 }
@@ -497,8 +446,8 @@
 .fm-loading .spinner {
   width: 20px;
   height: 20px;
-  border: 2px solid var(--border-color);
-  border-top-color: var(--accent-bg);
+  border: 2px solid var(--ovelis-border-color);
+  border-top-color: var(--ovelis-accent-bg);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
@@ -514,8 +463,8 @@
   left: 50%;
   transform: translate(-50%, -50%);
   width: 400px;
-  background: var(--card-bg);
-  border: 1px solid var(--border-color);
+  background: var(--ovelis-card-bg);
+  border: 1px solid var(--ovelis-border-color);
   border-radius: var(--radius-md);
   padding: 16px;
   z-index: 1000;
@@ -536,7 +485,7 @@
 .pd-name {
   font-size: 14pt;
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--ovelis-text-primary);
 }
 
 .pd-content {
@@ -547,16 +496,16 @@
   display: flex;
   justify-content: space-between;
   padding: 8px 0;
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--ovelis-border-color);
 }
 
 .pd-label {
-  color: var(--text-secondary);
+  color: var(--ovelis-text-secondary);
   font-size: var(--font-body);
 }
 
 .pd-value {
-  color: var(--text-primary);
+  color: var(--ovelis-text-primary);
   font-size: var(--font-body);
 }
 
@@ -567,8 +516,8 @@
 
 .pd-footer button {
   padding: 6px 16px;
-  background: var(--accent-bg);
-  color: var(--accent-fg);
+  background: var(--ovelis-accent-bg);
+  color: var(--ovelis-accent-fg);
   border: none;
   border-radius: var(--radius-xs);
   cursor: pointer;
@@ -577,7 +526,7 @@
 }
 
 .pd-footer button:hover {
-  background: var(--accent-hover);
+  background: var(--ovelis-accent-hover);
 }
 
 /* ── Path Error Dialog (路径不存在弹窗 - 模态) ─────────────────── */
@@ -598,8 +547,8 @@
 .fm-path-error-dialog {
   position: relative;
   width: 400px;
-  background: var(--card-bg);
-  border: 1px solid var(--border-color);
+  background: var(--ovelis-card-bg);
+  border: 1px solid var(--ovelis-border-color);
   border-radius: var(--radius-md);
   padding: 20px;
   box-shadow: var(--shadow-popup);
@@ -621,15 +570,15 @@
 .ped-title {
   font-size: 14pt;
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--ovelis-text-primary);
 }
 
 .ped-message {
-  color: var(--text-secondary);
+  color: var(--ovelis-text-secondary);
   font-size: var(--font-body);
   margin-bottom: 16px;
   padding: 8px 12px;
-  background: var(--view-bg);
+  background: var(--ovelis-view-bg);
   border-radius: var(--radius-xs);
   word-break: break-all;
 }
@@ -641,8 +590,8 @@
 
 .ped-footer button {
   padding: 6px 20px;
-  background: var(--accent-bg);
-  color: var(--accent-fg);
+  background: var(--ovelis-accent-bg);
+  color: var(--ovelis-accent-fg);
   border: none;
   border-radius: var(--radius-xs);
   cursor: pointer;
@@ -651,7 +600,7 @@
 }
 
 .ped-footer button:hover {
-  background: var(--accent-hover);
+  background: var(--ovelis-accent-hover);
 }
 
 /* ── Offline Empty State (离线空状态) ─────────────────── */
@@ -680,12 +629,12 @@
 .fm-offline .offline-title {
   font-size: 15pt;
   font-weight: 700;
-  color: var(--text-primary);
+  color: var(--ovelis-text-primary);
 }
 
 .fm-offline .offline-desc {
   font-size: var(--font-body);
-  color: var(--text-secondary);
+  color: var(--ovelis-text-secondary);
   text-align: center;
   max-width: 320px;
   line-height: 1.5;
@@ -704,7 +653,7 @@
 .fm-offline .offline-servers-label {
   font-size: var(--font-small);
   font-weight: 600;
-  color: var(--text-secondary);
+  color: var(--ovelis-text-secondary);
   text-align: left;
   width: 100%;
   padding: 0 4px;
@@ -717,8 +666,8 @@
   gap: 10px;
   width: 100%;
   padding: 10px 14px;
-  background: var(--view-bg);
-  border: 1px solid var(--border-color);
+  background: var(--ovelis-view-bg);
+  border: 1px solid var(--ovelis-border-color);
   border-radius: var(--radius-sm);
   cursor: pointer;
   transition: all 150ms var(--ease-out);
@@ -726,7 +675,7 @@
 }
 
 .fm-offline .offline-server-btn:hover:not(:disabled) {
-  border-color: var(--accent-bg);
+  border-color: var(--ovelis-accent-bg);
   background: rgba(53, 132, 228, 0.06);
 }
 
@@ -752,7 +701,7 @@
 .fm-offline .offline-server-btn .osb-name {
   font-size: var(--font-body);
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--ovelis-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -760,7 +709,7 @@
 
 .fm-offline .offline-server-btn .osb-host {
   font-size: var(--font-small);
-  color: var(--text-secondary);
+  color: var(--ovelis-text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -768,14 +717,14 @@
 
 .fm-offline .offline-server-btn .osb-action {
   font-size: var(--font-body);
-  color: var(--accent-bg);
+  color: var(--ovelis-accent-bg);
   font-weight: 500;
   flex-shrink: 0;
   white-space: nowrap;
 }
 
 .fm-offline .offline-server-btn:disabled .osb-action {
-  color: var(--text-disabled);
+  color: var(--ovelis-text-disabled);
 }
 
 /* 无服务器提示 */
@@ -785,10 +734,10 @@
   align-items: center;
   gap: 4px;
   padding: 16px 24px;
-  background: var(--card-bg);
+  background: var(--ovelis-card-bg);
   border-radius: var(--radius-sm);
   font-size: var(--font-body);
-  color: var(--text-secondary);
+  color: var(--ovelis-text-secondary);
 }
 
 /* ── Path Suggestions ─────────────────────────────────── */
@@ -800,9 +749,9 @@
   left: 0;
   width: 100%;  /* 宽度匹配地址栏 */
   margin-top: 4px;  /* 与地址栏间隔 4px */
-  background: var(--view-bg);  /* 使用暖灰背景 */
+  background: var(--ovelis-view-bg);  /* 使用暖灰背景 */
   opacity: 0.85;  /* 85% 透明度 */
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--ovelis-border-color);
   border-radius: var(--radius-sm);  /* 四个角都圆角 */
   box-shadow: var(--shadow-popup);  /* 使用 CSS 变量 */
   z-index: 100;
@@ -821,12 +770,12 @@
 }
 
 .fm-suggestion-item:hover {
-  background: var(--card-bg);
+  background: var(--ovelis-card-bg);
 }
 
 .fm-suggestion-item.selected {
-  background: var(--accent-bg);
-  color: var(--accent-fg);
+  background: var(--ovelis-accent-bg);
+  color: var(--ovelis-accent-fg);
 }
 
 /* 建议项图标 */

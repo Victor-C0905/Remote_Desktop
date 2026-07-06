@@ -123,6 +123,16 @@ export interface ThemeColors {
   sliderThumbBg: string;
   /** 滑块活动/拖动状态色 */
   sliderActiveBg: string;
+
+  // 字体颜色和边框颜色
+  /** 主字体颜色 */
+  textPrimary: string;
+  /** 次级字体颜色 */
+  textSecondary: string;
+  /** 禁用字体颜色 */
+  textDisabled: string;
+  /** 边框颜色 */
+  borderColor: string;
 }
 
 // ============================================================
@@ -177,6 +187,10 @@ export const themes: Record<ThemeId, Theme> = {
       sliderTrackBg: '#d5d0c4',      // 深暖灰滑条轨道
       sliderThumbBg: '#15aa70',      // 绿色滑块
       sliderActiveBg: '#129864',     // 活动状态
+      textPrimary: 'rgba(0, 0, 0, 0.87)',
+      textSecondary: 'rgba(0, 0, 0, 0.60)',
+      textDisabled: 'rgba(0, 0, 0, 0.38)',
+      borderColor: 'rgba(0, 0, 0, 0.15)',
     },
     darkColors: {
       windowBg: '#242424',           // 中性暗色
@@ -192,6 +206,10 @@ export const themes: Record<ThemeId, Theme> = {
       sliderTrackBg: '#454545',      // 深灰滑条轨道
       sliderThumbBg: '#62a0ea',      // GNOME Blue 滑块
       sliderActiveBg: '#7ab2f0',     // 活动状态
+      textPrimary: 'rgba(255, 255, 255, 0.87)',
+      textSecondary: 'rgba(255, 255, 255, 0.60)',
+      textDisabled: 'rgba(255, 255, 255, 0.38)',
+      borderColor: 'rgba(255, 255, 255, 0.12)',
     },
     accentColorOptions: ['warmBlue', 'paperAccent'],
   },
@@ -220,6 +238,10 @@ export const themes: Record<ThemeId, Theme> = {
       sliderTrackBg: '#d0d0d0',      // 中性灰滑条轨道
       sliderThumbBg: '#3584e4',      // GNOME Blue 滑块
       sliderActiveBg: '#1f75d1',     // 活动状态
+      textPrimary: 'rgba(0, 0, 0, 0.87)',
+      textSecondary: 'rgba(0, 0, 0, 0.60)',
+      textDisabled: 'rgba(0, 0, 0, 0.38)',
+      borderColor: 'rgba(0, 0, 0, 0.15)',
     },
     darkColors: {
       windowBg: '#242424',           // 中性暗色
@@ -235,6 +257,10 @@ export const themes: Record<ThemeId, Theme> = {
       sliderTrackBg: '#454545',      // 深灰滑条轨道
       sliderThumbBg: '#62a0ea',      // GNOME Blue 滑块
       sliderActiveBg: '#7ab2f0',     // 活动状态
+      textPrimary: 'rgba(255, 255, 255, 0.87)',
+      textSecondary: 'rgba(255, 255, 255, 0.60)',
+      textDisabled: 'rgba(255, 255, 255, 0.38)',
+      borderColor: 'rgba(255, 255, 255, 0.12)',
     },
     // 无可选强调色，使用固定的 GNOME Blue
   },
@@ -264,6 +290,10 @@ export const themes: Record<ThemeId, Theme> = {
       sliderTrackBg: '#454545',      // 深灰滑条轨道
       sliderThumbBg: '#62a0ea',      // GNOME Blue 滑块
       sliderActiveBg: '#7ab2f0',     // 活动状态
+      textPrimary: 'rgba(255, 255, 255, 0.87)',
+      textSecondary: 'rgba(255, 255, 255, 0.60)',
+      textDisabled: 'rgba(255, 255, 255, 0.38)',
+      borderColor: 'rgba(255, 255, 255, 0.12)',
     },
     darkColors: {
       windowBg: '#242424',           // 与 lightColors 相同
@@ -279,6 +309,10 @@ export const themes: Record<ThemeId, Theme> = {
       sliderTrackBg: '#454545',
       sliderThumbBg: '#62a0ea',
       sliderActiveBg: '#7ab2f0',
+      textPrimary: 'rgba(255, 255, 255, 0.87)',
+      textSecondary: 'rgba(255, 255, 255, 0.60)',
+      textDisabled: 'rgba(255, 255, 255, 0.38)',
+      borderColor: 'rgba(255, 255, 255, 0.12)',
     },
     // 无可选强调色，使用固定的 GNOME Blue
   },

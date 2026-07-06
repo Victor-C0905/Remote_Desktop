@@ -7,6 +7,7 @@
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0; /* ✅ 建立 flex 约束链（关键修复） */
   background: #1e1e1e;
 }
 
@@ -15,8 +16,8 @@
   display: flex;
   align-items: center;
   padding: 8px 12px;
-  background: var(--headerbar-bg);
-  border-bottom: 1px solid var(--border-color);
+  background: var(--ovelis-headerbar-bg);
+  border-bottom: 1px solid var(--ovelis-border-color);
   gap: 8px;
   z-index: 10;
   position: relative;
@@ -27,14 +28,14 @@
   padding: 4px 12px;
   border: none;
   background: transparent;
-  color: var(--text-primary);
+  color: var(--ovelis-text-primary);
   cursor: pointer;
   border-radius: var(--radius-xs);
   font-size: 13px;
 }
 
 .header-button:hover {
-  background: var(--card-bg);
+  background: var(--ovelis-card-bg);
 }
 
 /* ── Search Bar ─────────────────────────────────────────────── */
@@ -42,8 +43,8 @@
   display: flex;
   align-items: center;
   padding: 8px 12px;
-  background: var(--card-bg);
-  border-bottom: 1px solid var(--border-color);
+  background: var(--ovelis-card-bg);
+  border-bottom: 1px solid var(--ovelis-border-color);
   gap: 8px;
   flex-shrink: 0;
 }
@@ -51,9 +52,9 @@
 .search-input {
   flex: 1;
   padding: 4px 8px;
-  border: 1px solid var(--border-color);
-  background: var(--view-bg);
-  color: var(--text-primary);
+  border: 1px solid var(--ovelis-border-color);
+  background: var(--ovelis-view-bg);
+  color: var(--ovelis-text-primary);
   border-radius: var(--radius-xs);
   font-family: var(--font-ui);
   font-size: 13px;
@@ -63,14 +64,14 @@
 }
 
 .search-input:focus {
-  outline: 2px solid var(--accent-bg);
+  outline: 2px solid var(--ovelis-accent-bg);
   outline-offset: -2px;
 }
 
 .search-button {
   padding: 4px 12px;
   border: none;
-  background: var(--accent-bg);
+  background: var(--ovelis-accent-bg);
   color: #fff;
   cursor: pointer;
   border-radius: var(--radius-xs);
@@ -78,7 +79,7 @@
 }
 
 .search-button:hover {
-  background: var(--accent-hover);
+  background: var(--ovelis-accent-hover);
 }
 
 /* ── Settings Panel ─────────────────────────────────────────────── */
@@ -88,8 +89,8 @@
   right: 12px;
   width: 300px;
   padding: 16px;
-  background: var(--card-bg);
-  border: 1px solid var(--border-color);
+  background: var(--ovelis-card-bg);
+  border: 1px solid var(--ovelis-border-color);
   border-radius: var(--radius-sm);
   z-index: 100;
   box-shadow: var(--shadow-popup);
@@ -99,7 +100,7 @@
   display: flex;
   align-items: center;
   margin-bottom: 12px;
-  color: var(--text-primary);
+  color: var(--ovelis-text-primary);
   font-size: 13px;
   font-family: var(--font-ui);
 }
@@ -123,7 +124,7 @@
   width: 100%;
   padding: 8px;
   border: none;
-  background: var(--accent-bg);
+  background: var(--ovelis-accent-bg);
   color: #fff;
   border-radius: var(--radius-xs);
   cursor: pointer;
@@ -132,15 +133,15 @@
 }
 
 .settings-close-button:hover {
-  background: var(--accent-hover);
+  background: var(--ovelis-accent-hover);
 }
 
 /* ── Context Menu ─────────────────────────────────────────────── */
 .terminal-context-menu {
   position: fixed;
   padding: 6px 0;
-  background: var(--card-bg);
-  border: 1px solid var(--border-color);
+  background: var(--ovelis-card-bg);
+  border: 1px solid var(--ovelis-border-color);
   border-radius: var(--radius-sm);
   z-index: 200;
   min-width: 160px;
@@ -153,7 +154,7 @@
   padding: 8px 16px;
   border: none;
   background: transparent;
-  color: var(--text-primary);
+  color: var(--ovelis-text-primary);
   cursor: pointer;
   text-align: left;
   font-size: 13px;
@@ -161,13 +162,13 @@
 }
 
 .menu-item:hover {
-  background: var(--card-hover);
+  background: var(--ovelis-card-hover);
 }
 
 .menu-divider {
   margin: 4px 0;
   border: none;
-  border-top: 1px solid var(--border-color);
+  border-top: 1px solid var(--ovelis-border-color);
 }
 
 /* ── Tab Bar ─────────────────────────────────────────────── */
@@ -175,8 +176,8 @@
   display: flex;
   align-items: center;
   height: 36px;
-  background: var(--headerbar-bg);
-  border-bottom: 1px solid var(--border-color);
+  background: var(--ovelis-headerbar-bg);
+  border-bottom: 1px solid var(--ovelis-border-color);
   padding: 0 4px;
   gap: 6px;  /* ✅ 修改：从 2px 改为 6px */
   flex-shrink: 0;
@@ -185,7 +186,7 @@
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: thin;
-  scrollbar-color: var(--border-color) transparent;
+  scrollbar-color: var(--ovelis-border-color) transparent;
 }
 
 .terminal-tab-bar::-webkit-scrollbar {
@@ -197,7 +198,7 @@
 }
 
 .terminal-tab-bar::-webkit-scrollbar-thumb {
-  background: var(--border-color);
+  background: var(--ovelis-border-color);
   border-radius: var(--radius-pill);
 }
 
@@ -212,7 +213,7 @@
   padding: 4px 8px;
   height: 28px;
   font-size: 12px;
-  color: var(--text-secondary);
+  color: var(--ovelis-text-secondary);
   border-radius: var(--radius-xs) var(--radius-xs) 0 0;
   cursor: pointer;
   border: none;
@@ -225,20 +226,20 @@
 }
 
 .terminal-tab:hover {
-  background: var(--card-bg);
-  color: var(--text-primary);
+  background: var(--ovelis-card-bg);
+  color: var(--ovelis-text-primary);
 }
 
 .terminal-tab.active {
-  background: var(--view-bg);
-  color: var(--text-primary);
-  border-bottom: 2px solid var(--accent-bg);
+  background: var(--ovelis-view-bg);
+  color: var(--ovelis-text-primary);
+  border-bottom: 2px solid var(--ovelis-accent-bg);
 }
 
 .terminal-tab .tab-icon {
   font-size: 11px;
   font-family: var(--font-mono);
-  color: var(--accent-bg);
+  color: var(--ovelis-accent-bg);
   flex-shrink: 0;
   width: 14px;
   text-align: center;
@@ -263,7 +264,7 @@
   border-radius: 50%;
   border: none;
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--ovelis-text-secondary);
   font-size: 12px;
   line-height: 1;
   cursor: pointer;
@@ -277,8 +278,8 @@
 }
 
 .terminal-tab .tab-close:hover {
-  background: var(--card-hover);
-  color: var(--text-primary);
+  background: var(--ovelis-card-hover);
+  color: var(--ovelis-text-primary);
 }
 
 .terminal-new-tab {
@@ -290,7 +291,7 @@
   border-radius: var(--radius-xs);
   border: none;
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--ovelis-text-secondary);
   font-size: 18px;
   cursor: pointer;
   margin-left: 2px;
@@ -298,8 +299,8 @@
 }
 
 .terminal-new-tab:hover {
-  background: var(--card-bg);
-  color: var(--text-primary);
+  background: var(--ovelis-card-bg);
+  color: var(--ovelis-text-primary);
 }
 
 /* ═════════════════════════════════════════════════════════════
@@ -308,6 +309,7 @@
 
 .terminal-container {
   flex: 1;
+  min-height: 0; /* ✅ 建立 flex 约束链（关键修复） */
   position: relative;
   min-height: 200px;  /* 设置最小高度，防止窗口过小导致 xterm.js 异常 */
   min-width: 400px;   /* 设置最小宽度，确保至少能显示合理的列数 */
@@ -419,7 +421,7 @@
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: var(--text-secondary);
+  color: var(--ovelis-text-secondary);
   gap: 12px;
 }
 
@@ -434,5 +436,5 @@
 
 .terminal-empty .empty-hint {
   font-size: 12px;
-  color: var(--text-disabled);
+  color: var(--ovelis-text-disabled);
 }

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useServerManager, formatLastConnected, getStatusIcon, getStatusColor } from "../context/ServerManager";
+import { useServerManager, formatLastConnected, getStatusColor } from "../context/ServerManager";
 import { useWallpaper, getPresetWallpaperName, getWallpaperStyle } from "../context/WallpaperContext";
 import { PRESET_WALLPAPERS } from "../stores/wallpaperStore";
 import { useSettingsStore } from "../stores/settingsStore";
@@ -763,16 +763,6 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
 
   return (
     <div className="st">
-      {/* Header Bar */}
-      <div className="st-headerbar">
-        <button className="st-back-btn" title="返回">←</button>
-        <span className="st-title">
-          {SIDEBAR_ITEMS.find(i => i.id === activeSection)?.label || "设置"}
-        </span>
-        <div className="st-headerbar-spacer" />
-        <button className="st-search-btn" title="搜索设置">🔍</button>
-      </div>
-
       {/* Content */}
       <div className="st-content">
         {/* Sidebar */}

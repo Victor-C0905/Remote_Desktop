@@ -12,7 +12,7 @@ export function useWindowEvent(
   eventType: WindowEventType,
   handler: (event: WindowEvent) => void
 ): void {
-  const manager = useWindowManager();
+  const { manager } = useWindowManager();
 
   useEffect(() => {
     return manager.on(eventType, handler);

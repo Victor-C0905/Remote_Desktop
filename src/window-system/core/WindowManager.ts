@@ -22,6 +22,7 @@ export class WindowManager implements IWindowManager {
   private registry: WindowRegistry;
   private eventBus: WindowEventBus;
   private activeWindowId: string | null = null;
+  private saveTimer: NodeJS.Timeout | null = null; // ✅ 新增：save 定时器
 
   constructor(registry: WindowRegistry) {
     this.windows = new WindowCollection();
@@ -269,10 +270,33 @@ export class WindowManager implements IWindowManager {
 
   /**
    * Save window states to localStorage
+   * ✅ 优化：异步延迟执行，避免频繁写入和阻塞 UI
    */
   save(): void {
-    const data = this.windows.getAll().map(w => w.serialize());
-    localStorage.setItem('gnome-remote-windows', JSON.stringify(data));
+    // ✅ 清除之前的定时器
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+    }
+    
+    // ✅ 延迟 1 秒后执行 save（避免频繁写入）
+    this.saveTimer = setTimeout(() => {
+      try {
+        const data = this.windows.getAll().map(w => w.serialize());
+        localStorage.setItem('gnome-remote-windows', JSON.stringify(data));
+      } catch (error) {
+        console.error('[WindowManager] Failed to save window states:', error);
+        // ✅ 尝试清理旧数据后再保存
+        try {
+          const data = this.windows.getAll().map(w => w.serialize());
+          localStorage.removeItem('gnome-remote-windows');
+          localStorage.setItem('gnome-remote-windows', JSON.stringify(data));
+        } catch (retryError) {
+          console.error('[WindowManager] Retry save failed:', retryError);
+          // 最终失败，不影响应用运行
+        }
+      }
+      this.saveTimer = null;
+    }, 1000);
   }
 
   /**
