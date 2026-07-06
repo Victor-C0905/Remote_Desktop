@@ -146,16 +146,27 @@ export function WindowShell({
       const newX = e.clientX - dragStartPos.current.x;
       const newY = e.clientY - dragStartPos.current.y;
 
-      // 获取父容器尺寸，限制窗口在父容器内
+      // 获取父容器尺寸
       const parentEl = windowRef.current?.parentElement;
       const parentWidth = parentEl?.clientWidth || window.innerWidth;
       const parentHeight = parentEl?.clientHeight || window.innerHeight;
 
-      // 窗口必须完全在父容器内可见
-      const maxX = parentWidth - size.width;
-      const maxY = parentHeight - size.height;
-      const minX = 0;
-      const minY = 0;
+      // ── 边界约束逻辑（符合标准窗口设计）──────────────
+      // 1. 顶部边界：无法超越 TopBar（y >= 0）
+      const minY = 0; // TopBar 高度已由 Desktop 处理，Desktop 区域 y=0 即 TopBar 下方
+
+      // 2. 左、右、下边界：可以穿越，但保留最小可见区域
+      // 防止窗口完全隐藏在边缘，导致无法选中
+      const MIN_VISIBLE = 100; // 最小可见区域（像素）
+
+      // 左边界：窗口可以向左移出屏幕，但至少保留 MIN_VISIBLE 在可视区域
+      const minX = -(size.width - MIN_VISIBLE);
+
+      // 右边界：窗口可以向右移出屏幕，但至少保留 MIN_VISIBLE 在可视区域
+      const maxX = parentWidth - MIN_VISIBLE;
+
+      // 下边界：窗口可以向下移出屏幕，但至少保留 MIN_VISIBLE 在可视区域
+      const maxY = parentHeight - MIN_VISIBLE;
 
       const boundedX = Math.max(minX, Math.min(newX, maxX));
       const boundedY = Math.max(minY, Math.min(newY, maxY));
@@ -262,7 +273,7 @@ export function WindowShell({
       let newX = resizeStartPos.current.posX;
       let newY = resizeStartPos.current.posY;
 
-      // 获取父容器尺寸，限制窗口在父容器内
+      // 获取父容器尺寸
       const parentEl = windowRef.current?.parentElement;
       const parentWidth = parentEl?.clientWidth || window.innerWidth;
       const parentHeight = parentEl?.clientHeight || window.innerHeight;
@@ -271,26 +282,46 @@ export function WindowShell({
       const minWidth = 400;
       const minHeight = 300;
 
+      // ── 边界约束逻辑（符合标准窗口设计）──────────────
+      // 1. 顶部边界：无法超越 TopBar（y >= 0）
+      const minY = 0; // TopBar 高度已由 Desktop 处理，Desktop 区域 y=0 即 TopBar 下方
+
+      // 2. 左、右、下边界：可以穿越，但保留最小可见区域
+      const MIN_VISIBLE = 100; // 最小可见区域（像素）
+
       // 根据调整方向计算新尺寸和位置
       if (resizeDirection.includes('e')) {
-        const maxWidth = parentWidth - newX;
+        // 右边界：可以向右扩展，但至少保留 MIN_VISIBLE 在可视区域
+        const maxWidth = parentWidth - newX + (newX < 0 ? -newX : 0);
         newWidth = Math.max(minWidth, Math.min(maxWidth, resizeStartPos.current.width + deltaX));
+        // 确保右边界不超出允许范围
+        if (newX + newWidth > parentWidth - MIN_VISIBLE) {
+          newWidth = parentWidth - MIN_VISIBLE - newX;
+        }
       }
       if (resizeDirection.includes('w')) {
+        // 左边界：可以向左扩展，但至少保留 MIN_VISIBLE 在可视区域
         const widthDelta = Math.min(deltaX, resizeStartPos.current.width - minWidth);
         newWidth = resizeStartPos.current.width - widthDelta;
         const newXCandidate = resizeStartPos.current.posX + widthDelta;
-        newX = Math.max(0, newXCandidate);
+        // 左边界最小位置：-(width - MIN_VISIBLE)
+        newX = Math.max(-(newWidth - MIN_VISIBLE), newXCandidate);
       }
       if (resizeDirection.includes('s')) {
-        const maxHeight = parentHeight - newY;
+        // 下边界：可以向下扩展，但至少保留 MIN_VISIBLE 在可视区域
+        const maxHeight = parentHeight - newY + (newY < 0 ? -newY : 0);
         newHeight = Math.max(minHeight, Math.min(maxHeight, resizeStartPos.current.height + deltaY));
+        // 确保下边界不超出允许范围
+        if (newY + newHeight > parentHeight - MIN_VISIBLE) {
+          newHeight = parentHeight - MIN_VISIBLE - newY;
+        }
       }
       if (resizeDirection.includes('n')) {
+        // 上边界：无法超越 TopBar
         const heightDelta = Math.min(deltaY, resizeStartPos.current.height - minHeight);
         newHeight = resizeStartPos.current.height - heightDelta;
         const newYCandidate = resizeStartPos.current.posY + heightDelta;
-        newY = Math.max(0, newYCandidate);
+        newY = Math.max(minY, newYCandidate);
       }
 
       resizeDataRef.current = { x: newX, y: newY, width: newWidth, height: newHeight };

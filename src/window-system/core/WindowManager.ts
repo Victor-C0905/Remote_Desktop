@@ -69,10 +69,34 @@ export class WindowManager implements IWindowManager {
     const containerWidth = window.innerWidth;
     const containerHeight = window.innerHeight - 32; // Subtract TopBar height
 
-    const position = options?.position ?? {
-      x: Math.min(100 + this.windows.count() * 30, containerWidth - app.defaultSize.width - 100),
-      y: Math.min(100 + this.windows.count() * 30, containerHeight - app.defaultSize.height - 100),
-    };
+    // ── 边界约束逻辑（符合标准窗口设计）──────────────
+    // 1. 顶部边界：无法超越 TopBar（y >= 0）
+    const minY = 0;
+
+    // 2. 左、右、下边界：可以穿越，但保留最小可见区域
+    const MIN_VISIBLE = 100; // 最小可见区域（像素）
+
+    const defaultX = Math.min(100 + this.windows.count() * 30, containerWidth - app.defaultSize.width - 100);
+    const defaultY = Math.min(100 + this.windows.count() * 30, containerHeight - app.defaultSize.height - 100);
+
+    // 确保默认位置在可视范围内（窗口创建时应该完全可见）
+    const constrainedDefaultX = Math.max(0, Math.min(defaultX, containerWidth - app.defaultSize.width));
+    const constrainedDefaultY = Math.max(minY, Math.min(defaultY, containerHeight - app.defaultSize.height));
+
+    // 如果提供了自定义位置，应用边界约束
+    let position = options?.position ?? { x: constrainedDefaultX, y: constrainedDefaultY };
+
+    if (options?.position) {
+      // 应用边界约束（允许部分移出屏幕，但保留最小可见区域）
+      const minX = -(app.defaultSize.width - MIN_VISIBLE);
+      const maxX = containerWidth - MIN_VISIBLE;
+      const maxY = containerHeight - MIN_VISIBLE;
+
+      position = {
+        x: Math.max(minX, Math.min(options.position.x, maxX)),
+        y: Math.max(minY, Math.min(options.position.y, maxY)),
+      };
+    }
 
     const size = options?.size ?? app.defaultSize;
 
@@ -301,6 +325,7 @@ export class WindowManager implements IWindowManager {
 
   /**
    * Load window states from localStorage
+   * Applies boundary constraints to restored positions
    */
   load(): void {
     const stored = localStorage.getItem('gnome-remote-windows');
@@ -308,8 +333,32 @@ export class WindowManager implements IWindowManager {
 
     try {
       const data = JSON.parse(stored) as PersistedWindowData[];
+
+      // ── 边界约束逻辑（符合标准窗口设计）──────────────
+      const containerWidth = window.innerWidth;
+      const containerHeight = window.innerHeight - 32; // Subtract TopBar height
+      const minY = 0; // 无法超越 TopBar
+      const MIN_VISIBLE = 100; // 最小可见区域
+
       data.forEach(windowData => {
         const window = Window.deserialize(windowData);
+
+        // 应用边界约束（防止窗口恢复时超出屏幕边界）
+        const minX = -(windowData.size.width - MIN_VISIBLE);
+        const maxX = containerWidth - MIN_VISIBLE;
+        const maxY = containerHeight - MIN_VISIBLE;
+
+        const constrainedPosition = {
+          x: Math.max(minX, Math.min(windowData.position.x, maxX)),
+          y: Math.max(minY, Math.min(windowData.position.y, maxY)),
+        };
+
+        // 更新窗口位置（如果超出边界）
+        if (windowData.position.x !== constrainedPosition.x ||
+            windowData.position.y !== constrainedPosition.y) {
+          window.setPosition(constrainedPosition);
+        }
+
         this.windows.add(window);
       });
     } catch (error) {
