@@ -1,13 +1,25 @@
 // src/window-system/WindowManagerContext.tsx
 
-import { createContext, useContext, useMemo, useEffect, useReducer, ReactNode } from 'react';
+import { createContext, useContext, useMemo, useEffect, useState, ReactNode } from 'react';
 import { WindowManager } from './core/WindowManager';
 import { WindowRegistry } from './core/WindowRegistry';
 import { IWindowManager } from './types';
 import { initWindowRegistry } from './init';
 
+// ✅ 新增：全局状态类型
+interface GlobalState {
+  windowList: Array<{ id: string; appId: string; isMinimized: boolean }>;
+  activeWindowId: string | null;
+}
+
+// ✅ 新增：Context 类型（包含 manager 和 globalState）
+interface WindowManagerContextValue {
+  manager: IWindowManager;
+  globalState: GlobalState;
+}
+
 // Create context with null default
-export const WindowManagerContext = createContext<IWindowManager | null>(null);
+export const WindowManagerContext = createContext<WindowManagerContextValue | null>(null);
 
 // Registry singleton (shared across all WindowManager instances)
 let registryInstance: WindowRegistry | null = null;
@@ -31,12 +43,42 @@ export function WindowManagerProvider({ children }: { children: ReactNode }) {
     return new WindowManager(registry);
   }, [registry]);
 
+  // ✅ 新增：全局关键状态
+  const [globalState, setGlobalState] = useState<GlobalState>({
+    windowList: [],
+    activeWindowId: null,
+  });
+
   // Load persisted windows on mount
   useEffect(() => {
     manager.load();
   }, [manager]);
 
-  // Save windows on changes
+  // ✅ 新增：选择性事件监听（只监听关键事件）
+  useEffect(() => {
+    return manager.onAny((event) => {
+      const criticalEvents = [
+        'window:created',
+        'window:closed',
+        'window:focused',
+        'window:minimized',
+        'window:restored'
+      ];
+
+      if (criticalEvents.includes(event.type)) {
+        setGlobalState({
+          windowList: manager.getAll().map(w => ({
+            id: w.id,
+            appId: w.appId,
+            isMinimized: w.minimized
+          })),
+          activeWindowId: manager.getActive()?.id || null
+        });
+      }
+    });
+  }, [manager]);
+
+  // Save windows on changes（保持原有逻辑）
   useEffect(() => {
     return manager.onAny(() => {
       manager.save();
@@ -44,7 +86,10 @@ export function WindowManagerProvider({ children }: { children: ReactNode }) {
   }, [manager]);
 
   return (
-    <WindowManagerContext.Provider value={manager}>
+    <WindowManagerContext.Provider value={{
+      manager,
+      globalState  // ✅ 新增：提供精简全局状态
+    }}>
       {children}
     </WindowManagerContext.Provider>
   );
@@ -59,20 +104,14 @@ export function useWindowManagerContext(): boolean {
 
 /**
  * Hook to access the WindowManager instance
- * Automatically re-renders when any window event occurs
+ * Returns manager and globalState
  */
-export function useWindowManager(): IWindowManager {
-  const manager = useContext(WindowManagerContext);
-  if (!manager) {
+export function useWindowManager(): WindowManagerContextValue {
+  const context = useContext(WindowManagerContext);
+  if (!context) {
     throw new Error('[useWindowManager] WindowManagerContext not provided');
   }
 
-  // Force re-render on any window event
-  const [, forceUpdate] = useReducer(x => x + 1, 0);
-
-  useEffect(() => {
-    return manager.onAny(() => forceUpdate());
-  }, [manager]);
-
-  return manager;
+  // ✅ 移除：不再强制重渲染（改为依赖 globalState）
+  return context;
 }

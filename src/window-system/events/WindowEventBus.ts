@@ -8,7 +8,7 @@ import { WindowEventType, WindowEvent, EventHandler, Unsubscribe } from '../type
  */
 export class WindowEventBus {
   private listeners: Map<WindowEventType, Set<EventHandler>> = new Map();
-  private anyListeners: Set<() => void> = new Set();
+  private anyListeners: Set<(event: WindowEvent) => void> = new Set();
 
   /**
    * Subscribe to a specific event type
@@ -27,10 +27,10 @@ export class WindowEventBus {
   /**
    * Subscribe to any event (for React force update)
    */
-  onAny(handler: () => void): Unsubscribe {
-    this.anyListeners.add(handler);
+  onAny(handler: (event: WindowEvent) => void): Unsubscribe {
+    this.anyListeners.add(handler as any);
     return () => {
-      this.anyListeners.delete(handler);
+      this.anyListeners.delete(handler as any);
     };
   }
 
@@ -45,7 +45,7 @@ export class WindowEventBus {
     }
 
     // Notify any-event listeners
-    this.anyListeners.forEach(handler => handler());
+    this.anyListeners.forEach(handler => handler(event));
   }
 
   /**
