@@ -152,15 +152,16 @@ function TerminalInstance({
 
       let lastCols = terminal.cols;
       let lastRows = terminal.rows;
-      let containerWidth = container.offsetWidth;
-      let containerHeight = container.offsetHeight;
+      // 容器尺寸（用于后续扩展）
+      // let containerWidth = container.offsetWidth;
+      // let containerHeight = container.offsetHeight;
 
       // ResizeObserver：只记录尺寸变化（不执行 resize）
-      const resizeObserver = new ResizeObserver(() => {
-        containerWidth = container.offsetWidth;
-        containerHeight = container.offsetHeight;
-      });
-      resizeObserver.observe(container);
+      // const resizeObserver = new ResizeObserver(() => {
+      //   containerWidth = container.offsetWidth;
+      //   containerHeight = container.offsetHeight;
+      // });
+      // resizeObserver.observe(container);
 
       // mouseup 事件：松开鼠标时立即执行 resize
       const handleMouseUp = () => {
@@ -195,7 +196,7 @@ function TerminalInstance({
 
       // 存储 disposable 以便 cleanup
       unlistenRefs.current.push(() => {
-        resizeObserver.disconnect();
+        // resizeObserver.disconnect(); // 已注释：resizeObserver 不再使用
         window.removeEventListener('mouseup', handleMouseUp);
       });
 
@@ -645,31 +646,32 @@ export function TerminalApp({ windowId }: { windowId: string }) {
 
   return (
     <div className="terminal-app" onClick={() => { if (contextMenu) setContextMenu(null); }}>
-      {/* Header Bar */}
-      <div className="terminal-header-bar">
-        <button className="header-button" onClick={handleNewTab} title="新建标签">+ 新建</button>
-        <button className="header-button" onClick={() => setShowSearch((v) => !v)} title="搜索">🔍</button>
-        <button className="header-button" onClick={() => setShowSettings((v) => !v)} title="设置">⚙️</button>
-        <div style={{ flex: 1 }} />
-        <span className="header-button" style={{ color: '#888', cursor: 'default' }}>
-          {activeServer ? `● 已连接 ${activeServer.name}` : '○ 本地演示模式'}
-        </span>
-      </div>
-
-      {/* Tab Bar */}
+      {/* Tab Bar - 整合原HeaderBar功能 */}
       <div className="terminal-tab-bar">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            className={`terminal-tab ${tab.id === activeTabId ? 'active' : ''}`}
-            onClick={() => setActiveTabId(tab.id)}
-          >
-            <span className="tab-icon">$</span>
-            <span className="tab-label">{tab.label}</span>
-            <span className="tab-close" onClick={(e) => handleCloseTab(tab.id, e)} title="关闭标签">×</span>
-          </button>
-        ))}
-        <button className="terminal-new-tab" onClick={handleNewTab} title="新建标签">+</button>
+        {/* Tab List */}
+        <div className="terminal-tab-list">
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              className={`terminal-tab ${tab.id === activeTabId ? 'active' : ''}`}
+              onClick={() => setActiveTabId(tab.id)}
+            >
+              <span className="tab-icon">$</span>
+              <span className="tab-label">{tab.label}</span>
+              <span className="tab-close" onClick={(e) => handleCloseTab(tab.id, e)} title="关闭标签">×</span>
+            </button>
+          ))}
+          <button className="terminal-new-tab" onClick={handleNewTab} title="新建标签">+</button>
+        </div>
+
+        {/* Actions and Status */}
+        <div className="terminal-tab-actions">
+          <button className="terminal-tab-btn" onClick={() => setShowSearch((v) => !v)} title="搜索">🔍</button>
+          <button className="terminal-tab-btn" onClick={() => setShowSettings((v) => !v)} title="设置">⚙️</button>
+          <span className="terminal-status">
+            {activeServer ? `● ${activeServer.name}` : '○ 本地'}
+          </span>
+        </div>
       </div>
 
       {/* Search Bar */}

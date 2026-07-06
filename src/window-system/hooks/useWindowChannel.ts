@@ -13,7 +13,7 @@ import {
  * Provides a structured way to send and receive events
  */
 export function useWindowChannel() {
-  const manager = useWindowManager();
+  const { manager } = useWindowManager();
 
   /**
    * Subscribe to a typed event
@@ -76,7 +76,7 @@ export function useTypedWindowEvent<T extends CustomEventType>(
   handler: (event: TypedWindowEvent<T>) => void,
   sourceWindowId?: string // Optional: filter by source
 ): void {
-  const manager = useWindowManager();
+  const { manager } = useWindowManager();
 
   useEffect(() => {
     const unsubscribe = manager.on(eventType as any, (event: any) => {

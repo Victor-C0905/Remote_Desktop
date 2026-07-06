@@ -8,7 +8,7 @@ import { WindowState } from '../types';
  * Returns window state and control methods
  */
 export function useWindowState(windowId: string): WindowState {
-  const manager = useWindowManager();
+  const { manager } = useWindowManager();
   const window = manager.getById(windowId);
 
   if (!window) {

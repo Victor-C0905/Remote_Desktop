@@ -3,14 +3,21 @@
   height: 100%;
   display: flex;
   flex-direction: column;
-  overflow: hidden; /* 限制子元素在可视区域内 */
+  /* ✅ 移除 overflow: hidden（关键修复） */
+  /* 
+   * 理由：
+   * - .shell是Desktop的最外层容器
+   * - overflow: hidden会阻止所有子元素的滚动（包括desktop-area和WindowShell）
+   * - desktop-area已经有overflow: hidden限制窗口位置
+   * - 不需要.shell再次设置overflow: hidden
+   */
 }
 
 /* ── Top Bar ──────────────────────────────────────────── */
 .top-bar {
   height: var(--topbar-height);
-  background: var(--headerbar-bg);
-  border-bottom: 1px solid var(--border-color);
+  background: var(--ovelis-headerbar-bg);
+  border-bottom: 1px solid var(--ovelis-border-color);
   display: flex;
   align-items: center;
   padding: 0 12px;
@@ -33,7 +40,7 @@
 .top-bar .activities-btn {
   background: none;
   border: none;
-  color: var(--text-primary);
+  color: var(--ovelis-text-primary);
   font-family: var(--font-ui);
   font-size: var(--font-small);
   font-weight: 700;
@@ -44,13 +51,13 @@
 }
 
 .top-bar .activities-btn:hover {
-  background: var(--border-color);
+  background: var(--ovelis-border-color);
 }
 
 .top-bar .separator {
   width: 1px;
   height: 16px;
-  background: var(--border-color);
+  background: var(--ovelis-border-color);
 }
 
 .top-bar .connection-indicator {
@@ -58,7 +65,7 @@
   align-items: center;
   gap: 6px;
   font-size: var(--font-small);
-  color: var(--text-secondary);
+  color: var(--ovelis-text-secondary);
 }
 
 .top-bar .connection-dot {
@@ -80,20 +87,20 @@
   display: flex;
   gap: 12px;
   font-size: var(--font-small);
-  color: var(--text-secondary);
+  color: var(--ovelis-text-secondary);
   font-variant-numeric: tabular-nums;
 }
 
 .top-bar .clock {
   font-size: var(--font-small);
-  color: var(--text-primary);
+  color: var(--ovelis-text-primary);
   font-variant-numeric: tabular-nums;
 }
 
 .top-bar .notification-btn {
   background: none;
   border: none;
-  color: var(--text-secondary);
+  color: var(--ovelis-text-secondary);
   cursor: pointer;
   padding: 2px 6px;
   border-radius: var(--radius-xs);
@@ -102,7 +109,7 @@
 }
 
 .top-bar .notification-btn:hover {
-  background: var(--border-color);
+  background: var(--ovelis-border-color);
 }
 
 /* ── Desktop Area ────────────────────────────────────── */
@@ -246,10 +253,10 @@
 .overview-search {
   width: 400px;
   padding: 10px 16px;
-  border: 2px solid var(--border-color);
+  border: 2px solid var(--ovelis-border-color);
   border-radius: var(--radius-lg);
   background: rgba(255, 255, 255, 0.95);
-  color: var(--text-primary);
+  color: var(--ovelis-text-primary);
   font-family: var(--font-ui);
   font-size: var(--font-body);
   outline: none;
@@ -257,11 +264,11 @@
 }
 
 .overview-search:focus {
-  border-color: var(--accent-bg);
+  border-color: var(--ovelis-accent-bg);
 }
 
 .overview-search::placeholder {
-  color: var(--text-disabled);
+  color: var(--ovelis-text-disabled);
 }
 
 .overview-apps {
@@ -311,7 +318,7 @@
   position: absolute;
   top: 0;
   left: 0;
-  background: var(--window-bg);
+  background: var(--ovelis-window-bg);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-popup);
   display: flex;
@@ -324,7 +331,8 @@
 }
 
 .app-window.active {
-  /* 移除 CSS 中的 z-index，由 inline style 控制 */
+  /* ✅ 使用 CSS 固定 z-index，避免动态计算 */
+  z-index: 90;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
   /* 取消边框，只使用阴影区分活动窗口 */
   border: none;
@@ -348,7 +356,8 @@
 
 /* 非激活窗口的样式 */
 .app-window:not(.active) {
-  /* 移除 CSS 中的 z-index，由 inline style 控制 */
+  /* ✅ 使用 CSS 固定 z-index */
+  z-index: 10;
   box-shadow: var(--shadow-popup);
   border: none;
 }
@@ -361,8 +370,8 @@
 
 .app-window-titlebar {
   height: var(--headerbar-height);
-  background: var(--headerbar-bg);
-  border-bottom: 1px solid var(--border-color);
+  background: var(--ovelis-headerbar-bg);
+  border-bottom: 1px solid var(--ovelis-border-color);
   display: flex;
   align-items: center;
   padding: 0 12px;
@@ -420,7 +429,7 @@
 .awt-title {
   font-size: var(--font-small);
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--ovelis-text-primary);
   flex: 1;
   text-align: center;
 }
@@ -431,7 +440,9 @@
 
 .app-window-content {
   flex: 1;
-  overflow: hidden;
+  min-height: 0;  /* ✅ 新增：建立flex高度约束链，让子应用的height:100%生效 */
+  /* 移除 overflow: hidden，让子应用内部的滚动容器正常工作
+     子应用（FileManager, Settings, Terminal）自己管理 overflow */
 }
 
 /* ── App Placeholder ──────────────────────────────────── */
@@ -441,7 +452,7 @@
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: var(--text-disabled);
+  color: var(--ovelis-text-disabled);
   gap: 12px;
 }
 

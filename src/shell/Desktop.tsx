@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, memo } from "react";
 import { FileManager } from "../apps/FileManager";
 import { TerminalApp } from "../apps/Terminal";
 import { SystemMonitor } from "../apps/SystemMonitor";
@@ -7,15 +7,20 @@ import { NotificationCenter, NotificationBadge } from "./NotificationCenter";
 import { useGlobalShortcuts, createAppShortcuts } from "../hooks/useGlobalShortcuts";
 import { ServerManagerProvider, useServerManager, getStatusColor } from "../context/ServerManager";
 import { formatBytesSafe, formatPercentSafe } from "../utils/offlineDefaults";
-import { usePreloader } from "../hooks/usePreloader";
-import { FileManagerSkeleton } from "../components/skeleton/FileManagerSkeleton";
+
 import { WallpaperProvider, useWallpaper, getWallpaperStyle } from "../context/WallpaperContext";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useTheme } from "../hooks/useTheme";
-import { DraggableWindow } from "../components/DraggableWindow";
+import { WindowShell } from "../components/window-shell";
 import { WindowManagerProvider, useWindowManager } from "../window-system/WindowManagerContext";
 import { listen } from "@tauri-apps/api/event";
 import "./Desktop.css";
+
+// ✅ 新增：窗口局部状态类型
+interface WindowLocalState {
+  position: { x: number; y: number };
+  size: { width: number; height: number };
+}
 
 // 完整的 MetricsSnapshot 类型（匹配 Agent）
 interface MetricsSnapshot {
@@ -53,6 +58,35 @@ const DOCK_APPS: DesktopApp[] = [
   { id: "settings", icon: "⚙️",  label: "设置" },
 ];
 
+// ✅ 新增：应用内容组件（React.memo 包裹）
+const MemoizedAppContent = memo(function AppContent({ 
+  appId, 
+  windowId, 
+  preloadData 
+}: { 
+  appId: string; 
+  windowId: string;
+  preloadData?: any;
+}) {
+  switch (appId) {
+    case 'files':
+      return <FileManager windowId={windowId} preloadData={preloadData} />;
+    case 'terminal':
+      return <TerminalApp windowId={windowId} />;
+    case 'monitor':
+      return <SystemMonitor windowId={windowId} />;
+    case 'settings':
+      return <Settings windowId={windowId} />;
+    default:
+      return <div>Unknown app</div>;
+  }
+}, (prevProps, nextProps) => {
+  // ✅ 只在 appId 或 windowId 变化时重渲染
+  return prevProps.appId === nextProps.appId && 
+         prevProps.windowId === nextProps.windowId &&
+         prevProps.preloadData === nextProps.preloadData;
+});
+
 export function Desktop() {
   return (
     <ServerManagerProvider>
@@ -73,16 +107,16 @@ function DesktopContent() {
   const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
   const [clock, setClock] = useState("");
 
+  // ✅ 新增：窗口局部状态管理（position/size），避免读取旧值
+  const [windowLocalStates, setWindowLocalStates] = useState<Map<string, WindowLocalState>>(new Map());
+
   const { activeServer } = useServerManager();
   const { wallpaper } = useWallpaper();
-  const manager = useWindowManager();
+  const { manager, globalState } = useWindowManager();
 
   // 全局主题应用（确保所有窗口都使用正确的主题 CSS 变量）
   const { themeId, accentColorId } = useSettingsStore();
   useTheme(themeId, accentColorId);
-
-  // ── FileManager 预加载器 ──
-  const preloader = usePreloader();
 
   // Clock
   useEffect(() => {
@@ -146,25 +180,9 @@ function DesktopContent() {
       return;
     }
 
-    // FileManager 需要预加载
-    if (appId === 'files') {
-      try {
-        await preloader.preload(activeServer?.id ?? null);
-        await manager.create(appId, {
-          serverId: activeServer?.id,
-          preloadData: preloader.data,
-        });
-      } catch {
-        console.error("[Desktop] FileManager 预加载失败");
-        // 创建窗口但标记为错误状态
-        const win = await manager.create(appId, { serverId: activeServer?.id });
-        win.setPreloadState('error');
-      }
-    } else {
-      // 其他应用:直接创建
-      await manager.create(appId, { serverId: activeServer?.id });
-    }
-  }, [manager, preloader, activeServer?.id, setOverviewVisible]);
+    // 所有应用直接创建（FileManager 自行处理数据加载和离线状态）
+    await manager.create(appId, { serverId: activeServer?.id });
+  }, [manager, activeServer?.id, setOverviewVisible]);
 
   // Global shortcuts
   const shortcuts = createAppShortcuts(
@@ -175,41 +193,10 @@ function DesktopContent() {
   );
   useGlobalShortcuts(shortcuts);
 
-  // Render app content（根据 preloadState 决定展示真实组件还是骨架屏）
+  // Render app content（使用 React.memo 包裹的组件）
   const renderAppContent = (appId: string, win: ReturnType<typeof manager.getById>) => {
     if (!win) return null;
-
-    switch (appId) {
-      case 'files':
-        if (win.preloadState === 'error') {
-          return (
-            <div className="fm" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12, height: '100%' }}>
-              <div style={{ fontSize: 36 }}>⚠️</div>
-              <div>数据加载失败</div>
-              <button
-                onClick={() => {
-                  preloader.preload(activeServer?.id ?? null).then(() => {
-                    win.setPreloadData(preloader.data);
-                  });
-                }}
-                style={{ padding: '6px 16px', borderRadius: 8, cursor: 'pointer', border: '1px solid var(--border-color)' }}
-              >重试</button>
-            </div>
-          );
-        }
-        if (win.preloadState !== 'ready') {
-          return <FileManagerSkeleton />;
-        }
-        return <FileManager windowId={win.id} preloadData={win.preloadData} />;
-      case 'terminal':
-        return <TerminalApp windowId={win.id} />;
-      case 'monitor':
-        return <SystemMonitor windowId={win.id} />;
-      case 'settings':
-        return <Settings windowId={win.id} />;
-      default:
-        return <div>Unknown app</div>;
-    }
+    return <MemoizedAppContent appId={appId} windowId={win.id} preloadData={win.preloadData} />;
   };
 
   // 获取所有窗口（由 WindowManager 管理）
@@ -290,37 +277,57 @@ function DesktopContent() {
             const app = manager.getApp(win.appId);
             if (!app) return null;
 
+            // ✅ 优先使用局部状态（position/size），避免读取旧值
+            const localState = windowLocalStates.get(win.id);
+            const currentPosition = localState?.position || win.position;
+            const currentSize = localState?.size || win.size;
+
             return (
-              <DraggableWindow
+              <WindowShell
                 key={win.id} // 使用稳定的 key,不包含 minimized 状态,避免重新挂载
+                windowId={win.id}
                 title={app.title}
                 isActive={win.id === activeWindow?.id}
-                isMinimized={win.minimized} // 新增:传递最小化状态
+                isMinimized={win.minimized}
+                mode="standard" // ✅ 所有应用默认使用标准模式（有头窗口）
+                position={currentPosition}
+                size={currentSize}
                 onClose={() => manager.close(win.id)}
                 onMinimize={() => manager.minimize(win.id)}
+                onMaximize={() => {
+                  // TODO: 实现最大化逻辑
+                  console.log('maximize:', win.id);
+                }}
                 onFocus={() => manager.focus(win.id)}
                 onPositionChange={(pos) => {
-                  // 同步位置变化到 Window 对象
+                  // ✅ 更新 Window 对象和局部状态
                   const window = manager.getById(win.id);
                   if (window) {
                     window.setPosition(pos);
+                    // ✅ 更新局部状态，触发重渲染
+                    setWindowLocalStates(prev => {
+                      const newMap = new Map(prev);
+                      newMap.set(win.id, { position: pos, size: currentSize });
+                      return newMap;
+                    });
                   }
                 }}
                 onSizeChange={(size) => {
-                  // 同步大小变化到 Window 对象
+                  // ✅ 更新 Window 对象和局部状态
                   const window = manager.getById(win.id);
                   if (window) {
                     window.setSize(size);
+                    // ✅ 更新局部状态，触发重渲染
+                    setWindowLocalStates(prev => {
+                      const newMap = new Map(prev);
+                      newMap.set(win.id, { position: currentPosition, size });
+                      return newMap;
+                    });
                   }
                 }}
-                initialPosition={win.position}
-                initialSize={win.size}
-                minWidth={app.minSize.width}
-                minHeight={app.minSize.height}
-                zIndex={win.id === activeWindow?.id ? 90 : 10 + index * 10}
               >
                 {renderAppContent(win.appId, win)}
-              </DraggableWindow>
+              </WindowShell>
             );
           });
         })()}

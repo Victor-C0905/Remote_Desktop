@@ -8,7 +8,7 @@ import { DraggableWindow } from '../../components/DraggableWindow';
  * Window component - wraps DraggableWindow with window system state
  */
 export function Window({ windowId }: { windowId: string }) {
-  const manager = useWindowManager();
+  const { manager } = useWindowManager();
   const state = useWindowState(windowId);
   const app = manager.getApp(state.appId);
 

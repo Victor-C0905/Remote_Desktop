@@ -296,32 +296,6 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
 
   return (
     <div className="sm">
-      {/* Header Bar — 始终渲染（不受门控影响） */}
-      <div className="sm-headerbar">
-        <div className="sm-tabs">
-          <button
-            className={`sm-tab${activeTab === "processes" ? " active" : ""}`}
-            onClick={() => setActiveTab("processes")}
-          >
-            进程
-          </button>
-          <button
-            className={`sm-tab${activeTab === "resources" ? " active" : ""}`}
-            onClick={() => setActiveTab("resources")}
-          >
-            资源
-          </button>
-          <button
-            className={`sm-tab${activeTab === "filesystems" ? " active" : ""}`}
-            onClick={() => setActiveTab("filesystems")}
-          >
-            文件系统
-          </button>
-        </div>
-        <div className="sm-headerbar-spacer" />
-        <button className="sm-menu-btn" title="菜单">⋮</button>
-      </div>
-
       {/* Content — 三层状态门控 */}
       <div className="sm-content">
         {showOffline ? (
@@ -339,6 +313,31 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
         ) : (
           /* 层 2: 真实数据内容（已收到在线数据） */
           <>
+            {/* Tab Toolbar - 原HeaderBar的Tab功能 */}
+            <div className="sm-toolbar">
+              <div className="sm-tabs">
+                <button
+                  className={`sm-tab${activeTab === "processes" ? " active" : ""}`}
+                  onClick={() => setActiveTab("processes")}
+                >
+                  进程
+                </button>
+                <button
+                  className={`sm-tab${activeTab === "resources" ? " active" : ""}`}
+                  onClick={() => setActiveTab("resources")}
+                >
+                  资源
+                </button>
+                <button
+                  className={`sm-tab${activeTab === "filesystems" ? " active" : ""}`}
+                  onClick={() => setActiveTab("filesystems")}
+                >
+                  文件系统
+                </button>
+              </div>
+              <button className="sm-menu-btn" title="菜单">⋮</button>
+            </div>
+
             {activeTab === "processes" && (
           <div className="sm-processes">
             <div className="sm-process-header">
@@ -470,11 +469,11 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
             <div className="sm-res-section sm-res-disks">
               <div className="sm-res-title-section">磁盘用量</div>
               {isOffline ? (
-                <div style={{ padding: '16px 0', color: 'var(--text-disabled)', textAlign: 'center' }}>
+                <div style={{ padding: '16px 0', color: 'var(--ovelis-text-disabled)', textAlign: 'center' }}>
                   无数据（未连接）
                 </div>
               ) : metrics.disks.length === 0 ? (
-                <div style={{ padding: '16px 0', color: 'var(--text-secondary)', textAlign: 'center' }}>
+                <div style={{ padding: '16px 0', color: 'var(--ovelis-text-secondary)', textAlign: 'center' }}>
                   暂无磁盘信息
                 </div>
               ) : (
@@ -518,7 +517,7 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
             </div>
             <div className="sm-fs-list">
               {isOffline ? (
-                <div className="sm-fs-row" style={{ justifyContent: 'center', color: 'var(--text-disabled)', padding: '20px 0' }}>
+                <div className="sm-fs-row" style={{ justifyContent: 'center', color: 'var(--ovelis-text-disabled)', padding: '20px 0' }}>
                   无数据（未连接）
                 </div>
               ) : (
