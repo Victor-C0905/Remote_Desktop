@@ -112,11 +112,19 @@ function DesktopContent() {
 
   const { activeServer } = useServerManager();
   const { wallpaper } = useWallpaper();
-  const { manager, globalState } = useWindowManager();
+  const { manager } = useWindowManager(); // ✅ 移除未使用的 globalState
 
   // 全局主题应用（确保所有窗口都使用正确的主题 CSS 变量）
   const { themeId, accentColorId } = useSettingsStore();
   useTheme(themeId, accentColorId);
+
+  // ✅ 计算最大化尺寸：屏幕宽度，高度 = 屏幕高度 - TopBar高度（32px）
+  const topBarHeight = 32;
+  const maxWindowSize = {
+    width: window.innerWidth,
+    height: window.innerHeight - topBarHeight,
+  };
+  const maxWindowPosition = { x: 0, y: 0 }; // 最大化时窗口位于 Desktop Area 左上角
 
   // Clock
   useEffect(() => {
@@ -171,12 +179,21 @@ function DesktopContent() {
   const openApp = useCallback(async (appId: string) => {
     setOverviewVisible(false);
 
-    // GNOME 标准:如果窗口已存在(包括最小化的窗口),点击 Dock 恢复时自动置顶
+    // ✅ GNOME 标准 Dock 行为：
+    // 1. 如果窗口不存在 → 创建新窗口
+    // 2. 如果窗口已最小化 → 恢复窗口（restore + focus）
+    // 3. 如果窗口已打开且非最小化 → 最小化窗口（minimize）
     const existingWindows = manager.getByAppId(appId);
     if (existingWindows.length > 0) {
       const existing = existingWindows[0];
-      // 如果窗口被最小化,focus() 会自动恢复它
-      manager.focus(existing.id);
+      if (existing.minimized) {
+        // ✅ 窗口已最小化 → 恢复窗口
+        manager.restore(existing.id);
+        manager.focus(existing.id);
+      } else {
+        // ✅ 窗口已打开且非最小化 → 最小化窗口
+        manager.minimize(existing.id);
+      }
       return;
     }
 
@@ -273,7 +290,7 @@ function DesktopContent() {
           const allWindows = windows;
 
           // 不重新排序，保持 DOM 树顺序不变，避免事件丢失
-          return allWindows.map((win, index) => {
+          return allWindows.map((win) => {
             const app = manager.getApp(win.appId);
             if (!app) return null;
 
@@ -289,14 +306,33 @@ function DesktopContent() {
                 title={app.title}
                 isActive={win.id === activeWindow?.id}
                 isMinimized={win.minimized}
+                isMaximized={win.maximized} // ✅ 新增：传递最大化状态
                 mode="standard" // ✅ 所有应用默认使用标准模式（有头窗口）
                 position={currentPosition}
                 size={currentSize}
                 onClose={() => manager.close(win.id)}
                 onMinimize={() => manager.minimize(win.id)}
                 onMaximize={() => {
-                  // TODO: 实现最大化逻辑
-                  console.log('maximize:', win.id);
+                  // ✅ 实现最大化逻辑：根据当前状态切换 maximize/unmaximize
+                  if (win.maximized) {
+                    // 当前已最大化 → 取消最大化
+                    manager.unmaximize(win.id);
+                    // ✅ 清除局部状态（恢复后使用 Window 对象的 position/size）
+                    setWindowLocalStates(prev => {
+                      const newMap = new Map(prev);
+                      newMap.delete(win.id); // 删除局部状态，让 WindowShell 读取 Window 对象的状态
+                      return newMap;
+                    });
+                  } else {
+                    // 当前未最大化 → 最大化
+                    manager.maximize(win.id, maxWindowPosition, maxWindowSize);
+                    // ✅ 更新局部状态（立即应用最大化尺寸）
+                    setWindowLocalStates(prev => {
+                      const newMap = new Map(prev);
+                      newMap.set(win.id, { position: maxWindowPosition, size: maxWindowSize });
+                      return newMap;
+                    });
+                  }
                 }}
                 onFocus={() => manager.focus(win.id)}
                 onPositionChange={(pos) => {
