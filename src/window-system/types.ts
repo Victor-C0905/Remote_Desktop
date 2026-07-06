@@ -64,7 +64,9 @@ export type WindowEventType =
   | 'window:restored'
   | 'window:resized'
   | 'window:moved'
-  | 'window:layout-changed';
+  | 'window:layout-changed'
+  | 'window:maximized'      // ✅ 新增：窗口最大化事件
+  | 'window:unmaximized';   // ✅ 新增：窗口取消最大化事件
 
 // Window event structure
 export interface WindowEvent {
@@ -88,6 +90,7 @@ export interface WindowState {
   position: { x: number; y: number };
   size: { width: number; height: number };
   minimized: boolean;
+  maximized: boolean; // ✅ 新增：最大化状态
   focused: boolean;
   preloadState: 'loading' | 'ready' | 'error';
   preloadData: any;
@@ -100,6 +103,8 @@ export interface IWindowManager {
   focus(windowId: string): void;
   minimize(windowId: string): void;
   restore(windowId: string): void;
+  maximize(windowId: string, maxPosition: { x: number; y: number }, maxSize: { width: number; height: number }): void; // ✅ 新增
+  unmaximize(windowId: string): void; // ✅ 新增
   getById(windowId: string): AppWindow | undefined;
   getByAppId(appId: string): AppWindow[];
   getAll(): AppWindow[];

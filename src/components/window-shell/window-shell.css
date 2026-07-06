@@ -60,6 +60,20 @@
   box-shadow: var(--shadow-popup);
 }
 
+.window-shell.maximized {
+  /* ✅ 最大化窗口：无圆角，无阴影，占满屏幕 */
+  border-radius: 0;
+  box-shadow: none;
+  /* 最大化窗口始终在最上层 */
+  z-index: 95;
+}
+
+/* ✅ 拖拽/resize 时禁用动画（避免卡顿） */
+.window-shell.dragging,
+.window-shell[data-resizing="true"] {
+  transition: none !important;
+}
+
 /* ═════════════════════════════════════════════════════════════
    HeaderBar - 窗口标题栏（standard 模式）
    ═════════════════════════════════════════════════════════════ */

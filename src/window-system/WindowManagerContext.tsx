@@ -56,25 +56,17 @@ export function WindowManagerProvider({ children }: { children: ReactNode }) {
 
   // ✅ 新增：选择性事件监听（只监听关键事件）
   useEffect(() => {
-    return manager.onAny((event) => {
-      const criticalEvents = [
-        'window:created',
-        'window:closed',
-        'window:focused',
-        'window:minimized',
-        'window:restored'
-      ];
-
-      if (criticalEvents.includes(event.type)) {
-        setGlobalState({
-          windowList: manager.getAll().map(w => ({
-            id: w.id,
-            appId: w.appId,
-            isMinimized: w.minimized
-          })),
-          activeWindowId: manager.getActive()?.id || null
-        });
-      }
+    return manager.onAny(() => {
+      // ✅ 修复：onAny 签名是 () => void，不接受 event 参数
+      // 直接更新状态（所有关键事件都触发更新）
+      setGlobalState({
+        windowList: manager.getAll().map(w => ({
+          id: w.id,
+          appId: w.appId,
+          isMinimized: w.minimized
+        })),
+        activeWindowId: manager.getActive()?.id || null
+      });
     });
   }, [manager]);
 

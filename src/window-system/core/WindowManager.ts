@@ -22,7 +22,7 @@ export class WindowManager implements IWindowManager {
   private registry: WindowRegistry;
   private eventBus: WindowEventBus;
   private activeWindowId: string | null = null;
-  private saveTimer: NodeJS.Timeout | null = null; // ✅ 新增：save 定时器
+  private saveTimer: ReturnType<typeof setTimeout> | null = null; // ✅ 修复：使用 ReturnType<typeof setTimeout> 代替 NodeJS.Timeout
 
   constructor(registry: WindowRegistry) {
     this.windows = new WindowCollection();
@@ -238,6 +238,46 @@ export class WindowManager implements IWindowManager {
     // Emit restored event
     this.eventBus.emit({
       type: 'window:restored',
+      windowId,
+      timestamp: Date.now(),
+    });
+  }
+
+  /**
+   * ✅ Maximize a window
+   * Saves current position/size, then applies maximized dimensions
+   */
+  maximize(windowId: string, maxPosition: { x: number; y: number }, maxSize: { width: number; height: number }): void {
+    const window = this.windows.get(windowId);
+    if (!window) return;
+
+    // ✅ setMaximized 内部会自动保存当前位置/尺寸
+    window.setMaximized(true);
+    window.setPosition(maxPosition);
+    window.setSize(maxSize);
+
+    // Emit maximized event
+    this.eventBus.emit({
+      type: 'window:maximized',
+      windowId,
+      timestamp: Date.now(),
+    });
+  }
+
+  /**
+   * ✅ Unmaximize a window
+   * Restores saved position/size (or defaults to center)
+   */
+  unmaximize(windowId: string): void {
+    const window = this.windows.get(windowId);
+    if (!window) return;
+
+    // ✅ setMaximized(false) 内部会自动恢复保存的位置/尺寸
+    window.setMaximized(false);
+
+    // Emit unmaximized event
+    this.eventBus.emit({
+      type: 'window:unmaximized',
       windowId,
       timestamp: Date.now(),
     });

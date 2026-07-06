@@ -14,6 +14,7 @@ export interface WindowShellProps {
   size: { width: number; height: number };
   // ✅ 删除 zIndex prop，改用 CSS 固定规则
   isMinimized?: boolean;
+  isMaximized?: boolean; // ✅ 新增：最大化状态
   mode?: 'standard' | 'frameless'; // 窗口模式：standard(标准) | frameless(无框)
 
   // 窗口控制回调 (由 Desktop 提供)
@@ -55,6 +56,7 @@ export function WindowShell({
   size,
   // ✅ 删除 zIndex prop，改用 CSS 固定规则
   isMinimized = false,
+  isMaximized = false, // ✅ 新增：最大化状态
   mode = 'standard', // 默认标准模式
   onClose,
   onMinimize,
@@ -117,10 +119,14 @@ export function WindowShell({
   // ── 拖拽开始 ────────────────────────────────────────
   // 只在 standard 模式下通过 HeaderBar 拖拽
   // frameless 模式下应用自己实现拖拽（通过回调API）
+  // ✅ 最大化状态下禁用拖拽
   const handleDragStart = useCallback(
     (e: React.MouseEvent) => {
       // frameless 模式下，WindowShell 不处理拖拽
       if (mode === 'frameless') return;
+
+      // ✅ 最大化状态下禁用拖拽
+      if (isMaximized) return;
 
       e.preventDefault();
       e.stopPropagation();
@@ -135,7 +141,21 @@ export function WindowShell({
       };
       dragPositionRef.current = { x: position.x, y: position.y };
     },
-    [position, onFocus, mode]
+    [position, onFocus, mode, isMaximized]
+  );
+
+  // ── 双击标题栏最大化（GNOME 标准）────────────────────
+  const handleHeaderBarDoubleClick = useCallback(
+    (e: React.MouseEvent) => {
+      // frameless 模式下，不处理双击
+      if (mode === 'frameless') return;
+
+      // ✅ GNOME 标准：双击 HeaderBar 触发最大化/取消最大化
+      e.preventDefault();
+      e.stopPropagation();
+      onMaximize();
+    },
+    [mode, onMaximize]
   );
 
   // ── 拖拽移动（使用 requestAnimationFrame 优化性能）────
@@ -230,8 +250,12 @@ export function WindowShell({
   }, [isDragging, size, onPositionChange, isOpening]); // ✅ 添加 isOpening
 
   // ── Resize 开始 ──────────────────────────────────────
+  // ✅ 最大化状态下禁用 resize
   const handleResizeStart = useCallback(
     (e: React.MouseEvent, direction: string) => {
+      // ✅ 最大化状态下禁用 resize
+      if (isMaximized) return;
+
       e.preventDefault();
       e.stopPropagation();
 
@@ -257,7 +281,7 @@ export function WindowShell({
         height: size.height,
       };
     },
-    [size, position, onFocus] // ✅ 添加 onFocus 到依赖项
+    [size, position, onFocus, isMaximized] // ✅ 添加 onFocus 和 isMaximized 到依赖项
   );
 
   // ── Resize 移动 ──────────────────────────────────────
@@ -401,8 +425,9 @@ export function WindowShell({
   return (
     <div
       ref={windowRef}
-      className={`window-shell${isActive ? ' active' : ''}${isDragging ? ' dragging' : ''}`}
+      className={`window-shell${isActive ? ' active' : ''}${isDragging ? ' dragging' : ''}${isMaximized ? ' maximized' : ''}`}
       data-window-id={windowId}
+      data-resizing={isResizing ? 'true' : 'false'} // ✅ 新增：用于 CSS 禁用动画
       style={{
         position: 'absolute',
         left: 0,
@@ -417,9 +442,12 @@ export function WindowShell({
         transform: `translate(${position.x}px, ${position.y}px) scale(${isOpening ? 0.96 : 1})`,
         willChange: isDragging ? 'transform' : 'auto',
         opacity: isOpening ? 0 : 1,
+        // ✅ 新增：窗口动画（仅在非拖拽/非 resize 时应用）
         transition: isOpening
           ? 'opacity 200ms cubic-bezier(0.25, 0, 0, 1), transform 200ms cubic-bezier(0.25, 0, 0, 1)'
-          : 'opacity 0.2s ease-out',
+          : (isDragging || isResizing) // ✅ 拖拽/resize 时禁用动画
+            ? 'opacity 0.2s ease-out' // 只保留 opacity 动画
+            : 'opacity 0.2s ease-out, transform 300ms cubic-bezier(0.25, 0, 0, 1), width 300ms cubic-bezier(0.25, 0, 0, 1), height 300ms cubic-bezier(0.25, 0, 0, 1)', // ✅ 添加 transform、width、height 动画
       }}
       onMouseDown={handleWindowMouseDown}
     >
@@ -430,8 +458,9 @@ export function WindowShell({
         <div
           className="window-header-bar"
           onMouseDown={handleDragStart}
+          onDoubleClick={handleHeaderBarDoubleClick} // ✅ 新增：双击标题栏最大化
           style={{
-            cursor: isDragging ? 'move' : 'move',
+            cursor: isMaximized ? 'default' : (isDragging ? 'move' : 'move'), // ✅ 最大化时禁用拖拽光标
             userSelect: 'none',
           }}
         >
@@ -444,105 +473,110 @@ export function WindowShell({
       <div className="window-content-frame">{children}</div>
 
       {/* ── Resize Handles（由 Shell 提供）───────────────── */}
-      {/* 右边 */}
-      <div
-        style={{
-          position: 'absolute',
-          right: 0,
-          top: 0,
-          bottom: 0,
-          width: 8,
-          cursor: 'e-resize',
-        }}
-        onMouseDown={(e) => handleResizeStart(e, 'e')}
-      />
-      {/* 下边 */}
-      <div
-        style={{
-          position: 'absolute',
-          bottom: 0,
-          left: 0,
-          right: 0,
-          height: 8,
-          cursor: 's-resize',
-        }}
-        onMouseDown={(e) => handleResizeStart(e, 's')}
-      />
-      {/* 右下角 */}
-      <div
-        style={{
-          position: 'absolute',
-          right: 0,
-          bottom: 0,
-          width: 16,
-          height: 16,
-          cursor: 'se-resize',
-        }}
-        onMouseDown={(e) => handleResizeStart(e, 'se')}
-      />
-      {/* 左边 */}
-      <div
-        style={{
-          position: 'absolute',
-          left: 0,
-          top: 0,
-          bottom: 0,
-          width: 8,
-          cursor: 'w-resize',
-        }}
-        onMouseDown={(e) => handleResizeStart(e, 'w')}
-      />
-      {/* 上边 */}
-      <div
-        style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          right: 0,
-          height: 8,
-          cursor: 'n-resize',
-          // ✅ 删除 zIndex，继承窗口的 z-index
-        }}
-        onMouseDown={(e) => handleResizeStart(e, 'n')}
-      />
-      {/* 左上角 */}
-      <div
-        style={{
-          position: 'absolute',
-          left: 0,
-          top: 0,
-          width: 16,
-          height: 16,
-          cursor: 'nw-resize',
-          // ✅ 删除 zIndex，继承窗口的 z-index
-        }}
-        onMouseDown={(e) => handleResizeStart(e, 'nw')}
-      />
-      {/* 右上角 */}
-      <div
-        style={{
-          position: 'absolute',
-          right: 0,
-          top: 0,
-          width: 16,
-          height: 16,
-          cursor: 'ne-resize',
-          // ✅ 删除 zIndex，继承窗口的 z-index
-        }}
-        onMouseDown={(e) => handleResizeStart(e, 'ne')}
-      />
-      {/* 左下角 */}
-      <div
-        style={{
-          position: 'absolute',
-          left: 0,
-          bottom: 0,
-          width: 16,
-          height: 16,
-          cursor: 'sw-resize',
-        }}
-        onMouseDown={(e) => handleResizeStart(e, 'sw')}
-      />
+      {/* ✅ 最大化时隐藏 resize handles */}
+      {!isMaximized && (
+        <>
+          {/* 右边 */}
+          <div
+            style={{
+              position: 'absolute',
+              right: 0,
+              top: 0,
+              bottom: 0,
+              width: 8,
+              cursor: 'e-resize',
+            }}
+            onMouseDown={(e) => handleResizeStart(e, 'e')}
+          />
+          {/* 下边 */}
+          <div
+            style={{
+              position: 'absolute',
+              bottom: 0,
+              left: 0,
+              right: 0,
+              height: 8,
+              cursor: 's-resize',
+            }}
+            onMouseDown={(e) => handleResizeStart(e, 's')}
+          />
+          {/* 右下角 */}
+          <div
+            style={{
+              position: 'absolute',
+              right: 0,
+              bottom: 0,
+              width: 16,
+              height: 16,
+              cursor: 'se-resize',
+            }}
+            onMouseDown={(e) => handleResizeStart(e, 'se')}
+          />
+          {/* 左边 */}
+          <div
+            style={{
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: 8,
+              cursor: 'w-resize',
+            }}
+            onMouseDown={(e) => handleResizeStart(e, 'w')}
+          />
+          {/* 上边 */}
+          <div
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              height: 8,
+              cursor: 'n-resize',
+              // ✅ 删除 zIndex，继承窗口的 z-index
+            }}
+            onMouseDown={(e) => handleResizeStart(e, 'n')}
+          />
+          {/* 左上角 */}
+          <div
+            style={{
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              width: 16,
+              height: 16,
+              cursor: 'nw-resize',
+              // ✅ 删除 zIndex，继承窗口的 z-index
+            }}
+            onMouseDown={(e) => handleResizeStart(e, 'nw')}
+          />
+          {/* 右上角 */}
+          <div
+            style={{
+              position: 'absolute',
+              right: 0,
+              top: 0,
+              width: 16,
+              height: 16,
+              cursor: 'ne-resize',
+              // ✅ 删除 zIndex，继承窗口的 z-index
+            }}
+            onMouseDown={(e) => handleResizeStart(e, 'ne')}
+          />
+          {/* 左下角 */}
+          <div
+            style={{
+              position: 'absolute',
+              left: 0,
+              bottom: 0,
+              width: 16,
+              height: 16,
+              cursor: 'sw-resize',
+            }}
+            onMouseDown={(e) => handleResizeStart(e, 'sw')}
+          />
+        </>
+      )}
     </div>
   );
 }

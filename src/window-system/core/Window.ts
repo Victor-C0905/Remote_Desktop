@@ -22,6 +22,11 @@ export class Window {
   private _activatedAt: number;
   private _preloadState: 'loading' | 'ready' | 'error';
   private _preloadData: any;
+  private _maximized: boolean; // ✅ 最大化状态
+  private _preMaximizeState: { // ✅ 最大化前的位置和尺寸
+    position: { x: number; y: number };
+    size: { width: number; height: number };
+  } | null;
 
   constructor(
     id: string,
@@ -40,6 +45,8 @@ export class Window {
     this._activatedAt = Date.now();
     this._preloadState = 'loading';
     this._preloadData = null;
+    this._maximized = false;
+    this._preMaximizeState = null;
   }
 
   // Position getters/setters
@@ -109,6 +116,40 @@ export class Window {
     this._preloadState = 'ready';
   }
 
+  // ✅ Maximized state (runtime state, not persisted)
+  get maximized(): boolean {
+    return this._maximized;
+  }
+
+  /**
+   * Set maximized state
+   * If maximizing, save current position/size for later restoration
+   * If unmaximizing, restore saved position/size (if available)
+   */
+  setMaximized(maximized: boolean): void {
+    if (maximized && !this._maximized) {
+      // ✅ 最大化前：保存当前位置和尺寸
+      this._preMaximizeState = {
+        position: { ...this._position },
+        size: { ...this._size },
+      };
+    } else if (!maximized && this._maximized && this._preMaximizeState) {
+      // ✅ 恢复最大化前的位置和尺寸
+      this._position = { ...this._preMaximizeState.position };
+      this._size = { ...this._preMaximizeState.size };
+      this._preMaximizeState = null; // 清除保存的状态
+    }
+    this._maximized = maximized;
+    this._updatedAt = Date.now();
+  }
+
+  /**
+   * Get pre-maximize state (for restoration)
+   */
+  get preMaximizeState(): { position: { x: number; y: number }; size: { width: number; height: number } } | null {
+    return this._preMaximizeState;
+  }
+
   // Timestamps
   get createdAt(): number {
     return this._createdAt;
@@ -154,6 +195,8 @@ export class Window {
     window._activatedAt = Date.now();
     window._preloadState = 'loading';
     window._preloadData = null;
+    window._maximized = false; // ✅ 反序列化时最大化状态为 false
+    window._preMaximizeState = null; // ✅ 无保存的预最大化状态
     return window;
   }
 }

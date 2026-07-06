@@ -27,6 +27,7 @@ export function useWindowState(windowId: string): WindowState {
     position: window.position,
     size: window.size,
     minimized: window.minimized,
+    maximized: window.maximized, // ✅ 新增：最大化状态
     focused: manager.getActive()?.id === windowId,
     preloadState: window.preloadState,
     preloadData: window.preloadData,
