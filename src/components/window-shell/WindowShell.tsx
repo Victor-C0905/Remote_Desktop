@@ -135,13 +135,16 @@ export function WindowShell({
       onFocus();
 
       setIsDragging(true);
+      // ✅ 关键修复：使用dragPositionRef.current作为position来源
+      // 避免props延迟更新导致的计算错误（特别是左侧/上边界resize改变position后）
+      const currentPos = dragPositionRef.current;
       dragStartPos.current = {
-        x: e.clientX - position.x,
-        y: e.clientY - position.y,
+        x: e.clientX - currentPos.x,
+        y: e.clientY - currentPos.y,
       };
-      dragPositionRef.current = { x: position.x, y: position.y };
+      dragPositionRef.current = { x: currentPos.x, y: currentPos.y };
     },
-    [position, onFocus, mode, isMaximized]
+    [onFocus, mode, isMaximized] // ✅ 移除 position 依赖，改用 ref
   );
 
   // ── 双击标题栏最大化（GNOME 标准）────────────────────
@@ -247,7 +250,7 @@ export function WindowShell({
         rafIdRef.current = null;
       }
     };
-  }, [isDragging, size, onPositionChange, isOpening]); // ✅ 添加 isOpening
+  }, [isDragging, size, onPositionChange, isOpening]); // ✅ 移除 position：避免resize改变position时频繁重新绑定事件监听器
 
   // ── Resize 开始 ──────────────────────────────────────
   // ✅ 最大化状态下禁用 resize
@@ -384,18 +387,19 @@ export function WindowShell({
           : 'opacity 0.2s ease-out';
       }
 
-      // 同步位置和大小到 Desktop（使用 ref 中的最终值）
+      // ✅ 关键修复：同步位置和大小到 Desktop（使用 ref 中的最终值）
+      // 确保左侧/上边界resize改变position后，props立即更新，避免拖拽时基于旧position计算
+      const finalPosition = { x: resizeDataRef.current.x, y: resizeDataRef.current.y };
+      const finalSize = { width: resizeDataRef.current.width, height: resizeDataRef.current.height };
+
+      // ✅ 立即更新dragPositionRef，确保下次拖拽开始时使用正确的位置
+      dragPositionRef.current = finalPosition;
+
       if (onPositionChange) {
-        onPositionChange({
-          x: resizeDataRef.current.x,
-          y: resizeDataRef.current.y,
-        });
+        onPositionChange(finalPosition);
       }
       if (onSizeChange) {
-        onSizeChange({
-          width: resizeDataRef.current.width,
-          height: resizeDataRef.current.height,
-        });
+        onSizeChange(finalSize);
       }
     };
 
