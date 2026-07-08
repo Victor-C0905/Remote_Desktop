@@ -179,31 +179,78 @@
   background: var(--ovelis-headerbar-bg);
   border-bottom: 1px solid var(--ovelis-border-color);
   padding: 0 4px;
-  gap: 6px;  /* ✅ 修改：从 2px 改为 6px */
   flex-shrink: 0;
   z-index: 10;
   position: relative;
+}
+
+.terminal-tab-list {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1;  /* ✅ 占据剩余空间 */
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: thin;
   scrollbar-color: var(--ovelis-border-color) transparent;
 }
 
-.terminal-tab-bar::-webkit-scrollbar {
+.terminal-tab-list::-webkit-scrollbar {
   height: 4px;
 }
 
-.terminal-tab-bar::-webkit-scrollbar-track {
+.terminal-tab-list::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.terminal-tab-bar::-webkit-scrollbar-thumb {
+.terminal-tab-list::-webkit-scrollbar-thumb {
   background: var(--ovelis-border-color);
   border-radius: var(--radius-pill);
 }
 
-.terminal-tab-bar::-webkit-scrollbar-thumb:hover {
+.terminal-tab-list::-webkit-scrollbar-thumb:hover {
   background: rgba(0,0,0,0.2);
+}
+
+.terminal-tab-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;  /* ✅ 推到右侧 */
+  flex-shrink: 0;  /* ✅ 不压缩 */
+  padding-right: 8px;
+}
+
+/* Tab actions 右侧按钮 */
+.terminal-tab-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-xs);
+  border: none;
+  background: transparent;
+  color: var(--ovelis-text-secondary);
+  font-size: 14px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.terminal-tab-btn:hover {
+  background: var(--ovelis-card-bg);
+  color: var(--ovelis-text-primary);
+}
+
+.terminal-status {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--ovelis-text-secondary);
+  font-family: var(--font-ui);
+  white-space: nowrap;
 }
 
 .terminal-tab {
