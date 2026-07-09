@@ -1,5 +1,6 @@
 use crate::config::AgentConfig;
 use crate::protocol::{Envelope, FileEntry, MetricsSnapshot, MountInfo, Payload};
+use crate::diff::{calculate_diff, apply_diff, FileDiff};
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -206,6 +207,37 @@ pub fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig) -> Envelope {
             error_response(envelope.request_id, "终端数据需要在持久 Stream 中处理")
         }
 
+        // 文件编辑器差异同步（Agent 只负责应用差异）
+        Payload::ApplyDiffRequest { path, base_mtime, diffs } => {
+            tracing::info!("应用差异请求: {} (base_mtime={})", path, base_mtime);
+            match handle_apply_diff(path, *base_mtime, diffs, cfg) {
+                Ok(new_mtime) => {
+                    tracing::info!("应用差异成功: {} (new_mtime={})", path, new_mtime);
+                    Envelope::new(
+                        envelope.request_id,
+                        Payload::ApplyDiffResponse {
+                            path: path.clone(),
+                            success: true,
+                            new_mtime,
+                            error: None,
+                        },
+                    )
+                }
+                Err(e) => {
+                    tracing::error!("应用差异失败: {} - {}", path, e);
+                    Envelope::new(
+                        envelope.request_id,
+                        Payload::ApplyDiffResponse {
+                            path: path.clone(),
+                            success: false,
+                            new_mtime: 0,
+                            error: Some(e),
+                        },
+                    )
+                }
+            }
+        }
+
         Payload::GetCurrentUser => {
             tracing::info!("获取当前用户请求");
             let username = handle_get_current_user();
@@ -385,6 +417,76 @@ fn handle_write_file(path: &str, content: &str, cfg: &AgentConfig) -> Result<u64
         })?;
 
     Ok(content.len() as u64)
+}
+
+/// 应用差异并写入文件（用于流量优化，无状态化）
+///
+/// # 参数
+/// - `path`: 文件路径
+/// - `base_mtime`: 基准 mtime（客户端缓存的版本）
+/// - `diffs`: 差异列表（客户端计算）
+/// - `cfg`: Agent 配置
+///
+/// # 返回
+/// - `new_mtime`: 新的 mtime（写入后）
+fn handle_apply_diff(
+    path: &str,
+    base_mtime: u64,
+    diffs: &[FileDiff],
+    cfg: &AgentConfig,
+) -> Result<u64, String> {
+    // 检查路径权限
+    if !cfg.security.allowed_paths.is_empty() {
+        let allowed = cfg
+            .security
+            .allowed_paths
+            .iter()
+            .any(|prefix| path.starts_with(prefix));
+        if !allowed {
+            return Err(format!("访问被拒绝: 不在允许的路径列表中 ({})", path));
+        }
+    }
+
+    // 获取文件当前 mtime
+    let metadata = fs::metadata(path)
+        .map_err(|e| format!("无法获取文件信息 '{}': {}", path, e))?;
+    let current_mtime = metadata
+        .modified()
+        .map_err(|e| format!("无法获取修改时间: {}", e))?
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| format!("时间转换失败: {}", e))?
+        .as_secs();
+
+    // 检查版本冲突（mtime 验证）
+    if current_mtime != base_mtime {
+        return Err(format!(
+            "文件版本冲突: 期望 mtime={}, 实际 mtime={}",
+            base_mtime, current_mtime
+        ));
+    }
+
+    // 读取原文件内容
+    let old_content = fs::read_to_string(path)
+        .map_err(|e| format!("读取文件失败: {}", e))?;
+
+    // 应用差异
+    let new_content = apply_diff(&old_content, diffs);
+
+    // 写入文件
+    fs::write(path, &new_content)
+        .map_err(|e| format!("写入文件失败: {}", e))?;
+
+    // 获取新的 mtime
+    let new_metadata = fs::metadata(path)
+        .map_err(|e| format!("无法获取新文件信息: {}", e))?;
+    let new_mtime = new_metadata
+        .modified()
+        .map_err(|e| format!("无法获取新修改时间: {}", e))?
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| format!("时间转换失败: {}", e))?
+        .as_secs();
+
+    Ok(new_mtime)
 }
 
 fn handle_delete(path: &str, cfg: &AgentConfig) -> Result<(), String> {
