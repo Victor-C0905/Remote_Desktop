@@ -66,10 +66,18 @@ export function WindowShell({
   onSizeChange,
   children,
 }: WindowShellProps) {
+  // ── 统一窗口状态管理（原子性修复）──────────────────
+  // ✅ 核心：使用单一ref管理窗口完整状态，确保拖拽和resize共享同一状态源
+  const windowStateRef = useRef({
+    x: position.x,
+    y: position.y,
+    width: size.width,
+    height: size.height
+  });
+
   // ── 拖拽状态 ────────────────────────────────────────
   const [isDragging, setIsDragging] = useState(false);
-  const dragStartPos = useRef({ x: 0, y: 0 });
-  const dragPositionRef = useRef({ x: position.x, y: position.y });
+  const dragStartPos = useRef({ x: 0, y: 0 });  // 鼠标相对偏移
   const rafIdRef = useRef<number | null>(null);
 
   // ── Resize 状态 ──────────────────────────────────────
@@ -83,38 +91,19 @@ export function WindowShell({
     posX: position.x,
     posY: position.y,
   });
-  const resizeDataRef = useRef({
-    x: position.x,
-    y: position.y,
-    width: size.width,
-    height: size.height,
-  });
 
   // ── 窗口打开动画 ────────────────────────────────────
   const [isOpening, setIsOpening] = useState(true);
+
+  // ── 原子性状态管理 ────────────────────────────────────
+  // ✅ 核心原则：windowStateRef是操作的唯一状态源，不允许被props重置
+  // ✅ 只在组件挂载时初始化，操作过程中实时更新，操作结束后提交到Desktop
+  // ✅ 删除双向同步逻辑，保证原子性
+
   useEffect(() => {
     const timer = setTimeout(() => setIsOpening(false), 200);
     return () => clearTimeout(timer);
   }, []);
-
-  // ✅ 同步 position props 到 ref（只在非拖拽时）
-  useEffect(() => {
-    if (!isDragging) {
-      dragPositionRef.current = { x: position.x, y: position.y };
-    }
-  }, [position, isDragging]);
-
-  // ✅ 同步 position/size props 到 ref（只在非 resize 时）
-  useEffect(() => {
-    if (!isResizing) {
-      resizeDataRef.current = {
-        x: position.x,
-        y: position.y,
-        width: size.width,
-        height: size.height
-      };
-    }
-  }, [position, size, isResizing]);
 
   // ── 拖拽开始 ────────────────────────────────────────
   // 只在 standard 模式下通过 HeaderBar 拖拽
@@ -135,14 +124,12 @@ export function WindowShell({
       onFocus();
 
       setIsDragging(true);
-      // ✅ 关键修复：使用dragPositionRef.current作为position来源
-      // 避免props延迟更新导致的计算错误（特别是左侧/上边界resize改变position后）
-      const currentPos = dragPositionRef.current;
+      // ✅ 原子性：windowStateRef是唯一状态源，不会被props重置
+      const currentState = windowStateRef.current;
       dragStartPos.current = {
-        x: e.clientX - currentPos.x,
-        y: e.clientY - currentPos.y,
+        x: e.clientX - currentState.x,
+        y: e.clientY - currentState.y,
       };
-      dragPositionRef.current = { x: currentPos.x, y: currentPos.y };
     },
     [onFocus, mode, isMaximized] // ✅ 移除 position 依赖，改用 ref
   );
@@ -194,8 +181,9 @@ export function WindowShell({
       const boundedX = Math.max(minX, Math.min(newX, maxX));
       const boundedY = Math.max(minY, Math.min(newY, maxY));
 
-      // 存储到 ref，不触发 React 重渲染
-      dragPositionRef.current = { x: boundedX, y: boundedY };
+      // ✅ 统一状态管理：更新windowStateRef，不触发 React 重渲染
+      windowStateRef.current.x = boundedX;
+      windowStateRef.current.y = boundedY;
 
       // 取消之前的动画帧
       if (rafIdRef.current !== null) {
@@ -230,9 +218,9 @@ export function WindowShell({
       // 拖拽结束时，更新 state（触发一次重渲染）
       setIsDragging(false);
 
-      // 同步位置到 Desktop
+      // ✅ 统一状态管理：同步位置到 Desktop
       if (onPositionChange) {
-        onPositionChange(dragPositionRef.current);
+        onPositionChange({ x: windowStateRef.current.x, y: windowStateRef.current.y });
       }
     };
 
@@ -268,23 +256,18 @@ export function WindowShell({
       setIsResizing(true);
       setResizeDirection(direction);
 
+      // ✅ 原子性：windowStateRef是唯一状态源，不会被props重置
+      const currentState = windowStateRef.current;
       resizeStartPos.current = {
         x: e.clientX,
         y: e.clientY,
-        width: size.width,
-        height: size.height,
-        posX: position.x,
-        posY: position.y,
-      };
-
-      resizeDataRef.current = {
-        x: position.x,
-        y: position.y,
-        width: size.width,
-        height: size.height,
+        width: currentState.width,
+        height: currentState.height,
+        posX: currentState.x,
+        posY: currentState.y,
       };
     },
-    [size, position, onFocus, isMaximized] // ✅ 添加 onFocus 和 isMaximized 到依赖项
+    [onFocus, isMaximized] // ✅ 移除 size/position 依赖，改用 ref
   );
 
   // ── Resize 移动 ──────────────────────────────────────
@@ -351,7 +334,8 @@ export function WindowShell({
         newY = Math.max(minY, newYCandidate);
       }
 
-      resizeDataRef.current = { x: newX, y: newY, width: newWidth, height: newHeight };
+      // ✅ 统一状态管理：更新windowStateRef，不触发 React 重渲染
+      windowStateRef.current = { x: newX, y: newY, width: newWidth, height: newHeight };
 
       // ✅ 使用 requestAnimationFrame 更新 DOM（实时视觉反馈）
       if (rafIdRef.current !== null) {
@@ -387,13 +371,9 @@ export function WindowShell({
           : 'opacity 0.2s ease-out';
       }
 
-      // ✅ 关键修复：同步位置和大小到 Desktop（使用 ref 中的最终值）
-      // 确保左侧/上边界resize改变position后，props立即更新，避免拖拽时基于旧position计算
-      const finalPosition = { x: resizeDataRef.current.x, y: resizeDataRef.current.y };
-      const finalSize = { width: resizeDataRef.current.width, height: resizeDataRef.current.height };
-
-      // ✅ 立即更新dragPositionRef，确保下次拖拽开始时使用正确的位置
-      dragPositionRef.current = finalPosition;
+      // ✅ 统一状态管理：同步位置和大小到 Desktop（使用 windowStateRef 的最终值）
+      const finalPosition = { x: windowStateRef.current.x, y: windowStateRef.current.y };
+      const finalSize = { width: windowStateRef.current.width, height: windowStateRef.current.height };
 
       if (onPositionChange) {
         onPositionChange(finalPosition);
