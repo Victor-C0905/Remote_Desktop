@@ -1,5 +1,6 @@
 // agent/src/protocol.rs
 use serde::{Deserialize, Serialize};
+use crate::diff::{FileDiff, DiffType}; // 导入差异类型
 
 /// 订阅类型枚举
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -203,6 +204,36 @@ pub enum Payload {
     #[serde(rename = "unsubscribe_ack")]
     UnsubscribeAck {
         success: bool,
+    },
+
+    // 文件编辑器差异同步（流量优化）
+    #[serde(rename = "calc_diff")]
+    CalculateDiffRequest {
+        path: String,           // 文件路径
+        old_content: String,    // 原内容（客户端缓存）
+        new_content: String,    // 新内容（用户修改后）
+    },
+
+    #[serde(rename = "calc_diff_resp")]
+    CalculateDiffResponse {
+        path: String,           // 文件路径
+        diffs: Vec<FileDiff>,   // 差异列表
+        mtime: u64,             // 文件修改时间（Unix timestamp）
+    },
+
+    #[serde(rename = "apply_diff")]
+    ApplyDiffRequest {
+        path: String,           // 文件路径
+        base_mtime: u64,        // 基准 mtime（客户端缓存的版本）
+        diffs: Vec<FileDiff>,   // 差异列表
+    },
+
+    #[serde(rename = "apply_diff_resp")]
+    ApplyDiffResponse {
+        path: String,           // 文件路径
+        success: bool,          // 是否成功
+        new_mtime: u64,         // 新的 mtime（写入后）
+        error: Option<String>,  // 错误信息（如果失败）
     },
 
     #[serde(rename = "error")]

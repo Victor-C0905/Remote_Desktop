@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useServerManager } from "../context/ServerManager";
 import { PLACEHOLDER } from "../utils/offlineDefaults";
 import { useWindowState } from "../window-system/hooks/useWindowState";
+import { useWindowManager } from "../window-system/hooks/useWindowManager";
 import { AppLayout } from "../components/app-shell";
 import "./FileManager.css";
 
@@ -102,6 +103,9 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   // ── 窗口系统集成 ─────────────────────────────────────
   // 获取窗口状态（包含 preloadData）
   const windowState = useWindowState(windowId);
+
+  // 获取窗口管理器（用于创建新窗口）
+  const { manager } = useWindowManager();
 
   // 从窗口状态获取预加载数据（优先使用 windowState.preloadData）
   const initialData = windowState.preloadData || preloadData;
@@ -638,10 +642,21 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         : `${currentPath}${sep}${entry.name}`;
       navigateTo(newPath);
     } else {
-      // TODO: file preview / download
-      console.log(`[FileManager] Open file: ${currentPath}/${entry.name}`);
+      // 双击文件时，打开编辑器窗口
+      const sep = "/";
+      const filePath = currentPath === "/"
+        ? `${currentPath}${sep}${entry.name}`
+        : `${currentPath}${sep}${entry.name}`;
+
+      console.log(`[FileManager] Open file in editor: ${filePath}`);
+
+      // 创建编辑器窗口，传递文件路径和服务器 ID
+      manager.create('editor', {
+        serverId: activeServerId,
+        preloadData: { path: filePath, serverId: activeServerId }
+      });
     }
-  }, [currentPath, navigateTo]);
+  }, [currentPath, navigateTo, manager, activeServerId]);
 
   // ── Properties Dialog ────────────────────────────────
   const showProperties = useCallback((entry: FileEntry) => {

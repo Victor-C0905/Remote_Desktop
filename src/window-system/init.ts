@@ -7,6 +7,7 @@ import { TerminalApp } from '../apps/Terminal';
 import { FileManager } from '../apps/FileManager';
 import { SystemMonitor } from '../apps/SystemMonitor';
 import { Settings } from '../apps/Settings';
+import { TextEditor } from '../apps/TextEditor/TextEditor';
 
 /**
  * Initialize the window registry with all registered applications
@@ -61,6 +62,17 @@ export function initWindowRegistry(registry: WindowRegistry): void {
     minSize: { width: 500, height: 400 },
     allowMultipleInstances: false,
     component: Settings,
+  });
+
+  // Text Editor - allows multiple instances for editing different files
+  registry.register({
+    id: 'editor',
+    title: '文本编辑器',
+    icon: '📝',
+    defaultSize: { width: 900, height: 600 },
+    minSize: { width: 600, height: 400 },
+    allowMultipleInstances: true,  // 允许多个实例，编辑多个文件
+    component: TextEditor,
   });
 
   console.log('[WindowRegistry] Registered apps:', registry.getAll().map(a => a.id));

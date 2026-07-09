@@ -12,6 +12,7 @@ mod protocol;
 mod server;
 mod subscription;
 mod pty;
+mod diff; // 差异计算模块（文件编辑器流量优化）
 
 #[derive(Parser, Debug)]
 #[command(name = "gnome-remote-agent")]

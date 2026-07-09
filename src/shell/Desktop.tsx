@@ -3,6 +3,7 @@ import { FileManager } from "../apps/FileManager";
 import { TerminalApp } from "../apps/Terminal";
 import { SystemMonitor } from "../apps/SystemMonitor";
 import { Settings } from "../apps/Settings";
+import { TextEditor } from "../apps/TextEditor/TextEditor";
 import { NotificationCenter, NotificationBadge } from "./NotificationCenter";
 import { useGlobalShortcuts, createAppShortcuts } from "../hooks/useGlobalShortcuts";
 import { ServerManagerProvider, useServerManager, getStatusColor } from "../context/ServerManager";
@@ -48,6 +49,7 @@ const DESKTOP_APPS: DesktopApp[] = [
   { id: "files",    icon: "📁", label: "远程文件" },
   { id: "terminal", icon: "🖥️", label: "远程终端" },
   { id: "monitor",  icon: "📊", label: "系统监控" },
+  { id: "editor",   icon: "📝", label: "文本编辑器" },
   { id: "settings", icon: "⚙️",  label: "设置" },
 ];
 
@@ -55,6 +57,7 @@ const DOCK_APPS: DesktopApp[] = [
   { id: "files",    icon: "📁", label: "文件" },
   { id: "terminal", icon: "🖥️", label: "终端" },
   { id: "monitor",  icon: "📊", label: "监控" },
+  { id: "editor",   icon: "📝", label: "编辑器" },
   { id: "settings", icon: "⚙️",  label: "设置" },
 ];
 
@@ -75,6 +78,8 @@ const MemoizedAppContent = memo(function AppContent({
       return <TerminalApp windowId={windowId} />;
     case 'monitor':
       return <SystemMonitor windowId={windowId} />;
+    case 'editor':
+      return <TextEditor windowId={windowId} preloadData={preloadData} />;
     case 'settings':
       return <Settings windowId={windowId} />;
     default:
