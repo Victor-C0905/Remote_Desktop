@@ -35,3 +35,10 @@ tracing = "0.1"
 tokio-rustls = "0.26"
 tauri-plugin-store = "2.4.3"
 
+[profile.release]
+opt-level = 3          # 最高优化等级
+lto = true             # 链接时优化(减少体积)
+strip = true           # 移除调试符号
+codegen-units = 1      # 单代码单元(优化更好)
+panic = "abort"        # 减少panic处理代码
+
