@@ -64,8 +64,8 @@
   /* ✅ 最大化窗口：无圆角，无阴影，占满屏幕 */
   border-radius: 0;
   box-shadow: none;
-  /* 最大化窗口始终在最上层 */
-  z-index: 95;
+  /* ✅ 删除特殊 z-index，遵循统一的激活状态规则 */
+  /* z-index 由 .window-shell.active 控制（90）或 .window-shell:not(.active) 控制（10） */
 }
 
 /* ✅ 拖拽/resize 时禁用动画（避免卡顿） */
