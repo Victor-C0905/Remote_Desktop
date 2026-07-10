@@ -106,13 +106,22 @@ pub enum Payload {
     ReadFileRequest { path: String },
 
     #[serde(rename = "read_file_resp")]
-    ReadFileResponse { path: String, content: String, size: u64 },
+    ReadFileResponse {
+        path: String,
+        content: String, // base64 编码（支持二进制）
+        mtime: u64,      // 文件修改时间（Unix timestamp）
+        size: u64,
+    },
 
     #[serde(rename = "write_file")]
     WriteFileRequest { path: String, content: String },
 
     #[serde(rename = "write_file_resp")]
-    WriteFileResponse { path: String, size: u64 },
+    WriteFileResponse {
+        path: String,
+        mtime: u64, // 文件修改时间（写入后的新 mtime）
+        size: u64,
+    },
 
     #[serde(rename = "delete")]
     DeleteRequest { path: String },

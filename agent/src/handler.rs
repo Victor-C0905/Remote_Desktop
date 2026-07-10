@@ -1,6 +1,6 @@
 use crate::config::AgentConfig;
 use crate::protocol::{Envelope, FileEntry, MetricsSnapshot, MountInfo, Payload};
-use crate::diff::{calculate_diff, apply_diff, FileDiff};
+use crate::diff::{apply_diff, FileDiff}; // 只导入 apply_diff
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -67,11 +67,12 @@ pub fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig) -> Envelope {
 
         Payload::ReadFileRequest { path } => {
             match handle_read_file(path, cfg) {
-                Ok((content, size)) => Envelope::new(
+                Ok((content, mtime, size)) => Envelope::new(
                     envelope.request_id,
                     Payload::ReadFileResponse {
                         path: path.clone(),
                         content,
+                        mtime,
                         size,
                     },
                 ),
@@ -81,10 +82,11 @@ pub fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig) -> Envelope {
 
         Payload::WriteFileRequest { path, content } => {
             match handle_write_file(path, content, cfg) {
-                Ok(size) => Envelope::new(
+                Ok((mtime, size)) => Envelope::new(
                     envelope.request_id,
                     Payload::WriteFileResponse {
                         path: path.clone(),
+                        mtime,
                         size,
                     },
                 ),
@@ -353,7 +355,7 @@ fn handle_read_dir(path: &str, cfg: &AgentConfig) -> Result<Vec<FileEntry>, Stri
     Ok(entries)
 }
 
-fn handle_read_file(path: &str, cfg: &AgentConfig) -> Result<(String, u64), String> {
+fn handle_read_file(path: &str, cfg: &AgentConfig) -> Result<(String, u64, u64), String> {
     // 如果 allowed_paths 不为空，则检查白名单
     // 如果 allowed_paths 为空，则不限制，依赖 Linux 文件系统权限
     if !cfg.security.allowed_paths.is_empty() {
@@ -389,10 +391,18 @@ fn handle_read_file(path: &str, cfg: &AgentConfig) -> Result<(String, u64), Stri
     let content = fs::read_to_string(path)
         .map_err(|e| format!("读取文件失败: {}", e))?;
 
-    Ok((content, metadata.len()))
+    // 获取文件修改时间（mtime）
+    let mtime = metadata
+        .modified()
+        .map_err(|e| format!("无法获取修改时间: {}", e))?
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| format!("时间转换失败: {}", e))?
+        .as_secs();
+
+    Ok((content, mtime, metadata.len()))
 }
 
-fn handle_write_file(path: &str, content: &str, cfg: &AgentConfig) -> Result<u64, String> {
+fn handle_write_file(path: &str, content: &str, cfg: &AgentConfig) -> Result<(u64, u64), String> {
     // 如果 allowed_paths 不为空，则检查白名单
     // 如果 allowed_paths 为空，则不限制，依赖 Linux 文件系统权限
     if !cfg.security.allowed_paths.is_empty() {
@@ -416,7 +426,17 @@ fn handle_write_file(path: &str, content: &str, cfg: &AgentConfig) -> Result<u64
             }
         })?;
 
-    Ok(content.len() as u64)
+    // 获取写入后的 mtime
+    let metadata = fs::metadata(path)
+        .map_err(|e| format!("无法获取文件信息: {}", e))?;
+    let mtime = metadata
+        .modified()
+        .map_err(|e| format!("无法获取修改时间: {}", e))?
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| format!("时间转换失败: {}", e))?
+        .as_secs();
+
+    Ok((mtime, content.len() as u64))
 }
 
 /// 应用差异并写入文件（用于流量优化，无状态化）
@@ -435,6 +455,9 @@ fn handle_apply_diff(
     diffs: &[FileDiff],
     cfg: &AgentConfig,
 ) -> Result<u64, String> {
+    println!("[handle_apply_diff] 开始处理: path={}, base_mtime={}, diffs_count={}", 
+        path, base_mtime, diffs.len());
+
     // 检查路径权限
     if !cfg.security.allowed_paths.is_empty() {
         let allowed = cfg
@@ -457,24 +480,38 @@ fn handle_apply_diff(
         .map_err(|e| format!("时间转换失败: {}", e))?
         .as_secs();
 
+    println!("[handle_apply_diff] Mtime 检查: expected={}, actual={}, match={}", 
+        base_mtime, current_mtime, base_mtime == current_mtime);
+
     // 检查版本冲突（mtime 验证）
     if current_mtime != base_mtime {
+        println!("[handle_apply_diff] ❌ Mtime 不匹配，返回错误");
         return Err(format!(
             "文件版本冲突: 期望 mtime={}, 实际 mtime={}",
             base_mtime, current_mtime
         ));
     }
 
+    println!("[handle_apply_diff] ✅ Mtime 匹配，继续应用差异");
+
     // 读取原文件内容
     let old_content = fs::read_to_string(path)
         .map_err(|e| format!("读取文件失败: {}", e))?;
 
+    println!("[handle_apply_diff] 读取文件: {} bytes, {} lines", 
+        old_content.len(), old_content.lines().count());
+
     // 应用差异
     let new_content = apply_diff(&old_content, diffs);
+
+    println!("[handle_apply_diff] 应用差异后: {} bytes, {} lines", 
+        new_content.len(), new_content.lines().count());
 
     // 写入文件
     fs::write(path, &new_content)
         .map_err(|e| format!("写入文件失败: {}", e))?;
+
+    println!("[handle_apply_diff] 文件写入成功");
 
     // 获取新的 mtime
     let new_metadata = fs::metadata(path)
