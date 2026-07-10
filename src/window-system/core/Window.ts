@@ -98,6 +98,14 @@ export class Window {
     this._activatedAt = Date.now();
   }
 
+  /**
+   * Set activation time directly (for WindowManager to control z-index)
+   * Used when creating new windows to ensure proper z-index ordering
+   */
+  setActivatedAt(timestamp: number): void {
+    this._activatedAt = timestamp;
+  }
+
   // Preload state
   get preloadState(): 'loading' | 'ready' | 'error' {
     return this._preloadState;
