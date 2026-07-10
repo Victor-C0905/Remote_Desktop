@@ -3,7 +3,11 @@ use quinn::{RecvStream, SendStream};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+// Unix平台特有的导入(终端功能)
+#[cfg(unix)]
+use tokio::io::AsyncReadExt;
+#[cfg(unix)]
 use tokio::time::{sleep, Duration};
 
 use crate::config::AgentConfig;
@@ -110,7 +114,8 @@ async fn handle_stream(
     cfg: &AgentConfig,
     subscription_manager: Arc<SubscriptionManager>,
     event_bus: Arc<EventBus>,
-    pty_manager: Arc<PtyManager>,
+    #[cfg(unix)] pty_manager: Arc<PtyManager>,
+    #[cfg(not(unix))] _pty_manager: Arc<PtyManager>,
 ) -> Result<()> {
     let (mut send, mut recv) = stream;
 
@@ -499,15 +504,5 @@ async fn handle_terminal_stream(
 
     Ok(())
 }
-
-// 非 Unix 平台的 stub 实现
-#[cfg(not(unix))]
-async fn handle_terminal_stream(
-    session_id: String,
-    _send: SendStream,
-    _recv: RecvStream,
-    _pty_manager: Arc<PtyManager>,
-) -> Result<()> {
-    tracing::warn!("终端功能仅支持 Unix 平台: session_id={}", session_id);
-    Ok(())
-}
+// ✅ 优化: 删除Windows平台的stub实现,因为终端功能仅支持Unix
+// #[cfg(not(unix))] 的 handle_terminal_stream 已删除

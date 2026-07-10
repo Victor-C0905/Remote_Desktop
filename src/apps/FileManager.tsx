@@ -652,8 +652,8 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
 
       // 创建编辑器窗口，传递文件路径和服务器 ID
       manager.create('editor', {
-        serverId: activeServerId,
-        preloadData: { path: filePath, serverId: activeServerId }
+        serverId: activeServerId || undefined,
+        preloadData: { path: filePath, serverId: activeServerId || undefined }
       });
     }
   }, [currentPath, navigateTo, manager, activeServerId]);

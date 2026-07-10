@@ -153,7 +153,6 @@ function TerminalInstance({
 
       let lastCols = terminal.cols;
       let lastRows = terminal.rows;
-      let isResizing = false;
       let resizeRAF: number | null = null;
 
       // ResizeObserver：监控容器尺寸变化，实时触发 fit()
@@ -175,9 +174,6 @@ function TerminalInstance({
               return;
             }
 
-            // 标记 resize 开始
-            isResizing = true;
-
             // 立即 fit()（让 xterm 调整到正确的尺寸）
             fitAddon.fit();
 
@@ -187,9 +183,8 @@ function TerminalInstance({
             // 检查 cols/rows 是否有效（避免最小化时的无效尺寸）
             const minCols = 10;
             const minRows = 5;
-            if (terminal.cols < minCols || terminal.rows < minRows) {
-              console.log('[Terminal] 尺寸太小，跳过 resize:', terminal.cols, 'x', terminal.rows);
-              isResizing = false;
+            if (!terminal || terminal.cols < minCols || terminal.rows < minRows) {
+              console.log('[Terminal] 尺寸太小，跳过 resize:', terminal?.cols, 'x', terminal?.rows);
               resizeRAF = null;
               return;
             }
@@ -213,7 +208,6 @@ function TerminalInstance({
             }
 
             // resize 完成
-            isResizing = false;
             resizeRAF = null;
           } catch (_) {}
         });

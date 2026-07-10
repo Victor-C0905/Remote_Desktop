@@ -1,7 +1,6 @@
 // src/window-system/tests/WindowManagerContext.test.tsx
 
-import { render, screen, act, fireEvent } from '@testing-library/react';
-import { useRef } from 'react';
+import { render, act } from '@testing-library/react';
 import { WindowManagerProvider, useWindowManager } from '../WindowManagerContext';
 import { IWindowManager } from '../types';
 
@@ -11,7 +10,7 @@ function TestComponent({ managerRef }: { managerRef?: React.MutableRefObject<IWi
 
   // 暴露 manager 给测试代码
   if (managerRef) {
-    managerRef.current = context;
+    (managerRef as any).current = context;
   }
 
   return (
@@ -37,7 +36,7 @@ describe('WindowManagerContext - 事件监听优化', () => {
       await new Promise(resolve => setTimeout(resolve, 100));
     });
 
-    const manager = managerRef.current!.manager;
+    const manager = managerRef.current as any;
 
     // 创建窗口
     await act(async () => {
@@ -75,7 +74,7 @@ describe('WindowManagerContext - 事件监听优化', () => {
       await new Promise(resolve => setTimeout(resolve, 100));
     });
 
-    const manager = managerRef.current!.manager;
+    const manager = managerRef.current as any;
 
     // 创建窗口（关键事件）
     let createdWindow: any;

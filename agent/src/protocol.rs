@@ -1,6 +1,6 @@
 // agent/src/protocol.rs
 use serde::{Deserialize, Serialize};
-use crate::diff::{FileDiff, DiffType}; // 导入差异类型
+use crate::diff::FileDiff; // 导入差异类型
 
 /// 订阅类型枚举
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
