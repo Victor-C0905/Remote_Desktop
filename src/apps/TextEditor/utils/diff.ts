@@ -78,7 +78,13 @@ function longestCommonSubsequence(a: string[], b: string[]): string[] {
  * @param oldLines - 旧文本行数组
  * @param newLines - 新文本行数组
  * @param lcs - 最长公共子序列
- * @returns 差异列表
+ * @returns 差异列表（客户端 FileChange 格式）
+ *
+ * @example
+ * ```typescript
+ * const diffs = generateDiff(oldLines, newLines, lcs);
+ * const tauriDiffs = convertToTauriFormat(diffs); // 转换为 Tauri 格式
+ * ```
  */
 function generateDiff(oldLines: string[], newLines: string[], lcs: string[]): FileChange[] {
   const diffs: FileChange[] = [];
@@ -126,6 +132,52 @@ function generateDiff(oldLines: string[], newLines: string[], lcs: string[]): Fi
   }
 
   return diffs;
+}
+
+/**
+ * Tauri 端期望的差异格式（对应 Rust 的 FileDiff 结构体）
+ */
+interface TauriFileDiff {
+  diff_type: 'insert' | 'delete' | 'replace';
+  line_number: number;
+  old_content?: string;
+  new_content?: string;
+}
+
+/**
+ * 将客户端 FileChange 格式转换为 Tauri 端 FileDiff 格式
+ *
+ * 用于发送到 Agent 的差异同步接口
+ *
+ * @param diffs - 客户端格式的差异列表
+ * @returns Tauri 端格式的差异列表
+ *
+ * @example
+ * ```typescript
+ * const clientDiffs = calculateDiff(oldContent, newContent);
+ * const tauriDiffs = convertToTauriFormat(clientDiffs);
+ * await invoke('remote_apply_diff', { diffs: tauriDiffs });
+ * ```
+ */
+export function convertToTauriFormat(diffs: FileChange[]): TauriFileDiff[] {
+  return diffs.map(diff => {
+    const result: TauriFileDiff = {
+      diff_type: diff.type,
+      line_number: diff.line,
+    };
+
+    // 添加可选字段（根据差异类型）
+    if (diff.type === 'delete' && 'old' in diff) {
+      result.old_content = diff.old;
+    } else if (diff.type === 'insert' && 'new' in diff) {
+      result.new_content = diff.new;
+    } else if (diff.type === 'replace') {
+      if ('old' in diff) result.old_content = diff.old;
+      if ('new' in diff) result.new_content = diff.new;
+    }
+
+    return result;
+  });
 }
 
 /**

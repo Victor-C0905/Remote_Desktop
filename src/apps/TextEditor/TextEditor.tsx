@@ -24,7 +24,7 @@
  * └─────────────────────────────────────┘
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { AppLayout } from '../../components/app-shell/AppLayout';
 import { useServerManager } from '../../context/ServerManager';
 import { useFileManager } from './hooks/useFileManager';
@@ -103,8 +103,32 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
   // 保存对话框状态
   const [showSaveDialog, setShowSaveDialog] = useState(false);
 
-  // 注意：handleOpenFile 函数已移除，因为当前版本未使用
-  // 未来版本可以添加打开文件的功能（例如通过菜单或快捷键）
+  // 防止重复打开同一个文件（关键修复）
+  const lastOpenedPath = useRef<string | null>(null);
+
+  /**
+   * 预加载文件（仅执行一次）
+   *
+   * 当窗口创建时，如果提供了 preloadData，自动打开文件
+   * 使用 ref 防止重复打开同一个文件
+   */
+  useEffect(() => {
+    if (preloadData && preloadData.path && preloadData.serverId) {
+      // 检查是否已经打开过这个文件
+      if (lastOpenedPath.current === preloadData.path) {
+        console.log('[TextEditor] 文件已打开，跳过重复打开:', preloadData.path);
+        return;
+      }
+
+      console.log('[TextEditor] 预加载文件:', preloadData.path);
+      lastOpenedPath.current = preloadData.path; // 记录已打开的文件
+
+      openFile(preloadData.serverId, preloadData.path).catch((err) => {
+        console.error('[TextEditor] 预加载文件失败:', err);
+        lastOpenedPath.current = null; // 失败时重置，允许重试
+      });
+    }
+  }, [preloadData, openFile]);
 
   /**
    * 处理保存文件

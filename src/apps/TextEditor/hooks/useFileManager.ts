@@ -12,26 +12,24 @@
 import { useState, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import type { FileState, FileChange, ApplyDiffResponse } from '../types/editor';
-import { calculateDiff } from '../utils/diff';
+import { calculateDiff, convertToTauriFormat } from '../utils/diff';
 
 /**
  * Tauri API 返回的文件读取结果
- *
- * 注意：当前 Agent 协议不返回 mtime，后续 Task 2.2 会扩展
  */
 interface ReadFileResult {
   path: string;
   content: string;
+  mtime: number; // 文件修改时间（Unix timestamp）
   size: number;
 }
 
 /**
  * Tauri API 返回的文件写入结果
- *
- * 注意：当前 Agent 协议不返回 mtime，后续 Task 2.2 会扩展
  */
 interface WriteFileResult {
   path: string;
+  mtime: number; // 文件修改时间（写入后的新 mtime）
   size: number;
 }
 
@@ -165,6 +163,9 @@ export function useFileManager(): UseFileManagerReturn {
   // 本地缓存的内容（用于新文件）
   const [localContent, setLocalContent] = useState<string>('');
 
+  // 原始内容缓存（用于差异计算）
+  const [originalContent, setOriginalContent] = useState<string | null>(null);
+
   /**
    * 打开文件
    *
@@ -188,7 +189,7 @@ export function useFileManager(): UseFileManagerReturn {
       // 设置为加载状态
       setFileState({
         path,
-        mtime: 0, // 当前 API 不返回 mtime，后续 Task 2.2 会扩展
+        mtime: 0, // 将在下面更新
         checksum: '',
         isLocked: false,
         fileType: 'loading',
@@ -203,17 +204,19 @@ export function useFileManager(): UseFileManagerReturn {
       // 计算校验和
       const checksum = await calculateChecksum(result.content);
 
-      // 创建文件状态
-      const newFileState: FileState = {
+      // 创建文件状态（使用真实的 mtime）
+      setFileState({
         path: result.path,
-        mtime: 0, // 当前 API 不返回 mtime，后续 Task 2.2 会扩展
+        mtime: result.mtime, // 使用 Agent 返回的真实 mtime
         checksum,
         isLocked: false,
-        fileType: 'text', // 当前只支持文本文件，后续会添加二进制文件支持
+        fileType: 'text',
         content: result.content,
-      };
+      });
 
-      setFileState(newFileState);
+      // 缓存原始内容（用于差异计算）
+      setOriginalContent(result.content);
+
       setOriginalChecksum(checksum);
     } catch (err) {
       // 处理错误
@@ -290,16 +293,36 @@ export function useFileManager(): UseFileManagerReturn {
     try {
       console.log('[saveWithDiff] 开始差异同步保存:', fileState.path);
 
-      // 步骤 1：客户端计算差异
-      const oldContent = fileState.content;
-      const newContent = fileState.content; // 当前内容
+      // 检查原始内容是否存在（关键保护）
+      if (originalContent === null) {
+        console.error('[saveWithDiff] 错误：原始内容为 null，无法计算差异');
+        console.log('[saveWithDiff] 当前 fileState:', fileState);
 
-      const diffs = calculateDiff(oldContent, newContent);
+        // 尝试修复：使用当前内容作为"原始内容"（但不应该发生）
+        setOriginalContent(fileState.content);
+        setError('内部错误：原始内容丢失，已自动修复，请重新保存。');
+        setIsSaving(false);
+        return;
+      }
+
+      // 步骤 1：客户端计算差异
+      // 使用原始内容 vs 当前内容
+      const oldContent = originalContent; // 原始内容（打开文件时）
+      const newContent = fileState.content; // 当前内容（用户修改后）
+
+      const clientDiffs = calculateDiff(oldContent, newContent);
+
+      // 转换为 Tauri 端期望的格式
+      const diffs = convertToTauriFormat(clientDiffs);
 
       console.log('[saveWithDiff] 计算差异完成:', {
         diffCount: diffs.length,
         oldLines: oldContent.split('\n').length,
         newLines: newContent.split('\n').length,
+        oldContentLength: oldContent.length,
+        newContentLength: newContent.length,
+        baseMtime: fileState.mtime, // 添加调试日志
+        diffsPreview: diffs.slice(0, 5), // 显示前 5 个差异（调试）
       });
 
       // 步骤 2：发送差异到 Agent
@@ -329,6 +352,9 @@ export function useFileManager(): UseFileManagerReturn {
           };
         });
 
+        // 更新原始内容缓存（保存成功后，当前内容成为新的"原始内容"）
+        setOriginalContent(newContent);
+
         setOriginalChecksum(newChecksum);
       } else {
         // 版本冲突或其他错误
@@ -348,7 +374,7 @@ export function useFileManager(): UseFileManagerReturn {
     } finally {
       setIsSaving(false);
     }
-  }, [fileState]);
+  }, [fileState, originalContent]);
 
   /**
    * 全量保存文件（传统方式）
@@ -445,10 +471,10 @@ export function useFileManager(): UseFileManagerReturn {
       // 计算校验和
       const checksum = await calculateChecksum(localContent);
 
-      // 创建文件状态（保存成功后，新文件变为已打开文件）
+      // 创建文件状态（保存成功后，新文件变为已打开文件，使用 Agent 返回的 mtime）
       const newFileState: FileState = {
         path: result.path,
-        mtime: 0, // 当前 API 不返回 mtime，后续 Task 2.2 会扩展
+        mtime: result.mtime, // 使用 Agent 返回的新 mtime
         checksum,
         isLocked: false,
         fileType: 'text',
@@ -456,6 +482,7 @@ export function useFileManager(): UseFileManagerReturn {
       };
 
       setFileState(newFileState);
+      setOriginalContent(localContent); // 缓存原始内容
       setOriginalChecksum(checksum);
       setLocalContent(''); // 清空本地缓存（因为现在是已打开文件）
     } catch (err) {
@@ -479,6 +506,7 @@ export function useFileManager(): UseFileManagerReturn {
     setIsLoading(false);
     setIsSaving(false);
     setLocalContent(''); // 清空本地缓存
+    setOriginalContent(null); // 清空原始内容缓存
   }, []);
 
   /**
@@ -491,20 +519,19 @@ export function useFileManager(): UseFileManagerReturn {
    * @param newContent - 新的文件内容
    */
   const updateContent = useCallback((newContent: string): void => {
-    // 如果是新文件（未打开文件），只更新本地缓存
-    if (!fileState) {
-      setLocalContent(newContent);
-      return;
-    }
-
-    // 如果是已打开文件，更新 fileState
     setFileState(prev => {
-      if (!prev || prev.fileType !== 'text') return prev;
+      if (!prev) {
+        // 如果是新文件（未打开文件），更新本地缓存
+        setLocalContent(newContent);
+        return null;
+      }
+
+      if (prev.fileType !== 'text') return prev;
 
       // 生成版本号，用于防止竞态条件
       const updateVersion = Date.now();
 
-      // 先更新内容（同步）+ 版本号
+      // 先更新内容（同步）+ 版本号，保留其他字段（包括 mtime）
       const newState = {
         ...prev,
         content: newContent,
@@ -528,7 +555,7 @@ export function useFileManager(): UseFileManagerReturn {
 
       return newState;
     });
-  }, [fileState]);
+  }, []); // 不依赖外部状态，使用 setFileState 的回调
 
   /**
    * 检查文件是否有未保存的变更

@@ -48,11 +48,20 @@ pub enum Payload {
     #[serde(rename = "read_file")]
     ReadFileRequest { path: String },
     #[serde(rename = "read_file_resp")]
-    ReadFileResponse { path: String, content: String, size: u64 },
+    ReadFileResponse {
+        path: String,
+        content: String,
+        mtime: u64, // 文件修改时间（Unix timestamp）
+        size: u64,
+    },
     #[serde(rename = "write_file")]
     WriteFileRequest { path: String, content: String },
     #[serde(rename = "write_file_resp")]
-    WriteFileResponse { path: String, size: u64 },
+    WriteFileResponse {
+        path: String,
+        mtime: u64, // 文件修改时间（写入后的新 mtime）
+        size: u64,
+    },
     #[serde(rename = "delete")]
     DeleteRequest { path: String },
     #[serde(rename = "delete_resp")]
@@ -137,6 +146,22 @@ pub enum Payload {
         success: bool,
     },
 
+    // 新增：差异同步（文件编辑器流量优化）
+    #[serde(rename = "apply_diff")]
+    ApplyDiffRequest {
+        path: String,
+        base_mtime: u64,
+        diffs: Vec<FileDiff>,
+    },
+
+    #[serde(rename = "apply_diff_resp")]
+    ApplyDiffResponse {
+        path: String,
+        success: bool,
+        new_mtime: u64,
+        error: Option<String>,
+    },
+
     #[serde(rename = "error")]
     Error { code: i32, message: String },
 }
@@ -159,6 +184,33 @@ pub enum SubscriptionType {
 
     #[serde(rename = "service_status")]
     ServiceStatus { service: String, interval_secs: Option<u64> },
+}
+
+// 新增：文件差异类型（用于流量优化）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileDiff {
+    /// 差异类型
+    pub diff_type: DiffType,
+    /// 行号（从 1 开始）
+    pub line_number: usize,
+    /// 原内容（replace/delete 时存在）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub old_content: Option<String>,
+    /// 新内容（replace/insert 时存在）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_content: Option<String>,
+}
+
+/// 差异类型
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum DiffType {
+    /// 插入新行
+    Insert,
+    /// 删除行
+    Delete,
+    /// 替换行
+    Replace,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -554,7 +606,7 @@ pub async fn remote_get_metrics(server_id: String, app: tauri::AppHandle) -> Res
 pub async fn remote_read_file(server_id: String, path: String, app: tauri::AppHandle) -> Result<RemoteReadFileResponse, String> {
     let resp = remote_send(server_id, Payload::ReadFileRequest { path }, app).await?;
     match resp.payload {
-        Payload::ReadFileResponse { path, content, size } => Ok(RemoteReadFileResponse { path, content, size }),
+        Payload::ReadFileResponse { path, content, mtime, size } => Ok(RemoteReadFileResponse { path, content, mtime, size }),
         Payload::Error { message, .. } => Err(message),
         _ => Err("意外响应".into()),
     }
@@ -564,6 +616,7 @@ pub async fn remote_read_file(server_id: String, path: String, app: tauri::AppHa
 pub struct RemoteReadFileResponse {
     pub path: String,
     pub content: String,
+    pub mtime: u64, // 文件修改时间（Unix timestamp）
     pub size: u64,
 }
 
@@ -571,7 +624,7 @@ pub struct RemoteReadFileResponse {
 pub async fn remote_write_file(server_id: String, path: String, content: String, app: tauri::AppHandle) -> Result<RemoteWriteFileResponse, String> {
     let resp = remote_send(server_id, Payload::WriteFileRequest { path, content }, app).await?;
     match resp.payload {
-        Payload::WriteFileResponse { path, size } => Ok(RemoteWriteFileResponse { path, size }),
+        Payload::WriteFileResponse { path, mtime, size } => Ok(RemoteWriteFileResponse { path, mtime, size }),
         Payload::Error { message, .. } => Err(message),
         _ => Err("意外响应".into()),
     }
@@ -580,6 +633,7 @@ pub async fn remote_write_file(server_id: String, path: String, content: String,
 #[derive(Debug, Serialize)]
 pub struct RemoteWriteFileResponse {
     pub path: String,
+    pub mtime: u64, // 文件修改时间（写入后的新 mtime）
     pub size: u64,
 }
 
@@ -640,6 +694,62 @@ pub async fn remote_copy(
         Payload::Error { message, .. } => Err(message),
         _ => Err("意外响应".into()),
     }
+}
+
+/// 应用差异到远程文件（流量优化）
+///
+/// # 参数
+/// - `server_id`: 服务器 ID
+/// - `path`: 文件路径
+/// - `base_mtime`: 基准 mtime（客户端缓存的版本）
+/// - `diffs`: 差异列表（客户端计算）
+///
+/// # 返回
+/// 应用差异后的响应（新的 mtime）
+#[tauri::command]
+pub async fn remote_apply_diff(
+    server_id: String,
+    path: String,
+    base_mtime: u64,
+    diffs: Vec<FileDiff>, // 使用本地定义的 FileDiff
+    app: tauri::AppHandle
+) -> Result<RemoteApplyDiffResponse, String> {
+    println!("[Connection] remote_apply_diff: server_id={}, path={}, base_mtime={}, diffs={}", 
+        server_id, path, base_mtime, diffs.len());
+
+    // 发送差异到 Agent
+    let resp = remote_send(
+        server_id,
+        Payload::ApplyDiffRequest {
+            path,
+            base_mtime,
+            diffs,
+        },
+        app
+    ).await?;
+
+    // 处理响应
+    match resp.payload {
+        Payload::ApplyDiffResponse { path, success, new_mtime, error } => {
+            Ok(RemoteApplyDiffResponse {
+                path,
+                success,
+                new_mtime,
+                error,
+            })
+        }
+        Payload::Error { message, .. } => Err(message),
+        _ => Err("意外响应".into()),
+    }
+}
+
+/// 应用差异响应结构体
+#[derive(Debug, serde::Serialize)]
+pub struct RemoteApplyDiffResponse {
+    pub path: String,
+    pub success: bool,
+    pub new_mtime: u64,
+    pub error: Option<String>,
 }
 
 #[tauri::command]
