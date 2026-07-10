@@ -19,15 +19,12 @@ pub struct SubscriptionManager {
 
     // 采集器实例
     metrics_collector: Arc<MetricsCollector>,
-
-    // 配置
-    config: AgentConfig,
 }
 
 impl SubscriptionManager {
-    pub fn new(config: AgentConfig, event_bus: Arc<EventBus>) -> Self {
+    pub fn new(_config: AgentConfig, event_bus: Arc<EventBus>) -> Self {
         let metrics_collector = Arc::new(MetricsCollector::new(
-            config.collectors.metrics_interval_secs,
+            _config.collectors.metrics_interval_secs,
             event_bus.clone(),
         ));
 
@@ -35,7 +32,6 @@ impl SubscriptionManager {
             subscribers: Arc::new(RwLock::new(HashMap::new())),
             type_counts: Arc::new(RwLock::new(HashMap::new())),
             metrics_collector,
-            config,
         }
     }
 
@@ -65,45 +61,6 @@ impl SubscriptionManager {
         }
 
         Ok(types)
-    }
-
-    /// 移除订阅
-    pub async fn unsubscribe(
-        &self,
-        stream_id: u64,
-        types: Vec<SubscriptionType>,
-    ) -> Result<()> {
-        // 移除订阅者
-        {
-            let mut subs = self.subscribers.write().await;
-            if let Some(subscribed_types) = subs.get_mut(&stream_id) {
-                for t in &types {
-                    subscribed_types.retain(|st| st != t);
-                }
-
-                // 如果订阅类型列表为空，移除订阅者
-                if subscribed_types.is_empty() {
-                    subs.remove(&stream_id);
-                }
-            }
-        }
-
-        // 更新订阅类型计数
-        for t in &types {
-            let type_name = t.type_name();
-            let mut counts = self.type_counts.write().await;
-            if let Some(count) = counts.get_mut(&type_name) {
-                *count -= 1;
-
-                // 如果无订阅者，停止对应的采集器
-                if *count == 0 {
-                    counts.remove(&type_name);
-                    self.stop_collector(&t).await?;
-                }
-            }
-        }
-
-        Ok(())
     }
 
     /// 移除所有订阅（Stream 关闭时）
@@ -168,11 +125,5 @@ impl SubscriptionManager {
     pub async fn has_subscribers(&self, event_type: &str) -> bool {
         let counts = self.type_counts.read().await;
         counts.get(event_type).map(|v| *v > 0).unwrap_or(false)
-    }
-
-    /// 获取订阅者数量
-    pub async fn subscriber_count(&self, event_type: &str) -> usize {
-        let counts = self.type_counts.read().await;
-        counts.get(event_type).copied().unwrap_or(0)
     }
 }

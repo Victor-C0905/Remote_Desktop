@@ -2,7 +2,7 @@
 
 use crate::event_bus::EventBus;
 use crate::protocol::MetricsSnapshot;
-use sysinfo::{System, Disks, Networks, CpuRefreshKind};
+use sysinfo::{System, Disks, CpuRefreshKind};
 use tokio::time::{sleep, Duration};
 use std::sync::Arc;
 use tokio::sync::RwLock;

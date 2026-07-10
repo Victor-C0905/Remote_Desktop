@@ -11,7 +11,7 @@
 
 import { useState, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import type { FileState, FileChange, ApplyDiffResponse } from '../types/editor';
+import type { FileState, ApplyDiffResponse } from '../types/editor';
 import { calculateDiff, convertToTauriFormat } from '../utils/diff';
 
 /**
