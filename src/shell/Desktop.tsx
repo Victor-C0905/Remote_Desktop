@@ -117,7 +117,8 @@ function DesktopContent() {
 
   const { activeServer } = useServerManager();
   const { wallpaper } = useWallpaper();
-  const { manager } = useWindowManager(); // ✅ 移除未使用的 globalState
+  // ✅ 关键修复：获取 globalState，确保窗口激活状态变化时重新渲染
+  const { manager, globalState } = useWindowManager();
 
   // 全局主题应用（确保所有窗口都使用正确的主题 CSS 变量）
   const { themeId, accentColorId } = useSettingsStore();
@@ -223,7 +224,10 @@ function DesktopContent() {
 
   // 获取所有窗口（由 WindowManager 管理）
   const windows = manager.getAll();
-  const activeWindow = manager.getActive();
+  // ✅ 关键修复：使用 globalState.activeWindowId 获取激活窗口，确保状态更新时重新渲染
+  const activeWindow = globalState.activeWindowId
+    ? manager.getById(globalState.activeWindowId)
+    : undefined;
 
   return (
     <div className="shell">

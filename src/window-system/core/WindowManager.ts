@@ -104,6 +104,22 @@ export class WindowManager implements IWindowManager {
     const windowId = this.generateWindowId(appId);
     const newWindow = new Window(windowId, appId, position, size);
 
+    // Ensure new window has highest activatedAt (for z-index ordering)
+    // Get current timestamp
+    const currentTimestamp = Date.now();
+
+    // Set new window's activatedAt to current timestamp
+    newWindow.setActivatedAt(currentTimestamp);
+
+    // Force old active window's activatedAt to be 1ms older (if any)
+    // This ensures new window always gets highest z-index
+    if (this.activeWindowId) {
+      const oldActiveWindow = this.windows.get(this.activeWindowId);
+      if (oldActiveWindow) {
+        oldActiveWindow.setActivatedAt(currentTimestamp - 1);
+      }
+    }
+
     // Add to collection
     this.windows.add(newWindow);
     this.activeWindowId = windowId;
