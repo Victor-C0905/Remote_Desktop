@@ -849,16 +849,16 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
           /* Sidebar */
           <div className="fm-sidebar">
             {sidebarSections.map((section, sectionIdx) => (
-              <div key={sectionIdx} className="sidebar-section">
-                <div className="sidebar-section-title">{section.title}</div>
+              <div key={sectionIdx} className="fm-sidebar-section">
+                <div className="fm-sidebar-section-title">{section.title}</div>
                 {section.items.map((item, itemIdx) => (
                   <div
                     key={`${sectionIdx}-${itemIdx}`}
-                    className={`sidebar-item${currentPath === item.path ? " active" : ""}`}
+                    className={`fm-sidebar-item${currentPath === item.path ? " fm-sidebar-item-active" : ""}`}
                     onClick={() => navigateTo(item.path)}
                   >
-                    <span className="si-icon">{item.icon}</span>
-                    <span className="si-label">{item.label}</span>
+                    <span className="fm-si-icon">{item.icon}</span>
+                    <span className="fm-si-label">{item.label}</span>
                   </div>
                 ))}
               </div>
@@ -985,13 +985,13 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
             </div>
           ) : error ? (
             <div className="fm-empty">
-              <div className="empty-icon">⚠️</div>
-              <div className="empty-text">{error}</div>
+              <div className="fm-empty-icon">⚠️</div>
+              <div className="fm-empty-text">{error}</div>
             </div>
           ) : entries.length === 0 ? (
             <div className="fm-empty">
-              <div className="empty-icon">📂</div>
-              <div className="empty-text">空目录</div>
+              <div className="fm-empty-icon">📂</div>
+              <div className="fm-empty-text">空目录</div>
             </div>
           ) : viewMode === "list" ? (
             <div className="fm-list">
@@ -1125,23 +1125,23 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
           className="fm-context-menu"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
-          <div className="ctx-item" onClick={() => { handleOpen(contextMenu.entry); setContextMenu(null); }}>
-            <span className="ctx-icon">📂</span> 打开
+          <div className="fm-fm-ctx-item" onClick={() => { handleOpen(contextMenu.entry); setContextMenu(null); }}>
+            <span className="fm-fm-ctx-icon">📂</span> 打开
           </div>
-          <div className="ctx-separator" />
+          <div className="fm-ctx-separator" />
 
           {/* 文件操作 */}
-          <div className="ctx-item" onClick={() => { handleRename(contextMenu.entry); setContextMenu(null); }}>
-            <span className="ctx-icon">✏️</span> 重命名
+          <div className="fm-ctx-item" onClick={() => { handleRename(contextMenu.entry); setContextMenu(null); }}>
+            <span className="fm-ctx-icon">✏️</span> 重命名
           </div>
-          <div className="ctx-item" onClick={() => { handleDelete(contextMenu.entry); setContextMenu(null); }}>
-            <span className="ctx-icon">🗑️</span> 删除
+          <div className="fm-ctx-item" onClick={() => { handleDelete(contextMenu.entry); setContextMenu(null); }}>
+            <span className="fm-ctx-icon">🗑️</span> 删除
           </div>
 
-          <div className="ctx-separator" />
+          <div className="fm-ctx-separator" />
 
           {/* 其他操作 */}
-          <div className="ctx-item" onClick={() => {
+          <div className="fm-ctx-item" onClick={() => {
             // 复制路径到剪贴板（Linux 格式）
             const sep = "/";
             const path = currentPath === "/"
@@ -1150,15 +1150,15 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
             navigator.clipboard.writeText(path);
             setContextMenu(null);
           }}>
-            <span className="ctx-icon">📋</span> 复制路径
+            <span className="fm-ctx-icon">📋</span> 复制路径
           </div>
-          <div className="ctx-item" onClick={() => setContextMenu(null)}>
-            <span className="ctx-icon">⬇️</span> 下载
+          <div className="fm-ctx-item" onClick={() => setContextMenu(null)}>
+            <span className="fm-ctx-icon">⬇️</span> 下载
           </div>
 
-          <div className="ctx-separator" />
-          <div className="ctx-item" onClick={() => { showProperties(contextMenu.entry); setContextMenu(null); }}>
-            <span className="ctx-icon">ℹ️</span> 属性
+          <div className="fm-ctx-separator" />
+          <div className="fm-ctx-item" onClick={() => { showProperties(contextMenu.entry); setContextMenu(null); }}>
+            <span className="fm-ctx-icon">ℹ️</span> 属性
           </div>
         </div>
       )}

@@ -68,4 +68,43 @@
   --headerbar-height: 48px;
   --sidebar-width:    240px;
   --dock-height:      64px;
+
+  /* ── Z-Index 层级系统（统一管理）─────────────────────── */
+  /* Layer 0: 壁纸层（背景层，z-index 无需设置）              */
+  /* Layer 10: 桌面图标层                                     */
+  --z-desktop-icons:    10;
+
+  /* Layer 15: Dock 层（底部任务栏，低于窗口，窗口可遮挡）   */
+  --z-dock:             15;
+
+  /* Layer 20: 非激活窗口层                                   */
+  --z-window-inactive:  20;
+
+  /* Layer 30: 激活窗口层（在 Dock 之上，窗口可遮挡 Dock）   */
+  --z-window-active:    30;
+
+  /* Layer 50: TopBar 层（顶部任务栏，始终可见）             */
+  --z-topbar:           50;
+
+  /* Layer 60: 应用内部浮动层（下拉菜单、Tooltip）            */
+  --z-app-dropdown:     60;
+  --z-app-tooltip:      65;
+
+  /* Layer 70: 应用内部模态层（确认对话框、设置面板）         */
+  --z-app-modal:        70;
+
+  /* Layer 80: 全局弹窗层（通知中心、全局菜单）               */
+  --z-notification:     80;
+  --z-global-menu:      85;
+
+  /* Layer 90: 最高层级（紧急系统提示、全局遮罩）             */
+  --z-system-alert:     90;
+  --z-system-overlay:   95;
+
+  /* 说明：                                                  */
+  /* 1. 所有组件必须使用 CSS 变量，不得直接写数字             */
+  /* 2. 同层级元素按 DOM 顺序渲染，z-index 相同              */
+  /* 3. 应用内部浮动元素不得超过 Layer 60-70                 */
+  /* 4. 全局弹窗不得超过 Layer 80-90                         */
+  /* 5. Dock 低于窗口，窗口可以遮挡 Dock（GNOME 行为）       */
 }

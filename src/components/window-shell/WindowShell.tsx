@@ -409,7 +409,7 @@ export function WindowShell({
   return (
     <div
       ref={windowRef}
-      className={`${styles.windowShell}${isActive ? ` ${styles.active}` : ''}${isDragging ? ` ${styles.dragging}` : ''}${isMaximized ? ` ${styles.maximized}` : ''}`}
+      className={`${styles.windowShell}${isActive ? ` ${styles.windowShellActive}` : ` ${styles.windowShellNotActive}`}${isDragging ? ` ${styles.windowShellDragging}` : ` ${styles.windowShellNotDragging}`}${isMaximized ? ` ${styles.windowShellMaximized}` : ''}`}
       data-window-id={windowId}
       data-resizing={isResizing ? 'true' : 'false'} // ✅ 新增：用于 CSS 禁用动画
       style={{
