@@ -3,7 +3,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { WindowControls } from './WindowControls';
-import './window-shell.css';
+import styles from './WindowShell.module.css';
 
 export interface WindowShellProps {
   // 窗口属性 (由 Desktop 提供)
@@ -409,7 +409,7 @@ export function WindowShell({
   return (
     <div
       ref={windowRef}
-      className={`window-shell${isActive ? ' active' : ''}${isDragging ? ' dragging' : ''}${isMaximized ? ' maximized' : ''}`}
+      className={`${styles.windowShell}${isActive ? ` ${styles.active}` : ''}${isDragging ? ` ${styles.dragging}` : ''}${isMaximized ? ` ${styles.maximized}` : ''}`}
       data-window-id={windowId}
       data-resizing={isResizing ? 'true' : 'false'} // ✅ 新增：用于 CSS 禁用动画
       style={{
@@ -440,7 +440,7 @@ export function WindowShell({
       {/* frameless 模式：不显示 HeaderBar，应用自己实现控制按钮 */}
       {mode === 'standard' && (
         <div
-          className="window-header-bar"
+          className={styles.windowHeaderBar}
           onMouseDown={handleDragStart}
           onDoubleClick={handleHeaderBarDoubleClick} // ✅ 新增：双击标题栏最大化
           style={{
@@ -448,13 +448,13 @@ export function WindowShell({
             userSelect: 'none',
           }}
         >
-          <div className="window-title">{title}</div>
+          <div className={styles.windowTitle}>{title}</div>
           <WindowControls onClose={onClose} onMinimize={onMinimize} onMaximize={onMaximize} />
         </div>
       )}
 
       {/* ── ContentFrame - 隔离层，建立 flex 约束链 ──────── */}
-      <div className="window-content-frame">{children}</div>
+      <div className={styles.windowContentFrame}>{children}</div>
 
       {/* ── Resize Handles（由 Shell 提供）───────────────── */}
       {/* ✅ 最大化时隐藏 resize handles */}

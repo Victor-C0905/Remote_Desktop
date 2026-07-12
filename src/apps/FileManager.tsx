@@ -1032,12 +1032,12 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                   }}
                   onContextMenu={(e) => handleContextMenu(e, entry, idx)}
                 >
-                  <div className="file-name">
-                    <span className="fn-icon">{getFileIcon(entry)}</span>
+                  <div className="fm-file-name">
+                    <span className="fm-fn-icon">{getFileIcon(entry)}</span>
                     {editingEntry?.name === entry.name ? (
                       <input
                         type="text"
-                        className="fn-edit-input"
+                        className="fm-fn-edit-input"
                         value={editingName}
                         onChange={(e) => setEditingName(e.target.value)}
                         onKeyDown={handleEditKeyDown}
@@ -1048,12 +1048,12 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                         style={{ width: `${Math.max(editingName.length + 0.5, 4)}ch` }}  // 动态宽度：文本长度 + 0.5字符，最小4字符
                       />
                     ) : (
-                      <span className="fn-text">{entry.name}</span>
+                      <span className="fm-fn-text">{entry.name}</span>
                     )}
                   </div>
-                  <span className="file-size">{entry.is_dir ? "—" : formatSize(entry.size)}</span>
-                  <span className="file-mtime">{formatDate(entry.mtime)}</span>
-                  <span className="file-perm">{entry.permissions}</span>
+                  <span className="fm-file-size">{entry.is_dir ? "—" : formatSize(entry.size)}</span>
+                  <span className="fm-file-mtime">{formatDate(entry.mtime)}</span>
+                  <span className="fm-file-perm">{entry.permissions}</span>
                 </div>
               ))}
             </div>
@@ -1090,11 +1090,11 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                   }}
                   onContextMenu={(e) => handleContextMenu(e, entry, idx)}
                 >
-                  <div className="gi-icon">{getFileIcon(entry)}</div>
+                  <div className="fm-gi-icon">{getFileIcon(entry)}</div>
                   {editingEntry?.name === entry.name ? (
                     <input
                       type="text"
-                      className="gi-edit-input"
+                      className="fm-gi-edit-input"
                       value={editingName}
                       onChange={(e) => setEditingName(e.target.value)}
                       onKeyDown={handleEditKeyDown}
@@ -1105,7 +1105,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                       style={{ width: `${Math.max(editingName.length + 0.5, 4)}ch` }}  // 动态宽度：文本长度 + 0.5字符，最小4字符
                     />
                   ) : (
-                    <div className="gi-label">{entry.name}</div>
+                    <div className="fm-gi-label">{entry.name}</div>
                   )}
                 </div>
               ))}

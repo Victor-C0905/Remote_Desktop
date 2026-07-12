@@ -242,7 +242,7 @@
   color: var(--ovelis-accent-fg);
 }
 
-.fm-list .fm-list-row .file-name {
+.fm-list .fm-list-row .fm-file-name {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -250,19 +250,19 @@
   overflow: hidden;
 }
 
-.fm-list .fm-list-row .file-name .fn-icon {
+.fm-list .fm-list-row .fm-file-name .fm-fn-icon {
   font-size: 18px;
   flex-shrink: 0;
 }
 
-.fm-list .fm-list-row .file-name .fn-text {
+.fm-list .fm-list-row .fm-file-name .fm-fn-text {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 /* Inline Editing Input (List View) */
-.fm-list .fm-list-row .file-name .fn-edit-input {
+.fm-list .fm-list-row .fm-file-name .fm-fn-edit-input {
   /* 移除固定宽度，使用 inline style 的动态宽度 */
   padding: 1px 2px;  /* 减小 padding，减少视觉偏移 */
   font-size: var(--font-body);
@@ -274,21 +274,21 @@
   outline: none;
 }
 
-.fm-list .fm-list-row .file-name .fn-edit-input:focus {
+.fm-list .fm-list-row .fm-file-name .fm-fn-edit-input:focus {
   border-color: var(--ovelis-accent-bg);
   box-shadow: 0 0 0 1px var(--ovelis-accent-bg);
 }
 
-.fm-list .fm-list-row .file-size,
-.fm-list .fm-list-row .file-mtime,
-.fm-list .fm-list-row .file-perm {
+.fm-list .fm-list-row .fm-file-size,
+.fm-list .fm-list-row .fm-file-mtime,
+.fm-list .fm-list-row .fm-file-perm {
   font-size: var(--font-small);
   color: var(--ovelis-text-secondary);
 }
 
-.fm-list .fm-list-row.selected .file-size,
-.fm-list .fm-list-row.selected .file-mtime,
-.fm-list .fm-list-row.selected .file-perm {
+.fm-list .fm-list-row.selected .fm-file-size,
+.fm-list .fm-list-row.selected .fm-file-mtime,
+.fm-list .fm-list-row.selected .fm-file-perm {
   color: rgba(255, 255, 255, 0.75);
 }
 
@@ -320,11 +320,11 @@
   color: var(--ovelis-accent-fg);
 }
 
-.fm-grid .fm-grid-item .gi-icon {
+.fm-grid .fm-grid-item .fm-gi-icon {
   font-size: 40px;
 }
 
-.fm-grid .fm-grid-item .gi-label {
+.fm-grid .fm-grid-item .fm-gi-label {
   font-size: var(--font-small);
   text-align: center;
   word-break: break-all;
@@ -334,7 +334,7 @@
 }
 
 /* Inline Editing Input (Grid View) */
-.fm-grid .fm-grid-item .gi-edit-input {
+.fm-grid .fm-grid-item .fm-gi-edit-input {
   /* 移除固定宽度，使用 inline style 的动态宽度 */
   padding: 1px 2px;  /* 减小 padding，减少视觉偏移 */
   font-size: var(--font-small);
@@ -347,7 +347,7 @@
   text-align: center;
 }
 
-.fm-grid .fm-grid-item .gi-edit-input:focus {
+.fm-grid .fm-grid-item .fm-gi-edit-input:focus {
   border-color: var(--ovelis-accent-bg);
   box-shadow: 0 0 0 1px var(--ovelis-accent-bg);
 }
