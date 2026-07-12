@@ -9,7 +9,7 @@
   right: 0;
   width: 100%;
   height: 100%;
-  z-index: 300;
+  z-index: var(--z-notification); /* ✅ Layer 80: 全局弹窗层 */
   display: flex;
   justify-content: flex-end;
   padding: 40px 12px 12px 12px;

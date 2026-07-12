@@ -81,7 +81,7 @@
   overflow: hidden;
 }
 
-.fm-breadcrumb .crumb {
+.fm-breadcrumb .fm-crumb {
   background: none;
   border: none;
   color: var(--ovelis-accent-bg);
@@ -94,21 +94,21 @@
   transition: background var(--duration-fast) var(--ease-out);
 }
 
-.fm-breadcrumb .crumb:hover {
+.fm-breadcrumb .fm-crumb:hover {
   background: var(--ovelis-border-color);
 }
 
-.fm-breadcrumb .crumb.current {
+.fm-breadcrumb .fm-crumb.fm-crumb-current {
   color: var(--ovelis-text-primary);
   cursor: default;
   font-weight: 600;
 }
 
-.fm-breadcrumb .crumb.current:hover {
+.fm-breadcrumb .fm-crumb.fm-crumb-current:hover {
   background: none;
 }
 
-.fm-breadcrumb .sep {
+.fm-breadcrumb .fm-sep {
   color: var(--ovelis-text-disabled);
   font-size: var(--font-small);
   user-select: none;
@@ -152,12 +152,12 @@
   padding: 8px 0;
 }
 
-.fm-sidebar .sidebar-section {
+.fm-sidebar .fm-sidebar-section {
   padding: 0 12px;
   margin-bottom: 12px;
 }
 
-.fm-sidebar .sidebar-section-title {
+.fm-sidebar .fm-sidebar-section-title {
   font-size: var(--font-small);
   font-weight: 700;
   color: var(--ovelis-text-secondary);
@@ -167,7 +167,7 @@
   margin-bottom: 2px;
 }
 
-.fm-sidebar .sidebar-item {
+.fm-sidebar .fm-sidebar-item {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -179,22 +179,22 @@
   transition: background var(--duration-fast) var(--ease-out);
 }
 
-.fm-sidebar .sidebar-item:hover {
+.fm-sidebar .fm-sidebar-item:hover {
   background: var(--ovelis-border-color);
 }
 
-.fm-sidebar .sidebar-item.active {
+.fm-sidebar .fm-sidebar-item.fm-sidebar-item-active {
   background: var(--ovelis-accent-bg);
   color: var(--ovelis-accent-fg);
 }
 
-.fm-sidebar .sidebar-item .si-icon {
+.fm-sidebar .fm-sidebar-item .fm-si-icon {
   font-size: 16px;
   width: 20px;
   text-align: center;
 }
 
-.fm-sidebar .sidebar-item .si-label {
+.fm-sidebar .fm-sidebar-item .fm-si-label {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -214,12 +214,12 @@
   gap: 8px;
   font-size: var(--font-small);
   font-weight: 600;
-  color: var(--ovelis-text-secondary);
+  color: var(--ovelis-text-secondary);.fm-list .fm-list-header {
   position: sticky;
   top: 0; /* ✅ AppLayout无padding，直接sticky到顶部 */
   padding: 8px 12px;
   background: var(--ovelis-window-bg);
-  z-index: 5;
+  z-index: 1; /* ✅ 内容层，相对于父容器，无需高 z-index */
 }
 
 .fm-list .fm-list-row {
@@ -360,7 +360,7 @@
   border: 1px solid var(--ovelis-border-color);
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-popup);
-  z-index: 300;
+  z-index: var(--z-app-dropdown); /* ✅ Layer 60: 应用内部下拉菜单 */
   padding: 4px 0;
   animation: menuFadeIn 120ms var(--ease-out);
 }
@@ -370,7 +370,7 @@
   to   { opacity: 1; transform: scale(1); }
 }
 
-.fm-context-menu .ctx-item {
+.fm-context-menu .fm-ctx-item {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -381,18 +381,18 @@
   transition: background var(--duration-fast) var(--ease-out);
 }
 
-.fm-context-menu .ctx-item:hover {
+.fm-context-menu .fm-ctx-item:hover {
   background: var(--ovelis-accent-bg);
   color: var(--ovelis-accent-fg);
 }
 
-.fm-context-menu .ctx-item .ctx-icon {
+.fm-context-menu .fm-ctx-item .fm-ctx-icon {
   font-size: 14px;
   width: 20px;
   text-align: center;
 }
 
-.fm-context-menu .ctx-separator {
+.fm-context-menu .fm-ctx-separator {
   height: 1px;
   background: var(--ovelis-border-color);
   margin: 4px 0;
@@ -423,12 +423,12 @@
   gap: 8px;
 }
 
-.fm-empty .empty-icon {
+.fm-empty .fm-empty-icon {
   font-size: 48px;
   opacity: 0.5;
 }
 
-.fm-empty .empty-text {
+.fm-empty .fm-empty-text {
   font-size: var(--font-body);
 }
 
@@ -467,7 +467,7 @@
   border: 1px solid var(--ovelis-border-color);
   border-radius: var(--radius-md);
   padding: 16px;
-  z-index: 1000;
+  z-index: var(--z-app-modal); /* ✅ Layer 70: 应用内部模态对话框 */
   box-shadow: var(--shadow-popup);
 }
 
@@ -531,15 +531,15 @@
 
 /* ── Path Error Dialog (路径不存在弹窗 - 模态) ─────────────────── */
 /* 遮罩层：覆盖整个文件管理器，阻止点击穿透 */
-.fm-path-error-overlay {
+.fm-path-error-overlay.fm-modal-backdrop {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.4);
-  z-index: 999;
+  z-index: var(--z-app-modal); /* ✅ Layer 70: 应用内部模态对话框遮罩 */
   display: flex;
   align-items: center;
   justify-content: center;
-  /* 阻止所有交互 */
+}  /* 阻止所有交互 */
   pointer-events: auto;
 }
 
@@ -754,7 +754,7 @@
   border: 1px solid var(--ovelis-border-color);
   border-radius: var(--radius-sm);  /* 四个角都圆角 */
   box-shadow: var(--shadow-popup);  /* 使用 CSS 变量 */
-  z-index: 100;
+  z-index: var(--z-app-dropdown); /* ✅ Layer 60: 应用内部下拉菜单 */
   max-height: 300px;
   overflow-y: auto;
 }
