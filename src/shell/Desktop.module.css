@@ -1,0 +1,480 @@
+.shell {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  /* ✅ 移除 overflow: hidden(关键修复) */
+  /* 
+   * 理由:
+   * - .shell是Desktop的最外层容器
+   * - overflow: hidden会阻止所有子元素的滚动(包括desktop-area和WindowShell)
+   * - desktop-area已经有overflow: hidden限制窗口位置
+   * - 不需要.shell再次设置overflow: hidden
+   */
+}
+
+/* ── Top Bar ──────────────────────────────────────────── */
+.topBar {
+  height: var(--topbar-height);
+  background: var(--ovelis-headerbar-bg);
+  border-bottom: 1px solid var(--ovelis-border-color);
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  gap: 16px;
+  flex-shrink: 0;
+  z-index: 100;
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
+.topBarButton,
+.topBarConnectionIndicator,
+.topBarMetrics,
+.topBarClock,
+.topBarNotificationBtn {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.topBarActivitiesBtn {
+  background: none;
+  border: none;
+  color: var(--ovelis-text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--font-small);
+  font-weight: 700;
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: var(--radius-xs);
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.topBarActivitiesBtnHover {
+  background: var(--ovelis-border-color);
+}
+
+.topBarSeparator {
+  width: 1px;
+  height: 16px;
+  background: var(--ovelis-border-color);
+}
+
+.topBarConnectionIndicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-small);
+  color: var(--ovelis-text-secondary);
+}
+
+.topBarConnectionDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #33d17a;
+}
+
+.topBarConnectionDotDisconnected {
+  background: #e01b24;
+}
+
+.topBarSpacer {
+  flex: 1;
+}
+
+.topBarMetrics {
+  display: flex;
+  gap: 12px;
+  font-size: var(--font-small);
+  color: var(--ovelis-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.topBarClock {
+  font-size: var(--font-small);
+  color: var(--ovelis-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.topBarNotificationBtn {
+  background: none;
+  border: none;
+  color: var(--ovelis-text-secondary);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-xs);
+  font-size: 14px;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.topBarNotificationBtnHover {
+  background: var(--ovelis-border-color);
+}
+
+/* ── Desktop Area ────────────────────────────────────── */
+.desktopArea {
+  flex: 1;
+  position: relative;
+  overflow: hidden; /* 限制应用窗口在桌面区域内 */
+}
+
+.desktopIcons {
+  position: absolute;
+  top: 24px;
+  left: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.desktopIcon {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 80px;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.desktopIconHover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.desktopIconActive {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.desktopIconIcon {
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 32px;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.3));
+}
+
+.desktopIconLabel {
+  font-size: var(--font-small);
+  color: #ffffff;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+  text-align: center;
+  line-height: 1.2;
+}
+
+/* ── Dock ────────────────────────────────────────────── */
+.dockContainer {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 50;
+}
+
+.dock {
+  display: flex;
+  gap: 4px;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.57); /* 任务栏透明度 95% (0.6 * 0.95 ≈ 0.57) */
+  backdrop-filter: blur(24px);
+  border-radius: var(--radius-lg);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.dockItem {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.dockItemHover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.dockItemActive {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.dockItemIcon {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+}
+
+.dockItemLabel {
+  font-size: 8pt;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.dockSeparator {
+  width: 1px;
+  background: rgba(255, 255, 255, 0.2);
+  margin: 4px 4px;
+}
+
+/* ── Overview Overlay ─────────────────────────────────── */
+.overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(24px);
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 80px;
+  animation: fadeIn var(--duration-normal) var(--ease-out);
+}
+
+.overlayHidden {
+  display: none;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.overviewSearch {
+  width: 400px;
+  padding: 10px 16px;
+  border: 2px solid var(--ovelis-border-color);
+  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.95);
+  color: var(--ovelis-text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--font-body);
+  outline: none;
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+.overviewSearchFocus {
+  border-color: var(--ovelis-accent-bg);
+}
+
+.overviewSearchPlaceholder {
+  color: var(--ovelis-text-disabled);
+}
+
+.overviewApps {
+  display: flex;
+  gap: 24px;
+  margin-top: 48px;
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: 600px;
+}
+
+.overviewApp {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 88px;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.overviewAppHover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.overviewAppIcon {
+  width: 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 36px;
+}
+
+.overviewAppLabel {
+  font-size: var(--font-small);
+  color: #ffffff;
+  text-align: center;
+}
+
+/* ── Application Windows ──────────────────────────────── */
+/* 注意:width/height 由 DraggableWindow 通过内联 style 设置,
+   此处不写死尺寸,避免与内联样式冲突 */
+.appWindow {
+  position: absolute;
+  top: 0;
+  left: 0;
+  background: var(--ovelis-window-bg);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popup);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: none;
+  /* GPU 加速优化 */
+  will-change: transform;
+  transition: opacity 0.2s ease-out;
+}
+
+.appWindowActive {
+  /* ✅ 使用 CSS 固定 z-index,避免动态计算 */
+  z-index: 90;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  /* 取消边框,只使用阴影区分活动窗口 */
+  border: none;
+}
+
+/* 拖拽时的视觉反馈 */
+.appWindowDragging {
+  opacity: 0.95;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.25);
+  cursor: move;
+  /* 提升性能:禁用过渡动画 */
+  transition: none;
+}
+
+/* 拖拽结束时的平滑过渡 */
+.appWindowNotDragging {
+  opacity: 1;
+  /* 移除 box-shadow 和 border 的 transition,避免切换时的割裂感 */
+  transition: opacity 0.3s ease-out;
+}
+
+/* 非激活窗口的样式 */
+.appWindowNotActive {
+  /* ✅ 使用 CSS 固定 z-index */
+  z-index: 10;
+  box-shadow: var(--shadow-popup);
+  border: none;
+}
+
+.appWindowTitlebar {
+  height: var(--headerbar-height);
+  background: var(--ovelis-headerbar-bg);
+  border-bottom: 1px solid var(--ovelis-border-color);
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  gap: 8px;
+  flex-shrink: 0;
+  cursor: move;
+  /* 移除 app-region: drag,使用 JavaScript 拖拽 */
+}
+
+.appWindowTitlebarAwtBtns,
+.appWindowTitlebarAwtTitle,
+.appWindowTitlebarButton {
+  cursor: default;
+}
+
+.awtBtns {
+  display: flex;
+  gap: 6px;
+}
+
+.awtBtn {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  transition: filter var(--duration-fast) var(--ease-out);
+}
+
+.awtBtnMinimize {
+  background: #f7d76a; /* GNOME Adwaita 浅黄色,更柔和 */
+}
+
+.awtBtnMinimizeHover {
+  filter: brightness(1.1);
+}
+
+.awtBtnMaximize {
+  background: #57e389; /* GNOME Adwaita 浅绿色,更柔和 */
+}
+
+.awtBtnMaximizeHover {
+  filter: brightness(1.1);
+}
+
+.awtBtnClose {
+  background: #f66151; /* GNOME Adwaita 浅红色,更柔和 */
+}
+
+.awtBtnCloseHover {
+  filter: brightness(1.1);
+}
+
+.awtTitle {
+  font-size: var(--font-small);
+  font-weight: 600;
+  color: var(--ovelis-text-primary);
+  flex: 1;
+  text-align: center;
+}
+
+.awtSpacer {
+  width: 56px; /* balance the close/minimize buttons */
+}
+
+.appWindowContent {
+  flex: 1;
+  min-height: 0;  /* ✅ 新增:建立flex高度约束链,让子应用的height:100%生效 */
+  /* 移除 overflow: hidden,让子应用内部的滚动容器正常工作
+     子应用(FileManager, Settings, Terminal)自己管理 overflow */
+}
+
+/* ── App Placeholder ──────────────────────────────────── */
+.appPlaceholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--ovelis-text-disabled);
+  gap: 12px;
+}
+
+.appPlaceholderPlaceholderIcon {
+  font-size: 48px;
+  opacity: 0.5;
+}
+
+.appPlaceholderPlaceholderText {
+  font-size: var(--font-body);
+}
+
+/* ── Dock Running Indicator ────────────────────────────── */
+.dockItemRunning {
+  position: relative;
+}
+
+.dockIndicator {
+  position: absolute;
+  bottom: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #ffffff;
+}
+
+.dockItemRunningIconAfter {
+  content: none;
+}

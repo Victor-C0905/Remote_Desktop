@@ -4,10 +4,10 @@ import { TerminalApp } from "../apps/Terminal";
 import { SystemMonitor } from "../apps/SystemMonitor";
 import { Settings } from "../apps/Settings";
 import { TextEditor } from "../apps/TextEditor/TextEditor";
-import { NotificationCenter, NotificationBadge } from "./NotificationCenter";
+import { NotificationCenter } from "./NotificationCenter";
+import { TopBar } from "./TopBar/TopBar"; // ✅ 新增：TopBar 独立组件
 import { useGlobalShortcuts, createAppShortcuts } from "../hooks/useGlobalShortcuts";
-import { ServerManagerProvider, useServerManager, getStatusColor } from "../context/ServerManager";
-import { formatBytesSafe, formatPercentSafe } from "../utils/offlineDefaults";
+import { ServerManagerProvider, useServerManager } from "../context/ServerManager";
 
 import { WallpaperProvider, useWallpaper, getWallpaperStyle } from "../context/WallpaperContext";
 import { useSettingsStore } from "../stores/settingsStore";
@@ -232,46 +232,14 @@ function DesktopContent() {
   return (
     <div className="shell">
       {/* Top Bar */}
-      <div className="top-bar" data-tauri-drag-region>
-        <button
-          className="activities-btn"
-          onClick={() => setOverviewVisible((v) => !v)}
-        >
-          活动
-        </button>
-        <div className="separator" />
-        <div className="connection-indicator">
-          <div
-            className="connection-dot"
-            style={{ background: activeServer ? getStatusColor(activeServer.status) : "#9a9996" }}
-          />
-          <span>
-            {activeServer?.status === "connected" ? "已连接" :
-             activeServer?.status === "connecting" ? "连接中..." :
-             activeServer?.status === "error" ? "连接失败" : "未连接"}
-          </span>
-          {activeServer && (
-            <span style={{ marginLeft: "8px", opacity: 0.7 }}>
-              {activeServer.name || activeServer.host}
-            </span>
-          )}
-        </div>
-        <div className="spacer" />
-        <div className="metrics">
-          <span>CPU {formatPercentSafe(metrics?.cpu_percent ?? 0, !metrics)}</span>
-          <span>MEM {formatBytesSafe(metrics?.mem_used_bytes ?? 0, !metrics)} / {formatBytesSafe(metrics?.mem_total_bytes ?? 0, !metrics)}</span>
-        </div>
-        <div className="separator" />
-        <span className="clock">{clock}</span>
-        <button
-          className="notification-btn"
-          onClick={() => setNotificationOpen(true)}
-          style={{ position: "relative" }}
-        >
-          🔔
-          <NotificationBadge count={unreadNotifications} criticalCount={criticalNotifications} />
-        </button>
-      </div>
+      <TopBar
+        metrics={metrics}
+        clock={clock}
+        unreadNotifications={unreadNotifications}
+        criticalNotifications={criticalNotifications}
+        onActivitiesClick={() => setOverviewVisible((v) => !v)}
+        onNotificationClick={() => setNotificationOpen(true)}
+      />
 
       {/* Desktop Area */}
       <div className="desktop-area" style={getWallpaperStyle(wallpaper)}>

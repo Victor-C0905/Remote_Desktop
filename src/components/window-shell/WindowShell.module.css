@@ -1,0 +1,114 @@
+/* src/components/window-shell/WindowShell.module.css */
+/* WindowShell 样式 - 完全独立,不与应用样式混合 */
+
+/* ═════════════════════════════════════════════════════════════
+   窗口容器样式
+   ═════════════════════════════════════════════════════════════ */
+
+.windowShell {
+  position: absolute;
+  background: var(--ovelis-window-bg);
+  border-radius: var(--radius-md); /* 12px */
+  box-shadow: var(--shadow-popup);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden; /* ✅ 窗口容器必须裁剪溢出内容,保证内容不超出窗口边界 */
+  /*
+   * 约束链设计:
+   * - windowShell: overflow: hidden(裁剪溢出,圆角生效)
+   * - windowContentFrame: min-height: 0(建立 flex 高度约束链)
+   * - appLayout: flex: 1 + min-height: 0(占满剩余空间)
+   * - appContent: overflow-y: auto(应用层管理滚动)
+   *
+   * 关键: 滚动发生在最内层的 .appContent 上,
+   * 外层全部 overflow: hidden,内容不会溢出窗口。
+   */
+
+  /* ✅ 使用 CSS 固定 z-index,避免动态计算 */
+  z-index: 10;
+
+  /* GPU 加速 */
+  will-change: transform;
+  transition: opacity 0.2s ease-out;
+}
+
+.windowShellActive {
+  /* ✅ 活动窗口: z-index 90(最上层) */
+  z-index: 90;
+  /* 活动窗口: 更深的阴影 */
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+
+.windowShellDragging {
+  /* 拖拽时的视觉反馈 */
+  opacity: 0.95;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.25);
+  cursor: move;
+  transition: none;
+}
+
+.windowShellNotDragging {
+  /* 拖拽结束时的平滑过渡 */
+  opacity: 1;
+  transition: opacity 0.3s ease-out;
+}
+
+.windowShellNotActive {
+  /* ✅ 非活动窗口: z-index 10(底层) */
+  z-index: 10;
+  /* 非活动窗口: 较浅的阴影 */
+  box-shadow: var(--shadow-popup);
+}
+
+.windowShellMaximized {
+  /* ✅ 最大化窗口: 无圆角,无阴影,占满屏幕 */
+  border-radius: 0;
+  box-shadow: none;
+  /* ✅ 删除特殊 z-index,遵循统一的激活状态规则 */
+  /* z-index 由 .windowShellActive 控制(90)或 .windowShellNotActive 控制(10) */
+}
+
+/* ✅ 拖拽/resize 时禁用动画(避免卡顿) */
+.windowShellDragging,
+.windowShellResizing {
+  transition: none !important;
+}
+
+/* ═════════════════════════════════════════════════════════════
+   HeaderBar - 窗口标题栏(standard 模式)
+   ═════════════════════════════════════════════════════════════ */
+
+.windowHeaderBar {
+  height: var(--headerbar-height); /* 48px */
+  background: var(--ovelis-headerbar-bg); /* ✅ 使用主题颜色变量(亮色: #ebe5d9, 暗色: #303030) */
+  border-bottom: 1px solid var(--ovelis-border-color); /* ✅ 使用主题边框颜色 */
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  gap: 8px;
+  flex-shrink: 0;
+  cursor: move;
+  user-select: none;
+}
+
+.windowTitle {
+  font-size: var(--font-small); /* 9pt */
+  font-weight: 600;
+  color: var(--ovelis-text-primary); /* ✅ 使用主题文字颜色(亮色: rgba(0,0,0,0.87), 暗色: rgba(255,255,255,0.87)) */
+  flex: 1;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ═════════════════════════════════════════════════════════════
+   ContentFrame - 隔离层
+   ═════════════════════════════════════════════════════════════ */
+
+.windowContentFrame {
+  flex: 1;
+  min-height: 0; /* ✅ 建立 flex 高度约束链 */
+  overflow: hidden; /* ✅ 裁剪溢出内容,配合 windowShell 的 overflow: hidden 双重保障 */
+  /* 束链: windowShell(overflow:hidden) → contentFrame(overflow:hidden) → appLayout(flex:1) → appContent(overflow-y:auto) */
+}

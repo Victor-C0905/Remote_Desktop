@@ -1,0 +1,82 @@
+/* ============================================================
+   AppLayout - 应用布局组件样式
+   ============================================================ */
+
+/**
+ * AppLayout 容器
+ *
+ * 提供 Sidebar + Main 的标准布局:
+ * - 使用 flex 布局,Sidebar 固定宽度,Main 区域占据剩余空间
+ * - height: 100% 填满父容器(WindowShell 的 ContentFrame)
+ * - min-height: 0 建立 flex 约束链,确保子元素滚动正常工作
+ */
+.appLayout {
+  display: flex;
+  flex: 1; /* ✅ 在 fm-app 的 flex column 中占据剩余空间 */
+  min-height: 0; /* ✅ 建立 flex 约束链 */
+  width: 100%;
+}
+
+/**
+ * Sidebar
+ *
+ * 标准应用侧边栏样式:
+ * - 固定宽度(默认 240px,可通过 style 属性自定义)
+ * - 背景色跟随主题(--ovelis-sidebar-bg)
+ * - 右侧边框分隔 Sidebar 和 Main 区域
+ * - 独立滚动条(overflow-y: auto)
+ * - flex-shrink: 0 防止宽度压缩
+ */
+.appSidebar {
+  flex-shrink: 0; /* 固定宽度,不压缩 */
+  background: var(--ovelis-sidebar-bg);
+  border-right: 1px solid var(--ovelis-border-color);
+  overflow-y: auto; /* Sidebar 内容独立滚动 */
+  overflow-x: hidden; /* 防止横向滚动 */
+}
+
+/**
+ * Main 区域
+ *
+ * Main 区域包含 Toolbar 和 Content:
+ * - flex: 1 占据剩余空间
+ * - min-width: 0 防止内容溢出
+ * - display: flex; flex-direction: column 纵向布局
+ * - min-height: 0 建立 flex 约束链,确保 Content 滚动正常
+ */
+.appMain {
+  flex: 1; /* 占据剩余空间 */
+  min-width: 0; /* 防止内容溢出 */
+  display: flex;
+  flex-direction: column;
+  min-height: 0; /* ✅ 建立 flex 约束链 */
+}
+
+/**
+ * Toolbar 容器
+ *
+ * Toolbar 插入在 Main 区域顶部:
+ * - flex-shrink: 0 固定高度,不压缩
+ * - Toolbar 内容的具体样式由应用自己定义
+ * - 容器只提供布局结构,不干预 Toolbar 样式
+ */
+.appToolbarContainer {
+  flex-shrink: 0; /* 固定高度,不压缩 */
+  /* Toolbar 样式由具体应用定义 */
+}
+
+/**
+ * Content 容器
+ *
+ * Main 区域的主要内容:
+ * - flex: 1 占据剩余空间
+ * - min-height: 0 建立 flex 约束链
+ * - overflow-y: auto 提供滚动条(主内容区滚动)
+ * - overflow-x: hidden 防止横向滚动
+ */
+.appContent {
+  flex: 1; /* 占据剩余空间 */
+  min-height: 0; /* ✅ 建立 flex 约束链 */
+  overflow-y: auto; /* ✅ 主内容区滚动 */
+  overflow-x: hidden; /* 防止横向滚动 */
+}
