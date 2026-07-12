@@ -11,6 +11,10 @@ import { TextEditor } from '../apps/TextEditor/TextEditor';
 
 /**
  * Initialize the window registry with all registered applications
+ *
+ * ⚠️ 单一数据源：此文件是应用清单的唯一真相源
+ * Desktop/Dock/Overview 都从 registry.getAll() 派生显示列表
+ * 新增应用只需在此注册，无需修改 Desktop.tsx
  */
 export function initWindowRegistry(registry: WindowRegistry): void {
   // Terminal - allows multiple instances
@@ -19,12 +23,14 @@ export function initWindowRegistry(registry: WindowRegistry): void {
     title: '终端',
     icon: '🖥️',
     defaultSize: { width: 850, height: 550 },
-    minSize: { width: 600, height: 400 },  // 增加最小尺寸，防止 xterm.js 显示异常
+    minSize: { width: 600, height: 400 },
     allowMultipleInstances: true,
     component: TerminalApp,
+    desktopLabel: '远程终端',
+    dockLabel: '终端',
   });
 
-  // File Manager - single instance, with preloading
+  // File Manager - single instance
   registry.register({
     id: 'files',
     title: '文件管理器',
@@ -32,14 +38,9 @@ export function initWindowRegistry(registry: WindowRegistry): void {
     defaultSize: { width: 900, height: 650 },
     minSize: { width: 600, height: 400 },
     allowMultipleInstances: false,
-    lifecycle: {
-      onBeforeCreate: async (_context) => {
-        // Preload file manager data using serverId
-        // Note: This will be handled by Desktop.tsx passing preloadData
-        return null;
-      },
-    },
     component: FileManager,
+    desktopLabel: '远程文件',
+    dockLabel: '文件',
   });
 
   // System Monitor - single instance
@@ -53,6 +54,17 @@ export function initWindowRegistry(registry: WindowRegistry): void {
     component: SystemMonitor,
   });
 
+  // Text Editor - allows multiple instances for editing different files
+  registry.register({
+    id: 'editor',
+    title: '文本编辑器',
+    icon: '📝',
+    defaultSize: { width: 900, height: 600 },
+    minSize: { width: 600, height: 400 },
+    allowMultipleInstances: true,
+    component: TextEditor,
+  });
+
   // Settings - single instance
   registry.register({
     id: 'settings',
@@ -62,17 +74,6 @@ export function initWindowRegistry(registry: WindowRegistry): void {
     minSize: { width: 500, height: 400 },
     allowMultipleInstances: false,
     component: Settings,
-  });
-
-  // Text Editor - allows multiple instances for editing different files
-  registry.register({
-    id: 'editor',
-    title: '文本编辑器',
-    icon: '📝',
-    defaultSize: { width: 900, height: 600 },
-    minSize: { width: 600, height: 400 },
-    allowMultipleInstances: true,  // 允许多个实例，编辑多个文件
-    component: TextEditor,
   });
 
   console.log('[WindowRegistry] Registered apps:', registry.getAll().map(a => a.id));

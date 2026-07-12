@@ -1,9 +1,4 @@
 import { useState, useEffect, useCallback, memo } from "react";
-import { FileManager } from "../apps/FileManager";
-import { TerminalApp } from "../apps/Terminal";
-import { SystemMonitor } from "../apps/SystemMonitor";
-import { Settings } from "../apps/Settings";
-import { TextEditor } from "../apps/TextEditor/TextEditor";
 import { NotificationCenter } from "./NotificationCenter";
 import { TopBar } from "./TopBar/TopBar";
 import { useGlobalShortcuts, createAppShortcuts } from "../hooks/useGlobalShortcuts";
@@ -14,6 +9,7 @@ import { useSettingsStore } from "../stores/settingsStore";
 import { useTheme } from "../hooks/useTheme";
 import { WindowShell } from "../components/window-shell";
 import { WindowManagerProvider, useWindowManager, useWindowGlobalState, useWindowState } from "../window-system/WindowManagerContext";
+import { AppDefinition } from "../window-system/types";
 import { listen } from "@tauri-apps/api/event";
 import "./Desktop.css";
 
@@ -33,61 +29,26 @@ interface MetricsSnapshot {
   uptime_secs: number;
 }
 
-interface DesktopApp {
-  id: string;
-  icon: string;
-  label: string;
-}
-
-const DESKTOP_APPS: DesktopApp[] = [
-  { id: "files",    icon: "📁", label: "远程文件" },
-  { id: "terminal", icon: "🖥️", label: "远程终端" },
-  { id: "monitor",  icon: "📊", label: "系统监控" },
-  { id: "editor",   icon: "📝", label: "文本编辑器" },
-  { id: "settings", icon: "⚙️",  label: "设置" },
-];
-
-const DOCK_APPS: DesktopApp[] = [
-  { id: "files",    icon: "📁", label: "文件" },
-  { id: "terminal", icon: "🖥️", label: "终端" },
-  { id: "monitor",  icon: "📊", label: "监控" },
-  { id: "editor",   icon: "📝", label: "编辑器" },
-  { id: "settings", icon: "⚙️",  label: "设置" },
-];
-
 // ─── 应用内容组件（React.memo 包裹）──────────────────
+// ✅ 从 registry 获取 component，不再硬编码 switch
 const MemoizedAppContent = memo(function AppContent({
-  appId,
+  app,
   windowId,
   preloadData
 }: {
-  appId: string;
+  app: AppDefinition;
   windowId: string;
   preloadData?: any;
 }) {
-  switch (appId) {
-    case 'files':
-      return <FileManager windowId={windowId} preloadData={preloadData} />;
-    case 'terminal':
-      return <TerminalApp windowId={windowId} />;
-    case 'monitor':
-      return <SystemMonitor windowId={windowId} />;
-    case 'editor':
-      return <TextEditor windowId={windowId} preloadData={preloadData} />;
-    case 'settings':
-      return <Settings windowId={windowId} />;
-    default:
-      return <div>Unknown app</div>;
-  }
+  const AppComponent = app.component;
+  return <AppComponent windowId={windowId} preloadData={preloadData} />;
 }, (prevProps, nextProps) => {
-  return prevProps.appId === nextProps.appId &&
+  return prevProps.app.id === nextProps.app.id &&
          prevProps.windowId === nextProps.windowId &&
          prevProps.preloadData === nextProps.preloadData;
 });
 
 // ─── 独立窗口组件：用 useWindowState 独立订阅 ────────
-// ✅ 核心优化：每个窗口用 useWindowState(windowId) 独立订阅
-// 其他窗口拖动/调整大小时，此组件不会重渲染
 const DesktopWindow = memo(function DesktopWindow({
   windowId,
   appId,
@@ -99,8 +60,7 @@ const DesktopWindow = memo(function DesktopWindow({
   const win = manager.getById(windowId);
   const app = manager.getApp(appId);
 
-  // ✅ 用 useWindowState 独立订阅此窗口的状态
-  // 只有此窗口状态变化时才重渲染，其他窗口拖动不影响
+  // 用 useWindowState 独立订阅此窗口的状态
   const windowState = useWindowState(windowId);
 
   if (!win || !app || !windowState) return null;
@@ -127,34 +87,28 @@ const DesktopWindow = memo(function DesktopWindow({
       onMinimize={() => manager.minimize(windowId)}
       onMaximize={() => {
         if (windowState.maximized) {
-          // 取消最大化：Window.setMaximized(false) 内部会恢复保存的位置/尺寸
           manager.unmaximize(windowId);
         } else {
-          // 最大化
           manager.maximize(windowId, maxWindowPosition, maxWindowSize);
         }
       }}
       onFocus={() => manager.focus(windowId)}
       onPositionChange={(pos) => {
-        // ✅ 只更新 Window 对象，useWindowState 会自动感知变化并重渲染
         const window = manager.getById(windowId);
         if (window) {
           window.setPosition(pos);
-          // ✅ 触发 window:moved 事件，通知 per-window 订阅者
           manager.emit({ type: 'window:moved', windowId, timestamp: Date.now() });
         }
       }}
       onSizeChange={(size) => {
-        // ✅ 只更新 Window 对象，useWindowState 会自动感知变化并重渲染
         const window = manager.getById(windowId);
         if (window) {
           window.setSize(size);
-          // ✅ 触发 window:resized 事件，通知 per-window 订阅者
           manager.emit({ type: 'window:resized', windowId, timestamp: Date.now() });
         }
       }}
     >
-      <MemoizedAppContent appId={appId} windowId={windowId} preloadData={win.preloadData} />
+      <MemoizedAppContent app={app} windowId={windowId} preloadData={win.preloadData} />
     </WindowShell>
   );
 });
@@ -185,9 +139,12 @@ function DesktopContent() {
   const { wallpaper } = useWallpaper();
   const { manager } = useWindowManager();
 
-  // ✅ 用 useWindowGlobalState 替代 globalState
-  // 只在窗口列表变化时重渲染（创建/关闭/最小化/恢复/聚焦）
-  // 窗口拖动/调整大小不触发此 Hook
+  // ✅ 从 registry 派生桌面/Dock 应用列表（单一数据源）
+  const registeredApps = manager.getRegisteredApps();
+  const desktopApps = registeredApps.filter(app => app.showOnDesktop !== false);
+  const dockApps = registeredApps.filter(app => app.showOnDock !== false);
+
+  // 用 useWindowGlobalState 替代 globalState
   const globalState = useWindowGlobalState();
 
   // 全局主题应用
@@ -284,19 +241,19 @@ function DesktopContent() {
       {/* Desktop Area */}
       <div className="desktop-area" style={getWallpaperStyle(wallpaper)}>
         <div className="desktop-icons">
-          {DESKTOP_APPS.map((app) => (
+          {desktopApps.map((app) => (
             <div
               key={app.id}
               className="desktop-icon"
               onDoubleClick={() => openApp(app.id)}
             >
               <div className="icon">{app.icon}</div>
-              <div className="label">{app.label}</div>
+              <div className="label">{app.desktopLabel ?? app.title}</div>
             </div>
           ))}
         </div>
 
-        {/* ✅ Application Windows — 独立订阅，拖动一个窗口不影响其他窗口 */}
+        {/* Application Windows */}
         {globalState.windowList.map((winInfo) => (
           <DesktopWindow
             key={winInfo.id}
@@ -308,7 +265,7 @@ function DesktopContent() {
         {/* Dock */}
         <div className="dock-container">
           <div className="dock">
-            {DOCK_APPS.map((app) => {
+            {dockApps.map((app) => {
               const isOpen = manager.getByAppId(app.id).length > 0;
               return (
                 <div
@@ -317,7 +274,7 @@ function DesktopContent() {
                   onClick={() => openApp(app.id)}
                 >
                   <div className="icon">{app.icon}</div>
-                  <div className="label">{app.label}</div>
+                  <div className="label">{app.dockLabel ?? app.title}</div>
                   {isOpen && <div className="dock-indicator" />}
                 </div>
               );
@@ -338,14 +295,14 @@ function DesktopContent() {
             autoFocus
           />
           <div className="overview-apps">
-            {DESKTOP_APPS.map((app) => (
+            {desktopApps.map((app) => (
               <div
                 key={app.id}
                 className="overview-app"
                 onClick={() => openApp(app.id)}
               >
                 <div className="icon">{app.icon}</div>
-                <div className="label">{app.label}</div>
+                <div className="label">{app.desktopLabel ?? app.title}</div>
               </div>
             ))}
           </div>

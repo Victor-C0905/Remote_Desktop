@@ -50,6 +50,12 @@ export interface AppDefinition {
   allowMultipleInstances: boolean;
   lifecycle?: WindowLifecycle;
   component: React.ComponentType<{ windowId: string; preloadData?: any }>;
+
+  // 桌面/Dock 显示配置（单一数据源，Desktop/Dock/Overview 从此派生）
+  showOnDesktop?: boolean;    // 是否显示在桌面图标区，默认 true
+  showOnDock?: boolean;       // 是否显示在 Dock，默认 true
+  desktopLabel?: string;      // 桌面图标标签（默认用 title）
+  dockLabel?: string;         // Dock 标签（默认用 title）
 }
 
 // Layout types
@@ -103,13 +109,14 @@ export interface IWindowManager {
   focus(windowId: string): void;
   minimize(windowId: string): void;
   restore(windowId: string): void;
-  maximize(windowId: string, maxPosition: { x: number; y: number }, maxSize: { width: number; height: number }): void; // ✅ 新增
-  unmaximize(windowId: string): void; // ✅ 新增
+  maximize(windowId: string, maxPosition: { x: number; y: number }, maxSize: { width: number; height: number }): void;
+  unmaximize(windowId: string): void;
   getById(windowId: string): AppWindow | undefined;
   getByAppId(appId: string): AppWindow[];
   getAll(): AppWindow[];
   getActive(): AppWindow | undefined;
   getApp(appId: string): AppDefinition | undefined;
+  getRegisteredApps(): AppDefinition[];
   on(eventType: WindowEventType, handler: EventHandler): Unsubscribe;
   onAny(handler: () => void): Unsubscribe;
   emit(event: WindowEvent): void;
