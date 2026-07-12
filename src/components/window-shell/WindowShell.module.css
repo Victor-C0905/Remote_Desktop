@@ -91,6 +91,11 @@
   user-select: none;
 }
 
+/* ✅ 最大化时标题栏不显示拖拽光标 */
+.windowShellMaximized .windowHeaderBar {
+  cursor: default;
+}
+
 .windowTitle {
   font-size: var(--font-small); /* 9pt */
   font-weight: 600;

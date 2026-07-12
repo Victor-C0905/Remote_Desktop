@@ -413,25 +413,19 @@ export function WindowShell({
       data-window-id={windowId}
       data-resizing={isResizing ? 'true' : 'false'} // ✅ 新增：用于 CSS 禁用动画
       style={{
-        position: 'absolute',
         left: 0,
         top: 0,
         width: size.width,
         height: size.height,
-        // ✅ 删除 inline zIndex，改用 CSS 固定规则
         display: isMinimized ? 'none' : 'flex',
-        flexDirection: 'column',
-        cursor: isDragging ? 'move' : 'default',
-        // 使用 transform 代替 left/top，性能更好（GPU 加速）
         transform: `translate(${position.x}px, ${position.y}px) scale(${isOpening ? 0.96 : 1})`,
         willChange: isDragging ? 'transform' : 'auto',
         opacity: isOpening ? 0 : 1,
-        // ✅ 新增：窗口动画（仅在非拖拽/非 resize 时应用）
         transition: isOpening
           ? 'opacity 200ms cubic-bezier(0.25, 0, 0, 1), transform 200ms cubic-bezier(0.25, 0, 0, 1)'
-          : (isDragging || isResizing) // ✅ 拖拽/resize 时禁用动画
-            ? 'opacity 0.2s ease-out' // 只保留 opacity 动画
-            : 'opacity 0.2s ease-out, transform 300ms cubic-bezier(0.25, 0, 0, 1), width 300ms cubic-bezier(0.25, 0, 0, 1), height 300ms cubic-bezier(0.25, 0, 0, 1)', // ✅ 添加 transform、width、height 动画
+          : (isDragging || isResizing)
+            ? 'opacity 0.2s ease-out'
+            : 'opacity 0.2s ease-out, transform 300ms cubic-bezier(0.25, 0, 0, 1), width 300ms cubic-bezier(0.25, 0, 0, 1), height 300ms cubic-bezier(0.25, 0, 0, 1)',
       }}
       onMouseDown={handleWindowMouseDown}
     >
@@ -442,11 +436,7 @@ export function WindowShell({
         <div
           className={styles.windowHeaderBar}
           onMouseDown={handleDragStart}
-          onDoubleClick={handleHeaderBarDoubleClick} // ✅ 新增：双击标题栏最大化
-          style={{
-            cursor: isMaximized ? 'default' : (isDragging ? 'move' : 'move'), // ✅ 最大化时禁用拖拽光标
-            userSelect: 'none',
-          }}
+          onDoubleClick={handleHeaderBarDoubleClick}
         >
           <div className={styles.windowTitle}>{title}</div>
           <WindowControls onClose={onClose} onMinimize={onMinimize} onMaximize={onMaximize} />

@@ -29,6 +29,7 @@
  */
 .appSidebar {
   flex-shrink: 0; /* 固定宽度,不压缩 */
+  width: var(--app-sidebar-width, 240px); /* ✅ 通过 CSS 变量控制，默认 240px */
   background: var(--ovelis-sidebar-bg);
   border-right: 1px solid var(--ovelis-border-color);
   overflow-y: auto; /* Sidebar 内容独立滚动 */

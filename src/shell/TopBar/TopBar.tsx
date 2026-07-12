@@ -59,7 +59,7 @@ export const TopBar = memo(function TopBar({
            activeServer?.status === "error" ? "连接失败" : "未连接"}
         </span>
         {activeServer && (
-          <span style={{ marginLeft: "8px", opacity: 0.7 }}>
+          <span className={styles.serverName}>
             {activeServer.name || activeServer.host}
           </span>
         )}

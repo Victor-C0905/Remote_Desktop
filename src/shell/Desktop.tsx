@@ -230,7 +230,7 @@ function DesktopContent() {
     : undefined;
 
   return (
-    <div className="shell" style={getWallpaperStyle(wallpaper)}>
+    <div className="shell">
       {/* Top Bar */}
       <TopBar
         metrics={metrics}
@@ -242,7 +242,7 @@ function DesktopContent() {
       />
 
       {/* Desktop Area */}
-      <div className="desktop-area">
+      <div className="desktop-area" style={getWallpaperStyle(wallpaper)}>
         <div className="desktop-icons">
           {DESKTOP_APPS.map((app) => (
             <div
