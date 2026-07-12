@@ -2,8 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useServerManager } from "../context/ServerManager";
 import { PLACEHOLDER } from "../utils/offlineDefaults";
-import { useWindowState } from "../window-system/hooks/useWindowState";
-import { useWindowManager } from "../window-system/hooks/useWindowManager";
+import { useWindowManager } from "../window-system/WindowManagerContext";
 import { AppLayout } from "../components/app-shell";
 import "./FileManager.css";
 
@@ -99,16 +98,13 @@ interface FileManagerProps {
   preloadData?: any;  // 由 Desktop 通过窗口状态注入
 }
 
-export function FileManager({ windowId, preloadData }: FileManagerProps) {
+export function FileManager({ preloadData }: FileManagerProps) {
   // ── 窗口系统集成 ─────────────────────────────────────
-  // 获取窗口状态（包含 preloadData）
-  const windowState = useWindowState(windowId);
-
-  // 获取窗口管理器（用于创建新窗口）
+  // 获取窗口管理器
   const { manager } = useWindowManager();
 
-  // 从窗口状态获取预加载数据（优先使用 windowState.preloadData）
-  const initialData = windowState.preloadData || preloadData;
+  // 从 props 获取预加载数据
+  const initialData = preloadData;
 
   const { activeServerId, servers, connectServer } = useServerManager();
 
