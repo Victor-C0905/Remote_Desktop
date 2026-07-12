@@ -81,8 +81,8 @@ export const TopBar = memo(function TopBar({
       <button className={styles.notificationBtn} onClick={onNotificationClick}>
         🔔
         <NotificationBadge
-          unread={unreadNotifications}
-          critical={criticalNotifications}
+          count={unreadNotifications}
+          criticalCount={criticalNotifications}
         />
       </button>
     </div>

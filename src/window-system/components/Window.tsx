@@ -1,40 +1,46 @@
 // src/window-system/components/Window.tsx
 
-import { useWindowManager } from '../hooks/useWindowManager';
-import { useWindowState } from '../hooks/useWindowState';
+import { useWindowManager, useWindowState } from '../WindowManagerContext';
 import { DraggableWindow } from '../../components/DraggableWindow';
 
 /**
  * Window component - wraps DraggableWindow with window system state
+ *
+ * ⚠️ 注意：此组件使用 DraggableWindow（遗留窗口组件），
+ * 当前 Desktop.tsx 使用 WindowShell + useWindowState 的方式渲染窗口。
+ * 此组件保留作为 window-system 模块的完整导出。
  */
 export function Window({ windowId }: { windowId: string }) {
   const { manager } = useWindowManager();
-  const state = useWindowState(windowId);
-  const app = manager.getApp(state.appId);
+  const windowState = useWindowState(windowId);
 
-  if (!app) {
+  // 从 Window 实例获取不可由 useWindowState 派生的字段
+  const win = manager.getById(windowId);
+  const app = win ? manager.getApp(win.appId) : undefined;
+
+  if (!windowState || !win || !app) {
     return null;
   }
 
   return (
     <DraggableWindow
-      title={state.title}
-      isActive={state.focused}
+      title={app.title}
+      isActive={windowState.isActive}
       onClose={() => manager.close(windowId)}
       onMinimize={() => manager.minimize(windowId)}
       onFocus={() => manager.focus(windowId)}
-      initialPosition={state.position}
-      initialSize={state.size}
+      initialPosition={windowState.position}
+      initialSize={windowState.size}
       minWidth={app.minSize.width}
       minHeight={app.minSize.height}
-      zIndex={state.focused ? 90 : 10}
+      zIndex={windowState.isActive ? 90 : 10}
     >
-      {state.preloadState === 'loading' ? (
+      {win.preloadState === 'loading' ? (
         <div>Loading...</div>
-      ) : state.preloadState === 'error' ? (
+      ) : win.preloadState === 'error' ? (
         <div>Error loading data</div>
       ) : (
-        <app.component windowId={windowId} preloadData={state.preloadData} />
+        <app.component windowId={windowId} preloadData={win.preloadData} />
       )}
     </DraggableWindow>
   );

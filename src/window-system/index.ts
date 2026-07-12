@@ -12,7 +12,6 @@ export { WINDOW_EVENTS } from './events/WindowEvents';
 
 // Hook exports
 export { useWindowManager } from './hooks/useWindowManager';
-export { useWindowState } from './hooks/useWindowState';
 export { useWindowEvent } from './hooks/useWindowEvent';
 
 // Context exports
@@ -20,6 +19,8 @@ export {
   WindowManagerProvider,
   WindowManagerContext,
   useWindowManagerContext,
+  useWindowGlobalState,
+  useWindowState,
 } from './WindowManagerContext';
 
 // Component exports

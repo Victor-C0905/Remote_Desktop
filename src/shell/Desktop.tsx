@@ -5,7 +5,7 @@ import { SystemMonitor } from "../apps/SystemMonitor";
 import { Settings } from "../apps/Settings";
 import { TextEditor } from "../apps/TextEditor/TextEditor";
 import { NotificationCenter } from "./NotificationCenter";
-import { TopBar } from "./TopBar/TopBar"; // ✅ 新增：TopBar 独立组件
+import { TopBar } from "./TopBar/TopBar";
 import { useGlobalShortcuts, createAppShortcuts } from "../hooks/useGlobalShortcuts";
 import { ServerManagerProvider, useServerManager } from "../context/ServerManager";
 
@@ -13,17 +13,11 @@ import { WallpaperProvider, useWallpaper, getWallpaperStyle } from "../context/W
 import { useSettingsStore } from "../stores/settingsStore";
 import { useTheme } from "../hooks/useTheme";
 import { WindowShell } from "../components/window-shell";
-import { WindowManagerProvider, useWindowManager } from "../window-system/WindowManagerContext";
+import { WindowManagerProvider, useWindowManager, useWindowGlobalState, useWindowState } from "../window-system/WindowManagerContext";
 import { listen } from "@tauri-apps/api/event";
 import "./Desktop.css";
 
-// ✅ 新增：窗口局部状态类型
-interface WindowLocalState {
-  position: { x: number; y: number };
-  size: { width: number; height: number };
-}
-
-// 完整的 MetricsSnapshot 类型（匹配 Agent）
+// ─── MetricsSnapshot 类型（匹配 Agent）───────────────
 interface MetricsSnapshot {
   cpu_percent: number;
   mem_used_bytes: number;
@@ -61,13 +55,13 @@ const DOCK_APPS: DesktopApp[] = [
   { id: "settings", icon: "⚙️",  label: "设置" },
 ];
 
-// ✅ 新增：应用内容组件（React.memo 包裹）
-const MemoizedAppContent = memo(function AppContent({ 
-  appId, 
-  windowId, 
-  preloadData 
-}: { 
-  appId: string; 
+// ─── 应用内容组件（React.memo 包裹）──────────────────
+const MemoizedAppContent = memo(function AppContent({
+  appId,
+  windowId,
+  preloadData
+}: {
+  appId: string;
   windowId: string;
   preloadData?: any;
 }) {
@@ -86,12 +80,86 @@ const MemoizedAppContent = memo(function AppContent({
       return <div>Unknown app</div>;
   }
 }, (prevProps, nextProps) => {
-  // ✅ 只在 appId 或 windowId 变化时重渲染
-  return prevProps.appId === nextProps.appId && 
+  return prevProps.appId === nextProps.appId &&
          prevProps.windowId === nextProps.windowId &&
          prevProps.preloadData === nextProps.preloadData;
 });
 
+// ─── 独立窗口组件：用 useWindowState 独立订阅 ────────
+// ✅ 核心优化：每个窗口用 useWindowState(windowId) 独立订阅
+// 其他窗口拖动/调整大小时，此组件不会重渲染
+const DesktopWindow = memo(function DesktopWindow({
+  windowId,
+  appId,
+}: {
+  windowId: string;
+  appId: string;
+}) {
+  const { manager } = useWindowManager();
+  const win = manager.getById(windowId);
+  const app = manager.getApp(appId);
+
+  // ✅ 用 useWindowState 独立订阅此窗口的状态
+  // 只有此窗口状态变化时才重渲染，其他窗口拖动不影响
+  const windowState = useWindowState(windowId);
+
+  if (!win || !app || !windowState) return null;
+
+  // 最大化尺寸
+  const maxWindowSize = {
+    width: window.innerWidth,
+    height: window.innerHeight - 32,
+  };
+  const maxWindowPosition = { x: 0, y: 0 };
+
+  return (
+    <WindowShell
+      key={windowId}
+      windowId={windowId}
+      title={app.title}
+      isActive={windowState.isActive}
+      isMinimized={windowState.minimized}
+      isMaximized={windowState.maximized}
+      mode="standard"
+      position={windowState.position}
+      size={windowState.size}
+      onClose={() => manager.close(windowId)}
+      onMinimize={() => manager.minimize(windowId)}
+      onMaximize={() => {
+        if (windowState.maximized) {
+          // 取消最大化：Window.setMaximized(false) 内部会恢复保存的位置/尺寸
+          manager.unmaximize(windowId);
+        } else {
+          // 最大化
+          manager.maximize(windowId, maxWindowPosition, maxWindowSize);
+        }
+      }}
+      onFocus={() => manager.focus(windowId)}
+      onPositionChange={(pos) => {
+        // ✅ 只更新 Window 对象，useWindowState 会自动感知变化并重渲染
+        const window = manager.getById(windowId);
+        if (window) {
+          window.setPosition(pos);
+          // ✅ 触发 window:moved 事件，通知 per-window 订阅者
+          manager.emit({ type: 'window:moved', windowId, timestamp: Date.now() });
+        }
+      }}
+      onSizeChange={(size) => {
+        // ✅ 只更新 Window 对象，useWindowState 会自动感知变化并重渲染
+        const window = manager.getById(windowId);
+        if (window) {
+          window.setSize(size);
+          // ✅ 触发 window:resized 事件，通知 per-window 订阅者
+          manager.emit({ type: 'window:resized', windowId, timestamp: Date.now() });
+        }
+      }}
+    >
+      <MemoizedAppContent appId={appId} windowId={windowId} preloadData={win.preloadData} />
+    </WindowShell>
+  );
+});
+
+// ─── Desktop 入口 ────────────────────────────────────
 export function Desktop() {
   return (
     <ServerManagerProvider>
@@ -104,6 +172,7 @@ export function Desktop() {
   );
 }
 
+// ─── DesktopContent ──────────────────────────────────
 function DesktopContent() {
   const [overviewVisible, setOverviewVisible] = useState(false);
   const [notificationOpen, setNotificationOpen] = useState(false);
@@ -112,25 +181,18 @@ function DesktopContent() {
   const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
   const [clock, setClock] = useState("");
 
-  // ✅ 新增：窗口局部状态管理（position/size），避免读取旧值
-  const [windowLocalStates, setWindowLocalStates] = useState<Map<string, WindowLocalState>>(new Map());
-
   const { activeServer } = useServerManager();
   const { wallpaper } = useWallpaper();
-  // ✅ 关键修复：获取 globalState，确保窗口激活状态变化时重新渲染
-  const { manager, globalState } = useWindowManager();
+  const { manager } = useWindowManager();
 
-  // 全局主题应用（确保所有窗口都使用正确的主题 CSS 变量）
+  // ✅ 用 useWindowGlobalState 替代 globalState
+  // 只在窗口列表变化时重渲染（创建/关闭/最小化/恢复/聚焦）
+  // 窗口拖动/调整大小不触发此 Hook
+  const globalState = useWindowGlobalState();
+
+  // 全局主题应用
   const { themeId, accentColorId } = useSettingsStore();
   useTheme(themeId, accentColorId);
-
-  // ✅ 计算最大化尺寸：屏幕宽度，高度 = 屏幕高度 - TopBar高度（32px）
-  const topBarHeight = 32;
-  const maxWindowSize = {
-    width: window.innerWidth,
-    height: window.innerHeight - topBarHeight,
-  };
-  const maxWindowPosition = { x: 0, y: 0 }; // 最大化时窗口位于 Desktop Area 左上角
 
   // Clock
   useEffect(() => {
@@ -145,7 +207,7 @@ function DesktopContent() {
     return () => clearInterval(id);
   }, []);
 
-  // 监听系统指标事件（由 ServerManager 自动订阅）
+  // 监听系统指标事件
   useEffect(() => {
     if (!activeServer?.id) return;
 
@@ -173,9 +235,7 @@ function DesktopContent() {
     };
   }, [activeServer?.id]);
 
-  // ── 断连时立即清空状态栏 metrics ────────────────────
-  // 当 activeServer 消失（断连/切换服务器）时，同步清空 metrics 数据
-  // 确保 TopBar 即时从 "CPU 23.5%" 切换到 "CPU —%"
+  // 断连时清空 metrics
   useEffect(() => {
     if (!activeServer?.id) {
       setMetrics(null);
@@ -185,25 +245,18 @@ function DesktopContent() {
   const openApp = useCallback(async (appId: string) => {
     setOverviewVisible(false);
 
-    // ✅ GNOME 标准 Dock 行为：
-    // 1. 如果窗口不存在 → 创建新窗口
-    // 2. 如果窗口已最小化 → 恢复窗口（restore + focus）
-    // 3. 如果窗口已打开且非最小化 → 最小化窗口（minimize）
     const existingWindows = manager.getByAppId(appId);
     if (existingWindows.length > 0) {
       const existing = existingWindows[0];
       if (existing.minimized) {
-        // ✅ 窗口已最小化 → 恢复窗口
         manager.restore(existing.id);
         manager.focus(existing.id);
       } else {
-        // ✅ 窗口已打开且非最小化 → 最小化窗口
         manager.minimize(existing.id);
       }
       return;
     }
 
-    // 所有应用直接创建（FileManager 自行处理数据加载和离线状态）
     await manager.create(appId, { serverId: activeServer?.id });
   }, [manager, activeServer?.id, setOverviewVisible]);
 
@@ -215,19 +268,6 @@ function DesktopContent() {
     () => setNotificationOpen(false)
   );
   useGlobalShortcuts(shortcuts);
-
-  // Render app content（使用 React.memo 包裹的组件）
-  const renderAppContent = (appId: string, win: ReturnType<typeof manager.getById>) => {
-    if (!win) return null;
-    return <MemoizedAppContent appId={appId} windowId={win.id} preloadData={win.preloadData} />;
-  };
-
-  // 获取所有窗口（由 WindowManager 管理）
-  const windows = manager.getAll();
-  // ✅ 关键修复：使用 globalState.activeWindowId 获取激活窗口，确保状态更新时重新渲染
-  const activeWindow = globalState.activeWindowId
-    ? manager.getById(globalState.activeWindowId)
-    : undefined;
 
   return (
     <div className="shell">
@@ -256,94 +296,14 @@ function DesktopContent() {
           ))}
         </div>
 
-        {/* Application Windows */}
-        {/* z-index 分配策略：
-            - 活动窗口: z-index: 90（最上层）
-            - 其他窗口: 根据激活时间戳排序，最近激活的在上层
-            - 最小化窗口: 保持渲染但隐藏(display: none),保留内部状态
-        */}
-        {(() => {
-          // 不过滤最小化窗口,保持所有窗口渲染以保留内部状态
-          const allWindows = windows;
-
-          // 不重新排序，保持 DOM 树顺序不变，避免事件丢失
-          return allWindows.map((win) => {
-            const app = manager.getApp(win.appId);
-            if (!app) return null;
-
-            // ✅ 优先使用局部状态（position/size），避免读取旧值
-            const localState = windowLocalStates.get(win.id);
-            const currentPosition = localState?.position || win.position;
-            const currentSize = localState?.size || win.size;
-
-            return (
-              <WindowShell
-                key={win.id} // 使用稳定的 key,不包含 minimized 状态,避免重新挂载
-                windowId={win.id}
-                title={app.title}
-                isActive={win.id === activeWindow?.id}
-                isMinimized={win.minimized}
-                isMaximized={win.maximized} // ✅ 新增：传递最大化状态
-                mode="standard" // ✅ 所有应用默认使用标准模式（有头窗口）
-                position={currentPosition}
-                size={currentSize}
-                onClose={() => manager.close(win.id)}
-                onMinimize={() => manager.minimize(win.id)}
-                onMaximize={() => {
-                  // ✅ 实现最大化逻辑：根据当前状态切换 maximize/unmaximize
-                  if (win.maximized) {
-                    // 当前已最大化 → 取消最大化
-                    manager.unmaximize(win.id);
-                    // ✅ 清除局部状态（恢复后使用 Window 对象的 position/size）
-                    setWindowLocalStates(prev => {
-                      const newMap = new Map(prev);
-                      newMap.delete(win.id); // 删除局部状态，让 WindowShell 读取 Window 对象的状态
-                      return newMap;
-                    });
-                  } else {
-                    // 当前未最大化 → 最大化
-                    manager.maximize(win.id, maxWindowPosition, maxWindowSize);
-                    // ✅ 更新局部状态（立即应用最大化尺寸）
-                    setWindowLocalStates(prev => {
-                      const newMap = new Map(prev);
-                      newMap.set(win.id, { position: maxWindowPosition, size: maxWindowSize });
-                      return newMap;
-                    });
-                  }
-                }}
-                onFocus={() => manager.focus(win.id)}
-                onPositionChange={(pos) => {
-                  // ✅ 更新 Window 对象和局部状态
-                  const window = manager.getById(win.id);
-                  if (window) {
-                    window.setPosition(pos);
-                    // ✅ 更新局部状态，触发重渲染
-                    setWindowLocalStates(prev => {
-                      const newMap = new Map(prev);
-                      newMap.set(win.id, { position: pos, size: currentSize });
-                      return newMap;
-                    });
-                  }
-                }}
-                onSizeChange={(size) => {
-                  // ✅ 更新 Window 对象和局部状态
-                  const window = manager.getById(win.id);
-                  if (window) {
-                    window.setSize(size);
-                    // ✅ 更新局部状态，触发重渲染
-                    setWindowLocalStates(prev => {
-                      const newMap = new Map(prev);
-                      newMap.set(win.id, { position: currentPosition, size });
-                      return newMap;
-                    });
-                  }
-                }}
-              >
-                {renderAppContent(win.appId, win)}
-              </WindowShell>
-            );
-          });
-        })()}
+        {/* ✅ Application Windows — 独立订阅，拖动一个窗口不影响其他窗口 */}
+        {globalState.windowList.map((winInfo) => (
+          <DesktopWindow
+            key={winInfo.id}
+            windowId={winInfo.id}
+            appId={winInfo.appId}
+          />
+        ))}
 
         {/* Dock */}
         <div className="dock-container">
