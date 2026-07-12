@@ -670,7 +670,7 @@ export function TerminalApp({ windowId }: { windowId: string }) {
   return (
     <div className="terminal-app" onClick={() => { if (contextMenu) setContextMenu(null); }}>
       {/* Tab Bar - 整合原HeaderBar功能 */}
-      <div className="terminal-tab-bar">
+      <div className="terminal-tabs-container">
         {/* Tab List */}
         <div className="terminal-tab-list">
           {tabs.map((tab) => (
