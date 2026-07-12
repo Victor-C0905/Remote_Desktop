@@ -1,0 +1,23 @@
+/* ============================================================
+   Scrollbar 全局样式 — GNOME Remote Client
+   从 adwaita.css 提取，确保桌面系统统一滚动条样式
+   ============================================================ */
+
+/* ── Scrollbar (GNOME Style) ───────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--ovelis-border-color);
+  border-radius: var(--radius-pill);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0,0,0,0.3);
+}

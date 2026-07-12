@@ -24,7 +24,7 @@
   flex-shrink: 0;
 }
 
-.header-button {
+.terminal-header-button {
   padding: 4px 12px;
   border: none;
   background: transparent;
@@ -34,7 +34,7 @@
   font-size: 13px;
 }
 
-.header-button:hover {
+.terminal-header-button:hover {
   background: var(--ovelis-card-bg);
 }
 
@@ -49,7 +49,7 @@
   flex-shrink: 0;
 }
 
-.search-input {
+.terminal-search-input {
   flex: 1;
   padding: 4px 8px;
   border: 1px solid var(--ovelis-border-color);
@@ -63,12 +63,12 @@
   -webkit-user-select: text;
 }
 
-.search-input:focus {
+.terminal-search-input:focus {
   outline: 2px solid var(--ovelis-accent-bg);
   outline-offset: -2px;
 }
 
-.search-button {
+.terminal-search-button {
   padding: 4px 12px;
   border: none;
   background: var(--ovelis-accent-bg);
@@ -78,7 +78,7 @@
   font-size: 13px;
 }
 
-.search-button:hover {
+.terminal-search-button:hover {
   background: var(--ovelis-accent-hover);
 }
 
@@ -96,7 +96,7 @@
   box-shadow: var(--shadow-popup);
 }
 
-.settings-label {
+.terminal-settings-label {
   display: flex;
   align-items: center;
   margin-bottom: 12px;
@@ -105,22 +105,22 @@
   font-family: var(--font-ui);
 }
 
-.settings-slider {
+.terminal-settings-slider {
   flex: 1;
   margin: 0 8px;
 }
 
-.settings-value {
+.terminal-settings-value {
   min-width: 30px;
   text-align: right;
   font-family: var(--font-mono);
 }
 
-.settings-checkbox {
+.terminal-settings-checkbox {
   margin-left: 8px;
 }
 
-.settings-close-button {
+.terminal-settings-close-button {
   width: 100%;
   padding: 8px;
   border: none;
@@ -132,7 +132,7 @@
   font-size: 13px;
 }
 
-.settings-close-button:hover {
+.terminal-settings-close-button:hover {
   background: var(--ovelis-accent-hover);
 }
 
@@ -148,7 +148,7 @@
   box-shadow: var(--shadow-popup);
 }
 
-.menu-item {
+.terminal-menu-item {
   display: block;
   width: 100%;
   padding: 8px 16px;
@@ -161,11 +161,11 @@
   font-family: var(--font-ui);
 }
 
-.menu-item:hover {
+.terminal-menu-item:hover {
   background: var(--ovelis-card-hover);
 }
 
-.menu-divider {
+.terminal-menu-divider {
   margin: 4px 0;
   border: none;
   border-top: 1px solid var(--ovelis-border-color);

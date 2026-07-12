@@ -702,7 +702,7 @@ export function TerminalApp({ windowId }: { windowId: string }) {
         <div className="terminal-search-bar">
           <span style={{ color: '#888', fontSize: 12 }}>搜索:</span>
           <input
-            className="search-input"
+            className="terminal-search-input"
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
             onKeyDown={(e) => {
@@ -711,10 +711,10 @@ export function TerminalApp({ windowId }: { windowId: string }) {
             autoFocus
             placeholder="在终端中搜索..."
           />
-          <button className="search-button" onClick={handleSearchPrev} title="上一个">↑</button>
-          <button className="search-button" onClick={handleSearchNext} title="下一个">↓</button>
-          <button className="search-button" onClick={handleSearch}>查找</button>
-          <button className="search-button" onClick={() => setShowSearch(false)}>关闭</button>
+          <button className="terminal-search-button" onClick={handleSearchPrev} title="上一个">↑</button>
+          <button className="terminal-search-button" onClick={handleSearchNext} title="下一个">↓</button>
+          <button className="terminal-search-button" onClick={handleSearch}>查找</button>
+          <button className="terminal-search-button" onClick={() => setShowSearch(false)}>关闭</button>
         </div>
       )}
 
@@ -759,38 +759,38 @@ export function TerminalApp({ windowId }: { windowId: string }) {
       {/* Settings Panel */}
       {showSettings && (
         <div className="terminal-settings-panel" onClick={(e) => e.stopPropagation()}>
-          <label className="settings-label">
+          <label className="terminal-settings-label">
             字号:
             <input
               type="range"
-              className="settings-slider"
+              className="terminal-settings-slider"
               min={10}
               max={24}
               value={fontSize}
               onChange={(e) => setFontSize(Number(e.target.value))}
             />
-            <span className="settings-value">{fontSize}</span>
+            <span className="terminal-settings-value">{fontSize}</span>
           </label>
-          <label className="settings-label">
+          <label className="terminal-settings-label">
             光标闪烁:
             <input
               type="checkbox"
-              className="settings-checkbox"
+              className="terminal-settings-checkbox"
               checked={cursorBlink}
               onChange={(e) => setCursorBlink(e.target.checked)}
             />
           </label>
-          <button className="settings-close-button" onClick={() => setShowSettings(false)}>关闭</button>
+          <button className="terminal-settings-close-button" onClick={() => setShowSettings(false)}>关闭</button>
         </div>
       )}
 
       {/* Context Menu（只在未选中时显示，提供粘贴选项）*/}
       {contextMenu && (
         <div className="terminal-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(e) => e.stopPropagation()}>
-          <button className="menu-item" onClick={handlePaste}>粘贴</button>
-          <hr className="menu-divider" />
-          <button className="menu-item" onClick={() => { setShowSearch(true); setContextMenu(null); }}>搜索</button>
-          <button className="menu-item" onClick={() => { setShowSettings(true); setContextMenu(null); }}>设置</button>
+          <button className="terminal-menu-item" onClick={handlePaste}>粘贴</button>
+          <hr className="terminal-menu-divider" />
+          <button className="terminal-menu-item" onClick={() => { setShowSearch(true); setContextMenu(null); }}>搜索</button>
+          <button className="terminal-menu-item" onClick={() => { setShowSettings(true); setContextMenu(null); }}>设置</button>
         </div>
       )}
     </div>
