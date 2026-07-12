@@ -45,6 +45,14 @@ export class WindowManager implements IWindowManager {
   }
 
   /**
+   * Get all registered app definitions
+   * Desktop/Dock/Overview 从此派生显示列表（单一数据源）
+   */
+  getRegisteredApps(): ReturnType<WindowRegistry['getAll']> {
+    return this.registry.getAll();
+  }
+
+  /**
    * Create a new window
    * Handles lifecycle hooks and preloading
    */
