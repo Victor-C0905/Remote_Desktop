@@ -146,9 +146,9 @@
 
 /* ── Content Area ─────────────────────────────────────── */
 .fm-sidebar {
-  /* ✅ 不设置width，由AppLayout的style={{ width }}控制 */
+  /* ✅ 不设置width，由AppLayout的CSS变量 --app-sidebar-width 控制 */
   background: var(--ovelis-sidebar-bg);
-  /* ✅ 不设置border-right，AppLayout的.app-sidebar已设置 */
+  /* ✅ 不设置border-right，AppLayout的 appSidebar 已设置 */
   padding: 8px 0;
 }
 

@@ -69,6 +69,11 @@
   background: #e01b24;  /* ✅ 保留原有红色 */
 }
 
+.serverName {
+  margin-left: 8px;
+  opacity: 0.7;
+}
+
 .spacer {
   flex: 1;
 }

@@ -16,7 +16,7 @@
 /* ── Top Bar ──────────────────────────────────────────── */
 .top-bar {
   height: var(--topbar-height);
-  background: transparent; /* ✅ 透明背景，可以看到壁纸 */
+  background: var(--ovelis-headerbar-bg);
   border-bottom: 1px solid var(--ovelis-border-color);
   display: flex;
   align-items: center;

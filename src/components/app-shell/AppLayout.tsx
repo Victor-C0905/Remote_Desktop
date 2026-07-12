@@ -1,5 +1,5 @@
 import React from "react";
-import "./app-layout.css";
+import styles from "./AppLayout.module.css";
 
 /**
  * AppLayout - 应用布局组件
@@ -64,12 +64,11 @@ export function AppLayout({
   children,
 }: AppLayoutProps) {
   return (
-    <div className="app-layout">
+    <div className={styles.appLayout} style={{ '--app-sidebar-width': `${sidebarWidth}px` } as React.CSSProperties}>
       {/* Sidebar（可选） */}
       {sidebar && (
         <div
-          className="app-sidebar"
-          style={{ width: sidebarWidth }}
+          className={styles.appSidebar}
           data-collapsible={sidebarCollapsible}
         >
           {sidebar}
@@ -77,12 +76,12 @@ export function AppLayout({
       )}
 
       {/* Main 区域 */}
-      <div className="app-main">
+      <div className={styles.appMain}>
         {/* Toolbar（可选） */}
-        {toolbar && <div className="app-toolbar-container">{toolbar}</div>}
+        {toolbar && <div className={styles.appToolbarContainer}>{toolbar}</div>}
 
         {/* Content（必选） */}
-        <div className="app-content">{children}</div>
+        <div className={styles.appContent}>{children}</div>
       </div>
     </div>
   );
