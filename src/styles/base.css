@@ -15,8 +15,11 @@ html, body, #root {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  /* ✅ 删除 font-family、font-size、color、background 变量引用 */
-  /* 这些由 variables.css 的 CSS 变量在运行时提供 */
+  /* 全局默认字体 */
+  font-family: var(--font-ui);
+  font-size: var(--font-body);
+  color: var(--ovelis-text-primary);
+  background: var(--ovelis-window-bg);
 }
 
 /* ✅ 关键修复：确保应用容器不阻止滚动 */
