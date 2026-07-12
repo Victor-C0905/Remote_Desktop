@@ -1,0 +1,27 @@
+/* ============================================================
+   Base Styles — GNOME Remote Client
+   最小化全局重置样式
+   ============================================================ */
+
+/* ── Reset ──────────────────────────────────────────────── */
+*, *::before, *::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  user-select: none;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden; /* ✅ 保留，防止页面整体滚动（桌面应用不需要浏览器滚动条） */
+  font-family: var(--font-ui);
+  font-size: var(--font-body);
+  color: var(--ovelis-text-primary);
+  background: var(--ovelis-window-bg);  /* ✅ 保留原有背景色 */
+}
+
+/* ✅ 关键修复：确保应用容器不阻止滚动 */
+#root > * {
+  overflow: visible; /* ✅ 确保Direct子元素不阻止滚动 */
+}

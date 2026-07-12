@@ -1,0 +1,790 @@
+/* ============================================================
+   FileManager — GNOME Nautilus Style(无HeaderBar版本)
+   ============================================================ */
+
+/* ── App Container ───────────────────────────────────── */
+.fmApp {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0; /* ✅ 建立 flex 约束链,确保子元素滚动正常 */
+  background: var(--ovelis-window-bg);
+}
+
+/* ── Toolbar(替代原HeaderBar)───────────────────────── */
+.fmToolbar {
+  height: 40px;
+  background: var(--ovelis-view-bg);
+  border-bottom: 1px solid var(--ovelis-border-color);
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.fmToolbarNav,
+.fmToolbarActions,
+.fmToolbarView {
+  display: flex;
+  gap: 4px;
+}
+
+.fmToolbarPath {
+  flex: 1;
+  min-width: 200px;
+  position: relative;
+}
+
+.fmToolbarBtn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: var(--radius-xs);
+  color: var(--ovelis-text-secondary);
+  cursor: pointer;
+  font-size: 14px;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.fmToolbarBtnHover:not(:disabled) {
+  background: var(--ovelis-border-color);
+  color: var(--ovelis-text-primary);
+}
+
+.fmToolbarBtnDisabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.fmToolbarBtnActive {
+  background: var(--ovelis-accent-bg);
+  color: var(--ovelis-text-on-accent);
+}
+
+/* ── Breadcrumb ──────────────────────────────────────── */
+.fmBreadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+  min-width: 200px; /* ✅ 修改:从 0 改为 200px */
+  padding: 0 8px;
+  height: 32px;
+  background: var(--ovelis-view-bg);
+  border: 1px solid var(--ovelis-border-color);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.crumb {
+  background: none;
+  border: none;
+  color: var(--ovelis-accent-bg);
+  font-family: var(--font-ui);
+  font-size: var(--font-body);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: var(--radius-xs);
+  white-space: nowrap;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.crumbHover {
+  background: var(--ovelis-border-color);
+}
+
+.crumbCurrent {
+  color: var(--ovelis-text-primary);
+  cursor: default;
+  font-weight: 600;
+}
+
+.crumbCurrentHover {
+  background: none;
+}
+
+.sep {
+  color: var(--ovelis-text-disabled);
+  font-size: var(--font-small);
+  user-select: none;
+}
+
+/* ── Path Input Container ─────────────────────────────────── */
+.fmPathInputContainer {
+  flex: 1;
+  min-width: 0;
+  position: relative;  /* 建议列表相对定位基准 */
+}
+
+/* ── Path Input ─────────────────────────────────────────── */
+.fmPathInput {
+  width: 100%;
+  height: 32px;
+  padding: 0 12px;
+  background: var(--ovelis-view-bg);
+  border: 1px solid var(--ovelis-border-color);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-ui);
+  font-size: var(--font-body);
+  color: var(--ovelis-text-primary);
+  outline: none;
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+.fmPathInputFocus {
+  border-color: var(--ovelis-accent-bg);
+}
+
+.fmPathInputPlaceholder {
+  color: var(--ovelis-text-disabled);
+}
+
+/* ── Content Area ─────────────────────────────────────── */
+.fmSidebar {
+  /* ✅ 不设置width,由AppLayout的style={{ width }}控制 */
+  background: var(--ovelis-sidebar-bg);
+  /* ✅ 不设置border-right,AppLayout的.app-sidebar已设置 */
+  padding: 8px 0;
+}
+
+.sidebarSection {
+  padding: 0 12px;
+  margin-bottom: 12px;
+}
+
+.sidebarSectionTitle {
+  font-size: var(--font-small);
+  font-weight: 700;
+  color: var(--ovelis-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 4px 8px;
+  margin-bottom: 2px;
+}
+
+.sidebarItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  color: var(--ovelis-sidebar-fg);
+  font-size: var(--font-body);
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.sidebarItemHover {
+  background: var(--ovelis-border-color);
+}
+
+.sidebarItemActive {
+  background: var(--ovelis-accent-bg);
+  color: var(--ovelis-accent-fg);
+}
+
+.siIcon {
+  font-size: 16px;
+  width: 20px;
+  text-align: center;
+}
+
+.siLabel {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── File List / Grid Area ───────────────────────────── */
+
+/* List View */
+.fmList {
+  width: 100%;
+}
+
+.fmListHeader {
+  display: grid;
+  grid-template-columns: minmax(200px, 1fr) 80px 120px 100px;
+  gap: 8px;
+  font-size: var(--font-small);
+  font-weight: 600;
+  color: var(--ovelis-text-secondary);
+  position: sticky;
+  top: 0; /* ✅ AppLayout无padding,直接sticky到顶部 */
+  padding: 8px 12px;
+  background: var(--ovelis-window-bg);
+  z-index: 5;
+}
+
+.fmListRow {
+  display: grid;
+  grid-template-columns: minmax(200px, 1fr) 80px 120px 100px; /* ✅ 修改:第一列使用 minmax */
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  align-items: center;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.fmListRowHover {
+  background: var(--ovelis-card-bg);
+}
+
+.fmListRowSelected {
+  background: var(--ovelis-accent-bg);
+  color: var(--ovelis-accent-fg);
+}
+
+.fileName {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 200px; /* ✅ 修改:从 0 改为 200px */
+  overflow: hidden;
+}
+
+.fnIcon {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.fnText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Inline Editing Input (List View) */
+.fnEditInput {
+  /* 移除固定宽度,使用 inline style 的动态宽度 */
+  padding: 1px 2px;  /* 减小 padding,减少视觉偏移 */
+  font-size: var(--font-body);
+  font-family: inherit;
+  border: 1px solid var(--ovelis-accent-bg);  /* 减小 border,减少视觉偏移 */
+  border-radius: 3px;  /* 减小圆角,配合更细的 border */
+  background: var(--ovelis-view-bg);
+  color: var(--ovelis-text-primary);
+  outline: none;
+}
+
+.fnEditInputFocus {
+  border-color: var(--ovelis-accent-bg);
+  box-shadow: 0 0 0 1px var(--ovelis-accent-bg);
+}
+
+.fileSize,
+.fileMtime,
+.filePerm {
+  font-size: var(--font-small);
+  color: var(--ovelis-text-secondary);
+}
+
+.fmListRowSelectedFileSize,
+.fmListRowSelectedFileMtime,
+.fmListRowSelectedFilePerm {
+  color: rgba(255, 255, 255, 0.75);
+}
+
+/* Grid View */
+.fmGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  gap: 8px;
+  padding: 4px;
+}
+
+.fmGridItem {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.fmGridItemHover {
+  background: var(--ovelis-card-bg);
+}
+
+.fmGridItemSelected {
+  background: var(--ovelis-accent-bg);
+  color: var(--ovelis-accent-fg);
+}
+
+.giIcon {
+  font-size: 40px;
+}
+
+.giLabel {
+  font-size: var(--font-small);
+  text-align: center;
+  word-break: break-all;
+  line-height: 1.2;
+  max-height: 2.4em;
+  overflow: hidden;
+}
+
+/* Inline Editing Input (Grid View) */
+.giEditInput {
+  /* 移除固定宽度,使用 inline style 的动态宽度 */
+  padding: 1px 2px;  /* 减小 padding,减少视觉偏移 */
+  font-size: var(--font-small);
+  font-family: inherit;
+  border: 1px solid var(--ovelis-accent-bg);  /* 减小 border,减少视觉偏移 */
+  border-radius: 3px;  /* 减小圆角,配合更细的 border */
+  background: var(--ovelis-view-bg);
+  color: var(--ovelis-text-primary);
+  outline: none;
+  text-align: center;
+}
+
+.giEditInputFocus {
+  border-color: var(--ovelis-accent-bg);
+  box-shadow: 0 0 0 1px var(--ovelis-accent-bg);
+}
+
+/* ── Context Menu ─────────────────────────────────────── */
+.fmContextMenu {
+  position: fixed;
+  min-width: 180px;
+  background: var(--ovelis-view-bg);
+  border: 1px solid var(--ovelis-border-color);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-popup);
+  z-index: 300;
+  padding: 4px 0;
+  animation: menuFadeIn 120ms var(--ease-out);
+}
+
+@keyframes menuFadeIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+.ctxItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 16px;
+  font-size: var(--font-body);
+  cursor: pointer;
+  color: var(--ovelis-text-primary);
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.ctxItemHover {
+  background: var(--ovelis-accent-bg);
+  color: var(--ovelis-accent-fg);
+}
+
+.ctxIcon {
+  font-size: 14px;
+  width: 20px;
+  text-align: center;
+}
+
+.ctxSeparator {
+  height: 1px;
+  background: var(--ovelis-border-color);
+  margin: 4px 0;
+}
+
+/* ── Status Bar ──────────────────────────────────────── */
+.fmStatusbar {
+  height: 28px;
+  background: var(--ovelis-headerbar-bg);
+  border-top: 1px solid var(--ovelis-border-color);
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  font-size: var(--font-small);
+  color: var(--ovelis-text-secondary);
+  gap: 16px;
+  flex-shrink: 0;
+}
+
+/* ── Empty State ─────────────────────────────────────── */
+.fmEmpty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--ovelis-text-disabled);
+  gap: 8px;
+}
+
+.emptyIcon {
+  font-size: 48px;
+  opacity: 0.5;
+}
+
+.emptyText {
+  font-size: var(--font-body);
+}
+
+/* ── Loading Spinner ─────────────────────────────────── */
+.fmLoading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--ovelis-text-secondary);
+  gap: 8px;
+  font-size: var(--font-body);
+}
+
+.spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--ovelis-border-color);
+  border-top-color: var(--ovelis-accent-bg);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Properties Dialog ─────────────────────────────────── */
+.fmPropertiesDialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 400px;
+  background: var(--ovelis-card-bg);
+  border: 1px solid var(--ovelis-border-color);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  z-index: 1000;
+  box-shadow: var(--shadow-popup);
+}
+
+.pdHeader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.pdIcon {
+  font-size: 32px;
+}
+
+.pdName {
+  font-size: 14pt;
+  font-weight: 600;
+  color: var(--ovelis-text-primary);
+}
+
+.pdContent {
+  margin-bottom: 16px;
+}
+
+.pdRow {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--ovelis-border-color);
+}
+
+.pdLabel {
+  color: var(--ovelis-text-secondary);
+  font-size: var(--font-body);
+}
+
+.pdValue {
+  color: var(--ovelis-text-primary);
+  font-size: var(--font-body);
+}
+
+.pdFooter {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.pdFooterButton {
+  padding: 6px 16px;
+  background: var(--ovelis-accent-bg);
+  color: var(--ovelis-accent-fg);
+  border: none;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  font-size: var(--font-body);
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.pdFooterButtonHover {
+  background: var(--ovelis-accent-hover);
+}
+
+/* ── Path Error Dialog (路径不存在弹窗 - 模态) ─────────────────── */
+/* 遮罩层:覆盖整个文件管理器,阻止点击穿透 */
+.fmPathErrorOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* 阻止所有交互 */
+  pointer-events: auto;
+}
+
+/* 弹窗本身:允许交互 */
+.fmPathErrorDialog {
+  position: relative;
+  width: 400px;
+  background: var(--ovelis-card-bg);
+  border: 1px solid var(--ovelis-border-color);
+  border-radius: var(--radius-md);
+  padding: 20px;
+  box-shadow: var(--shadow-popup);
+  /* 允许弹窗内的交互 */
+  pointer-events: auto;
+}
+
+.pedHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.pedIcon {
+  font-size: 22px;
+}
+
+.pedTitle {
+  font-size: 14pt;
+  font-weight: 600;
+  color: var(--ovelis-text-primary);
+}
+
+.pedMessage {
+  color: var(--ovelis-text-secondary);
+  font-size: var(--font-body);
+  margin-bottom: 16px;
+  padding: 8px 12px;
+  background: var(--ovelis-view-bg);
+  border-radius: var(--radius-xs);
+  word-break: break-all;
+}
+
+.pedFooter {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.pedFooterButton {
+  padding: 6px 20px;
+  background: var(--ovelis-accent-bg);
+  color: var(--ovelis-accent-fg);
+  border: none;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  font-size: var(--font-body);
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.pedFooterButtonHover {
+  background: var(--ovelis-accent-hover);
+}
+
+/* ── Offline Empty State (离线空状态) ─────────────────── */
+.fmOffline {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 12px;
+  padding: 32px;
+  animation: offlineFadeIn 200ms var(--ease-out);
+}
+
+@keyframes offlineFadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.offlineIcon {
+  font-size: 56px;
+  line-height: 1;
+  opacity: 0.6;
+}
+
+.offlineTitle {
+  font-size: 15pt;
+  font-weight: 700;
+  color: var(--ovelis-text-primary);
+}
+
+.offlineDesc {
+  font-size: var(--font-body);
+  color: var(--ovelis-text-secondary);
+  text-align: center;
+  max-width: 320px;
+  line-height: 1.5;
+}
+
+/* 可用服务器列表 */
+.offlineServers {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  max-width: 360px;
+  margin-top: 8px;
+}
+
+.offlineServersLabel {
+  font-size: var(--font-small);
+  font-weight: 600;
+  color: var(--ovelis-text-secondary);
+  text-align: left;
+  width: 100%;
+  padding: 0 4px;
+}
+
+/* 服务器连接按钮 */
+.offlineServerBtn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 14px;
+  background: var(--ovelis-view-bg);
+  border: 1px solid var(--ovelis-border-color);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 150ms var(--ease-out);
+  text-align: left;
+}
+
+.offlineServerBtnHover:not(:disabled) {
+  border-color: var(--ovelis-accent-bg);
+  background: rgba(53, 132, 228, 0.06);
+}
+
+.offlineServerBtnDisabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.osbStatus {
+  font-size: 16px;
+  flex-shrink: 0;
+  width: 20px;
+  text-align: center;
+}
+
+.osbInfo {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.osbName {
+  font-size: var(--font-body);
+  font-weight: 600;
+  color: var(--ovelis-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.osbHost {
+  font-size: var(--font-small);
+  color: var(--ovelis-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.osbAction {
+  font-size: var(--font-body);
+  color: var(--ovelis-accent-bg);
+  font-weight: 500;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.offlineServerBtnDisabledOsbAction {
+  color: var(--ovelis-text-disabled);
+}
+
+/* 无服务器提示 */
+.offlineNoServers {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 16px 24px;
+  background: var(--ovelis-card-bg);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-body);
+  color: var(--ovelis-text-secondary);
+}
+
+/* ── Path Suggestions ─────────────────────────────────── */
+
+/* 建议列表容器 — 位于地址栏正下方,宽度匹配 */
+.fmSuggestions {
+  position: absolute;
+  top: 100%;  /* 紧贴地址栏下方 */
+  left: 0;
+  width: 100%;  /* 宽度匹配地址栏 */
+  margin-top: 4px;  /* 与地址栏间隔 4px */
+  background: var(--ovelis-view-bg);  /* 使用暖灰背景 */
+  opacity: 0.85;  /* 85% 透明度 */
+  border: 1px solid var(--ovelis-border-color);
+  border-radius: var(--radius-sm);  /* 四个角都圆角 */
+  box-shadow: var(--shadow-popup);  /* 使用 CSS 变量 */
+  z-index: 100;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+/* 建议项 */
+.fmSuggestionItem {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  gap: 8px;
+  cursor: pointer;
+  transition: background 0.1s ease-out;
+}
+
+.fmSuggestionItemHover {
+  background: var(--ovelis-card-bg);
+}
+
+.fmSuggestionItemSelected {
+  background: var(--ovelis-accent-bg);
+  color: var(--ovelis-accent-fg);
+}
+
+/* 建议项图标 */
+.fmSuggestionIcon {
+  font-size: 16px;
+}
+
+/* 建议项文本 */
+.fmSuggestionText {
+  font-size: var(--font-body);
+  flex: 1;
+}

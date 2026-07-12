@@ -1,0 +1,517 @@
+/* ============================================================
+   文本编辑器样式
+   基础的文本编辑面板,遵循 GNOME 设计规范
+   ============================================================ */
+
+/* ── 文本编辑面板容器 ──────────────────────────────────── */
+.teTextPane {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── 文本编辑区域 ──────────────────────────────────────── */
+.teTextarea {
+  /* 基础布局 */
+  width: 100%;
+  flex: 1; /* 占满剩余空间 */
+  min-height: 100px; /* 最小高度 */
+  box-sizing: border-box; /* 确保 padding 包含在宽度内 */
+
+  /* 内边距(左右完全一致) */
+  padding: 16px;
+
+  /* 边框和轮廓 */
+  border: none;
+  outline: none;
+  resize: none; /* 禁用手动调整大小 */
+
+  /* 背景和文字颜色(使用项目 CSS 变量) */
+  background: var(--ovelis-window-bg);
+  color: var(--ovelis-text-primary);
+
+  /* 字体设置(业内标准等宽字体栈) */
+  font-family: 'Source Code Pro', 'Consolas', 'Monaco', 'Menlo', 'SF Mono', 'Courier New', monospace;
+  font-size: 15px;
+  line-height: 1.5;
+  letter-spacing: 0.3px;
+
+  /* Tab 宽度 */
+  tab-size: 4;
+
+  /* 文本渲染优化 */
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  /* 滚动设置 */
+  overflow-y: auto; /* 内容超出时显示滚动条 */
+  overflow-x: auto; /* 水平方向也支持滚动 */
+
+  /* 过渡效果 */
+  transition: background-color var(--duration-normal) var(--ease-out),
+              color var(--duration-normal) var(--ease-out);
+}
+
+/* 自定义滚动条样式(确保左右边界一致) */
+.teTextareaWebkitScrollbar {
+  width: 12px; /* 垂直滚动条宽度 */
+  height: 12px; /* 水平滚动条高度 */
+}
+
+.teTextareaWebkitScrollbarTrack {
+  background: transparent; /* 滚动条轨道透明 */
+}
+
+.teTextareaWebkitScrollbarThumb {
+  background: var(--ovelis-border-color); /* 滚动条滑块颜色 */
+  border-radius: 6px; /* 圆角 */
+  border: 2px solid transparent; /* 透明边框,确保滑块不占据额外空间 */
+}
+
+.teTextareaWebkitScrollbarThumbHover {
+  background: var(--ovelis-text-secondary); /* 悬停时颜色 */
+}
+
+.teTextareaWebkitScrollbarCorner {
+  background: transparent; /* 滚动条角落透明 */
+}
+
+/* ── Placeholder 样式 ───────────────────────────────────── */
+.teTextareaPlaceholder {
+  color: var(--ovelis-text-secondary);
+  opacity: 1; /* 确保 placeholder 可见 */
+}
+
+/* ── Focus 状态(聚焦时的视觉效果)────────────────────── */
+.teTextareaFocus {
+  /* 使用项目定义的 focus ring */
+  outline: 2px solid var(--ovelis-border-focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+/* ── Dark Mode 适配 ────────────────────────────────────── */
+[data-theme="dark"] .teTextarea {
+  /* 暗色模式下的背景和文字颜色会自动通过 CSS 变量更新 */
+  /* 这里只需要确保继承即可 */
+}
+
+/* ============================================================
+   十六进制编辑面板样式
+   用于查看二进制文件的十六进制视图
+   ============================================================ */
+
+/* ── 十六进制面板容器 ────────────────────────────────────── */
+.teHexPane {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--ovelis-window-bg);
+}
+
+/* ── 分页控制栏 ─────────────────────────────────────────── */
+.teHexPagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--ovelis-border-color);
+  background: var(--ovelis-headerbar-bg);
+}
+
+/* ── 分页按钮 ───────────────────────────────────────────── */
+.teHexPaginationBtn {
+  padding: 6px 12px;
+  border: 1px solid var(--ovelis-border-color);
+  border-radius: var(--radius-sm);
+  background: var(--ovelis-view-bg);
+  color: var(--ovelis-text-primary);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.teHexPaginationBtnHover:not(:disabled) {
+  background: var(--ovelis-accent-bg);
+  color: var(--ovelis-accent-fg);
+  border-color: var(--ovelis-accent-bg);
+}
+
+.teHexPaginationBtnDisabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ── 分页信息文本 ───────────────────────────────────────── */
+.teHexPaginationInfo {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--ovelis-text-secondary);
+}
+
+/* ── 十六进制内容区 ─────────────────────────────────────── */
+.teHexContent {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: auto;
+  padding: 12px;
+  background: var(--ovelis-window-bg);
+}
+
+/* ── 十六进制行 ─────────────────────────────────────────── */
+.teHexLine {
+  /* 字体设置(业内标准等宽字体栈) */
+  font-family: 'Source Code Pro', 'Consolas', 'Monaco', 'Menlo', 'SF Mono', 'Courier New', monospace;
+  font-size: 15px;
+  line-height: 1.5;
+  letter-spacing: 0.3px;
+
+  color: var(--ovelis-text-primary);
+  white-space: pre; /* 保留空格和格式 */
+  user-select: text; /* 允许选择文本 */
+  padding: 2px 0;
+
+  /* 文本渲染优化 */
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── 空状态提示 ─────────────────────────────────────────── */
+.teHexEmpty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+}
+
+.teHexEmptyText {
+  font-family: var(--font-ui);
+  font-size: 14px;
+  color: var(--ovelis-text-secondary);
+}
+
+/* ============================================================
+   编辑模式切换组件样式
+   用于在文本模式和十六进制模式之间切换
+   ============================================================ */
+
+/* ── 编辑模式容器 ──────────────────────────────────────── */
+.teEditorMode {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* ── 模式按钮基础样式 ───────────────────────────────────── */
+.teModeBtn {
+  /* 基础布局 */
+  padding: 6px 12px;
+
+  /* 边框和圆角 */
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+
+  /* 背景和文字 */
+  background: transparent;
+  color: var(--ovelis-text-primary);
+
+  /* 字体设置 */
+  font-family: var(--font-ui);
+  font-size: 13px;
+
+  /* 交互 */
+  cursor: pointer;
+
+  /* 过渡效果 */
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+/* ── 模式按钮 Hover 状态 ──────────────────────────────── */
+.teModeBtnHover {
+  background: var(--ovelis-headerbar-bg);
+}
+
+/* ── 模式按钮 Active 状态 ────────────────────────────── */
+.teModeBtnActive {
+  /* 激活状态使用 accent 颜色 */
+  background: var(--ovelis-accent-bg);
+  color: var(--ovelis-accent-fg);
+  border-color: var(--ovelis-accent-bg);
+}
+
+/* ── 模式按钮 Disabled 状态 ───────────────────────────── */
+.teModeBtnDisabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ============================================================
+   状态栏组件样式
+   显示文件的行数、字符数、编码、保存状态等信息
+   ============================================================ */
+
+/* ── 状态栏容器 ────────────────────────────────────────── */
+.teStatusBar {
+  /* 基础布局 */
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 16px;  /* 左右边距与工具栏和文本编辑区一致 */
+
+  /* 边框 */
+  border-top: 1px solid var(--ovelis-border-color);
+
+  /* 背景 */
+  background: var(--ovelis-headerbar-bg);
+}
+
+/* ── 状态项 ────────────────────────────────────────────── */
+.teStatusItem {
+  /* 字体设置 */
+  font-family: var(--font-ui);
+  font-size: 12px;
+  line-height: 1.4;
+
+  /* 文字颜色 */
+  color: var(--ovelis-text-secondary);
+
+  /* 禁止换行 */
+  white-space: nowrap;
+}
+
+/* ── 只读标识(二进制文件) ───────────────────────────── */
+.teStatusReadonly {
+  font-weight: 600; /* 加粗 */
+  color: var(--ovelis-accent-bg); /* 使用强调色(蓝色),表示只读状态 */
+  padding: 2px 8px; /* 内边距 */
+  background: rgba(53, 132, 228, 0.1); /* 浅蓝色背景 */
+  border-radius: 4px; /* 圆角 */
+}
+
+/* ── 状态项分隔符(可选,通过 border 实现)────────────── */
+.teStatusItemBefore {
+  content: '';
+  margin-right: 16px;
+}
+
+/* ============================================================
+   文本编辑器主组件样式
+   整合所有子组件,提供完整的编辑器布局
+   ============================================================ */
+
+/* ── 主容器 ────────────────────────────────────────────── */
+/* 主应用容器 */
+.teApp {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;  /* 垂直布局,状态栏在底部 */
+}
+
+/* 应用内容区域(包含 AppLayout) */
+.teAppContent {
+  flex: 1;  /* 占据剩余空间 */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;  /* 防止内容溢出 */
+}
+
+/* ── 内容包装器 ─────────────────────────────────────────── */
+.teContentWrapper {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden; /* 防止内容溢出 */
+}
+
+/* ── 工具栏 ────────────────────────────────────────────── */
+.teToolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;  /* 左右边距与文本编辑区一致 */
+  background: var(--ovelis-headerbar-bg);
+  border-bottom: 1px solid var(--ovelis-border-color);
+}
+
+/* ── 文件名显示 ─────────────────────────────────────────── */
+.teFilename {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ovelis-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 300px; /* 限制最大宽度 */
+}
+
+/* ── 未保存标记 ─────────────────────────────────────────── */
+.teUnsavedMarker {
+  color: var(--ovelis-accent-bg);
+  font-weight: 700;
+  font-size: 16px;
+}
+
+/* ── 工具栏按钮 ─────────────────────────────────────────── */
+.teToolbarBtn {
+  padding: 6px 12px;
+  border: 1px solid var(--ovelis-border-color);
+  border-radius: var(--radius-sm);
+  background: var(--ovelis-view-bg);
+  color: var(--ovelis-text-primary);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out);
+  white-space: nowrap;
+}
+
+.teToolbarBtnHover:not(:disabled) {
+  background: var(--ovelis-accent-bg);
+  color: var(--ovelis-accent-fg);
+  border-color: var(--ovelis-accent-bg);
+}
+
+.teToolbarBtnDisabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ── 保存按钮(特殊样式)──────────────────────────────────── */
+.teSaveBtn {
+  min-width: 80px; /* 固定最小宽度 */
+}
+
+/* ── 加载状态 ────────────────────────────────────────────── */
+.teLoading {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  background: var(--ovelis-window-bg);
+}
+
+.teLoadingText {
+  font-family: var(--font-ui);
+  font-size: 14px;
+  color: var(--ovelis-text-secondary);
+}
+
+/* ── 空状态 ──────────────────────────────────────────────── */
+.teEmpty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ovelis-window-bg);
+}
+
+/* 空状态容器(视觉绑定) */
+.teEmptyContainer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 48px 64px;
+  background: var(--ovelis-card-bg);
+  border: 2px dashed var(--ovelis-border-color);
+  border-radius: var(--radius-lg);
+  max-width: 400px;
+}
+
+.teEmptyIcon {
+  font-size: 48px;
+  opacity: 0.6;
+}
+
+.teEmptyText {
+  font-family: var(--font-ui);
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--ovelis-text-primary);
+}
+
+.teEmptyHint {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--ovelis-text-secondary);
+  text-align: center;
+  line-height: 1.5;
+}
+
+/* ── 错误状态 ─────────────────────────────────────────────── */
+.teError {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  background: var(--ovelis-window-bg);
+}
+
+.teErrorContent {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--ovelis-card-bg);
+  border: 1px solid var(--ovelis-border-color);
+  border-radius: var(--radius-sm);
+  max-width: 600px;
+}
+
+.teErrorIcon {
+  font-size: 20px;
+  color: #e01b24; /* GNOME 红色(错误色) */
+}
+
+.teErrorText {
+  flex: 1;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--ovelis-text-primary);
+  word-wrap: break-word;
+}
+
+.teErrorClose {
+  padding: 4px 8px;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--ovelis-text-secondary);
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.teErrorCloseHover {
+  color: var(--ovelis-text-primary);
+}
+
+/* ── 二进制文件警告 ──────────────────────────────────────── */
+.teBinaryWarning {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  background: var(--ovelis-window-bg);
+}
+
+.teBinaryWarningText {
+  font-family: var(--font-ui);
+  font-size: 14px;
+  color: var(--ovelis-text-secondary);
+  text-align: center;
+}
