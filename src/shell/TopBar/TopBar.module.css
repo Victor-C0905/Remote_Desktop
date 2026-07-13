@@ -9,11 +9,11 @@
   left: 0;
   right: 0;
   height: var(--topbar-height);
-  /* 透明毛玻璃：独立于 --ovelis-headerbar-bg，不影响其他组件 */
-  background: rgba(245, 240, 230, 0.1);
-  backdrop-filter: blur(24px) saturate(1.8);
-  -webkit-backdrop-filter: blur(50px) saturate(1);
-  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  /* 毛玻璃效果：引用全局变量，保持与其他组件一致 */
+  background: var(--ovelis-frosted-bg);
+  backdrop-filter: var(--ovelis-frosted-blur);
+  -webkit-backdrop-filter: var(--ovelis-frosted-blur);
+  border-bottom: 1px solid var(--ovelis-frosted-border);
   display: flex;
   align-items: center;
   padding: 0 12px;
