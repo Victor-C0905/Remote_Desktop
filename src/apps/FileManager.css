@@ -203,28 +203,39 @@
 
 /* ── File List / Grid Area ───────────────────────────── */
 
-/* List View */
+/* List View - 重构为 flex 布局（模仿 SystemMonitor） */
 .fm-list {
-  width: 100%;
+  display: flex;
+  flex-direction: column;
+  height: 100%;  /* ✅ 填满父容器 */
+  min-height: 0;  /* ✅ 建立 flex 约束链 */
 }
 
+/* ✅ 表头固定（flex-shrink: 0），不参与滚动 */
 .fm-list .fm-list-header {
   display: grid;
-  grid-template-columns: minmax(200px, 1fr) 80px 120px 100px;
+  grid-template-columns: minmax(180px, 2fr) 90px 140px 90px;  /* ✅ 优化列宽比例 */
   gap: 8px;
   font-size: var(--font-small);
   font-weight: 600;
-  color: var(--ovelis-text-secondary);.fm-list .fm-list-header {
-  position: sticky;
-  top: 0; /* ✅ AppLayout无padding，直接sticky到顶部 */
+  color: var(--ovelis-text-secondary);
   padding: 8px 12px;
-  background: var(--ovelis-window-bg);
-  z-index: 1; /* ✅ 内容层，相对于父容器，无需高 z-index */
+  background: var(--ovelis-headerbar-bg);  /* ✅ 使用标题栏背景色 */
+  border-bottom: 1px solid var(--ovelis-border-color);  /* ✅ 添加分隔线 */
+  flex-shrink: 0;  /* ✅ 固定高度，不压缩 */
+}
+
+/* ✅ 文件列表滚动容器（模仿 SystemMonitor） */
+.fm-list-content {
+  flex: 1;  /* 占据剩余空间 */
+  overflow-y: auto;  /* ✅ 主内容区滚动 */
+  overflow-x: hidden;  /* ✅ 防止横向滚动 */
+  min-height: 0;  /* ✅ 建立 flex 约束链 */
 }
 
 .fm-list .fm-list-row {
   display: grid;
-  grid-template-columns: minmax(200px, 1fr) 80px 120px 100px; /* ✅ 修改：第一列使用 minmax */
+  grid-template-columns: minmax(180px, 2fr) 90px 140px 90px;  /* ✅ 匹配表头列宽 */
   gap: 8px;
   padding: 6px 12px;
   border-radius: var(--radius-xs);
