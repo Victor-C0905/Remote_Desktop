@@ -162,8 +162,8 @@ export function WindowShell({
       const parentHeight = parentEl?.clientHeight || window.innerHeight;
 
       // ── 边界约束逻辑（符合标准窗口设计）──────────────
-      // 1. 顶部边界：无法超越 TopBar（y >= 0）
-      const minY = 0; // TopBar 高度已由 Desktop 处理，Desktop 区域 y=0 即 TopBar 下方
+      // 1. 顶部边界：工作区内 y >= 0（TopBar 已由 shell flex 布局分离）
+      const minY = 0;
 
       // 2. 左、右、下边界：可以穿越，但保留最小可见区域
       // 防止窗口完全隐藏在边缘，导致无法选中
@@ -293,8 +293,8 @@ export function WindowShell({
       const minHeight = 300;
 
       // ── 边界约束逻辑（符合标准窗口设计）──────────────
-      // 1. 顶部边界：无法超越 TopBar（y >= 0）
-      const minY = 0; // TopBar 高度已由 Desktop 处理，Desktop 区域 y=0 即 TopBar 下方
+      // 1. 顶部边界：工作区内 y >= 0（TopBar 已由 shell flex 布局分离）
+      const minY = 0;
 
       // 2. 左、右、下边界：可以穿越，但保留最小可见区域
       const MIN_VISIBLE = 100; // 最小可见区域（像素）

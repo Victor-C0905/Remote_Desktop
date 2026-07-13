@@ -1,119 +1,33 @@
+/* ── Shell 布局架构 ────────────────────────────────────── */
+/* 壁纸层在背景，TopBar + Workspace 在前景 */
+
 .shell {
   width: 100%;
   height: 100%;
-  position: relative; /* TopBar 绝对定位的参考 */
-}
-
-/* ── Top Bar ──────────────────────────────────────────── */
-/* 旧版全局 .top-bar 样式已迁移到 TopBar.module.css */
-/* TopBar 组件使用 CSS Module，此处仅保留全局 no-drag 规则 */
-.top-bar {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: var(--z-topbar);
-}
-
-.top-bar button,
-.top-bar .connection-indicator,
-.top-bar .metrics,
-.top-bar .clock,
-.top-bar .notification-btn {
-  -webkit-app-region: no-drag;
-  app-region: no-drag;
-}
-
-.top-bar .activities-btn {
-  background: none;
-  border: none;
-  color: var(--ovelis-text-primary);
-  font-family: var(--font-ui);
-  font-size: var(--font-small);
-  font-weight: 700;
-  cursor: pointer;
-  padding: 2px 8px;
-  border-radius: var(--radius-xs);
-  transition: background var(--duration-fast) var(--ease-out);
-}
-
-.top-bar .activities-btn:hover {
-  background: var(--ovelis-border-color);
-}
-
-.top-bar .separator {
-  width: 1px;
-  height: 16px;
-  background: var(--ovelis-border-color);
-}
-
-.top-bar .connection-indicator {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: var(--font-small);
-  color: var(--ovelis-text-secondary);
+  flex-direction: column;
+  background-size: cover;
+  background-position: center;
 }
 
-.top-bar .connection-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #33d17a;
-}
-
-.top-bar .connection-dot.disconnected {
-  background: #e01b24;
-}
-
-.top-bar .spacer {
+/* ── Workspace 工作区 ──────────────────────────────────── */
+/* TopBar 下方的区域，包含桌面图标、窗口、Dock */
+.workspace {
   flex: 1;
-}
-
-.top-bar .metrics {
-  display: flex;
-  gap: 12px;
-  font-size: var(--font-small);
-  color: var(--ovelis-text-secondary);
-  font-variant-numeric: tabular-nums;
-}
-
-.top-bar .clock {
-  font-size: var(--font-small);
-  color: var(--ovelis-text-primary);
-  font-variant-numeric: tabular-nums;
-}
-
-.top-bar .notification-btn {
-  background: none;
-  border: none;
-  color: var(--ovelis-text-secondary);
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: var(--radius-xs);
-  font-size: 14px;
-  transition: background var(--duration-fast) var(--ease-out);
-}
-
-.top-bar .notification-btn:hover {
-  background: var(--ovelis-border-color);
-}
-
-/* ── Desktop Area ────────────────────────────────────── */
-.desktop-area {
-  width: 100%;
-  height: 100%;
   position: relative;
-  overflow: hidden; /* 限制应用窗口在桌面区域内 */
+  overflow: hidden;
+  min-height: 0; /* 建立 flex 高度约束链 */
 }
 
+/* ── Desktop Icons ─────────────────────────────────────── */
 .desktop-icons {
   position: absolute;
-  top: calc(var(--topbar-height) + 24px); /* 偏移 TopBar 高度 */
+  top: 24px;
   left: 24px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  z-index: var(--z-desktop-icons);
 }
 
 .desktop-icon {
@@ -160,14 +74,14 @@
   bottom: 16px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: var(--z-dock); /* ✅ Layer 40: 底部任务栏 */
+  z-index: var(--z-dock);
 }
 
 .dock {
   display: flex;
   gap: 4px;
   padding: 8px 12px;
-  background: rgba(0, 0, 0, 0.57); /* 任务栏透明度 95% (0.6 * 0.95 ≈ 0.57) */
+  background: rgba(0, 0, 0, 0.57);
   backdrop-filter: blur(24px);
   border-radius: var(--radius-lg);
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -210,6 +124,26 @@
   width: 1px;
   background: rgba(255, 255, 255, 0.2);
   margin: 4px 4px;
+}
+
+/* ── Dock Running Indicator ────────────────────────────── */
+.dock-item.running {
+  position: relative;
+}
+
+.dock-indicator {
+  position: absolute;
+  bottom: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #ffffff;
+}
+
+.dock-item.running .icon::after {
+  content: none;
 }
 
 /* ── Overview Overlay ─────────────────────────────────── */
@@ -299,9 +233,8 @@
   text-align: center;
 }
 
-/* ── Application Windows ──────────────────────────────── */
-/* 注意：width/height 由 DraggableWindow 通过内联 style 设置，
-   此处不写死尺寸，避免与内联样式冲突 */
+/* ── Application Windows（旧版 DraggableWindow）─────── */
+/* 注意：width/height 由 DraggableWindow 通过内联 style 设置 */
 .app-window {
   position: absolute;
   top: 0;
@@ -313,48 +246,33 @@
   flex-direction: column;
   overflow: hidden;
   border: none;
-  /* GPU 加速优化 */
   will-change: transform;
   transition: opacity 0.2s ease-out;
 }
 
 .app-window.active {
-  /* ✅ 使用 CSS 固定 z-index，避免动态计算 */
   z-index: 90;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
-  /* 取消边框，只使用阴影区分活动窗口 */
   border: none;
 }
 
-/* 拖拽时的视觉反馈 */
 .app-window.dragging {
   opacity: 0.95;
   box-shadow: 0 12px 48px rgba(0, 0, 0, 0.25);
   cursor: move;
-  /* 提升性能：禁用过渡动画 */
   transition: none;
 }
 
-/* 拖拽结束时的平滑过渡 */
 .app-window:not(.dragging) {
   opacity: 1;
-  /* 移除 box-shadow 和 border 的 transition，避免切换时的割裂感 */
   transition: opacity 0.3s ease-out;
 }
 
-/* 非激活窗口的样式 */
 .app-window:not(.active) {
-  /* ✅ 使用 CSS 固定 z-index */
   z-index: 10;
   box-shadow: var(--shadow-popup);
   border: none;
 }
-
-/* 移除 @keyframes windowOpen，使用 React 动画避免 transform 冲突 */
-/* @keyframes windowOpen {
-  from { opacity: 0; transform: scale(0.96); }
-  to   { opacity: 1; transform: scale(1); }
-} */
 
 .app-window-titlebar {
   height: var(--headerbar-height);
@@ -366,7 +284,6 @@
   gap: 8px;
   flex-shrink: 0;
   cursor: move;
-  /* 移除 app-region: drag，使用 JavaScript 拖拽 */
 }
 
 .app-window-titlebar .awt-btns,
@@ -391,7 +308,7 @@
 }
 
 .awt-btn.minimize {
-  background: #f7d76a; /* GNOME Adwaita 浅黄色，更柔和 */
+  background: #f7d76a;
 }
 
 .awt-btn.minimize:hover {
@@ -399,7 +316,7 @@
 }
 
 .awt-btn.maximize {
-  background: #57e389; /* GNOME Adwaita 浅绿色，更柔和 */
+  background: #57e389;
 }
 
 .awt-btn.maximize:hover {
@@ -407,7 +324,7 @@
 }
 
 .awt-btn.close {
-  background: #f66151; /* GNOME Adwaita 浅红色，更柔和 */
+  background: #f66151;
 }
 
 .awt-btn.close:hover {
@@ -423,14 +340,12 @@
 }
 
 .awt-spacer {
-  width: 56px; /* balance the close/minimize buttons */
+  width: 56px;
 }
 
 .app-window-content {
   flex: 1;
-  min-height: 0;  /* ✅ 新增：建立flex高度约束链，让子应用的height:100%生效 */
-  /* 移除 overflow: hidden，让子应用内部的滚动容器正常工作
-     子应用（FileManager, Settings, Terminal）自己管理 overflow */
+  min-height: 0;
 }
 
 /* ── App Placeholder ──────────────────────────────────── */
@@ -451,24 +366,4 @@
 
 .app-placeholder .placeholder-text {
   font-size: var(--font-body);
-}
-
-/* ── Dock Running Indicator ────────────────────────────── */
-.dock-item.running {
-  position: relative;
-}
-
-.dock-indicator {
-  position: absolute;
-  bottom: 2px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: #ffffff;
-}
-
-.dock-item.running .icon::after {
-  content: none;
 }
