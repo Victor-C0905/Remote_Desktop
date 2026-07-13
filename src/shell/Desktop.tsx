@@ -199,6 +199,13 @@ function DesktopContent() {
     }
   }, [activeServer?.id]);
 
+  /**
+   * ✅ Dock 激活/最小化逻辑
+   * - 如果应用没有打开：创建新窗口
+   * - 如果应用已最小化：恢复并聚焦
+   * - 如果应用已打开但未聚焦：聚焦该窗口
+   * - 如果应用已激活（在前台）：最小化该窗口
+   */
   const openApp = useCallback(async (appId: string) => {
     setOverviewVisible(false);
 
@@ -223,6 +230,30 @@ function DesktopContent() {
 
     await manager.create(appId, { serverId: activeServer?.id });
   }, [manager, activeServer?.id, setOverviewVisible, globalState.activeWindowId]);
+
+  /**
+   * ✅ 桌面图标/Overview 打开逻辑
+   * - 只支持打开应用，不支持最小化
+   * - 如果应用已打开：聚焦该窗口（不最小化）
+   * - 是否支持多实例：由应用自己的 allowMultipleInstances 配置决定
+   */
+  const createApp = useCallback(async (appId: string) => {
+    setOverviewVisible(false);
+
+    const existingWindows = manager.getByAppId(appId);
+    if (existingWindows.length > 0) {
+      // 应用已打开 → 聚焦该窗口（不最小化）
+      const existing = existingWindows[0];
+      if (existing.minimized) {
+        manager.restore(existing.id);
+      }
+      manager.focus(existing.id);
+      return;
+    }
+
+    // 应用未打开 → 创建新窗口（是否允许多实例由应用配置决定）
+    await manager.create(appId, { serverId: activeServer?.id });
+  }, [manager, activeServer?.id, setOverviewVisible]);
 
   // Global shortcuts
   const shortcuts = createAppShortcuts(
@@ -252,7 +283,7 @@ function DesktopContent() {
             <div
               key={app.id}
               className="desktop-icon"
-              onDoubleClick={() => openApp(app.id)}
+              onDoubleClick={() => createApp(app.id)}
             >
               <div className="icon">{app.icon}</div>
               <div className="label">{app.desktopLabel ?? app.title}</div>
@@ -306,7 +337,7 @@ function DesktopContent() {
               <div
                 key={app.id}
                 className="overview-app"
-                onClick={() => openApp(app.id)}
+                onClick={() => createApp(app.id)}
               >
                 <div className="icon">{app.icon}</div>
                 <div className="label">{app.desktopLabel ?? app.title}</div>
