@@ -4,10 +4,6 @@
    ============================================================ */
 
 .topBar {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
   height: var(--topbar-height);
   /* 毛玻璃效果：引用全局变量，保持与其他组件一致 */
   background: var(--ovelis-frosted-bg);

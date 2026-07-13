@@ -75,10 +75,10 @@ export class WindowManager implements IWindowManager {
 
     // Calculate initial position and size
     const containerWidth = window.innerWidth;
-    const containerHeight = window.innerHeight - 32; // Subtract TopBar height
+    const containerHeight = window.innerHeight - 32; // 减去 TopBar 高度
 
     // ── 边界约束逻辑（符合标准窗口设计）──────────────
-    // 1. 顶部边界：无法超越 TopBar（y >= 0）
+    // 1. 顶部边界：工作区内 y >= 0（TopBar 已由 shell flex 布局分离）
     const minY = 0;
 
     // 2. 左、右、下边界：可以穿越，但保留最小可见区域

@@ -65,12 +65,12 @@ const DesktopWindow = memo(function DesktopWindow({
 
   if (!win || !app || !windowState) return null;
 
-  // 最大化尺寸
+  // 最大化尺寸（工作区占满屏幕）
   const maxWindowSize = {
     width: window.innerWidth,
-    height: window.innerHeight - 32,
+    height: window.innerHeight - 32, // 减去 TopBar 高度
   };
-  const maxWindowPosition = { x: 0, y: 0 };
+  const maxWindowPosition = { x: 0, y: 0 }; // 工作区内 y=0
 
   return (
     <WindowShell
@@ -227,7 +227,7 @@ function DesktopContent() {
   useGlobalShortcuts(shortcuts);
 
   return (
-    <div className="shell">
+    <div className="shell" style={getWallpaperStyle(wallpaper)}>
       {/* Top Bar */}
       <TopBar
         metrics={metrics}
@@ -238,8 +238,8 @@ function DesktopContent() {
         onNotificationClick={() => setNotificationOpen(true)}
       />
 
-      {/* Desktop Area */}
-      <div className="desktop-area" style={getWallpaperStyle(wallpaper)}>
+      {/* Workspace: TopBar 下方的工作区 */}
+      <div className="workspace">
         <div className="desktop-icons">
           {desktopApps.map((app) => (
             <div
