@@ -33,6 +33,23 @@ export function adjustBrightness(hex: string, percent: number): string {
 }
 
 /**
+ * 十六进制转 RGB
+ * @param hex 十六进制颜色值（格式：#RRGGBB）
+ * @returns { r, g, b } 或 null（格式错误时）
+ */
+function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
+  if (!/^#[0-9A-Fa-f]{6}$/.test(hex)) {
+    return null;
+  }
+  const num = parseInt(hex.replace('#', ''), 16);
+  return {
+    r: (num >> 16) & 255,
+    g: (num >> 8) & 255,
+    b: num & 255,
+  };
+}
+
+/**
  * 应用主题颜色到CSS变量（统一设置ovelis前缀变量）
  * @param themeId 主题ID
  * @param accentColorId 强调色ID（可选）
@@ -54,6 +71,12 @@ export function applyThemeColors(
     root.style.setProperty('--ovelis-headerbar-bg', colors.headerbarBg);
     root.style.setProperty('--ovelis-sidebar-bg', colors.sidebarBg);
     root.style.setProperty('--ovelis-sidebar-border', colors.sidebarBorder);
+
+    // 设置毛玻璃颜色（跟随主题的 headerbarBg，透明度 80%）
+    const headerbarRgb = hexToRgb(colors.headerbarBg);
+    if (headerbarRgb) {
+      root.style.setProperty('--ovelis-frosted-bg', `rgba(${headerbarRgb.r}, ${headerbarRgb.g}, ${headerbarRgb.b}, 0.80)`);
+    }
 
     // 设置滑块颜色（ovelis前缀）
     root.style.setProperty('--ovelis-slider-track-bg', colors.sliderTrackBg);
