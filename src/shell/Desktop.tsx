@@ -205,17 +205,24 @@ function DesktopContent() {
     const existingWindows = manager.getByAppId(appId);
     if (existingWindows.length > 0) {
       const existing = existingWindows[0];
+      const activeWindowId = globalState.activeWindowId;
+
       if (existing.minimized) {
+        // 窗口已最小化 → 恢复并聚焦
         manager.restore(existing.id);
         manager.focus(existing.id);
+      } else if (existing.id !== activeWindowId) {
+        // 窗口已打开但未聚焦 → 聚焦
+        manager.focus(existing.id);
       } else {
+        // 窗口已打开且已聚焦 → 最小化
         manager.minimize(existing.id);
       }
       return;
     }
 
     await manager.create(appId, { serverId: activeServer?.id });
-  }, [manager, activeServer?.id, setOverviewVisible]);
+  }, [manager, activeServer?.id, setOverviewVisible, globalState.activeWindowId]);
 
   // Global shortcuts
   const shortcuts = createAppShortcuts(
