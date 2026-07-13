@@ -63,6 +63,15 @@
   --duration-slow:    300ms;
   --ease-out:         cubic-bezier(0.25, 0, 0, 1);
 
+  /* ── 毛玻璃效果 (Frosted Glass) ─────────────────────── */
+  /* headerbar-bg 的 RGB 分离，用于构造 rgba 透明色 */
+  --ovelis-headerbar-bg-rgb: 245, 240, 230;
+  /* 毛玻璃参数：原色 + 0.78 透明度 */
+  --ovelis-frosted-bg:       rgba(245, 240, 230, 0.78);
+  --ovelis-frosted-blur:     blur(24px) saturate(160%);
+  /* 毛玻璃边框（比普通边框更弱，避免突兀） */
+  --ovelis-frosted-border:   rgba(0, 0, 0, 0.06);
+
   /* Layout Constants */
   --topbar-height:    32px;
   --headerbar-height: 48px;

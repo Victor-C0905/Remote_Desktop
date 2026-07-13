@@ -7,7 +7,7 @@
 
 .windowShell {
   position: absolute;
-  background: var(--ovelis-window-bg);
+  background: transparent; /* 让标题栏毛玻璃能模糊到壁纸 */
   border-radius: var(--radius-md); /* 12px */
   box-shadow: var(--shadow-popup);
   display: flex;
@@ -80,8 +80,11 @@
 
 .windowHeaderBar {
   height: var(--headerbar-height); /* 48px */
-  background: var(--ovelis-headerbar-bg); /* ✅ 使用主题颜色变量(亮色: #ebe5d9, 暗色: #303030) */
-  border-bottom: 1px solid var(--ovelis-border-color); /* ✅ 使用主题边框颜色 */
+  /* 毛玻璃效果：引用全局变量，与 TopBar 保持一致 */
+  background: var(--ovelis-frosted-bg);
+  backdrop-filter: var(--ovelis-frosted-blur);
+  -webkit-backdrop-filter: var(--ovelis-frosted-blur);
+  border-bottom: 1px solid var(--ovelis-frosted-border);
   display: flex;
   align-items: center;
   padding: 0 12px;
