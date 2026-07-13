@@ -991,67 +991,71 @@ export function FileManager({ preloadData }: FileManagerProps) {
             </div>
           ) : viewMode === "list" ? (
             <div className="fm-list">
+              {/* ✅ 表头固定（flex-shrink: 0），不参与滚动 */}
               <div className="fm-list-header">
                 <span>名称</span>
                 <span>大小</span>
                 <span>修改时间</span>
                 <span>权限</span>
               </div>
-              {entries.map((entry, idx) => (
-                <div
-                  key={entry.name}
-                  className={`fm-list-row${selectedIdx === idx ? " selected" : ""}`}
-                  onClick={() => {
-                    // 清除之前的定时器
-                    if (clickTimerRef.current) {
-                      clearTimeout(clickTimerRef.current);
-                      clickTimerRef.current = null;
-                    }
-
-                    // GNOME-style: 如果文件已被选中，延迟判断是否为单击（防止双击误触发）
-                    if (selectedIdx === idx && editingEntry?.name !== entry.name) {
-                      clickTimerRef.current = setTimeout(() => {
-                        handleRename(entry);
+              {/* ✅ 文件列表滚动容器（flex: 1 + overflow-y: auto） */}
+              <div className="fm-list-content">
+                {entries.map((entry, idx) => (
+                  <div
+                    key={entry.name}
+                    className={`fm-list-row${selectedIdx === idx ? " selected" : ""}`}
+                    onClick={() => {
+                      // 清除之前的定时器
+                      if (clickTimerRef.current) {
+                        clearTimeout(clickTimerRef.current);
                         clickTimerRef.current = null;
-                      }, 200);  // 200ms 延迟，更快的响应，确保双击不会触发重命名
-                    } else {
-                      setSelectedIdx(idx);
-                    }
-                  }}
-                  onDoubleClick={() => {
-                    // 双击时，清除单击的定时器，防止触发重命名
-                    if (clickTimerRef.current) {
-                      clearTimeout(clickTimerRef.current);
-                      clickTimerRef.current = null;
-                    }
-                    handleOpen(entry);
-                  }}
-                  onContextMenu={(e) => handleContextMenu(e, entry, idx)}
-                >
-                  <div className="fm-file-name">
-                    <span className="fm-fn-icon">{getFileIcon(entry)}</span>
-                    {editingEntry?.name === entry.name ? (
-                      <input
-                        type="text"
-                        className="fm-fn-edit-input"
-                        value={editingName}
-                        onChange={(e) => setEditingName(e.target.value)}
-                        onKeyDown={handleEditKeyDown}
-                        onBlur={finishRename}
-                        autoFocus
-                        onClick={(e) => e.stopPropagation()}
-                        onDoubleClick={(e) => e.stopPropagation()}  // 阻止双击事件冒泡
-                        style={{ width: `${Math.max(editingName.length + 0.5, 4)}ch` }}  // 动态宽度：文本长度 + 0.5字符，最小4字符
-                      />
-                    ) : (
-                      <span className="fm-fn-text">{entry.name}</span>
-                    )}
+                      }
+
+                      // GNOME-style: 如果文件已被选中，延迟判断是否为单击（防止双击误触发）
+                      if (selectedIdx === idx && editingEntry?.name !== entry.name) {
+                        clickTimerRef.current = setTimeout(() => {
+                          handleRename(entry);
+                          clickTimerRef.current = null;
+                        }, 200);  // 200ms 延迟，更快的响应，确保双击不会触发重命名
+                      } else {
+                        setSelectedIdx(idx);
+                      }
+                    }}
+                    onDoubleClick={() => {
+                      // 双击时，清除单击的定时器，防止触发重命名
+                      if (clickTimerRef.current) {
+                        clearTimeout(clickTimerRef.current);
+                        clickTimerRef.current = null;
+                      }
+                      handleOpen(entry);
+                    }}
+                    onContextMenu={(e) => handleContextMenu(e, entry, idx)}
+                  >
+                    <div className="fm-file-name">
+                      <span className="fm-fn-icon">{getFileIcon(entry)}</span>
+                      {editingEntry?.name === entry.name ? (
+                        <input
+                          type="text"
+                          className="fm-fn-edit-input"
+                          value={editingName}
+                          onChange={(e) => setEditingName(e.target.value)}
+                          onKeyDown={handleEditKeyDown}
+                          onBlur={finishRename}
+                          autoFocus
+                          onClick={(e) => e.stopPropagation()}
+                          onDoubleClick={(e) => e.stopPropagation()}  // 阻止双击事件冒泡
+                          style={{ width: `${Math.max(editingName.length + 0.5, 4)}ch` }}  // 动态宽度：文本长度 + 0.5字符，最小4字符
+                        />
+                      ) : (
+                        <span className="fm-fn-text">{entry.name}</span>
+                      )}
+                    </div>
+                    <span className="fm-file-size">{entry.is_dir ? "—" : formatSize(entry.size)}</span>
+                    <span className="fm-file-mtime">{formatDate(entry.mtime)}</span>
+                    <span className="fm-file-perm">{entry.permissions}</span>
                   </div>
-                  <span className="fm-file-size">{entry.is_dir ? "—" : formatSize(entry.size)}</span>
-                  <span className="fm-file-mtime">{formatDate(entry.mtime)}</span>
-                  <span className="fm-file-perm">{entry.permissions}</span>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
           ) : (
             <div className="fm-grid">
