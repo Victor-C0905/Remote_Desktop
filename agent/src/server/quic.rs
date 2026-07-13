@@ -121,7 +121,7 @@ async fn handle_stream(
 
     // 生成唯一的 Stream ID
     let stream_id = STREAM_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
-    tracing::info!("Stream ID: {}", stream_id);
+    tracing::debug!("Stream ID: {}", stream_id);
 
     // 读取第一条消息（订阅请求）
     let data = read_message(&mut recv).await?;

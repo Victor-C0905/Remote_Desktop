@@ -95,7 +95,7 @@ impl MetricsCollector {
 
         // 直接读取 /proc/net/dev 获取网络数据（兼容 WSL 镜像网络模式）
         let (network_rx, network_tx) = Self::get_network_stats();
-        tracing::info!("网络总计: 接收 {} bytes, 发送 {} bytes", network_rx, network_tx);
+        tracing::debug!("网络总计: 接收 {} bytes, 发送 {} bytes", network_rx, network_tx);
 
         // 计算真正被进程使用的内存（不包括 buffer/cache）
         // 与 free 命令的 "used" 一致：total - free - buffers - cache

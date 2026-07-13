@@ -67,7 +67,7 @@ fn default_allowed_paths() -> Vec<String> { vec!["/home".into(), "/etc".into(), 
 fn default_blocked_commands() -> Vec<String> { vec!["rm -rf /".into(), "dd if=".into(), "mkfs.".into()] }
 fn default_max_sessions() -> usize { 10 }
 fn default_max_file_mb() -> u64 { 500 }
-fn default_metrics_interval() -> u64 { 1 }
+fn default_metrics_interval() -> u64 { 2 }
 fn default_file_changes_delay() -> u64 { 100 }
 fn default_process_scan_interval() -> u64 { 2 }
 fn default_service_status_interval() -> u64 { 5 }
@@ -120,7 +120,7 @@ fn default_config() -> AgentConfig {
             metrics_interval_secs: 2,
         },
         collectors: CollectorsConfig {
-            metrics_interval_secs: 1,
+            metrics_interval_secs: 2,
             file_changes_delay_ms: 100,
             process_scan_interval_secs: 2,
             service_status_interval_secs: 5,
