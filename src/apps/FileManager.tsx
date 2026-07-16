@@ -501,6 +501,18 @@ export function FileManager({ preloadData }: FileManagerProps) {
     }
   };
 
+  // 打开终端并传递当前路径作为工作目录
+  const openTerminalAtCurrentPath = useCallback(() => {
+    manager.create('terminal', {
+      preloadData: {
+        workingDirectory: currentPath
+      }
+    });
+    // 恢复地址栏显示为当前路径
+    setPathInput(currentPath);
+    pathInputRef.current?.blur();
+  }, [manager, currentPath]);
+
   const handlePathInputKeyDown = async (e: React.KeyboardEvent<HTMLInputElement>) => {
     // 如果建议列表显示且有选中项，按 Enter 选择建议项
     if (e.key === "Enter" && showSuggestions && selectedSuggestionIdx !== null) {
@@ -509,6 +521,13 @@ export function FileManager({ preloadData }: FileManagerProps) {
     } else if (e.key === "Enter") {
       e.preventDefault();
       setShowSuggestions(false);
+
+      // 检测 shell 命令：打开当前目录的终端
+      if (pathInput.trim() === 'shell') {
+        openTerminalAtCurrentPath();
+        return;
+      }
+
       // 注意：不在此处设置 setIsEditingPath(false)
       // 过早设为 false 会导致 useEffect 在异步导航期间覆盖用户输入，造成删除异常
       // 统一在导航完成后通过 blur() 触发 handlePathInputBlur 清理

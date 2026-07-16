@@ -197,7 +197,7 @@ pub fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig) -> Envelope {
             }
         }
 
-        Payload::TerminalSpawnRequest { shell, cols, rows } => {
+        Payload::TerminalSpawnRequest { shell, cols, rows, .. } => {
             tracing::info!("终端请求: shell={}, cols={}, rows={}", shell, cols, rows);
             // 终端创建需要在 QUIC Stream 异步处理（持久双向隧道）
             error_response(envelope.request_id, "终端创建需要在 QUIC Stream 异步处理")

@@ -542,7 +542,7 @@
 
 /* ── Path Error Dialog (路径不存在弹窗 - 模态) ─────────────────── */
 /* 遮罩层：覆盖整个文件管理器，阻止点击穿透 */
-.fm-path-error-overlay.fm-modal-backdrop {
+.fm-path-error-overlay {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.4);
@@ -550,7 +550,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-}  /* 阻止所有交互 */
+  /* 阻止所有交互 */
   pointer-events: auto;
 }
 

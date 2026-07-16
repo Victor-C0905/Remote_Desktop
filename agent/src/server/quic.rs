@@ -210,11 +210,12 @@ async fn handle_stream(
         }
 
         #[cfg(unix)]
-        Payload::TerminalSpawnRequest { shell, cols, rows } => {
-            tracing::info!("终端创建请求: shell={}, cols={}, rows={}", shell, cols, rows);
+        Payload::TerminalSpawnRequest { shell, cols, rows, working_directory } => {
+            tracing::info!("终端创建请求: shell={}, cols={}, rows={}, cwd={:?}",
+                shell, cols, rows, working_directory);
 
             // 创建 PTY 会话
-            let session_id = pty_manager.spawn(&shell, *cols, *rows).await?;
+            let session_id = pty_manager.spawn(&shell, *cols, *rows, working_directory.as_deref()).await?;
 
             // 发送响应
             let response = Envelope::new(

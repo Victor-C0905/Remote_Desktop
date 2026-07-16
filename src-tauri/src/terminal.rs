@@ -71,6 +71,7 @@ pub async fn remote_spawn_terminal(
     shell: String,
     cols: u16,
     rows: u16,
+    working_directory: Option<String>,
     app: tauri::AppHandle,
 ) -> Result<RemoteTerminalSession, String> {
     let manager = app.state::<ConnectionManager>();
@@ -98,6 +99,7 @@ pub async fn remote_spawn_terminal(
         shell: shell.clone(),
         cols,
         rows,
+        working_directory,
     });
 
     let data = envelope.encode()?;

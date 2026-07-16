@@ -87,7 +87,7 @@ pub enum Payload {
     #[serde(rename = "metrics_data")]
     MetricsData(MetricsSnapshot),
     #[serde(rename = "terminal_spawn")]
-    TerminalSpawnRequest { shell: String, cols: u16, rows: u16 },
+    TerminalSpawnRequest { shell: String, cols: u16, rows: u16, working_directory: Option<String> },
     #[serde(rename = "terminal_spawn_resp")]
     TerminalSpawnResponse { session_id: String },
     #[serde(rename = "terminal_resize")]

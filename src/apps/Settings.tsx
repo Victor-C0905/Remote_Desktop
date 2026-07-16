@@ -224,6 +224,17 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
   const [editingServer, setEditingServer] = useState<{ id: string; name: string; host: string; port: number; token?: string } | null>(null);
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
 
+  // 终端默认路径配置
+  const [terminalDefaultPath, setTerminalDefaultPath] = useState(() => {
+    return localStorage.getItem("terminal-default-path") || "";
+  });
+
+  const handleTerminalPathChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setTerminalDefaultPath(value);
+    localStorage.setItem("terminal-default-path", value);
+  };
+
   const {
     servers,
     activeServer,
@@ -640,6 +651,26 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
         return (
           <div className="st-section">
             <div className="st-section-title">终端设置</div>
+
+            {/* 默认工作目录 */}
+            <div className="st-card">
+              <div className="st-card-header text-title">默认工作目录</div>
+              <div className="st-option-row">
+                <input
+                  type="text"
+                  className="st-input"
+                  value={terminalDefaultPath}
+                  onChange={handleTerminalPathChange}
+                  placeholder="留空使用用户主目录 (~)"
+                  spellCheck={false}
+                  style={{ width: '100%' }}
+                />
+              </div>
+              <div className="st-hint">
+                💡 在文件管理器地址栏输入 <code>shell</code> 可在当前目录打开终端
+              </div>
+            </div>
+
             <div className="st-card">
               <div className="st-card-header text-title">配色方案</div>
               <div className="st-theme-toggle">

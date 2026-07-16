@@ -29,7 +29,7 @@ pub struct PtySession {
 #[cfg(unix)]
 impl PtySession {
     /// 创建新的 PTY 会话
-    pub fn spawn(shell: &str, cols: u16, rows: u16) -> Result<Self> {
+    pub fn spawn(shell: &str, cols: u16, rows: u16, working_directory: Option<&str>) -> Result<Self> {
         use nix::pty::{forkpty, Winsize};
         use std::os::fd::IntoRawFd;
 
@@ -77,6 +77,26 @@ impl PtySession {
                 // 子进程：执行 shell
                 use std::os::unix::process::CommandExt;
                 let mut cmd = std::process::Command::new(&shell);
+
+                // 获取 home 目录（跨平台）
+                let home = std::env::var("HOME")
+                    .or_else(|_| std::env::var("USERPROFILE"))
+                    .unwrap_or_else(|_| "/".to_string());
+
+                if let Some(path) = working_directory {
+                    // 验证路径是否存在且是目录
+                    if std::path::Path::new(path).is_dir() {
+                        cmd.current_dir(path);
+                        info!("使用指定工作目录: {}", path);
+                    } else {
+                        cmd.current_dir(&home);
+                        warn!("路径不存在或不是目录，回退到 home: {} -> {}", path, home);
+                    }
+                } else {
+                    cmd.current_dir(&home);
+                    info!("使用默认工作目录: {}", home);
+                }
+
                 cmd.env("TERM", "xterm-256color")
                     .env("COLORTERM", "truecolor")
                     .env("COLUMNS", cols.to_string())
@@ -208,14 +228,15 @@ impl PtyManager {
     }
 
     /// 创建新的 PTY 会话
-    pub async fn spawn(&self, shell: &str, cols: u16, rows: u16) -> Result<String> {
-        let session = PtySession::spawn(shell, cols, rows)?;
+    pub async fn spawn(&self, shell: &str, cols: u16, rows: u16, working_directory: Option<&str>) -> Result<String> {
+        let session = PtySession::spawn(shell, cols, rows, working_directory)?;
         let session_id = format!("pty-{}", uuid::Uuid::new_v4());
 
         let mut sessions = self.sessions.lock().await;
         sessions.insert(session_id.clone(), session);
 
-        info!("PTY 会话创建: id={}, shell={}", session_id, shell);
+        info!("PTY 会话创建: id={}, shell={}, cwd={:?}",
+            session_id, shell, working_directory);
         Ok(session_id)
     }
 
