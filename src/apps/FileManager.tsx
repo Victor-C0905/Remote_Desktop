@@ -581,14 +581,14 @@ export function FileManager({ preloadData }: FileManagerProps) {
   const parsePathSegments = useCallback((path: string): Array<{ name: string; path: string }> => {
     const segments: Array<{ name: string; path: string }> = [];
     if (!path || path === "/") {
-      return [{ name: "/", path: "/" }];
+      return [{ name: "🏠", path: "/" }];  // 根目录显示图标
     }
 
     // 分割路径
     const parts = path.split("/").filter(p => p !== "");
 
-    // 第一个分段是根目录 "/"（作为按钮）
-    segments.push({ name: "/", path: "/" });
+    // 第一个分段是根目录 "/"（作为按钮，显示图标）
+    segments.push({ name: "🏠", path: "/" });
 
     // 添加每个路径分段
     let accumulatedPath = "";
@@ -949,7 +949,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
                         </button>
                         {/* 根目录后不显示分隔符，其他分段之间显示分隔符（除了最后一个） */}
                         {index >= 1 && index < array.length - 1 && (
-                          <span className="fm-breadcrumb-separator">/</span>
+                          <span className="fm-breadcrumb-separator">▸</span>
                         )}
                       </>
                     );

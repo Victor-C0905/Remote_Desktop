@@ -115,10 +115,11 @@
 
 .fm-breadcrumb .fm-sep,
 .fm-breadcrumb-separator {
-  color: var(--ovelis-text-disabled);
+  color: var(--ovelis-text-secondary);
   font-size: calc(var(--font-body) - 1px);
-  margin: 0 1px;
+  margin: 0 3px;
   user-select: none;
+  opacity: 0.7;  /* 稍微淡化，不抢眼 */
 }
 
 /* ── Path Input Container ─────────────────────────────────── */
