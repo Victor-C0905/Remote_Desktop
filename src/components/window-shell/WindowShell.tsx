@@ -300,14 +300,9 @@ export function WindowShell({
       const MIN_VISIBLE = 100; // 最小可见区域（像素）
 
       // 根据调整方向计算新尺寸和位置
+      // 右侧拖拽：无最大宽度限制，仅保留最小宽度
       if (resizeDirection.includes('e')) {
-        // 右边界：可以向右扩展，但至少保留 MIN_VISIBLE 在可视区域
-        const maxWidth = parentWidth - newX + (newX < 0 ? -newX : 0);
-        newWidth = Math.max(minWidth, Math.min(maxWidth, resizeStartPos.current.width + deltaX));
-        // 确保右边界不超出允许范围
-        if (newX + newWidth > parentWidth - MIN_VISIBLE) {
-          newWidth = parentWidth - MIN_VISIBLE - newX;
-        }
+        newWidth = Math.max(minWidth, resizeStartPos.current.width + deltaX);
       }
       if (resizeDirection.includes('w')) {
         // 左边界：可以向左扩展，但至少保留 MIN_VISIBLE 在可视区域
@@ -317,14 +312,9 @@ export function WindowShell({
         // 左边界最小位置：-(width - MIN_VISIBLE)
         newX = Math.max(-(newWidth - MIN_VISIBLE), newXCandidate);
       }
+      // 下方拖拽：无最大高度限制，仅保留最小高度
       if (resizeDirection.includes('s')) {
-        // 下边界：可以向下扩展，但至少保留 MIN_VISIBLE 在可视区域
-        const maxHeight = parentHeight - newY + (newY < 0 ? -newY : 0);
-        newHeight = Math.max(minHeight, Math.min(maxHeight, resizeStartPos.current.height + deltaY));
-        // 确保下边界不超出允许范围
-        if (newY + newHeight > parentHeight - MIN_VISIBLE) {
-          newHeight = parentHeight - MIN_VISIBLE - newY;
-        }
+        newHeight = Math.max(minHeight, resizeStartPos.current.height + deltaY);
       }
       if (resizeDirection.includes('n')) {
         // 上边界：无法超越 TopBar

@@ -204,9 +204,9 @@ export function DraggableWindow({
       const parentHeight = parentEl?.clientHeight || window.innerHeight;
 
       // 根据调整方向计算新尺寸和位置
+      // 右侧拖拽：无最大宽度限制，仅保留最小宽度
       if (resizeDirection.includes("e")) {
-        const maxWidth = parentWidth - newX;
-        newWidth = Math.max(minWidth, Math.min(maxWidth, resizeStartPos.current.width + deltaX));
+        newWidth = Math.max(minWidth, resizeStartPos.current.width + deltaX);
       }
       if (resizeDirection.includes("w")) {
         const widthDelta = Math.min(deltaX, resizeStartPos.current.width - minWidth);
@@ -214,9 +214,9 @@ export function DraggableWindow({
         const newXCandidate = resizeStartPos.current.posX + widthDelta;
         newX = Math.max(0, newXCandidate);
       }
+      // 下方拖拽：无最大高度限制，仅保留最小高度
       if (resizeDirection.includes("s")) {
-        const maxHeight = parentHeight - newY;
-        newHeight = Math.max(minHeight, Math.min(maxHeight, resizeStartPos.current.height + deltaY));
+        newHeight = Math.max(minHeight, resizeStartPos.current.height + deltaY);
       }
       if (resizeDirection.includes("n")) {
         const heightDelta = Math.min(deltaY, resizeStartPos.current.height - minHeight);
