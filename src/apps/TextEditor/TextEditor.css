@@ -200,37 +200,55 @@
 /* ============================================================
    编辑模式切换组件样式
    用于在文本模式和十六进制模式之间切换
+   GNOME 分组按钮样式（Linked Buttons）
    ============================================================ */
 
 /* ── 编辑模式容器 ──────────────────────────────────────── */
 .te-editor-mode {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 0; /* 分组按钮无间距 */
 }
 
 /* ── 模式按钮基础样式 ───────────────────────────────────── */
 .te-mode-btn {
-  /* 基础布局 */
-  padding: 6px 12px;
+  /* GNOME Linked Button 样式 */
+  padding: 8px 16px;
+  min-height: 32px; /* GNOME 按钮 Minimum height: 32px */
 
-  /* 边框和圆角 */
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  /* 边框和圆角（分组按钮：左边按钮右边圆角，右边按钮左边圆角） */
+  border: 1px solid var(--ovelis-border-color);
+  border-radius: 0; /* 默认无圆角 */
 
   /* 背景和文字 */
-  background: transparent;
+  background: var(--ovelis-view-bg);
   color: var(--ovelis-text-primary);
 
   /* 字体设置 */
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: 14px; /* GNOME 标准字号 */
+  font-weight: 500; /* 中等字重 */
 
   /* 交互 */
   cursor: pointer;
 
   /* 过渡效果 */
   transition: all var(--duration-fast) var(--ease-out);
+}
+
+/* ── 第一个按钮：左边圆角 ────────────────────────────── */
+.te-mode-btn:first-child {
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm); /* 左边圆角 */
+}
+
+/* ── 最后一个按钮：右边圆角 ──────────────────────────── */
+.te-mode-btn:last-child {
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0; /* 右边圆角 */
+}
+
+/* ── 相邻按钮边框重叠（防止双边框）────────────────────── */
+.te-mode-btn:not(:last-child) {
+  border-right: none; /* 移除右边边框 */
 }
 
 /* ── 模式按钮 Hover 状态 ──────────────────────────────── */
@@ -246,9 +264,18 @@
   border-color: var(--ovelis-accent-bg);
 }
 
+/* ── Active 状态的相邻按钮边框 ────────────────────────── */
+.te-mode-btn.active:not(:last-child) {
+  border-right: 1px solid var(--ovelis-accent-bg); /* 保留右边边框 */
+}
+
+.te-mode-btn.active:not(:first-child) {
+  border-left: 1px solid var(--ovelis-accent-bg); /* 保留左边边框 */
+}
+
 /* ── 模式按钮 Disabled 状态 ───────────────────────────── */
 .te-mode-btn:disabled {
-  opacity: 0.4;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
@@ -262,8 +289,9 @@
   /* 基础布局 */
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 8px 16px;  /* 左右边距与工具栏和文本编辑区一致 */
+  gap: 12px; /* 状态项之间的间距 */
+  padding: 6px 16px;  /* 左右边距与工具栏和文本编辑区一致 */
+  height: 28px; /* 固定高度，更紧凑 */
 
   /* 边框 */
   border-top: 1px solid var(--ovelis-border-color);
@@ -286,19 +314,30 @@
   white-space: nowrap;
 }
 
+/* ── 分隔符 ────────────────────────────────────────────── */
+.te-status-separator {
+  /* 字体设置 */
+  font-family: var(--font-ui);
+  font-size: 12px;
+  line-height: 1.4;
+
+  /* 文字颜色 */
+  color: var(--ovelis-border-color);
+
+  /* 禁止换行 */
+  white-space: nowrap;
+
+  /* 间距 */
+  margin: 0 4px;
+}
+
 /* ── 只读标识（二进制文件） ───────────────────────────── */
 .te-status-readonly {
   font-weight: 600; /* 加粗 */
   color: var(--ovelis-accent-bg); /* 使用强调色（蓝色），表示只读状态 */
-  padding: 2px 8px; /* 内边距 */
+  padding: 2px 6px; /* 内边距 */
   background: rgba(53, 132, 228, 0.1); /* 浅蓝色背景 */
   border-radius: 4px; /* 圆角 */
-}
-
-/* ── 状态项分隔符（可选，通过 border 实现）────────────── */
-.te-status-item + .te-status-item::before {
-  content: '';
-  margin-right: 16px;
 }
 
 /* ============================================================
@@ -335,62 +374,101 @@
 .te-toolbar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 8px 16px;  /* 左右边距与文本编辑区一致 */
+  justify-content: space-between; /* 左侧/右侧分离布局 */
+  padding: 0 16px;  /* 左右边距与文本编辑区一致 */
+  height: 48px; /* GNOME HeaderBar 标准高度 */
   background: var(--ovelis-headerbar-bg);
   border-bottom: 1px solid var(--ovelis-border-color);
+}
+
+/* ── 工具栏左侧区域 ─────────────────────────────────────── */
+.te-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 1 auto; /* 不拉伸，占据内容所需空间 */
+}
+
+/* ── 工具栏右侧区域 ─────────────────────────────────────── */
+.te-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px; /* 按钮间距 */
+  flex: 0 0 auto; /* 固定宽度，不拉伸 */
 }
 
 /* ── 文件名显示 ─────────────────────────────────────────── */
 .te-filename {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px; /* 文件名与未保存标记间距 */
+}
+
+.te-filename-text {
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: 15px; /* 稍大字号，标题感 */
   font-weight: 600;
   color: var(--ovelis-text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 300px; /* 限制最大宽度 */
+  max-width: 400px; /* 允许更长的文件名 */
 }
 
 /* ── 未保存标记 ─────────────────────────────────────────── */
 .te-unsaved-marker {
   color: var(--ovelis-accent-bg);
   font-weight: 700;
-  font-size: 16px;
+  font-size: 14px;
+  margin-left: 2px; /* 与文件名间距 */
 }
 
 /* ── 工具栏按钮 ─────────────────────────────────────────── */
 .te-toolbar-btn {
-  padding: 6px 12px;
+  /* GNOME 标准按钮样式 */
+  padding: 8px 16px;
+  min-height: 32px; /* GNOME 按钮 Minimum height: 32px */
+
+  /* 边框和圆角 */
   border: 1px solid var(--ovelis-border-color);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-sm); /* 8px */
+
+  /* 背景和文字 */
   background: var(--ovelis-view-bg);
   color: var(--ovelis-text-primary);
+
+  /* 字体设置 */
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: 14px; /* GNOME 标准字号 */
+  font-weight: 500; /* 中等字重 */
+
+  /* 交互 */
   cursor: pointer;
+
+  /* 过渡效果 */
   transition: all var(--duration-fast) var(--ease-out);
   white-space: nowrap;
 }
 
 .te-toolbar-btn:hover:not(:disabled) {
-  background: var(--ovelis-accent-bg);
+  background: var(--ovelis-headerbar-bg); /* hover 背景 */
+  border-color: var(--ovelis-border-color);
+}
+
+.te-toolbar-btn:active:not(:disabled) {
+  background: var(--ovelis-accent-bg); /* active 背景 */
   color: var(--ovelis-accent-fg);
   border-color: var(--ovelis-accent-bg);
 }
 
 .te-toolbar-btn:disabled {
-  opacity: 0.4;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
 /* ── 保存按钮（特殊样式）──────────────────────────────────── */
 .te-save-btn {
-  min-width: 80px; /* 固定最小宽度 */
+  min-width: 90px; /* 固定最小宽度 */
 }
 
 /* ── 加载状态 ────────────────────────────────────────────── */
@@ -399,14 +477,15 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 40px;
+  padding: 60px 40px; /* 更大的内边距 */
   background: var(--ovelis-window-bg);
 }
 
 .te-loading-text {
   font-family: var(--font-ui);
-  font-size: 14px;
+  font-size: 15px; /* 稍大字号 */
   color: var(--ovelis-text-secondary);
+  opacity: 0.8; /* 半透明 */
 }
 
 /* ── 空状态 ──────────────────────────────────────────────── */
@@ -423,32 +502,32 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 16px;
-  padding: 48px 64px;
+  gap: 20px; /* 更大间距 */
+  padding: 60px 80px; /* 更大的内边距 */
   background: var(--ovelis-card-bg);
   border: 2px dashed var(--ovelis-border-color);
   border-radius: var(--radius-lg);
-  max-width: 400px;
+  max-width: 480px; /* 更大的最大宽度 */
 }
 
 .te-empty-icon {
-  font-size: 48px;
-  opacity: 0.6;
+  font-size: 64px; /* 更大的图标 */
+  opacity: 0.5;
 }
 
 .te-empty-text {
   font-family: var(--font-ui);
-  font-size: 16px;
+  font-size: 17px; /* 更大字号 */
   font-weight: 500;
   color: var(--ovelis-text-primary);
 }
 
 .te-empty-hint {
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: 14px;
   color: var(--ovelis-text-secondary);
   text-align: center;
-  line-height: 1.5;
+  line-height: 1.6; /* 更大的行高 */
 }
 
 /* ── 错误状态 ─────────────────────────────────────────────── */
@@ -457,45 +536,49 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 40px;
+  padding: 40px 60px; /* 更大的内边距 */
   background: var(--ovelis-window-bg);
 }
 
 .te-error-content {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
+  gap: 16px; /* 更大间距 */
+  padding: 16px 24px; /* 更大的内边距 */
   background: var(--ovelis-card-bg);
   border: 1px solid var(--ovelis-border-color);
-  border-radius: var(--radius-sm);
-  max-width: 600px;
+  border-radius: var(--radius-md); /* 更大的圆角 */
+  max-width: 640px; /* 更大的最大宽度 */
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1); /* 添加阴影 */
 }
 
 .te-error-icon {
-  font-size: 20px;
+  font-size: 24px; /* 更大的图标 */
   color: #e01b24; /* GNOME 红色（错误色） */
 }
 
 .te-error-text {
   flex: 1;
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: 14px; /* 稍大字号 */
   color: var(--ovelis-text-primary);
   word-wrap: break-word;
+  line-height: 1.5;
 }
 
 .te-error-close {
-  padding: 4px 8px;
+  padding: 8px 12px; /* 更大的内边距 */
   border: none;
   border-radius: var(--radius-xs);
   background: transparent;
   color: var(--ovelis-text-secondary);
   cursor: pointer;
-  transition: color var(--duration-fast) var(--ease-out);
+  transition: all var(--duration-fast) var(--ease-out);
+  font-size: 18px; /* 更大的关闭图标 */
 }
 
 .te-error-close:hover {
+  background: var(--ovelis-headerbar-bg);
   color: var(--ovelis-text-primary);
 }
 
@@ -505,13 +588,14 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 40px;
+  padding: 60px 40px; /* 更大的内边距 */
   background: var(--ovelis-window-bg);
 }
 
 .te-binary-warning-text {
   font-family: var(--font-ui);
-  font-size: 14px;
+  font-size: 15px; /* 稍大字号 */
   color: var(--ovelis-text-secondary);
   text-align: center;
+  opacity: 0.8; /* 半透明 */
 }

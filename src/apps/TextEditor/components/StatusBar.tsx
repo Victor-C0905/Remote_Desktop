@@ -1,13 +1,14 @@
 /**
  * 状态栏组件
  *
- * 显示文件的状态信息，包括行数、字符数、编码、保存状态和修改时间
+ * 显示文件的状态信息，包括光标位置、行数、字符数、编码、保存状态和修改时间
  * 遵循 GNOME 设计规范的状态栏样式
  */
 
 import React from 'react';
 import '../TextEditor.css'; // 导入样式文件
 import type { FileState } from '../types/editor';
+import type { CursorPosition } from './TextEditorPane';
 
 /**
  * StatusBar 组件 Props
@@ -18,6 +19,12 @@ interface StatusBarProps {
 
   /** 是否有未保存的变更 */
   hasUnsavedChanges: boolean;
+
+  /** 光标位置（行号、列号） */
+  cursorPosition: CursorPosition;
+
+  /** 新文件的字符数（可选，仅用于未打开文件时） */
+  newFileCharCount?: number;
 }
 
 /**
@@ -68,27 +75,43 @@ function countLines(content: string): number {
  * 状态栏组件
  *
  * 显示文件信息：
- * - 未打开文件：显示"未打开文件"
- * - 已打开文件：显示行数、字符数、编码、保存状态、修改时间
+ * - 未打开文件：显示"未命名文件"、光标位置
+ * - 已打开文件：显示光标位置、行数、字符数、编码、保存状态、修改时间
  *
  * @param props - 组件属性
  * @param props.fileState - 当前文件状态
  * @param props.hasUnsavedChanges - 是否有未保存的变更
+ * @param props.cursorPosition - 光标位置（行号、列号）
  *
  * @example
  * ```tsx
  * <StatusBar
  *   fileState={currentFile}
  *   hasUnsavedChanges={hasUnsavedChanges}
+ *   cursorPosition={{ line: 1, column: 1 }}
  * />
  * ```
  */
-export function StatusBar({ fileState, hasUnsavedChanges }: StatusBarProps): React.ReactElement {
+export function StatusBar({ fileState, hasUnsavedChanges, cursorPosition, newFileCharCount }: StatusBarProps): React.ReactElement {
   // 未打开文件时显示"未命名文件"
   if (!fileState) {
     return (
       <div className="te-status-bar">
         <span className="te-status-item">未命名文件</span>
+        {/* 分隔符 */}
+        <span className="te-status-separator">|</span>
+        {/* 光标位置（新文件也可以显示） */}
+        <span className="te-status-item">
+          行 {cursorPosition.line}, 列 {cursorPosition.column}
+        </span>
+        {/* 分隔符 */}
+        <span className="te-status-separator">|</span>
+        {/* 字符个数（新文件） */}
+        <span className="te-status-item">
+          {newFileCharCount || 0}个字符
+        </span>
+        {/* 分隔符 */}
+        <span className="te-status-separator">|</span>
         <span className="te-status-item">
           {hasUnsavedChanges ? '未保存' : ''}
         </span>
@@ -111,22 +134,38 @@ export function StatusBar({ fileState, hasUnsavedChanges }: StatusBarProps): Rea
         </span>
       )}
 
+      {/* 光标位置（仅文本文件显示） */}
+      {fileState.fileType === 'text' && (
+        <span className="te-status-item">
+          行 {cursorPosition.line}, 列 {cursorPosition.column}
+        </span>
+      )}
+
+      {/* 分隔符 */}
+      <span className="te-status-separator">|</span>
+
       {/* 行数（仅文本文件显示） */}
       {fileState.fileType === 'text' && (
         <span className="te-status-item">
-          行数: {lineCount}
+          {lineCount} 行
         </span>
       )}
 
       {/* 字符数或文件大小 */}
       <span className="te-status-item">
-        {fileState.fileType === 'text' ? `字符数: ${charCount}` : `大小: ${fileSize}`}
+        {fileState.fileType === 'text' ? `${charCount}个字符` : fileSize}
       </span>
+
+      {/* 分隔符 */}
+      <span className="te-status-separator">|</span>
 
       {/* 文件编码 */}
       <span className="te-status-item">
-        编码: {encoding}
+        {encoding}
       </span>
+
+      {/* 分隔符 */}
+      <span className="te-status-separator">|</span>
 
       {/* 保存状态（仅文本文件显示） */}
       {fileState.fileType === 'text' && (
@@ -135,9 +174,12 @@ export function StatusBar({ fileState, hasUnsavedChanges }: StatusBarProps): Rea
         </span>
       )}
 
+      {/* 分隔符 */}
+      <span className="te-status-separator">|</span>
+
       {/* 修改时间 */}
       <span className="te-status-item">
-        修改时间: {formatTime(fileState.mtime)}
+        {formatTime(fileState.mtime)}
       </span>
     </div>
   );
