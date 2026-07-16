@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { useServerManager } from "../context/ServerManager";
 import { PLACEHOLDER } from "../utils/offlineDefaults";
@@ -123,7 +124,10 @@ export function FileManager({ preloadData }: FileManagerProps) {
   const [history, setHistory] = useState<string[]>([currentPath]);
   const [historyIdx, setHistoryIdx] = useState(0);
   const [contextMenu, setContextMenu] = useState<{
-    x: number; y: number; entry: FileEntry;
+    x: number;
+    y: number;
+    type: 'file' | 'empty';  // 菜单类型：文件菜单或空白区域菜单
+    entry?: FileEntry;       // 文件信息（仅文件菜单）
   } | null>(null);
   const [propertiesEntry, setPropertiesEntry] = useState<FileEntry | null>(null);
   const [editingEntry, setEditingEntry] = useState<FileEntry | null>(null);  // 正在编辑的文件
@@ -843,11 +847,106 @@ export function FileManager({ preloadData }: FileManagerProps) {
     }
   }, [currentPath, activeServerId, loadDir]);
 
+  // 刷新当前目录
+  const handleRefresh = useCallback(() => {
+    setContextMenu(null);
+    loadDir(currentPath);
+  }, [currentPath, loadDir]);
+
+  // 新建文件夹
+  const handleNewFolder = useCallback(async () => {
+    setContextMenu(null);
+    const folderName = prompt("请输入文件夹名称：");
+    if (!folderName) return;
+
+    const sep = "/";
+    const folderPath = currentPath === "/"
+      ? `${currentPath}${sep}${folderName}`
+      : `${currentPath}${sep}${folderName}`;
+
+    try {
+      if (activeServerId) {
+        await invoke("remote_mkdir", { serverId: activeServerId, path: folderPath });
+        loadDir(currentPath);
+      } else {
+        alert("请先连接到远程服务器");
+      }
+    } catch (err) {
+      console.error("[FileManager] mkdir 失败:", err);
+      alert(`创建文件夹失败: ${err}`);
+    }
+  }, [currentPath, activeServerId, loadDir]);
+
+  // 新建文件
+  const handleNewFile = useCallback(async () => {
+    setContextMenu(null);
+    const fileName = prompt("请输入文件名称：");
+    if (!fileName) return;
+
+    const sep = "/";
+    const filePath = currentPath === "/"
+      ? `${currentPath}${sep}${fileName}`
+      : `${currentPath}${sep}${fileName}`;
+
+    try {
+      if (activeServerId) {
+        // 创建空文件
+        await invoke("remote_write_file", {
+          serverId: activeServerId,
+          path: filePath,
+          content: ""
+        });
+        loadDir(currentPath);
+      } else {
+        alert("请先连接到远程服务器");
+      }
+    } catch (err) {
+      console.error("[FileManager] new file 失败:", err);
+      alert(`创建文件失败: ${err}`);
+    }
+  }, [currentPath, activeServerId, loadDir]);
+
   // ── Context Menu ─────────────────────────────────────
+  // 智能计算右键菜单位置，紧贴鼠标右下角，避免超出屏幕边界
+  const calculateMenuPosition = useCallback((mouseX: number, mouseY: number) => {
+    const offset = 3;  // 距离鼠标的距离（紧贴）
+
+    // 简化：直接使用鼠标位置 + offset，不做边界检测
+    // 让 CSS 的 position: fixed 自动处理
+    const x = mouseX + offset;
+    const y = mouseY + offset;
+
+    return { x, y };
+  }, []);
+
   const handleContextMenu = useCallback((e: React.MouseEvent, entry: FileEntry, idx: number) => {
     e.preventDefault();
-    setSelectedIdx(idx);
-    setContextMenu({ x: e.clientX, y: e.clientY, entry });
+    e.stopPropagation();  // 阻止事件冒泡到父容器
+
+    // 只有当前已选中该文件时，才显示文件菜单
+    // 否则显示刷新菜单（和空白区域一样）
+    if (selectedIdx === idx) {
+      setContextMenu({ x: e.clientX + 3, y: e.clientY + 3, type: 'file', entry });
+    } else {
+      // 未选中该文件，显示刷新菜单
+      setContextMenu({ x: e.clientX + 3, y: e.clientY + 3, type: 'empty' });
+    }
+  }, [selectedIdx]);
+
+  // 空白区域右键菜单
+  const handleEmptyContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const position = calculateMenuPosition(e.clientX, e.clientY);
+    setContextMenu({ ...position, type: 'empty' });
+  }, [calculateMenuPosition]);
+
+  // 点击空白区域取消选中
+  const handleEmptyClick = useCallback((e: React.MouseEvent) => {
+    // 检查点击目标，如果是空白区域则取消选中
+    const target = e.target as HTMLElement;
+    if (!target.closest('.fm-list-row') && !target.closest('.fm-grid-item')) {
+      setSelectedIdx(-1);
+    }
   }, []);
 
   // Close context menu on click anywhere
@@ -1084,7 +1183,11 @@ export function FileManager({ preloadData }: FileManagerProps) {
                 <span>权限</span>
               </div>
               {/* ✅ 文件列表滚动容器（flex: 1 + overflow-y: auto） */}
-              <div className="fm-list-content">
+              <div
+                className="fm-list-content"
+                onContextMenu={handleEmptyContextMenu}
+                onClick={handleEmptyClick}
+              >
                 {entries.map((entry, idx) => (
                   <div
                     key={entry.name}
@@ -1143,7 +1246,11 @@ export function FileManager({ preloadData }: FileManagerProps) {
               </div>
             </div>
           ) : (
-            <div className="fm-grid">
+            <div
+              className="fm-grid"
+              onContextMenu={handleEmptyContextMenu}
+              onClick={handleEmptyClick}
+            >
               {entries.map((entry, idx) => (
                 <div
                   key={entry.name}
@@ -1204,52 +1311,74 @@ export function FileManager({ preloadData }: FileManagerProps) {
         <span>总大小: {isOffline ? PLACEHOLDER : formatSize(totalSize)}</span>
       </div>
 
-      {/* Context Menu */}
-      {contextMenu && (
+      {/* Context Menu - 使用 Portal 渲染到 body，确保 position: fixed 相对于视口 */}
+      {contextMenu && createPortal(
         <div
           className="fm-context-menu"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
-          <div className="fm-fm-ctx-item" onClick={() => { handleOpen(contextMenu.entry); setContextMenu(null); }}>
-            <span className="fm-fm-ctx-icon">📂</span> 打开
-          </div>
-          <div className="fm-ctx-separator" />
+          {contextMenu.type === 'file' && contextMenu.entry && (
+            // 文件/文件夹菜单
+            <>
+              <div className="fm-ctx-item" onClick={() => { handleOpen(contextMenu.entry!); setContextMenu(null); }}>
+                <span className="fm-ctx-icon">📂</span> 打开
+              </div>
+              <div className="fm-ctx-separator" />
 
-          {/* 文件操作 */}
-          <div className="fm-ctx-item" onClick={() => { handleRename(contextMenu.entry); setContextMenu(null); }}>
-            <span className="fm-ctx-icon">✏️</span> 重命名
-          </div>
-          <div className="fm-ctx-item" onClick={() => { handleDelete(contextMenu.entry); setContextMenu(null); }}>
-            <span className="fm-ctx-icon">🗑️</span> 删除
-          </div>
+              {/* 文件操作 */}
+              <div className="fm-ctx-item" onClick={() => { handleRename(contextMenu.entry!); setContextMenu(null); }}>
+                <span className="fm-ctx-icon">✏️</span> 重命名
+              </div>
+              <div className="fm-ctx-item" onClick={() => { handleDelete(contextMenu.entry!); setContextMenu(null); }}>
+                <span className="fm-ctx-icon">🗑️</span> 删除
+              </div>
 
-          <div className="fm-ctx-separator" />
+              <div className="fm-ctx-separator" />
 
-          {/* 其他操作 */}
-          <div className="fm-ctx-item" onClick={() => {
-            // 复制路径到剪贴板（Linux 格式）
-            const sep = "/";
-            const path = currentPath === "/"
-              ? `${currentPath}${sep}${contextMenu.entry.name}`
-              : `${currentPath}${sep}${contextMenu.entry.name}`;
-            navigator.clipboard.writeText(path);
-            setContextMenu(null);
-          }}>
-            <span className="fm-ctx-icon">📋</span> 复制路径
-          </div>
-          <div className="fm-ctx-item" onClick={() => setContextMenu(null)}>
-            <span className="fm-ctx-icon">⬇️</span> 下载
-          </div>
+              {/* 其他操作 */}
+              <div className="fm-ctx-item" onClick={() => {
+                // 复制路径到剪贴板（Linux 格式）
+                const sep = "/";
+                const path = currentPath === "/"
+                  ? `${currentPath}${sep}${contextMenu.entry!.name}`
+                  : `${currentPath}${sep}${contextMenu.entry!.name}`;
+                navigator.clipboard.writeText(path);
+                setContextMenu(null);
+              }}>
+                <span className="fm-ctx-icon">📋</span> 复制路径
+              </div>
+              <div className="fm-ctx-item" onClick={() => setContextMenu(null)}>
+                <span className="fm-ctx-icon">⬇️</span> 下载
+              </div>
 
-          <div className="fm-ctx-separator" />
-          <div className="fm-ctx-item" onClick={() => { showProperties(contextMenu.entry); setContextMenu(null); }}>
-            <span className="fm-ctx-icon">ℹ️</span> 属性
-          </div>
-        </div>
+              <div className="fm-ctx-separator" />
+              <div className="fm-ctx-item" onClick={() => { showProperties(contextMenu.entry!); setContextMenu(null); }}>
+                <span className="fm-ctx-icon">ℹ️</span> 属性
+              </div>
+            </>
+          )}
+
+          {contextMenu.type === 'empty' && (
+            // 空白区域菜单
+            <>
+              <div className="fm-ctx-item" onClick={handleRefresh}>
+                <span className="fm-ctx-icon">🔄</span> 刷新
+              </div>
+              <div className="fm-ctx-separator" />
+              <div className="fm-ctx-item" onClick={handleNewFolder}>
+                <span className="fm-ctx-icon">📁</span> 新建文件夹
+              </div>
+              <div className="fm-ctx-item" onClick={handleNewFile}>
+                <span className="fm-ctx-icon">📄</span> 新建文件
+              </div>
+            </>
+          )}
+        </div>,
+        document.body
       )}
 
-      {/* Path Error Dialog — 路径不存在时弹窗提示（模态） */}
-      {pathErrorDialog && (
+      {/* Path Error Dialog — 路径不存在时弹窗提示（模态）- 使用 Portal */}
+      {pathErrorDialog && createPortal(
         <div className="fm-path-error-overlay">
           <div className="fm-path-error-dialog">
             <div className="ped-header">
@@ -1261,11 +1390,12 @@ export function FileManager({ preloadData }: FileManagerProps) {
               <button autoFocus onClick={() => setPathErrorDialog(null)}>确定</button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
-      {/* Properties Dialog */}
-      {propertiesEntry && (
+      {/* Properties Dialog - 使用 Portal */}
+      {propertiesEntry && createPortal(
         <div className="fm-properties-dialog">
           <div className="pd-header">
             <span className="pd-icon">{getFileIcon(propertiesEntry)}</span>
@@ -1292,7 +1422,8 @@ export function FileManager({ preloadData }: FileManagerProps) {
           <div className="pd-footer">
             <button onClick={() => setPropertiesEntry(null)}>关闭</button>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
