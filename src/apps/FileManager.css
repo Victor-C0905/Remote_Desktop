@@ -9,6 +9,7 @@
   height: 100%;
   min-height: 0; /* ✅ 建立 flex 约束链，确保子元素滚动正常 */
   background: var(--ovelis-window-bg);
+  outline: none; /* 移除焦点样式，避免黑框 */
 }
 
 /* ── Toolbar（替代原HeaderBar）───────────────────────── */
