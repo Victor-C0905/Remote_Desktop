@@ -70,32 +70,37 @@
 .fm-breadcrumb {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 1px;
   flex: 1;
-  min-width: 200px; /* ✅ 修改：从 0 改为 200px */
-  padding: 0 8px;
+  min-width: 200px;
+  padding: 0 6px;
   height: 32px;
   background: var(--ovelis-view-bg);
   border: 1px solid var(--ovelis-border-color);
   border-radius: var(--radius-sm);
   overflow: hidden;
+  cursor: text;
 }
 
-.fm-breadcrumb .fm-crumb {
+.fm-breadcrumb .fm-crumb,
+.fm-breadcrumb-segment {
   background: none;
   border: none;
   color: var(--ovelis-accent-bg);
   font-family: var(--font-ui);
-  font-size: var(--font-body);
+  font-size: calc(var(--font-body) - 1px);  /* 稍微小一点 */
   cursor: pointer;
-  padding: 2px 4px;
+  padding: 3px 5px;
   border-radius: var(--radius-xs);
   white-space: nowrap;
-  transition: background var(--duration-fast) var(--ease-out);
+  transition: background var(--duration-fast) var(--ease-out),
+              color var(--duration-fast) var(--ease-out);
 }
 
-.fm-breadcrumb .fm-crumb:hover {
-  background: var(--ovelis-border-color);
+.fm-breadcrumb .fm-crumb:hover,
+.fm-breadcrumb-segment:hover {
+  background: var(--ovelis-hover-bg);
+  color: var(--ovelis-text-primary);
 }
 
 .fm-breadcrumb .fm-crumb.fm-crumb-current {
@@ -108,9 +113,11 @@
   background: none;
 }
 
-.fm-breadcrumb .fm-sep {
+.fm-breadcrumb .fm-sep,
+.fm-breadcrumb-separator {
   color: var(--ovelis-text-disabled);
-  font-size: var(--font-small);
+  font-size: calc(var(--font-body) - 1px);
+  margin: 0 1px;
   user-select: none;
 }
 
@@ -118,7 +125,7 @@
 .fm-path-input-container {
   flex: 1;
   min-width: 0;
-  position: relative;  /* 建议列表相对定位基准 */
+  position: relative;
 }
 
 /* ── Path Input ─────────────────────────────────────────── */
@@ -133,7 +140,12 @@
   font-size: var(--font-body);
   color: var(--ovelis-text-primary);
   outline: none;
+  display: none;  /* 默认隐藏 */
   transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+.fm-path-input.visible {
+  display: block;  /* 编辑模式显示 */
 }
 
 .fm-path-input:focus {
