@@ -571,9 +571,34 @@ export function FileManager({ preloadData }: FileManagerProps) {
     }
   };
 
-  const handlePathInputFocus = () => {
+  const handlePathInputFocus = (e: React.FocusEvent<HTMLInputElement>) => {
     setIsEditingPath(true);
+    // 自动全选，方便用户输入新地址
+    e.target.select();
   };
+
+  // 解析路径为分段（用于面包屑导航）
+  const parsePathSegments = useCallback((path: string): Array<{ name: string; path: string }> => {
+    const segments: Array<{ name: string; path: string }> = [];
+    if (!path || path === "/") {
+      return [{ name: "/", path: "/" }];
+    }
+
+    // 分割路径
+    const parts = path.split("/").filter(p => p !== "");
+
+    // 第一个分段是根目录 "/"（作为按钮）
+    segments.push({ name: "/", path: "/" });
+
+    // 添加每个路径分段
+    let accumulatedPath = "";
+    parts.forEach((part) => {
+      accumulatedPath += "/" + part;
+      segments.push({ name: part, path: accumulatedPath });
+    });
+
+    return segments;
+  }, []);
 
   // 路径格式化函数：确保路径格式正确
   const normalizePath = useCallback((path: string): string => {
@@ -618,6 +643,11 @@ export function FileManager({ preloadData }: FileManagerProps) {
     }
     return success;
   }, [history, historyIdx, loadDir, normalizePath]);
+
+  // 跳转到指定路径（面包屑导航使用）
+  const handleBreadcrumbClick = useCallback((path: string) => {
+    navigateTo(path);
+  }, [navigateTo]);
 
   const handleSelectSuggestion = useCallback((suggestion: string) => {
     setPathInput(suggestion);
@@ -892,10 +922,46 @@ export function FileManager({ preloadData }: FileManagerProps) {
 
             {/* Path Input */}
             <div className="fm-toolbar-path">
+              {/* 面包屑导航：非编辑模式显示 */}
+              {!isEditingPath && (
+                <div
+                  className="fm-breadcrumb"
+                  onClick={() => {
+                    setIsEditingPath(true);
+                    // 延迟聚焦，等待输入框显示
+                    setTimeout(() => pathInputRef.current?.focus(), 0);
+                  }}
+                >
+                  {parsePathSegments(currentPath).map((segment, index, array) => {
+                    const isLast = index === array.length - 1;
+                    return (
+                      <>
+                        <button
+                          key={segment.path}
+                          className={`fm-breadcrumb-segment ${isLast ? 'fm-crumb-current' : ''}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleBreadcrumbClick(segment.path);
+                          }}
+                          title={segment.path}
+                        >
+                          {segment.name}
+                        </button>
+                        {/* 根目录后不显示分隔符，其他分段之间显示分隔符（除了最后一个） */}
+                        {index >= 1 && index < array.length - 1 && (
+                          <span className="fm-breadcrumb-separator">/</span>
+                        )}
+                      </>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* 路径输入框：编辑模式显示 */}
               <input
                 ref={pathInputRef}
                 type="text"
-                className="fm-path-input"
+                className={`fm-path-input ${isEditingPath ? 'visible' : ''}`}
                 value={pathInput}
                 onChange={handlePathInputChange}
                 onKeyDown={handlePathInputKeyDown}
