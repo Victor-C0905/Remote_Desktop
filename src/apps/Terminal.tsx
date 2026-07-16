@@ -45,6 +45,7 @@ interface TerminalInstanceProps {
   activeServerPort: number | null;
   fontSize: number;
   cursorBlink: boolean;
+  workingDirectory?: string | null;
   // callback: terminal 实例创建后通知父组件（用于复制/粘贴）
   onTerminalReady?: (terminal: Terminal, sessionId: string | null, searchAddon: SearchAddon) => void;
 }
@@ -56,6 +57,7 @@ function TerminalInstance({
   activeServerPort,
   fontSize,
   cursorBlink,
+  workingDirectory,
   onTerminalReady,
 }: TerminalInstanceProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -116,7 +118,7 @@ function TerminalInstance({
           // 6. 尝试连接远程 PTY 或启动演示模式
           if (activeServerId) {
             setInitializationStatus('连接远程终端...');
-            await connectRemotePty(terminal, activeServerId, activeServerName, activeServerHost, activeServerPort, sessionIdRef, unlistenRefs);
+            await connectRemotePty(terminal, activeServerId, activeServerName, activeServerHost, activeServerPort, sessionIdRef, unlistenRefs, workingDirectory);
           } else {
             setInitializationStatus('演示模式');
             terminal.write('[演示模式] 未连接远程服务器\r\n');
@@ -282,6 +284,7 @@ async function connectRemotePty(
   serverPort: number | null,
   sessionIdRef: React.MutableRefObject<string | null>,
   unlistenRefs: React.MutableRefObject<UnlistenFn[]>,
+  workingDirectory?: string | null,
 ): Promise<string> {
   // 1. 创建远程终端会话
   const result = await invoke<{ session_id: string }>('remote_spawn_terminal', {
@@ -289,6 +292,7 @@ async function connectRemotePty(
     shell: '',  // 使用默认 shell
     cols: terminal.cols,
     rows: terminal.rows,
+    workingDirectory: workingDirectory || null,
   });
 
   const sessionId = result.session_id;
@@ -432,13 +436,28 @@ function isWideChar(char: string): boolean {
 // ===================================================================
 // TerminalApp: 主组件（管理多个 tab、header、设置等 UI shell）
 // ===================================================================
-export function TerminalApp({ windowId }: { windowId: string }) {
+interface TerminalAppProps {
+  windowId: string;
+  preloadData?: {
+    workingDirectory?: string;
+  };
+}
+
+export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
   // ── 窗口系统集成 ────────────────────────────────────────────────────
   // 获取窗口状态（title、position、size、focused 等）
   // 用于窗口系统集成，确保每个窗口实例正确连接到窗口管理器
   // const windowState = useWindowState(windowId); // 未来集成时使用
   const { activeServer } = useServerManager();
   const activeServerId = activeServer?.id || null;
+
+  // ── 工作目录配置 ────────────────────────────────────────────────────
+  // 优先使用 preloadData（从文件管理器打开），否则使用用户配置的默认路径
+  const [configuredDefaultPath] = useState(() => {
+    return localStorage.getItem("terminal-default-path") || null;
+  });
+
+  const workingDirectory = preloadData?.workingDirectory || configuredDefaultPath;
 
   // ── 窗口实例独立状态（每个窗口实例有自己的 tabs、设置等）────────────
   const [tabs, setTabs] = useState<TerminalTabMeta[]>([]);
@@ -738,6 +757,7 @@ export function TerminalApp({ windowId }: { windowId: string }) {
               activeServerPort={activeServer?.port || null}
               fontSize={fontSize}
               cursorBlink={cursorBlink}
+              workingDirectory={workingDirectory}
               onTerminalReady={(terminal, sessionId, searchAddon) => {
                 // 更新 refs（所有 tab 都更新，但只有活动 tab 的 terminal 可见）
                 activeTerminalRef.current = terminal;
