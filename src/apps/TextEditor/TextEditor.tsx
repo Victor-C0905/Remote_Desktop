@@ -24,11 +24,12 @@
  * └─────────────────────────────────────┘
  */
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { AppLayout } from '../../components/app-shell/AppLayout';
 import { useServerManager } from '../../context/ServerManager';
 import { useFileManager } from './hooks/useFileManager';
 import { TextEditorPane } from './components/TextEditorPane';
+import type { CursorPosition } from './components/TextEditorPane';
 import { HexEditorPane } from './components/HexEditorPane';
 import { EditorMode } from './components/EditorMode';
 import { StatusBar } from './components/StatusBar';
@@ -100,6 +101,9 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
   // 编辑模式状态（text/hex）
   const [editorMode, setEditorMode] = useState<EditorModeType>('text');
 
+  // 光标位置状态（行号、列号）
+  const [cursorPosition, setCursorPosition] = useState<CursorPosition>({ line: 1, column: 1 });
+
   // 保存对话框状态
   const [showSaveDialog, setShowSaveDialog] = useState(false);
 
@@ -135,8 +139,9 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
    *
    * 如果是新文件（fileState == null），弹出对话框让用户输入路径
    * 如果是已打开文件（fileState != null），直接保存
+   * 使用 useCallback 包装，避免不必要的重新创建
    */
-  const handleSave = async () => {
+  const handleSave = useCallback(async () => {
     // 检查是否有活跃服务器
     if (!activeServerId) {
       console.error('[TextEditor] 未连接到服务器，无法保存文件');
@@ -152,7 +157,7 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
 
     // 如果是已打开文件，直接保存
     await saveFile(activeServerId);
-  };
+  }, [activeServerId, fileState, saveFile]); // 依赖项
 
   /**
    * 处理另存为
@@ -222,9 +227,34 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
   }, [windowId, closeFile]);
 
   /**
+   * Ctrl+S 快捷键保存
+   *
+   * 监听键盘事件，当按下 Ctrl+S 时触发保存操作
+   */
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      // 检查是否按下 Ctrl+S（或 Cmd+S 在 Mac 上）
+      if ((event.ctrlKey || event.metaKey) && event.key === 's') {
+        event.preventDefault(); // 阻止浏览器默认的保存行为
+        handleSave();
+      }
+    };
+
+    // 添加键盘事件监听
+    window.addEventListener('keydown', handleKeyDown);
+
+    // 清理监听器
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [handleSave]); // 依赖 handleSave 函数
+
+  /**
    * 渲染工具栏
    *
-   * 只包括保存按钮和编辑模式切换，文件信息由状态栏展示
+   * GNOME HeaderBar 风格：
+   * - 左侧：文件名显示（如果有）+ 未保存标记
+   * - 右侧：保存按钮 + 编辑模式切换
    */
   const renderToolbar = () => {
     // 判断是否可以保存
@@ -237,20 +267,37 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
       (fileState && fileState.fileType === 'text' && hasUnsavedChanges())
     );
 
+    // 文件名显示：已打开文件显示路径，新文件显示"未命名文件"
+    const fileName = fileState ? fileState.path.split('/').pop() || fileState.path : '未命名文件';
+
     return (
       <div className="te-toolbar">
-        {/* 保存按钮 */}
-        <button
-          className="te-toolbar-btn te-save-btn"
-          onClick={handleSave}
-          disabled={!canSave}
-          title="保存文件 (Ctrl+S)"
-        >
-          {isSaving ? '保存中...' : '保存'}
-        </button>
+        {/* 左侧：文件名区域 */}
+        <div className="te-toolbar-left">
+          <div className="te-filename">
+            <span className="te-filename-text">{fileName}</span>
+            {/* 未保存标记 */}
+            {hasUnsavedChanges() && (
+              <span className="te-unsaved-marker" title="未保存">●</span>
+            )}
+          </div>
+        </div>
 
-        {/* 编辑模式切换 */}
-        <EditorMode mode={editorMode} onChange={handleModeChange} />
+        {/* 右侧：操作按钮区域 */}
+        <div className="te-toolbar-right">
+          {/* 保存按钮 */}
+          <button
+            className="te-toolbar-btn te-save-btn"
+            onClick={handleSave}
+            disabled={!canSave}
+            title="保存文件 (Ctrl+S)"
+          >
+            {isSaving ? '保存中...' : '保存'}
+          </button>
+
+          {/* 编辑模式切换 */}
+          <EditorMode mode={editorMode} onChange={handleModeChange} />
+        </div>
       </div>
     );
   };
@@ -309,6 +356,7 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
             <TextEditorPane
               content={fileState.content}
               onChange={handleContentChange}
+              onCursorChange={setCursorPosition}
             />
           );
         } else if (fileState.fileType === 'binary') {
@@ -336,6 +384,7 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
       <TextEditorPane
         content={localContent}
         onChange={handleContentChange}
+        onCursorChange={setCursorPosition}
       />
     );
   };
@@ -343,13 +392,15 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
   /**
    * 渲染状态栏
    *
-   * 显示文件的行数、字符数、编码、保存状态等
+   * 显示文件的行数、字符数、编码、保存状态、光标位置等
    */
   const renderStatusBar = () => {
     return (
       <StatusBar
         fileState={fileState}
         hasUnsavedChanges={hasUnsavedChanges()}
+        cursorPosition={cursorPosition}
+        newFileCharCount={localContent.length}
       />
     );
   };
