@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, memo } from "react";
+import { useState, useEffect, useCallback, memo, useRef } from "react";
 import { NotificationCenter } from "./NotificationCenter";
 import { TopBar } from "./TopBar/TopBar";
 import { useGlobalShortcuts, createAppShortcuts } from "../hooks/useGlobalShortcuts";
@@ -7,6 +7,7 @@ import { ServerManagerProvider, useServerManager } from "../context/ServerManage
 import { WallpaperProvider, useWallpaper, getWallpaperStyle } from "../context/WallpaperContext";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useTheme } from "../hooks/useTheme";
+import { useContrastColor } from "../hooks/useContrastColor";
 import { WindowShell } from "../components/window-shell";
 import { WindowManagerProvider, useWindowManager, useWindowGlobalState, useWindowState } from "../window-system/WindowManagerContext";
 import { AppDefinition } from "../window-system/types";
@@ -138,6 +139,18 @@ function DesktopContent() {
   const { activeServer } = useServerManager();
   const { wallpaper } = useWallpaper();
   const { manager } = useWindowManager();
+
+  // ✅ Dock ref - 用于对比色计算
+  const dockRef = useRef<HTMLDivElement>(null);
+
+  // ✅ 根据 dock 背景色自动选择高对比度文本颜色
+  // ✅ 使用主题的文本颜色 (--ovelis-text-primary)
+  const { textColor, actualColor } = useContrastColor(dockRef, {
+    interval: 500,
+    useThemeText: true,  // ✅ 使用主题文本颜色
+    lightColor: '#ffffff',  // 后备: 亮色背景使用白色文本
+    darkColor: '#000000',   // 后备: 暗色背景使用黑色文本
+  });
 
   // ✅ 从 registry 派生桌面/Dock 应用列表（单一数据源）
   const registeredApps = manager.getRegisteredApps();
@@ -302,7 +315,16 @@ function DesktopContent() {
 
         {/* Dock */}
         <div className="dock-container">
-          <div className="dock">
+          <div
+            ref={dockRef}
+            className="dock"
+            style={{
+              '--dock-text-color': actualColor,
+              '--dock-text-shadow': textColor === 'light'
+                ? '0 1px 2px rgba(0, 0, 0, 0.5)'
+                : '0 1px 1px rgba(255, 255, 255, 0.5)',
+            } as React.CSSProperties}
+          >
             {dockApps.map((app) => {
               const isOpen = manager.getByAppId(app.id).length > 0;
               return (

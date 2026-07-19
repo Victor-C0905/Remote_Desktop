@@ -75,6 +75,9 @@ export function applyThemeColors(
     // 设置毛玻璃颜色（跟随主题的 headerbarBg，透明度 80%）
     const headerbarRgb = hexToRgb(colors.headerbarBg);
     if (headerbarRgb) {
+      // ✅ 设置 RGB 分离值,供 dock 等组件使用
+      root.style.setProperty('--ovelis-headerbar-bg-rgb', `${headerbarRgb.r}, ${headerbarRgb.g}, ${headerbarRgb.b}`);
+      // ✅ 设置毛玻璃背景色 (rgba 格式)
       root.style.setProperty('--ovelis-frosted-bg', `rgba(${headerbarRgb.r}, ${headerbarRgb.g}, ${headerbarRgb.b}, 0.80)`);
     }
 
