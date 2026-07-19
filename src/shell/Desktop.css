@@ -81,10 +81,29 @@
   display: flex;
   gap: 4px;
   padding: 8px 12px;
-  background: rgba(0, 0, 0, 0.57);
-  backdrop-filter: blur(24px);
+  /* 多层背景: 底层半透明 + 上层渐变 */
+  background:
+    linear-gradient(
+      to bottom,
+      rgba(255, 255, 255, 0.08) 0%,
+      rgba(255, 255, 255, 0.04) 50%,
+      rgba(0, 0, 0, 0.02) 100%
+    ),
+    rgba(var(--ovelis-headerbar-bg-rgb), 0.15);
+  backdrop-filter: var(--ovelis-frosted-blur);
+  -webkit-backdrop-filter: var(--ovelis-frosted-blur);
   border-radius: var(--radius-lg);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  /* 双层边框: 外层深色 + 内层浅色 */
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow:
+    /* 主阴影 - 柔和的下落阴影 */
+    0 8px 32px rgba(0, 0, 0, 0.15),
+    /* 顶部高光 - 模拟光源 */
+    0 1px 0 rgba(255, 255, 255, 0.15) inset,
+    /* 底部阴影 - 增强立体感 */
+    0 -1px 0 rgba(0, 0, 0, 0.05) inset,
+    /* 外发光 - 微妙的边缘光 */
+    0 0 0 1px rgba(255, 255, 255, 0.05);
 }
 
 .dock-item {
@@ -95,15 +114,48 @@
   padding: 4px 8px;
   border-radius: var(--radius-sm);
   cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out);
+  position: relative;
+}
+
+.dock-item::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
   transition: background var(--duration-fast) var(--ease-out);
 }
 
+.dock-item:hover::before {
+  /* 悬停: 微妙的背景高亮 + 顶部高光 */
+  background: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.15) 0%,
+    rgba(255, 255, 255, 0.08) 100%
+  );
+}
+
 .dock-item:hover {
-  background: rgba(255, 255, 255, 0.15);
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.1),
+    0 1px 0 rgba(255, 255, 255, 0.1) inset;
+}
+
+.dock-item:active::before {
+  /* 激活: 更深的背景 + 轻微下压效果 */
+  background: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.2) 0%,
+    rgba(255, 255, 255, 0.12) 100%
+  );
 }
 
 .dock-item:active {
-  background: rgba(255, 255, 255, 0.25);
+  transform: translateY(1px);
+  box-shadow:
+    0 1px 4px rgba(0, 0, 0, 0.15),
+    0 1px 0 rgba(0, 0, 0, 0.05) inset;
 }
 
 .dock-item .icon {
@@ -113,11 +165,20 @@
   align-items: center;
   justify-content: center;
   font-size: 24px;
+  color: var(--dock-text-color, #ffffff);
+  /* 简化阴影: 只用一层柔和的描边效果 */
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  position: relative;
+  z-index: 1;
 }
 
 .dock-item .label {
   font-size: 8pt;
-  color: rgba(255, 255, 255, 0.8);
+  color: var(--dock-text-color, #ffffff);
+  /* 简化阴影: 轻微的描边,不影响可读性 */
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.4);
+  position: relative;
+  z-index: 1;
 }
 
 .dock-separator {
@@ -139,7 +200,21 @@
   width: 4px;
   height: 4px;
   border-radius: 50%;
-  background: #ffffff;
+  background: var(--dock-text-color, #ffffff);
+  /* 简化光晕: 只用一层柔和的发光 */
+  box-shadow: 0 0 3px var(--dock-text-color, #ffffff);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: translateX(-50%) scale(1);
+  }
+  50% {
+    opacity: 0.7;
+    transform: translateX(-50%) scale(0.9);
+  }
 }
 
 .dock-item.running .icon::after {
