@@ -198,10 +198,10 @@ export function DraggableWindow({
       let newX = resizeStartPos.current.posX;
       let newY = resizeStartPos.current.posY;
 
-      // 获取父容器尺寸，限制窗口在父容器内
-      const parentEl = windowRef.current?.parentElement;
-      const parentWidth = parentEl?.clientWidth || window.innerWidth;
-      const parentHeight = parentEl?.clientHeight || window.innerHeight;
+      // 获取父容器尺寸，限制窗口在父容器内（暂未使用）
+      // const parentEl = windowRef.current?.parentElement;
+      // const parentWidth = parentEl?.clientWidth || window.innerWidth;
+      // const parentHeight = parentEl?.clientHeight || window.innerHeight;
 
       // 根据调整方向计算新尺寸和位置
       // 右侧拖拽：无最大宽度限制，仅保留最小宽度

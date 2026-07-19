@@ -7,12 +7,14 @@ mod cert;
 mod collectors;
 mod config;
 mod event_bus;
+mod file_stream; // 文件流处理模块（上传下载）
 mod handler;
 mod protocol;
 mod server;
 mod subscription;
 mod pty;
 mod diff; // 差异计算模块（文件编辑器流量优化）
+mod transfer_session; // 传输会话管理模块
 
 #[derive(Parser, Debug)]
 #[command(name = "gnome-remote-agent")]
