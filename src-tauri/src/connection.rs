@@ -105,6 +105,67 @@ pub enum Payload {
     #[serde(rename = "mounts_resp")]
     MountsResponse { mounts: Vec<MountInfo> },
 
+    // ===== 文件传输协议扩展 =====
+
+    /// 文件传输请求（客户端 → Agent）
+    #[serde(rename = "file_transfer")]
+    FileTransferRequest {
+        direction: String,        // "upload" 或 "download"
+        path: String,             // 远程文件路径
+        file_size: Option<u64>,   // 文件大小（上传时提供）
+        chunk_size: Option<u32>,  // 建议的分块大小（可选）
+    },
+
+    /// 文件传输接受响应（Agent → 客户端）
+    #[serde(rename = "file_transfer_accept")]
+    FileTransferAccept {
+        session_id: String,       // 传输会话 ID
+        file_size: u64,           // 文件总大小
+        chunk_size: u32,          // 确认的分块大小
+        mtime: Option<u64>,       // 文件修改时间
+    },
+
+    /// 文件数据块（双向传输）
+    #[serde(rename = "file_chunk")]
+    FileChunk {
+        session_id: String,       // 传输会话 ID
+        seq: u32,                 // 块序号
+        data: Vec<u8>,            // 文件数据（原始字节）
+        size: u32,                // 实际数据大小
+    },
+
+    /// 文件传输完成（双向传输）
+    #[serde(rename = "file_transfer_complete")]
+    FileTransferComplete {
+        session_id: String,       // 传输会话 ID
+        success: bool,            // 是否成功
+        mtime: Option<u64>,       // 文件修改时间
+        error: Option<String>,    // 错误信息
+    },
+
+    /// 文件传输进度（Agent → 客户端）
+    #[serde(rename = "file_transfer_progress")]
+    FileTransferProgress {
+        session_id: String,       // 传输会话 ID
+        transferred: u64,         // 已传输字节数
+        total: u64,               // 总字节数
+        speed_bps: u64,           // 传输速度
+        eta_secs: u64,            // 预计剩余时间
+    },
+
+    /// 取消文件传输（客户端 → Agent）
+    #[serde(rename = "cancel_file_transfer")]
+    CancelFileTransfer {
+        session_id: String,       // 传输会话 ID
+    },
+
+    /// 取消文件传输响应（Agent → 客户端）
+    #[serde(rename = "cancel_file_transfer_resp")]
+    CancelFileTransferResponse {
+        session_id: String,       // 传输会话 ID
+        success: bool,            // 是否成功取消
+    },
+
     // 新增：路径建议
     #[serde(rename = "get_path_suggestions")]
     GetPathSuggestionsRequest { path: String },

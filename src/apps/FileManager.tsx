@@ -1,10 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { useServerManager } from "../context/ServerManager";
 import { PLACEHOLDER } from "../utils/offlineDefaults";
 import { useWindowManager } from "../window-system/WindowManagerContext";
 import { AppLayout } from "../components/app-shell";
+import { TransferNotification } from "../components/TransferNotification";
 import "./FileManager.css";
 
 export interface FileEntry {
@@ -906,6 +908,119 @@ export function FileManager({ preloadData }: FileManagerProps) {
     }
   }, [currentPath, activeServerId, loadDir]);
 
+  // ── 文件传输功能 ──────────────────────────────────────────
+
+  /**
+   * 处理文件上传
+   *
+   * 触发 Windows 文件选择对话框，支持多选
+   */
+  const handleUpload = useCallback(async () => {
+    // 检查是否有活跃服务器
+    if (!activeServerId) {
+      alert("请先连接到远程服务器");
+      return;
+    }
+
+    try {
+      // 打开 Windows 文件选择对话框
+      const selectedFiles = await open({
+        multiple: true,  // 支持多选
+        directory: false, // 选择文件（不是文件夹）
+        title: '选择要上传的文件',
+        filters: [
+          { name: '所有文件', extensions: ['*'] },
+          { name: '文本文件', extensions: ['txt', 'md', 'json', 'toml', 'yaml', 'yml'] },
+          { name: '脚本文件', extensions: ['sh', 'py', 'js', 'ts', 'rs'] },
+        ],
+      });
+
+      // 用户取消选择
+      if (!selectedFiles) return;
+
+      // selectedFiles 是字符串数组（多选）或字符串（单选）
+      const files = Array.isArray(selectedFiles) ? selectedFiles : [selectedFiles];
+
+      // 为每个文件创建传输任务
+      for (const localPath of files) {
+        const fileName = localPath.split(/[\\/]/).pop() || 'unknown';
+        const remotePath = currentPath === "/"
+          ? `/${fileName}`
+          : `${currentPath}/${fileName}`;
+
+        console.log(`[FileManager] 上传文件: ${localPath} -> ${remotePath}`);
+
+        // 调用 Tauri 后端开始上传
+        await invoke("transfer_file", {
+          serverId: activeServerId,
+          direction: "upload",
+          remotePath,
+          localPath,
+        });
+      }
+
+      // 关闭右键菜单
+      setContextMenu(null);
+    } catch (err) {
+      console.error('[FileManager] 上传失败:', err);
+      alert(`上传失败: ${err}`);
+    }
+  }, [activeServerId, currentPath]);
+
+  /**
+   * 处理文件下载
+   *
+   * 触发 Windows 保存对话框
+   */
+  const handleDownload = useCallback(async (entry: FileEntry) => {
+    // 检查是否有活跃服务器
+    if (!activeServerId) {
+      alert("请先连接到远程服务器");
+      return;
+    }
+
+    // 文件夹不能下载
+    if (entry.is_dir) {
+      alert("暂不支持文件夹下载");
+      return;
+    }
+
+    try {
+      // 构建远程文件路径
+      const remotePath = currentPath === "/"
+        ? `/${entry.name}`
+        : `${currentPath}/${entry.name}`;
+
+      console.log(`[FileManager] 下载文件: ${remotePath}`);
+
+      // 打开 Windows 保存对话框
+      const localPath = await save({
+        defaultPath: entry.name,  // 默认文件名
+        title: '保存文件',
+        filters: [
+          { name: '所有文件', extensions: ['*'] },
+        ],
+      });
+
+      // 用户取消选择
+      if (!localPath) return;
+
+      // 调用 Tauri 后端开始下载
+      await invoke("transfer_file", {
+        serverId: activeServerId,
+        direction: "download",
+        remotePath,
+        localPath,
+      });
+
+      // 关闭右键菜单
+      setContextMenu(null);
+    } catch (err) {
+      console.error('[FileManager] 下载失败:', err);
+      alert(`下载失败: ${err}`);
+    }
+  }, [activeServerId, currentPath]);
+
   // ── Context Menu ─────────────────────────────────────
   // 智能计算右键菜单位置，紧贴鼠标右下角，避免超出屏幕边界
   const calculateMenuPosition = useCallback((mouseX: number, mouseY: number) => {
@@ -1347,9 +1462,15 @@ export function FileManager({ preloadData }: FileManagerProps) {
               }}>
                 <span className="fm-ctx-icon">📋</span> 复制路径
               </div>
-              <div className="fm-ctx-item" onClick={() => setContextMenu(null)}>
-                <span className="fm-ctx-icon">⬇️</span> 下载
-              </div>
+
+              {/* 下载功能（仅文件） */}
+              {!contextMenu.entry!.is_dir && (
+                <div className="fm-ctx-item" onClick={() => {
+                  handleDownload(contextMenu.entry!);
+                }}>
+                  <span className="fm-ctx-icon">⬇️</span> 下载
+                </div>
+              )}
 
               <div className="fm-ctx-separator" />
               <div className="fm-ctx-item" onClick={() => { showProperties(contextMenu.entry!); setContextMenu(null); }}>
@@ -1370,6 +1491,11 @@ export function FileManager({ preloadData }: FileManagerProps) {
               </div>
               <div className="fm-ctx-item" onClick={handleNewFile}>
                 <span className="fm-ctx-icon">📄</span> 新建文件
+              </div>
+
+              {/* 上传功能 */}
+              <div className="fm-ctx-item" onClick={handleUpload}>
+                <span className="fm-ctx-icon">⬆️</span> 上传文件
               </div>
             </>
           )}
@@ -1425,6 +1551,9 @@ export function FileManager({ preloadData }: FileManagerProps) {
         </div>,
         document.body
       )}
+
+      {/* 传输进度通知 */}
+      <TransferNotification />
     </div>
   );
 }

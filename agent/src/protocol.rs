@@ -2,6 +2,16 @@
 use serde::{Deserialize, Serialize};
 use crate::diff::FileDiff; // 导入差异类型
 
+/// 文件传输方向
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TransferDirection {
+    /// 上传：本地 → 远程
+    Upload,
+    /// 下载：远程 → 本地
+    Download,
+}
+
 /// 订阅类型枚举
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(tag = "type", content = "params")]
@@ -184,6 +194,67 @@ pub enum Payload {
 
     #[serde(rename = "mounts_resp")]
     MountsResponse { mounts: Vec<MountInfo> },
+
+    // ===== 文件传输协议扩展 =====
+
+    /// 文件传输请求（客户端 → Agent）
+    #[serde(rename = "file_transfer")]
+    FileTransferRequest {
+        direction: TransferDirection,  // 传输方向（强类型）
+        path: String,                  // 远程文件路径
+        file_size: Option<u64>,        // 文件大小（上传时提供）
+        chunk_size: Option<u32>,       // 建议的分块大小（可选，默认 64KB）
+    },
+
+    /// 文件传输接受响应（Agent → 客户端）
+    #[serde(rename = "file_transfer_accept")]
+    FileTransferAccept {
+        session_id: String,       // 传输会话 ID
+        file_size: u64,           // 文件总大小
+        chunk_size: u32,          // 确认的分块大小（字节）
+        mtime: Option<u64>,       // 文件修改时间（下载时提供）
+    },
+
+    /// 文件数据块（双向传输）
+    #[serde(rename = "file_chunk")]
+    FileChunk {
+        session_id: String,       // 传输会话 ID
+        seq: u32,                 // 块序号（从 1 开始）
+        data: Vec<u8>,            // 文件数据（原始字节，serde_json 会自动 base64 编码）
+        size: u32,                // 实际数据大小（字节）
+    },
+
+    /// 文件传输完成（双向传输）
+    #[serde(rename = "file_transfer_complete")]
+    FileTransferComplete {
+        session_id: String,       // 传输会话 ID
+        success: bool,            // 是否成功
+        mtime: Option<u64>,       // 文件修改时间（上传成功后返回）
+        error: Option<String>,    // 错误信息（失败时）
+    },
+
+    /// 文件传输进度（Agent → 客户端，主动推送）
+    #[serde(rename = "file_transfer_progress")]
+    FileTransferProgress {
+        session_id: String,       // 传输会话 ID
+        transferred: u64,         // 已传输字节数
+        total: u64,               // 总字节数
+        speed_bps: u64,           // 传输速度（字节/秒）
+        eta_secs: u64,            // 预计剩余时间（秒）
+    },
+
+    /// 取消文件传输（客户端 → Agent）
+    #[serde(rename = "cancel_file_transfer")]
+    CancelFileTransfer {
+        session_id: String,       // 传输会话 ID
+    },
+
+    /// 取消文件传输响应（Agent → 客户端）
+    #[serde(rename = "cancel_file_transfer_resp")]
+    CancelFileTransferResponse {
+        session_id: String,       // 传输会话 ID
+        success: bool,            // 是否成功取消
+    },
 
     // 新增：通用订阅
     #[serde(rename = "subscribe")]

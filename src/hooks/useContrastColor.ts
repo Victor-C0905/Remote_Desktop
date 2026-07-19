@@ -51,7 +51,7 @@ function getBestTextColor(bgColor: { r: number; g: number; b: number }): 'light'
  * @param options 配置选项
  */
 export function useContrastColor(
-  elementRef: RefObject<HTMLElement>,
+  elementRef: RefObject<HTMLElement | null>,
   options: {
     /** 采样间隔 (毫秒, 默认: 500) */
     interval?: number;
