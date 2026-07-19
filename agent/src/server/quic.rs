@@ -217,32 +217,14 @@ async fn handle_stream(
             // 创建 PTY 会话
             let session_id = pty_manager.spawn(&shell, *cols, *rows, working_directory.as_deref()).await?;
 
-            // 发送响应
-            let response = Envelope::new(
-                envelope.request_id,
-                Payload::TerminalSpawnResponse { session_id: session_id.clone() },
-            );
-            match response.encode() {
-                Ok(resp_bytes) => {
-                    if let Err(e) = write_message(&mut send, &resp_bytes).await {
-                        tracing::warn!("发送终端响应失败: {}", e);
-                        return Ok(());
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("编码终端响应失败: {}", e);
-                    return Ok(());
-                }
-            }
-
-            tracing::info!("终端会话创建成功: session_id={}", session_id);
-
-            // 进入终端双向数据隧道循环
+            // 修改：先进入终端双向数据隧道循环（数据接收任务会立即启动）
+            // 然后在 handle_terminal_stream 内部发送响应，确保接收任务已就绪
             handle_terminal_stream(
                 session_id.clone(),
                 send,
                 recv,
                 pty_manager,
+                envelope.request_id,  // 传递 request_id 用于发送响应
             ).await?;
 
             tracing::info!("终端 Stream 结束: session_id={}", session_id);
@@ -360,97 +342,27 @@ async fn write_message(send: &mut SendStream, data: &[u8]) -> Result<()> {
 #[cfg(unix)]
 async fn handle_terminal_stream(
     session_id: String,
-    mut send: SendStream,
-    mut recv: RecvStream,
+    send: SendStream,
+    recv: RecvStream,
     pty_manager: Arc<PtyManager>,
+    request_id: u32,  // 新增：用于发送响应
 ) -> Result<()> {
     tracing::info!("终端双向隧道启动: session_id={}", session_id);
 
-    // ── PTY 输出读取任务（带批量发送优化）────────
-    // 策略：累积数据直到达到 BATCH_SIZE 或超过 BATCH_INTERVAL_MS
-    const BATCH_SIZE: usize = 1024;        // 每批最大字节数
-    const BATCH_INTERVAL_MS: u64 = 30;     // 最大等待时间 (ms)
+    // 使用 Arc 包装 send，让两个任务都能访问
+    let send = Arc::new(tokio::sync::Mutex::new(send));
+    let send_clone = send.clone();
 
+    // ── 关键修改：先启动客户端输入读取任务，确保数据接收通道就绪 ────
+    // 这样可以避免客户端发送的早期输入数据丢失
     let session_id_clone = session_id.clone();
     let pty_manager_clone = pty_manager.clone();
-    let pty_read_task = tokio::spawn(async move {
-        let mut batch_buffer = Vec::with_capacity(BATCH_SIZE);
-        let mut last_send_time = std::time::Instant::now();
+    let (client_read_started_tx, client_read_started_rx) = tokio::sync::oneshot::channel();
 
-        loop {
-            // 从 PTY 读取输出
-            match pty_manager_clone.read(&session_id_clone).await {
-                Ok(data) if !data.is_empty() => {
-                    batch_buffer.extend_from_slice(&data);
-
-                    // 判断是否需要发送批次
-                    let should_flush = batch_buffer.len() >= BATCH_SIZE
-                        || last_send_time.elapsed().as_millis() >= BATCH_INTERVAL_MS as u128;
-
-                    if should_flush && !batch_buffer.is_empty() {
-                        // 发送批量数据
-                        let len = (batch_buffer.len() as u32).to_le_bytes();
-                        if let Err(e) = send.write_all(&len).await {
-                            tracing::warn!("发送终端数据长度失败: {}", e);
-                            break;
-                        }
-                        if let Err(e) = send.write_all(&batch_buffer).await {
-                            tracing::warn!("发送终端数据失败: {}", e);
-                            break;
-                        }
-                        tracing::debug!(
-                            "PTY 批量输出发送: batch_len={}, chunks=1",
-                            batch_buffer.len()
-                        );
-                        batch_buffer.clear();
-                        last_send_time = std::time::Instant::now();
-                    }
-                }
-                Ok(_) => {
-                    // 无数据时检查是否有积压数据需要刷新
-                    if !batch_buffer.is_empty()
-                        && last_send_time.elapsed().as_millis() >= BATCH_INTERVAL_MS as u128
-                    {
-                        let len = (batch_buffer.len() as u32).to_le_bytes();
-                        if let Err(e) = send.write_all(&len).await {
-                            tracing::warn!("发送终端数据长度失败(空闲刷新): {}", e);
-                            break;
-                        }
-                        if let Err(e) = send.write_all(&batch_buffer).await {
-                            tracing::warn!("发送终端数据失败(空闲刷新): {}", e);
-                            break;
-                        }
-                        tracing::debug!(
-                            "PTY 空闲刷新: batch_len={}",
-                            batch_buffer.len()
-                        );
-                        batch_buffer.clear();
-                        last_send_time = std::time::Instant::now();
-                    }
-                    // 无数据，短暂等待（降低轮询频率减少 CPU 占用）
-                    sleep(Duration::from_millis(10)).await;
-                }
-                Err(e) => {
-                    tracing::warn!("PTY 读取失败: {}", e);
-                    break;
-                }
-            }
-        }
-
-        // 发送剩余数据
-        if !batch_buffer.is_empty() {
-            let len = (batch_buffer.len() as u32).to_le_bytes();
-            let _ = send.write_all(&len).await;
-            let _ = send.write_all(&batch_buffer).await;
-        }
-
-        tracing::info!("PTY 读取任务结束: session_id={}", session_id_clone);
-    });
-
-    // 创建客户端输入读取任务
-    let session_id_clone = session_id.clone();
-    let pty_manager_clone = pty_manager.clone();
     let client_read_task = tokio::spawn(async move {
+        // 立即通知主任务：客户端读取任务已启动
+        let _ = client_read_started_tx.send(());
+
         loop {
             // 从客户端读取输入
             let mut len_buf = [0u8; 4];
@@ -488,6 +400,117 @@ async fn handle_terminal_stream(
             }
         }
         tracing::info!("客户端读取任务结束: session_id={}", session_id_clone);
+    });
+
+    // 等待客户端读取任务启动（确保接收通道就绪）
+    client_read_started_rx.await?;
+
+    // 发送响应给客户端（此时数据接收任务已经就绪）
+    let response = Envelope::new(
+        request_id,
+        Payload::TerminalSpawnResponse { session_id: session_id.clone() },
+    );
+    match response.encode() {
+        Ok(resp_bytes) => {
+            let mut send_guard = send.lock().await;
+            if let Err(e) = write_message(&mut send_guard, &resp_bytes).await {
+                tracing::warn!("发送终端响应失败: {}", e);
+                drop(send_guard);
+                client_read_task.abort();
+                return Ok(());
+            }
+        }
+        Err(e) => {
+            tracing::warn!("编码终端响应失败: {}", e);
+            client_read_task.abort();
+            return Ok(());
+        }
+    }
+
+    tracing::info!("终端会话创建成功，响应已发送: session_id={}", session_id);
+
+    // ── PTY 输出读取任务（带批量发送优化）────────
+    // 策略：累积数据直到达到 BATCH_SIZE 或超过 BATCH_INTERVAL_MS
+    const BATCH_SIZE: usize = 1024;        // 每批最大字节数
+    const BATCH_INTERVAL_MS: u64 = 30;     // 最大等待时间 (ms)
+
+    let session_id_clone = session_id.clone();
+    let pty_manager_clone = pty_manager.clone();
+    let pty_read_task = tokio::spawn(async move {
+        let mut batch_buffer = Vec::with_capacity(BATCH_SIZE);
+        let mut last_send_time = std::time::Instant::now();
+
+        loop {
+            // 从 PTY 读取输出
+            match pty_manager_clone.read(&session_id_clone).await {
+                Ok(data) if !data.is_empty() => {
+                    batch_buffer.extend_from_slice(&data);
+
+                    // 判断是否需要发送批次
+                    let should_flush = batch_buffer.len() >= BATCH_SIZE
+                        || last_send_time.elapsed().as_millis() >= BATCH_INTERVAL_MS as u128;
+
+                    if should_flush && !batch_buffer.is_empty() {
+                        // 发送批量数据
+                        let len = (batch_buffer.len() as u32).to_le_bytes();
+                        let mut send_guard = send_clone.lock().await;
+                        if let Err(e) = send_guard.write_all(&len).await {
+                            tracing::warn!("发送终端数据长度失败: {}", e);
+                            break;
+                        }
+                        if let Err(e) = send_guard.write_all(&batch_buffer).await {
+                            tracing::warn!("发送终端数据失败: {}", e);
+                            break;
+                        }
+                        tracing::debug!(
+                            "PTY 批量输出发送: batch_len={}, chunks=1",
+                            batch_buffer.len()
+                        );
+                        batch_buffer.clear();
+                        last_send_time = std::time::Instant::now();
+                    }
+                }
+                Ok(_) => {
+                    // 无数据时检查是否有积压数据需要刷新
+                    if !batch_buffer.is_empty()
+                        && last_send_time.elapsed().as_millis() >= BATCH_INTERVAL_MS as u128
+                    {
+                        let len = (batch_buffer.len() as u32).to_le_bytes();
+                        let mut send_guard = send_clone.lock().await;
+                        if let Err(e) = send_guard.write_all(&len).await {
+                            tracing::warn!("发送终端数据长度失败(空闲刷新): {}", e);
+                            break;
+                        }
+                        if let Err(e) = send_guard.write_all(&batch_buffer).await {
+                            tracing::warn!("发送终端数据失败(空闲刷新): {}", e);
+                            break;
+                        }
+                        tracing::debug!(
+                            "PTY 空闲刷新: batch_len={}",
+                            batch_buffer.len()
+                        );
+                        batch_buffer.clear();
+                        last_send_time = std::time::Instant::now();
+                    }
+                    // 无数据，短暂等待（降低轮询频率减少 CPU 占用）
+                    sleep(Duration::from_millis(10)).await;
+                }
+                Err(e) => {
+                    tracing::warn!("PTY 读取失败: {}", e);
+                    break;
+                }
+            }
+        }
+
+        // 发送剩余数据
+        if !batch_buffer.is_empty() {
+            let len = (batch_buffer.len() as u32).to_le_bytes();
+            let mut send_guard = send_clone.lock().await;
+            let _ = send_guard.write_all(&len).await;
+            let _ = send_guard.write_all(&batch_buffer).await;
+        }
+
+        tracing::info!("PTY 读取任务结束: session_id={}", session_id_clone);
     });
 
     // 等待任一任务结束
