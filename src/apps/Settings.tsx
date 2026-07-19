@@ -312,11 +312,16 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
               <div className="st-current-connection">
                 <div className="st-conn-row">
                   <span className="st-conn-label text-label">主机</span>
-                  <span className="st-conn-value st-conn-value-host">{activeServer?.host || "未连接"}</span>
+                  <span className="st-conn-value st-conn-value-host">
+                    {activeServer?.host || <span className="st-conn-placeholder">未连接</span>}
+                  </span>
                 </div>
                 <div className="st-conn-row">
                   <span className="st-conn-label text-label">端口</span>
-                  <span className="st-conn-value st-conn-value-port">{activeServer?.port || "—"} (QUIC)</span>
+                  <span className="st-conn-value st-conn-value-port">
+                    {activeServer?.port || <span className="st-conn-placeholder">—</span>}
+                    <span className="st-conn-protocol">(QUIC)</span>
+                  </span>
                 </div>
                 <div className="st-conn-row">
                   <span className="st-conn-label text-label">状态</span>
@@ -327,7 +332,8 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                     />
                     {activeServer?.status === "connected" ? "已连接" : 
                      activeServer?.status === "connecting" ? "连接中..." :
-                     activeServer?.status === "error" ? "错误" : "未连接"}
+                     activeServer?.status === "error" ? "错误" : 
+                     <span className="st-conn-placeholder">未连接</span>}
                   </span>
                 </div>
                 {activeServer?.status === "connected" && (
@@ -366,7 +372,7 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
               <div className="st-server-list">
                 {servers.length === 0 ? (
                   <div className="st-server-empty">
-                    <span>暂无保存的服务器</span>
+                    <span className="text-body">暂无保存的服务器</span>
                     <span className="st-server-empty-hint text-caption">点击下方按钮添加</span>
                   </div>
                 ) : (

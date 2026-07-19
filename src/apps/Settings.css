@@ -226,21 +226,41 @@
 
 /* ── Connection Values (根据内容类型设置最小宽度) ── */
 .st-conn-value {
-  font-size: var(--font-body);
-  color: var(--ovelis-text-primary);
   display: flex;
   align-items: center;
   gap: 6px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  text-align: right; /* ✅ 新增：右对齐 */
-  justify-content: flex-end; /* ✅ 新增：内容靠右 */
+  text-align: right; /* ✅ 右对齐 */
+  justify-content: flex-end; /* ✅ 内容靠右 */
+  /* 使用 text-caption 的字体样式 */
+  font-size: var(--font-small);
+  font-weight: 400;
+  color: var(--ovelis-text-secondary);
+  line-height: 1.3;
+}
+
+/* 协议提示文本样式 */
+.st-conn-protocol {
+  font-size: var(--font-small);
+  color: var(--ovelis-text-secondary);
+  opacity: 0.6;
+  white-space: nowrap;
+}
+
+/* 占位符文本样式 - 未连接时显示的提示文本 */
+.st-conn-placeholder {
+  font-size: var(--font-small);  /* ✅ 修复: 使用与 st-conn-value 相同的字体大小 */
+  color: var(--ovelis-text-secondary);
+  opacity: 0.7;
+  font-style: italic;
+  white-space: nowrap;  /* ✅ 添加: 防止文本换行 */
 }
 
 /* 主机名：较长最小宽度 */
 .st-conn-value-host {
-  min-width: 150px; /* ✅ 新增：主机名最小宽度 */
+  min-width: 150px; /* ✅ 主机名最小宽度 */
 }
 
 /* 端口：中等最小宽度 */
@@ -794,17 +814,20 @@
 }
 
 .st-server-empty {
+  grid-column: 1 / -1; /* ✅ 占据整行 */
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   padding: 24px;
-  color: var(--ovelis-text-disabled);
-  gap: 4px;
+  color: var(--ovelis-text-secondary);
+  gap: 8px;
+  text-align: center;
 }
 
 .st-server-empty-hint {
   font-size: var(--font-small);
+  color: var(--ovelis-text-disabled);
 }
 
 /* ── Connection Error ───────────────────────────────── */
