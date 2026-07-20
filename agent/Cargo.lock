@@ -553,6 +553,7 @@ dependencies = [
  "chrono",
  "clap",
  "futures-util",
+ "lazy_static",
  "libc",
  "nix",
  "notify",

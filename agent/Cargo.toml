@@ -35,6 +35,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # 工具
 bytes = "1"
 uuid = { version = "1", features = ["v4"] }
+lazy_static = "1.4"
 anyhow = "1"
 thiserror = "1"
 clap = { version = "4", features = ["derive"] }
