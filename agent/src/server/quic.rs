@@ -14,7 +14,7 @@ use crate::config::AgentConfig;
 use crate::pty::PtyManager;
 use crate::subscription::SubscriptionManager;
 use crate::event_bus::EventBus;
-use crate::protocol::{Envelope, Payload};
+use crate::protocol::{Envelope, Payload, TransferDirection};
 
 // 全局 Stream ID 计数器
 static STREAM_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -295,9 +295,68 @@ async fn handle_stream(
             }
         }
 
+        // 文件传输请求
+        Payload::FileTransferRequest { direction, path, file_size, chunk_size } => {
+            tracing::info!("文件传输请求: direction={:?}, path={}", direction, path);
+
+            // 调用 handler 中的处理函数
+            match crate::handler::handle_file_transfer_request(envelope.request_id, direction, path, *file_size, *chunk_size, cfg).await {
+                Ok(response) => {
+                    // 发送 FileTransferAccept 响应
+                    match response.encode() {
+                        Ok(resp_bytes) => {
+                            if let Err(e) = write_message(&mut send, &resp_bytes).await {
+                                tracing::warn!("发送响应失败: {}", e);
+                                return Ok(());
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("编码响应失败: {}", e);
+                            return Ok(());
+                        }
+                    }
+
+                    // 如果是下载，启动异步发送任务
+                    if *direction == TransferDirection::Download {
+                        // 获取 session_id
+                        if let Payload::FileTransferAccept { session_id, file_size, chunk_size, .. } = response.payload {
+                            handle_file_download_stream(
+                                session_id,
+                                send,
+                                path.to_string(),
+                                file_size,
+                                chunk_size,
+                            ).await?;
+                        }
+                    } else {
+                        // 上传：等待客户端发送 FileChunk
+                        // 注意：上传需要从 response 中获取 session_id
+                        if let Payload::FileTransferAccept { session_id, file_size, .. } = response.payload {
+                            handle_file_upload_stream(
+                                recv,
+                                session_id,
+                                path.to_string(),
+                                file_size,
+                            ).await?;
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("文件传输请求失败: {}", e);
+                    let response = Envelope::new(
+                        envelope.request_id,
+                        Payload::Error { code: -1, message: e },
+                    );
+                    if let Ok(resp_bytes) = response.encode() {
+                        write_message(&mut send, &resp_bytes).await?;
+                    }
+                }
+            }
+        }
+
         _ => {
-            // 其他请求使用同步 handler
-            let response = crate::handler::handle_envelope(&envelope, cfg);
+            // 其他请求使用异步 handler
+            let response = crate::handler::handle_envelope(&envelope, cfg).await;
             match response.encode() {
                 Ok(resp_bytes) => {
                     if let Err(e) = write_message(&mut send, &resp_bytes).await {
@@ -343,7 +402,7 @@ async fn write_message(send: &mut SendStream, data: &[u8]) -> Result<()> {
 async fn handle_terminal_stream(
     session_id: String,
     send: SendStream,
-    recv: RecvStream,
+    mut recv: RecvStream,
     pty_manager: Arc<PtyManager>,
     request_id: u32,  // 新增：用于发送响应
 ) -> Result<()> {
@@ -530,3 +589,112 @@ async fn handle_terminal_stream(
 }
 // ✅ 优化: 删除Windows平台的stub实现,因为终端功能仅支持Unix
 // #[cfg(not(unix))] 的 handle_terminal_stream 已删除
+
+/// 处理文件下载流（发送文件数据）
+async fn handle_file_download_stream(
+    session_id: String,
+    mut send: SendStream,
+    path: String,
+    file_size: u64,
+    _chunk_size: u32,
+) -> Result<()> {
+    tracing::info!("开始发送文件: session_id={}, path={}, size={}", session_id, path, file_size);
+
+    // 从全局会话管理器获取 session 并取出 reader
+    let mut sessions = crate::handler::TRANSFER_SESSIONS.lock().await;
+    let session = sessions.get_mut(&session_id)
+        .ok_or_else(|| anyhow::anyhow!("会话不存在: {}", session_id))?;
+
+    let mut reader = session.reader.take()
+        .ok_or_else(|| anyhow::anyhow!("文件读取器不存在"))?;
+
+    drop(sessions);  // 释放锁
+
+    let mut seq = 1u32;
+
+    // 读取并发送文件块
+    while let Some(chunk) = reader.read_next_chunk().map_err(|e| anyhow::anyhow!("{}", e))? {
+        // 发送 FileChunk
+        let chunk_payload = Payload::FileChunk {
+            session_id: session_id.clone(),
+            seq,
+            data: chunk.clone(),
+            size: chunk.len() as u32,
+        };
+
+        let chunk_envelope = Envelope::new(0, chunk_payload);  // request_id 不重要
+        let chunk_bytes = chunk_envelope.encode().map_err(|e| anyhow::anyhow!("{}", e))?;
+
+        if let Err(e) = write_message(&mut send, &chunk_bytes).await {
+            tracing::error!("发送文件块失败: {}", e);
+            break;
+        }
+
+        seq += 1;
+        tracing::debug!("已发送块: seq={}, size={}", seq-1, chunk.len());
+    }
+
+    // 发送 FileTransferComplete
+    let complete_payload = Payload::FileTransferComplete {
+        session_id: session_id.clone(),
+        success: true,
+        mtime: None,
+        error: None,
+    };
+
+    let complete_envelope = Envelope::new(0, complete_payload);
+    let complete_bytes = complete_envelope.encode().map_err(|e| anyhow::anyhow!("{}", e))?;
+    write_message(&mut send, &complete_bytes).await?;
+
+    tracing::info!("文件发送完成: session_id={}", session_id);
+    Ok(())
+}
+
+/// 处理文件上传流（接收文件数据）
+async fn handle_file_upload_stream(
+    mut recv: RecvStream,
+    session_id: String,
+    path: String,
+    file_size: u64,
+) -> Result<()> {
+    tracing::info!("开始接收文件: session_id={}, path={}, size={}", session_id, path, file_size);
+
+    // 从全局会话管理器获取 session 并取出 writer
+    let mut sessions = crate::handler::TRANSFER_SESSIONS.lock().await;
+    let session = sessions.get_mut(&session_id)
+        .ok_or_else(|| anyhow::anyhow!("会话不存在: {}", session_id))?;
+
+    let mut writer = session.writer.take()
+        .ok_or_else(|| anyhow::anyhow!("文件写入器不存在"))?;
+
+    drop(sessions);  // 释放锁
+
+    // 接收文件块
+    loop {
+        let data = read_message(&mut recv).await?;
+        if data.is_none() {
+            break;
+        }
+
+        let data = data.unwrap();
+        let envelope = Envelope::decode(&data).map_err(|e| anyhow::anyhow!("{}", e))?;
+
+        match envelope.payload {
+            Payload::FileChunk { data, .. } => {
+                writer.write_chunk(&data).map_err(|e| anyhow::anyhow!("{}", e))?;
+            }
+            Payload::FileTransferComplete { success, error, .. } => {
+                if success {
+                    writer.finish().map_err(|e| anyhow::anyhow!("{}", e))?;
+                    tracing::info!("文件接收完成: session_id={}", session_id);
+                } else {
+                    tracing::error!("文件传输失败: {:?}", error);
+                }
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
+}

@@ -5,6 +5,7 @@ use std::time::UNIX_EPOCH;
 
 mod connection;
 mod terminal;
+mod transfer;
 
 /* ── Shared Types ────────────────────────────────────────── */
 
@@ -396,6 +397,7 @@ pub fn run() {
             terminal::remote_terminal_write,
             terminal::remote_terminal_close,
             terminal::remote_terminal_resize,
+            transfer::transfer_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,10 +1,22 @@
 use crate::config::AgentConfig;
-use crate::protocol::{Envelope, FileEntry, MetricsSnapshot, MountInfo, Payload};
+use crate::protocol::{Envelope, FileEntry, MetricsSnapshot, MountInfo, Payload, TransferDirection};
 use crate::diff::{apply_diff, FileDiff}; // 只导入 apply_diff
+use crate::transfer_session::{TransferSession, TransferStatus};
+use crate::file_stream::{FileStreamReader, FileStreamWriter};
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use std::collections::HashMap;
+use uuid::Uuid;
 
-pub fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig) -> Envelope {
+// 全局传输会话管理器
+lazy_static::lazy_static! {
+    pub static ref TRANSFER_SESSIONS: Arc<Mutex<HashMap<String, TransferSession>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+}
+
+pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig) -> Envelope {
     match &envelope.payload {
         Payload::Ping { timestamp } => {
             let server_time = SystemTime::now()
@@ -274,6 +286,56 @@ pub fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig) -> Envelope {
             // 注意：取消订阅处理需要 SubscriptionManager，需要在 QUIC Server 中异步处理
             // 这里暂时返回错误响应
             error_response(envelope.request_id, "取消订阅功能需要在 QUIC Server 中异步处理")
+        }
+
+        // ===== 文件传输处理 =====
+
+        // 文件传输请求
+        Payload::FileTransferRequest { direction, path, file_size, chunk_size } => {
+            tracing::info!("文件传输请求: direction={:?}, path={}", direction, path);
+            match handle_file_transfer_request(envelope.request_id, direction, path, *file_size, *chunk_size, cfg).await {
+                Ok(response) => response,
+                Err(e) => {
+                    tracing::error!("文件传输请求失败: {}", e);
+                    error_response(envelope.request_id, &e)
+                }
+            }
+        }
+
+        // 文件数据块
+        Payload::FileChunk { session_id, seq, data, size } => {
+            tracing::debug!("文件数据块: session_id={}, seq={}, size={}", session_id, seq, size);
+            match handle_file_chunk(envelope.request_id, session_id, *seq, data, cfg).await {
+                Ok(response) => response,
+                Err(e) => {
+                    tracing::error!("处理数据块失败: {}", e);
+                    error_response(envelope.request_id, &e)
+                }
+            }
+        }
+
+        // 文件传输完成
+        Payload::FileTransferComplete { session_id, success, mtime: _, error: _ } => {
+            tracing::info!("文件传输完成: session_id={}, success={}", session_id, success);
+            match handle_file_transfer_complete(envelope.request_id, session_id, *success, cfg).await {
+                Ok(response) => response,
+                Err(e) => {
+                    tracing::error!("处理传输完成失败: {}", e);
+                    error_response(envelope.request_id, &e)
+                }
+            }
+        }
+
+        // 取消文件传输
+        Payload::CancelFileTransfer { session_id } => {
+            tracing::info!("取消文件传输: session_id={}", session_id);
+            match handle_cancel_file_transfer(envelope.request_id, session_id, cfg).await {
+                Ok(response) => response,
+                Err(e) => {
+                    tracing::error!("取消传输失败: {}", e);
+                    error_response(envelope.request_id, &e)
+                }
+            }
         }
 
         other => {
@@ -742,4 +804,340 @@ fn error_response(request_id: u32, message: &str) -> Envelope {
             message: message.into(),
         },
     )
+}
+
+// ===== 文件传输处理函数 =====
+
+/// 处理文件传输请求
+///
+/// # 参数
+/// - `request_id`: 请求 ID
+/// - `direction`: 传输方向（Upload 或 Download）
+/// - `path`: 文件路径
+/// - `file_size`: 文件大小（上传时提供）
+/// - `chunk_size`: 分块大小（可选）
+/// - `cfg`: Agent 配置
+///
+/// # 返回
+/// - `Ok(Envelope)`: FileTransferAccept 响应
+/// - `Err(String)`: 错误信息
+pub async fn handle_file_transfer_request(
+    request_id: u32,
+    direction: &TransferDirection,
+    path: &str,
+    file_size: Option<u64>,
+    chunk_size: Option<u32>,
+    cfg: &AgentConfig,
+) -> Result<Envelope, String> {
+    // 1. 检查路径权限（allowed_paths）
+    if !cfg.security.allowed_paths.is_empty() {
+        let allowed = cfg
+            .security
+            .allowed_paths
+            .iter()
+            .any(|prefix| path.starts_with(prefix));
+        if !allowed {
+            return Err(format!("访问被拒绝: 不在允许的路径列表中 ({})", path));
+        }
+    }
+
+    // 2. 生成 session_id
+    let session_id = format!("transfer-{}", Uuid::new_v4());
+
+    // 3. 根据方向处理
+    match direction {
+        TransferDirection::Upload => {
+            // 上传：客户端上传文件到 Agent
+            // 需要 file_size 参数
+            let file_size = file_size.unwrap_or(0);
+            if file_size == 0 {
+                return Err("上传文件必须提供 file_size 参数".to_string());
+            }
+
+            // 检查文件大小限制
+            let max_size = cfg.limits.max_file_transfer_mb * 1024 * 1024;
+            if file_size > max_size {
+                return Err(format!(
+                    "文件大小超过限制: {}MB > {}MB",
+                    file_size / (1024 * 1024),
+                    cfg.limits.max_file_transfer_mb
+                ));
+            }
+
+            // 创建文件写入器
+            let writer = FileStreamWriter::new(path, file_size)?;
+
+            // 默认分块大小 64KB
+            let chunk_size = chunk_size.unwrap_or(64 * 1024);
+
+            // 创建传输会话
+            let mut session = TransferSession::new(
+                session_id.clone(),
+                direction.clone(),
+                path.to_string(),
+                file_size,
+                chunk_size,
+            );
+            session.writer = Some(writer);
+
+            // 保存到全局会话管理器
+            let mut sessions = TRANSFER_SESSIONS.lock().await;
+            sessions.insert(session_id.clone(), session);
+
+            tracing::info!("创建上传会话: session_id={}, path={}, size={}", session_id, path, file_size);
+
+            // 返回接受响应
+            Ok(Envelope::new(
+                request_id,
+                Payload::FileTransferAccept {
+                    session_id,
+                    file_size,
+                    chunk_size,
+                    mtime: None,
+                },
+            ))
+        }
+
+        TransferDirection::Download => {
+            // 下载：Agent 发送文件到客户端
+            // 获取文件元数据
+            let metadata = fs::metadata(path)
+                .map_err(|e| {
+                    let error_msg = e.to_string();
+                    if error_msg.contains("Permission denied") {
+                        format!("权限不足: 无法访问文件 '{}' (需要相应的 Linux 用户权限)", path)
+                    } else if error_msg.contains("No such file") {
+                        format!("文件 '{}' 不存在", path)
+                    } else {
+                        format!("无法访问文件 '{}': {}", path, e)
+                    }
+                })?;
+
+            if metadata.is_dir() {
+                return Err("路径是目录，不能下载".to_string());
+            }
+
+            let file_size = metadata.len();
+            let mtime = metadata
+                .modified()
+                .map_err(|e| format!("无法获取修改时间: {}", e))?
+                .duration_since(UNIX_EPOCH)
+                .map_err(|e| format!("时间转换失败: {}", e))?
+                .as_secs();
+
+            // 创建文件读取器
+            let reader = FileStreamReader::new(path, file_size)?;
+
+            // 默认分块大小 64KB
+            let chunk_size = chunk_size.unwrap_or(64 * 1024);
+
+            // 创建传输会话
+            let mut session = TransferSession::new(
+                session_id.clone(),
+                direction.clone(),
+                path.to_string(),
+                file_size,
+                chunk_size,
+            );
+            session.reader = Some(reader);
+
+            // 保存到全局会话管理器
+            let mut sessions = TRANSFER_SESSIONS.lock().await;
+            sessions.insert(session_id.clone(), session);
+
+            tracing::info!("创建下载会话: session_id={}, path={}, size={}", session_id, path, file_size);
+
+            // 返回接受响应
+            Ok(Envelope::new(
+                request_id,
+                Payload::FileTransferAccept {
+                    session_id,
+                    file_size,
+                    chunk_size,
+                    mtime: Some(mtime),
+                },
+            ))
+        }
+    }
+}
+
+/// 处理文件数据块（上传时使用）
+///
+/// # 参数
+/// - `request_id`: 请求 ID
+/// - `session_id`: 传输会话 ID
+/// - `seq`: 块序号（从 1 开始）
+/// - `data`: 数据块
+/// - `cfg`: Agent 配置
+///
+/// # 返回
+/// - `Ok(Envelope)`: FileChunk 响应（确认）
+/// - `Err(String)`: 错误信息
+async fn handle_file_chunk(
+    request_id: u32,
+    session_id: &str,
+    seq: u32,
+    data: &[u8],
+    _cfg: &AgentConfig,
+) -> Result<Envelope, String> {
+    // 1. 从 TRANSFER_SESSIONS 获取会话
+    let mut sessions = TRANSFER_SESSIONS.lock().await;
+
+    let session = sessions
+        .get_mut(session_id)
+        .ok_or_else(|| format!("传输会话不存在: {}", session_id))?;
+
+    // 2. 检查会话状态是否为 Active
+    if session.status != TransferStatus::Active {
+        return Err(format!("传输会话状态异常: {:?}", session.status));
+    }
+
+    // 3. 写入数据块到文件
+    if let Some(writer) = session.writer.as_mut() {
+        writer.write_chunk(data)?;
+
+        // 4. 更新 transferred 字段
+        session.transferred = writer.transferred();
+
+        tracing::debug!(
+            "写入数据块: session_id={}, seq={}, size={}, transferred={}/{}",
+            session_id,
+            seq,
+            data.len(),
+            session.transferred,
+            session.file_size
+        );
+    } else {
+        return Err("传输会话没有 writer".to_string());
+    }
+
+    // 5. 返回 FileChunk 响应（确认）
+    Ok(Envelope::new(
+        request_id,
+        Payload::FileChunk {
+            session_id: session_id.to_string(),
+            seq,
+            data: vec![], // 确认响应不需要数据
+            size: data.len() as u32,
+        },
+    ))
+}
+
+/// 处理文件传输完成
+///
+/// # 参数
+/// - `request_id`: 请求 ID
+/// - `session_id`: 传输会话 ID
+/// - `success`: 是否成功
+/// - `cfg`: Agent 配置
+///
+/// # 返回
+/// - `Ok(Envelope)`: FileTransferComplete 响应
+/// - `Err(String)`: 错误信息
+async fn handle_file_transfer_complete(
+    request_id: u32,
+    session_id: &str,
+    success: bool,
+    _cfg: &AgentConfig,
+) -> Result<Envelope, String> {
+    // 1. 从 TRANSFER_SESSIONS 获取会话
+    let mut sessions = TRANSFER_SESSIONS.lock().await;
+
+    let session = sessions
+        .remove(session_id)
+        .ok_or_else(|| format!("传输会话不存在: {}", session_id))?;
+
+    // 2. 根据成功状态处理
+    let mtime = if success {
+        // 成功：finish() 写入，获取 mtime
+        match session.direction {
+            TransferDirection::Upload => {
+                // 上传完成：写入文件
+                let mut writer = session.writer.ok_or("传输会话没有 writer")?;
+                writer.finish()?;
+
+                // 获取文件修改时间
+                let metadata = fs::metadata(&session.path)
+                    .map_err(|e| format!("无法获取文件信息: {}", e))?;
+                let mtime = metadata
+                    .modified()
+                    .map_err(|e| format!("无法获取修改时间: {}", e))?
+                    .duration_since(UNIX_EPOCH)
+                    .map_err(|e| format!("时间转换失败: {}", e))?
+                    .as_secs();
+
+                tracing::info!("文件上传完成: path={}, size={}", session.path, session.file_size);
+                Some(mtime)
+            }
+            TransferDirection::Download => {
+                // 下载完成：不需要特殊处理
+                tracing::info!("文件下载完成: path={}", session.path);
+                None
+            }
+        }
+    } else {
+        // 失败：abort() 清理临时文件
+        match session.direction {
+            TransferDirection::Upload => {
+                if let Some(mut writer) = session.writer {
+                    writer.abort();
+                    tracing::info!("文件上传取消: path={}", session.path);
+                }
+            }
+            TransferDirection::Download => {
+                // 下载取消：不需要清理
+                tracing::info!("文件下载取消: path={}", session.path);
+            }
+        }
+        None
+    };
+
+    // 3. 返回 FileTransferComplete
+    Ok(Envelope::new(
+        request_id,
+        Payload::FileTransferComplete {
+            session_id: session_id.to_string(),
+            success,
+            mtime,
+            error: None,
+        },
+    ))
+}
+
+/// 处理取消文件传输
+///
+/// # 参数
+/// - `request_id`: 请求 ID
+/// - `session_id`: 传输会话 ID
+/// - `cfg`: Agent 配置
+///
+/// # 返回
+/// - `Ok(Envelope)`: CancelFileTransferResponse 响应
+/// - `Err(String)`: 错误信息
+async fn handle_cancel_file_transfer(
+    request_id: u32,
+    session_id: &str,
+    _cfg: &AgentConfig,
+) -> Result<Envelope, String> {
+    // 1. 从 TRANSFER_SESSIONS 移除会话
+    let mut sessions = TRANSFER_SESSIONS.lock().await;
+
+    let session = sessions
+        .remove(session_id)
+        .ok_or_else(|| format!("传输会话不存在: {}", session_id))?;
+
+    // 2. 如果有 writer，调用 abort()
+    if let Some(mut writer) = session.writer {
+        writer.abort();
+        tracing::info!("取消上传，已删除临时文件: path={}", session.path);
+    }
+
+    // 3. 返回 CancelFileTransferResponse
+    Ok(Envelope::new(
+        request_id,
+        Payload::CancelFileTransferResponse {
+            session_id: session_id.to_string(),
+            success: true,
+        },
+    ))
 }

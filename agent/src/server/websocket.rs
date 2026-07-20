@@ -60,7 +60,7 @@ async fn handle_ws_socket(mut ws_stream: tokio_tungstenite::WebSocketStream<toki
             Ok(WsMessage::Binary(data)) => {
                 match crate::protocol::Envelope::decode(&data) {
                     Ok(envelope) => {
-                        let response = crate::handler::handle_envelope(&envelope, &cfg);
+                        let response = crate::handler::handle_envelope(&envelope, &cfg).await;
                         if let Ok(resp_bytes) = response.encode() {
                             if ws_stream.send(WsMessage::Binary(resp_bytes)).await.is_err() {
                                 break;
