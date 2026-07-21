@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { open, save, ask } from "@tauri-apps/plugin-dialog";
 import { useServerManager } from "../context/ServerManager";
 import { PLACEHOLDER } from "../utils/offlineDefaults";
 import { useWindowManager } from "../window-system/WindowManagerContext";
@@ -914,6 +914,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
    * 处理文件上传
    *
    * 触发 Windows 文件选择对话框，支持多选
+   * 上传前检查文件是否存在，如果存在则询问用户是否覆盖
    */
   const handleUpload = useCallback(async () => {
     // 检查是否有活跃服务器
@@ -947,6 +948,45 @@ export function FileManager({ preloadData }: FileManagerProps) {
         const remotePath = currentPath === "/"
           ? `/${fileName}`
           : `${currentPath}/${fileName}`;
+
+        console.log(`[FileManager] 检查文件是否存在: ${remotePath}`);
+
+        // 检查远程文件是否存在
+        try {
+          const fileInfo = await invoke<{ exists: boolean; size?: number; mtime?: number } | null>(
+            "check_file_exists",
+            { serverId: activeServerId, path: remotePath }
+          );
+
+          // 如果文件存在，询问用户是否覆盖
+          if (fileInfo && fileInfo.exists) {
+            const size = fileInfo.size ? formatSize(fileInfo.size) : '未知';
+            const mtime = fileInfo.mtime
+              ? new Date(fileInfo.mtime * 1000).toLocaleString('zh-CN')
+              : '未知';
+
+            const confirmed = await ask(
+              `文件已存在：${fileName}\n\n大小：${size}\n修改时间：${mtime}\n\n是否覆盖？`,
+              {
+                title: '确认覆盖',
+                kind: 'warning',
+                okLabel: '是',
+                cancelLabel: '否',
+              }
+            );
+
+            // 用户选择"否"，跳过该文件
+            if (!confirmed) {
+              console.log(`[FileManager] 用户取消覆盖: ${fileName}`);
+              continue;
+            }
+
+            console.log(`[FileManager] 用户确认覆盖: ${fileName}`);
+          }
+        } catch (checkErr) {
+          // 检查失败，记录错误但继续上传（向后兼容）
+          console.warn(`[FileManager] 检查文件存在失败，直接上传:`, checkErr);
+        }
 
         console.log(`[FileManager] 上传文件: ${localPath} -> ${remotePath}`);
 
@@ -1094,6 +1134,33 @@ export function FileManager({ preloadData }: FileManagerProps) {
       setSelectedIdx(prev => Math.max((prev ?? 0) - 1, 0));
     }
   }, [entries, selectedIdx, goUp, handleOpen, editingEntry, isEditingPath]);
+
+  // ── 监听上传完成事件 ─────────────────────────────────
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+
+    const setupListener = async () => {
+      const { listen } = await import('@tauri-apps/api/event');
+      unlisten = await listen<{ dir_path: string; file_name: string }>('upload-completed', (event) => {
+        console.log('[FileManager] 收到上传完成事件:', event.payload);
+        const { dir_path } = event.payload;
+
+        // 如果上传的目录是当前目录，刷新
+        if (dir_path === currentPath) {
+          console.log('[FileManager] 上传目录匹配，刷新当前目录');
+          loadDir(currentPath);
+        }
+      });
+    };
+
+    setupListener();
+
+    return () => {
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, [currentPath, loadDir]);
 
   // ── Stats ────────────────────────────────────────────
   const dirCount = entries.filter(e => e.is_dir).length;

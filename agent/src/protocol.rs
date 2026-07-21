@@ -200,7 +200,7 @@ pub enum Payload {
     /// 文件传输请求（客户端 → Agent）
     #[serde(rename = "file_transfer")]
     FileTransferRequest {
-        direction: TransferDirection,  // 传输方向（强类型）
+        direction: String,           // 传输方向（"upload" 或 "download"）
         path: String,                  // 远程文件路径
         file_size: Option<u64>,        // 文件大小（上传时提供）
         chunk_size: Option<u32>,       // 建议的分块大小（可选，默认 64KB）
@@ -241,6 +241,20 @@ pub enum Payload {
         total: u64,               // 总字节数
         speed_bps: u64,           // 传输速度（字节/秒）
         eta_secs: u64,            // 预计剩余时间（秒）
+    },
+
+    /// 检查文件是否存在（客户端 → Agent）
+    #[serde(rename = "file_exists")]
+    FileExistsRequest {
+        path: String,             // 文件路径
+    },
+
+    /// 文件存在响应（Agent → 客户端）
+    #[serde(rename = "file_exists_resp")]
+    FileExistsResponse {
+        exists: bool,             // 是否存在
+        size: Option<u64>,        // 文件大小（存在时）
+        mtime: Option<u64>,       // 修改时间（存在时）
     },
 
     /// 取消文件传输（客户端 → Agent）

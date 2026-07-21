@@ -317,7 +317,7 @@ async fn handle_stream(
                     }
 
                     // 如果是下载，启动异步发送任务
-                    if *direction == TransferDirection::Download {
+                    if direction == "download" {
                         // 获取 session_id
                         if let Payload::FileTransferAccept { session_id, file_size, chunk_size, .. } = response.payload {
                             handle_file_download_stream(

@@ -398,6 +398,8 @@ pub fn run() {
             terminal::remote_terminal_close,
             terminal::remote_terminal_resize,
             transfer::transfer_file,
+            transfer::cancel_transfer,
+            transfer::check_file_exists,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

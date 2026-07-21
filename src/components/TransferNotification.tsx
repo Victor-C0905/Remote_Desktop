@@ -1,43 +1,7 @@
-import { useState, useEffect } from 'react';
-import { listen } from '@tauri-apps/api/event';
+import { useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import { useTransferProgress } from '../hooks/useTransferProgress';
 import './TransferNotification.css';
-
-/**
- * 传输任务状态
- */
-interface TransferTask {
-  id: string;
-  session_id: string;
-  direction: 'upload' | 'download';
-  file_name: string;
-  remote_path: string;
-  local_path?: string;
-  file_size: number;
-  transferred: number;
-  speed: number;      // 字节/秒
-  eta: number;        // 秒
-  status: 'pending' | 'active' | 'paused' | 'completed' | 'error';
-  error?: string;
-  progress: number;   // 0-100
-}
-
-/**
- * 传输进度事件 payload
- */
-interface TransferProgressPayload {
-  task_id: string;
-  session_id: string;
-  direction: string;
-  file_name: string;
-  remote_path: string;
-  file_size: number;
-  transferred: number;
-  progress: number;
-  speed_bps: number;
-  eta_secs: number;
-  status: string;
-  error?: string;
-}
 
 /**
  * 传输进度通知组件
@@ -48,59 +12,9 @@ interface TransferProgressPayload {
  * - 暂停/继续/取消控制
  */
 export function TransferNotification() {
-  const [transfers, setTransfers] = useState<TransferTask[]>([]);
+  // 使用统一的进度管理 Hook
+  const { transfers, clearCompleted } = useTransferProgress();
   const [isMinimized, setIsMinimized] = useState(false);
-
-  // 监听传输进度事件
-  useEffect(() => {
-    const unlisten = listen<TransferProgressPayload>('transfer-progress', (event) => {
-      const payload = event.payload;
-
-      setTransfers(prev => {
-        const existing = prev.find(t => t.id === payload.task_id);
-
-        if (existing) {
-          // 更新现有任务
-          return prev.map(t =>
-            t.id === payload.task_id
-              ? {
-                  ...t,
-                  transferred: payload.transferred,
-                  progress: payload.progress,
-                  speed: payload.speed_bps,
-                  eta: payload.eta_secs,
-                  status: payload.status as TransferTask['status'],
-                  error: payload.error,
-                }
-              : t
-          );
-        } else {
-          // 添加新任务
-          return [
-            ...prev,
-            {
-              id: payload.task_id,
-              session_id: payload.session_id,
-              direction: payload.direction as 'upload' | 'download',
-              file_name: payload.file_name,
-              remote_path: payload.remote_path,
-              file_size: payload.file_size,
-              transferred: payload.transferred,
-              progress: payload.progress,
-              speed: payload.speed_bps,
-              eta: payload.eta_secs,
-              status: payload.status as TransferTask['status'],
-              error: payload.error,
-            },
-          ];
-        }
-      });
-    });
-
-    return () => {
-      unlisten.then(fn => fn());
-    };
-  }, []);
 
   // 格式化文件大小
   const formatSize = (bytes: number): string => {
@@ -124,6 +38,27 @@ export function TransferNotification() {
     return `${Math.floor(secs / 3600)}小时${Math.floor((secs % 3600) / 60)}分`;
   };
 
+  // 关闭已完成的任务
+  const handleClose = () => {
+    clearCompleted();
+  };
+
+  // 取消传输（暂时不实现，等待后端支持）
+  const handleCancel = async (taskId: string) => {
+    try {
+      await invoke('cancel_transfer', { taskId });
+      // 注意：不直接操作 transfers，等待后端发送更新事件
+    } catch (error) {
+      console.error('[TransferNotification] 取消传输失败:', error);
+    }
+  };
+
+  // 移除单个任务（暂时不实现）
+  const handleRemove = (taskId: string) => {
+    // 注意：暂时不实现，等待 useTransferProgress Hook 提供删除方法
+    console.log('[TransferNotification] 移除任务:', taskId);
+  };
+
   // 如果没有传输任务，不显示
   if (transfers.length === 0) return null;
 
@@ -139,7 +74,7 @@ export function TransferNotification() {
         >
           {isMinimized ? '▲' : '▼'}
         </button>
-        <button className="tn-close-btn">✕</button>
+        <button className="tn-close-btn" onClick={handleClose}>✕</button>
       </div>
 
       {/* 传输列表 */}
@@ -150,7 +85,7 @@ export function TransferNotification() {
               {/* 文件图标 + 文件名 */}
               <div className="tn-task-header">
                 <span className="tn-icon">
-                  {task.direction === 'upload' ? '⬆️' : '⬇️'}
+                  {task.direction === 'upload' ? '⬆️ 上传' : '⬇️ 下载'}
                 </span>
                 <span className="tn-filename">{task.file_name}</span>
                 <span className="tn-status">
@@ -186,16 +121,13 @@ export function TransferNotification() {
               {/* 控制按钮 */}
               <div className="tn-actions">
                 {task.status === 'active' && (
-                  <button onClick={() => {/* TODO: 暂停 */}}>暂停</button>
+                  <button onClick={() => handleCancel(task.id)}>取消</button>
                 )}
                 {task.status === 'paused' && (
-                  <button onClick={() => {/* TODO: 继续 */}}>继续</button>
+                  <button onClick={() => handleCancel(task.id)}>取消</button>
                 )}
-                {(task.status === 'active' || task.status === 'paused') && (
-                  <button onClick={() => {/* TODO: 取消 */}}>取消</button>
-                )}
-                {task.status === 'error' && (
-                  <button onClick={() => {/* TODO: 重试 */}}>重试</button>
+                {(task.status === 'completed' || task.status === 'error') && (
+                  <button onClick={() => handleRemove(task.id)}>关闭</button>
                 )}
               </div>
             </div>

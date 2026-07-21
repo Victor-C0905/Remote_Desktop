@@ -40,7 +40,7 @@ pub struct TransferTask {
     pub speed_bps: u64,
     /// 预估剩余时间（秒）
     pub eta_secs: u64,
-    /// 任务状态: "pending" | "transferring" | "completed" | "failed" | "cancelled"
+    /// 任务状态: "pending" | "active" | "paused" | "completed" | "error" | "cancelled"
     pub status: String,
     /// 错误信息（如果失败）
     pub error: Option<String>,
@@ -164,6 +164,8 @@ impl TransferManager {
             .get_mut(task_id)
             .ok_or_else(|| format!("任务不存在: {}", task_id))?;
 
+        let old_progress = task.progress;  // ← 在更新前保存旧进度
+
         task.transferred = transferred;
         task.speed_bps = speed_bps;
 
@@ -182,13 +184,27 @@ impl TransferManager {
         if task.progress >= 100 {
             task.status = "completed".to_string();
         } else if task.status == "pending" {
-            task.status = "transferring".to_string();
+            task.status = "active".to_string();
         }
 
+        // 节流：只在进度变化超过 1% 时发送事件
+        // 小文件（< 1MB）不节流，保证进度可见
+        let should_emit = if task.file_size < 1_000_000 {
+            true  // 小文件：每次都发送
+        } else {
+            // 大文件：进度变化超过 1% 才发送
+            // 注意：使用 old_progress（更新前的值）
+            task.progress > old_progress || transferred == task.file_size
+        };
+
         // 发送进度事件
-        let task_clone = task.clone();
-        drop(tasks); // 释放锁
-        self.emit_progress(&task_clone)?;
+        if should_emit {
+            let task_clone = task.clone();
+            drop(tasks);  // 释放锁
+            self.emit_progress(&task_clone)?;
+        } else {
+            drop(tasks);  // 释放锁
+        }
 
         Ok(())
     }
@@ -201,7 +217,7 @@ impl TransferManager {
             .get_mut(task_id)
             .ok_or_else(|| format!("任务不存在: {}", task_id))?;
 
-        task.status = "failed".to_string();
+        task.status = "error".to_string();  // ← 改为 "error"，与前端一致
         task.error = Some(error);
 
         // 发送进度事件
@@ -227,6 +243,28 @@ impl TransferManager {
         let task_clone = task.clone();
         drop(tasks);
         self.emit_progress(&task_clone)?;
+
+        // 如果是上传，发送 upload-completed 事件（包含目录路径）
+        if task_clone.direction == "upload" {
+            // 提取目录路径
+            let dir_path = if let Some(pos) = task_clone.remote_path.rfind('/') {
+                if pos == 0 {
+                    "/".to_string()
+                } else {
+                    task_clone.remote_path[..pos].to_string()
+                }
+            } else {
+                "/".to_string()
+            };
+
+            self.app_handle
+                .emit("upload-completed", serde_json::json!({
+                    "remote_path": task_clone.remote_path,
+                    "dir_path": dir_path,
+                    "file_name": task_clone.file_name,
+                }))
+                .map_err(|e| format!("发送 upload-completed 事件失败: {}", e))?;
+        }
 
         Ok(())
     }
@@ -692,4 +730,53 @@ async fn perform_transfer(
         }
         _ => Err("意外的响应类型".to_string()),
     }
+}
+
+/// 取消文件传输
+#[command]
+pub async fn cancel_transfer(task_id: String) -> Result<(), String> {
+    eprintln!("[Transfer] 取消传输请求: task_id={}", task_id);
+
+    // TODO: 实现取消传输的逻辑
+    // 1. 从全局状态中获取 TransferManager
+    // 2. 调用 manager.cancel_task(&task_id)
+    // 3. 发送 CancelFileTransfer 到 Agent
+
+    // 临时实现：直接返回成功
+    Ok(())
+}
+
+/// 检查文件是否存在
+#[command]
+pub async fn check_file_exists(
+    server_id: String,
+    path: String,
+    app_handle: tauri::AppHandle,
+) -> Result<FileExistsInfo, String> {
+    use crate::connection::{remote_send, Payload};
+
+    eprintln!("[Transfer] 检查文件是否存在: server_id={}, path={}", server_id, path);
+
+    // 发送请求
+    let request = Payload::FileExistsRequest { path };
+    let response = remote_send(server_id, request, app_handle).await?;
+
+    // 处理响应
+    match response.payload {
+        Payload::FileExistsResponse { exists, size, mtime } => {
+            Ok(FileExistsInfo { exists, size, mtime })
+        }
+        Payload::Error { message, .. } => {
+            Err(format!("Agent 返回错误: {}", message))
+        }
+        _ => Err("意外的响应类型".to_string()),
+    }
+}
+
+/// 文件存在信息
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FileExistsInfo {
+    pub exists: bool,
+    pub size: Option<u64>,
+    pub mtime: Option<u64>,
 }

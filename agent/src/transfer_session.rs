@@ -3,7 +3,6 @@
 //! 提供文件传输会话的状态跟踪，支持上传和下载操作。
 
 use crate::file_stream::{FileStreamReader, FileStreamWriter};
-use crate::protocol::TransferDirection;
 use std::time::SystemTime;
 
 /// 传输会话状态
@@ -33,8 +32,8 @@ pub enum TransferStatus {
 pub struct TransferSession {
     /// 会话 ID
     pub session_id: String,
-    /// 传输方向
-    pub direction: TransferDirection,
+    /// 传输方向（"upload" 或 "download"）
+    pub direction: String,
     /// 文件路径
     pub path: String,
     /// 文件总大小
@@ -63,7 +62,7 @@ impl TransferSession {
     /// 创建新的传输会话
     pub fn new(
         session_id: String,
-        direction: TransferDirection,
+        direction: String,
         path: String,
         file_size: u64,
         chunk_size: u32,
