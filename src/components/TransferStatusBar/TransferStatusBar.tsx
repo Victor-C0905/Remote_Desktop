@@ -50,11 +50,41 @@ function CollapseIcon({ className }: { className?: string }) {
 }
 
 export function TransferStatusBar() {
-  const { transfers } = useTransferProgress();
+  const { transfers, removeTask } = useTransferProgress();
   const [isExpanded, setIsExpanded] = useState(false);
 
-  // 无传输任务时不显示
-  if (transfers.length === 0) return null;
+  // 展开/收起切换函数
+  const toggleExpand = () => {
+    setIsExpanded(!isExpanded);
+  };
+
+  // 如果没有传输任务，显示占位状态
+  if (transfers.length === 0) {
+    return (
+      <div
+        className="transfer-status-bar"
+        onClick={toggleExpand}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            toggleExpand();
+          }
+        }}
+        aria-label="传输任务"
+        aria-expanded={isExpanded}
+      >
+        <div className="tsb-left">
+          <DownloadIcon className="tsb-icon" />
+          <span className="tsb-count">无传输任务</span>
+        </div>
+        <button className="tsb-expand-btn">
+          <ExpandIcon />
+        </button>
+      </div>
+    );
+  }
 
   // 按权重计算总进度：活动任务 70%，已完成任务 30%
   const calculateWeightedProgress = () => {
@@ -134,6 +164,7 @@ export function TransferStatusBar() {
       {isExpanded && (
         <TransferPanel
           transfers={transfers}
+          onRemoveTask={removeTask}
           onClose={() => setIsExpanded(false)}
         />
       )}

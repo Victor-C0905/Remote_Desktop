@@ -44,6 +44,10 @@ pub struct TransferTask {
     pub status: String,
     /// 错误信息（如果失败）
     pub error: Option<String>,
+
+    // ── 原始参数（用于重试和断点续传） ──
+    /// 服务器 ID（原始参数）
+    pub server_id: String,
 }
 
 /// 传输管理器
@@ -103,7 +107,7 @@ impl TransferManager {
         // 创建任务
         let task = TransferTask {
             id: task_id.clone(),
-            session_id: server_id,
+            session_id: server_id.clone(),
             direction,
             file_name,
             remote_path,
@@ -115,6 +119,7 @@ impl TransferManager {
             eta_secs: 0,
             status: "pending".to_string(),
             error: None,
+            server_id: server_id,  // 保存原始参数
         };
 
         // 保存任务
@@ -265,6 +270,141 @@ impl TransferManager {
                 }))
                 .map_err(|e| format!("发送 upload-completed 事件失败: {}", e))?;
         }
+
+        Ok(())
+    }
+
+    /// 暂停任务
+    pub async fn pause_task(&self, task_id: &str) -> Result<(), String> {
+        let mut tasks = self.tasks.lock().await;
+        let task = tasks
+            .get_mut(task_id)
+            .ok_or_else(|| format!("任务不存在: {}", task_id))?;
+
+        // 只能暂停活动任务
+        if task.status != "active" {
+            return Err(format!("只能暂停活动中的任务，当前状态: {}", task.status));
+        }
+
+        task.status = "paused".to_string();
+
+        // 发送进度事件
+        let task_clone = task.clone();
+        drop(tasks);
+        self.emit_progress(&task_clone)?;
+
+        tracing::info!("暂停传输任务: id={}", task_id);
+        Ok(())
+    }
+
+    /// 继续任务
+    pub async fn resume_task(&self, task_id: &str) -> Result<(), String> {
+        let mut tasks = self.tasks.lock().await;
+        let task = tasks
+            .get_mut(task_id)
+            .ok_or_else(|| format!("任务不存在: {}", task_id))?;
+
+        // 只能继续暂停的任务
+        if task.status != "paused" {
+            return Err(format!("只能继续暂停的任务，当前状态: {}", task.status));
+        }
+
+        task.status = "active".to_string();
+
+        // 发送进度事件
+        let task_clone = task.clone();
+        drop(tasks);
+        self.emit_progress(&task_clone)?;
+
+        tracing::info!("继续传输任务: id={}", task_id);
+        Ok(())
+    }
+
+    /// 重试任务（支持断点续传）
+    ///
+    /// # 参数
+    /// - `task_id`: 任务 ID
+    /// - `app_handle`: Tauri 应用句柄
+    ///
+    /// # 断点续传逻辑
+    /// - 如果任务之前已有传输进度（transferred > 0），尝试断点续传
+    /// - 否则从头开始传输
+    pub async fn retry_task(&self, task_id: &str, app_handle: &AppHandle) -> Result<(), String> {
+        let mut tasks = self.tasks.lock().await;
+        let task = tasks
+            .get_mut(task_id)
+            .ok_or_else(|| format!("任务不存在: {}", task_id))?;
+
+        // 只能重试失败的任务
+        if task.status != "error" {
+            return Err(format!("只能重试失败的任务，当前状态: {}", task.status));
+        }
+
+        // 保存断点续传位置
+        let resume_from = if task.transferred > 0 {
+            Some(task.transferred)
+        } else {
+            None
+        };
+
+        // 重置任务状态
+        task.status = "pending".to_string();
+        task.error = None;
+
+        // 保存任务副本用于重新启动传输
+        let task_clone = task.clone();
+
+        // 发送进度事件
+        self.emit_progress(&task_clone)?;
+
+        tracing::info!(
+            "重试传输任务: id={}, resume_from={:?}",
+            task_id,
+            resume_from
+        );
+
+        // 释放锁
+        drop(tasks);
+
+        // 重新启动传输（需要在后台任务中执行）
+        let task_id_clone = task_clone.id.clone();
+        let manager_clone = Arc::new(TransferManager::new(app_handle.clone()));
+        let _ = manager_clone;  // 避免未使用警告
+
+        // 获取连接管理器和 QUIC Connection
+        let connection_manager = app_handle.state::<ConnectionManager>();
+
+        let quic_conn = {
+            let conns = connection_manager.connections.lock().unwrap();
+            let active_conn = conns.get(&task_clone.server_id)
+                .ok_or_else(|| format!("服务器未连接: {}", task_clone.server_id))?;
+            active_conn.quic_conn.clone()
+        };
+
+        let conn = quic_conn.ok_or_else(|| {
+            "未找到 QUIC Connection，可能只使用了 WebSocket 连接".to_string()
+        })?;
+
+        let request_id = connection_manager.next_request_id();
+
+        // 在后台任务中重新执行传输
+        tokio::spawn(async move {
+            let result = perform_transfer(
+                &conn,
+                request_id,
+                task_clone.direction.clone(),
+                task_clone.remote_path.clone(),
+                task_clone.local_path.clone(),
+                &manager_clone,
+                &task_clone.id,
+                resume_from,  // 传递断点续传位置
+            ).await;
+
+            if let Err(e) = result {
+                tracing::error!("重试传输失败: task_id={}, error={}", task_id_clone, e);
+                let _ = manager_clone.mark_failed(&task_id_clone, e).await;
+            }
+        });
 
         Ok(())
     }
@@ -430,8 +570,9 @@ pub async fn transfer_file(
         return Err(format!("无效的传输方向: {}", direction));
     }
 
-    // 创建传输管理器（使用 Arc 共享）
-    let manager = Arc::new(TransferManager::new(app_handle.clone()));
+    // 获取全局 TransferManager
+    let manager = app_handle.state::<Arc<TransferManager>>();
+    let manager = Arc::clone(&manager);  // 克隆 Arc，共享状态
 
     // 创建任务
     eprintln!("[Transfer] 开始创建传输任务: server_id={}, direction={}", server_id, direction);
@@ -471,7 +612,7 @@ pub async fn transfer_file(
 
     // 在后台任务中执行传输
     let task_id_clone = task_id.clone();
-    let manager_clone = Arc::clone(&manager);  // 克隆 Arc，共享状态
+    let manager_clone = Arc::clone(&manager);
     let _server_id_clone = server_id.clone();
     let direction_clone = direction.clone();
     let remote_path_clone = remote_path.clone();
@@ -491,6 +632,7 @@ pub async fn transfer_file(
             local_path_clone,
             &manager_clone,
             &task_id_clone,
+            None,  // 新任务从头开始传输
         ).await;
 
         eprintln!("[Transfer] 后台任务执行完成: task_id={}, result={:?}", task_id_clone, result);
@@ -504,7 +646,17 @@ pub async fn transfer_file(
     Ok(task_id)
 }
 
-/// 执行文件传输的内部函数
+/// 执行文件传输的内部函数（支持断点续传）
+///
+/// # 参数
+/// - `conn`: QUIC 连接
+/// - `request_id`: 请求 ID
+/// - `direction`: 传输方向（"upload" 或 "download"）
+/// - `remote_path`: 远程文件路径
+/// - `local_path`: 本地文件路径
+/// - `manager`: 传输管理器
+/// - `task_id`: 任务 ID
+/// - `resume_from`: 断点续传位置（可选，从哪个字节开始）
 async fn perform_transfer(
     conn: &quinn::Connection,
     request_id: u32,
@@ -513,9 +665,10 @@ async fn perform_transfer(
     local_path: String,
     manager: &TransferManager,
     task_id: &str,
+    resume_from: Option<u64>,
 ) -> Result<(), String> {
-    eprintln!("[Transfer] 开始执行文件传输: task_id={}, direction={}, remote={}, local={}",
-        task_id, direction, remote_path, local_path);
+    eprintln!("[Transfer] 开始执行文件传输: task_id={}, direction={}, remote={}, local={}, resume_from={:?}",
+        task_id, direction, remote_path, local_path, resume_from);
 
     // 1. 发送 FileTransferRequest
     let file_size = if direction == "upload" {
@@ -531,6 +684,7 @@ async fn perform_transfer(
         path: remote_path.clone(),
         file_size,
         chunk_size: Some(64 * 1024),
+        resume_from,  // 添加断点续传参数
     };
 
     // 创建 Stream
@@ -585,6 +739,57 @@ async fn perform_transfer(
                 let start_time = std::time::Instant::now();
 
                 while let Some(chunk) = reader.read_next_chunk()? {
+                    // 检查任务状态：是否被暂停或取消
+                    {
+                        let tasks = manager.tasks.lock().await;
+                        if let Some(task) = tasks.get(task_id) {
+                            if task.status.as_str() == "paused" {
+                                // 暂停传输，等待恢复
+                                drop(tasks);
+                                tracing::info!("传输已暂停: task_id={}", task_id);
+
+                                // 等待恢复信号（轮询检查）
+                                loop {
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                                    let tasks = manager.tasks.lock().await;
+                                    if let Some(task) = tasks.get(task_id) {
+                                        match task.status.as_str() {
+                                            "active" => {
+                                                // 已恢复，继续传输
+                                                drop(tasks);
+                                                tracing::info!("传输已恢复: task_id={}", task_id);
+                                                break;
+                                            }
+                                            "cancelled" => {
+                                                // 已取消，终止传输
+                                                drop(tasks);
+                                                tracing::info!("传输已取消: task_id={}", task_id);
+                                                return Err("传输已取消".to_string());
+                                            }
+                                            _ => {
+                                                // 继续等待（paused 状态）
+                                                drop(tasks);
+                                                continue;
+                                            }
+                                        }
+                                    } else {
+                                        // 任务已删除
+                                        return Err("任务已删除".to_string());
+                                    }
+                                }
+                            } else if task.status.as_str() == "cancelled" {
+                                // 已取消，终止传输
+                                drop(tasks);
+                                tracing::info!("传输已取消: task_id={}", task_id);
+                                return Err("传输已取消".to_string());
+                            }
+                        } else {
+                            // 任务已删除
+                            drop(tasks);
+                            return Err("任务已删除".to_string());
+                        }
+                    }
+
                     // 发送 FileChunk
                     let chunk_payload = Payload::FileChunk {
                         session_id: session_id.clone(),
@@ -653,6 +858,57 @@ async fn perform_transfer(
 
                 eprintln!("[Transfer] 进入接收循环：等待 FileChunk");
                 loop {
+                    // 检查任务状态：是否被暂停或取消
+                    {
+                        let tasks = manager.tasks.lock().await;
+                        if let Some(task) = tasks.get(task_id) {
+                            if task.status.as_str() == "paused" {
+                                // 暂停传输，等待恢复
+                                drop(tasks);
+                                tracing::info!("传输已暂停: task_id={}", task_id);
+
+                                // 等待恢复信号（轮询检查）
+                                loop {
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                                    let tasks = manager.tasks.lock().await;
+                                    if let Some(task) = tasks.get(task_id) {
+                                        match task.status.as_str() {
+                                            "active" => {
+                                                // 已恢复，继续传输
+                                                drop(tasks);
+                                                tracing::info!("传输已恢复: task_id={}", task_id);
+                                                break;
+                                            }
+                                            "cancelled" => {
+                                                // 已取消，终止传输
+                                                drop(tasks);
+                                                tracing::info!("传输已取消: task_id={}", task_id);
+                                                return Err("传输已取消".to_string());
+                                            }
+                                            _ => {
+                                                // 继续等待（paused 状态）
+                                                drop(tasks);
+                                                continue;
+                                            }
+                                        }
+                                    } else {
+                                        // 任务已删除
+                                        return Err("任务已删除".to_string());
+                                    }
+                                }
+                            } else if task.status.as_str() == "cancelled" {
+                                // 已取消，终止传输
+                                drop(tasks);
+                                tracing::info!("传输已取消: task_id={}", task_id);
+                                return Err("传输已取消".to_string());
+                            }
+                        } else {
+                            // 任务已删除
+                            drop(tasks);
+                            return Err("任务已删除".to_string());
+                        }
+                    }
+
                     // 读取消息长度
                     eprintln!("[Transfer] 等待读取消息长度");
                     let mut chunk_len_buf = [0u8; 4];
@@ -732,17 +988,59 @@ async fn perform_transfer(
     }
 }
 
+/// 暂停文件传输
+#[command]
+pub async fn pause_transfer(task_id: String, app_handle: AppHandle) -> Result<(), String> {
+    eprintln!("[Transfer] 暂停传输请求: task_id={}", task_id);
+
+    // 获取全局 TransferManager
+    let manager = app_handle.state::<Arc<TransferManager>>();
+
+    // 调用暂停方法
+    manager.pause_task(&task_id).await?;
+
+    Ok(())
+}
+
+/// 继续文件传输
+#[command]
+pub async fn resume_transfer(task_id: String, app_handle: AppHandle) -> Result<(), String> {
+    eprintln!("[Transfer] 继续传输请求: task_id={}", task_id);
+
+    // 获取全局 TransferManager
+    let manager = app_handle.state::<Arc<TransferManager>>();
+
+    // 调用继续方法
+    manager.resume_task(&task_id).await?;
+
+    Ok(())
+}
+
+/// 重试文件传输（支持断点续传）
+#[command]
+pub async fn retry_transfer(task_id: String, app_handle: AppHandle) -> Result<(), String> {
+    eprintln!("[Transfer] 重试传输请求: task_id={}", task_id);
+
+    // 获取全局 TransferManager
+    let manager = app_handle.state::<Arc<TransferManager>>();
+
+    // 调用重试方法（支持断点续传）
+    manager.retry_task(&task_id, &app_handle).await?;
+
+    Ok(())
+}
+
 /// 取消文件传输
 #[command]
-pub async fn cancel_transfer(task_id: String) -> Result<(), String> {
+pub async fn cancel_transfer(task_id: String, app_handle: AppHandle) -> Result<(), String> {
     eprintln!("[Transfer] 取消传输请求: task_id={}", task_id);
 
-    // TODO: 实现取消传输的逻辑
-    // 1. 从全局状态中获取 TransferManager
-    // 2. 调用 manager.cancel_task(&task_id)
-    // 3. 发送 CancelFileTransfer 到 Agent
+    // 获取全局 TransferManager
+    let manager = app_handle.state::<Arc<TransferManager>>();
 
-    // 临时实现：直接返回成功
+    // 调用取消方法
+    manager.cancel_task(&task_id).await?;
+
     Ok(())
 }
 

@@ -110,7 +110,8 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
   /**
    * 取消传输
    */
-  const handleCancel = async () => {
+  const handleCancel = async (e: React.MouseEvent) => {
+    e.stopPropagation();  // 阻止事件冒泡，避免触发父元素的点击事件
     try {
       await invoke('cancel_transfer', { taskId: task.id });
       console.log('[TaskCard] 已取消传输:', task.id);
@@ -122,7 +123,8 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
   /**
    * 暂停传输
    */
-  const handlePause = async () => {
+  const handlePause = async (e: React.MouseEvent) => {
+    e.stopPropagation();  // 阻止事件冒泡
     try {
       await invoke('pause_transfer', { taskId: task.id });
       console.log('[TaskCard] 已暂停传输:', task.id);
@@ -134,7 +136,8 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
   /**
    * 继续传输
    */
-  const handleResume = async () => {
+  const handleResume = async (e: React.MouseEvent) => {
+    e.stopPropagation();  // 阻止事件冒泡
     try {
       await invoke('resume_transfer', { taskId: task.id });
       console.log('[TaskCard] 已继续传输:', task.id);
@@ -146,7 +149,8 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
   /**
    * 重试传输
    */
-  const handleRetry = async () => {
+  const handleRetry = async (e: React.MouseEvent) => {
+    e.stopPropagation();  // 阻止事件冒泡
     try {
       await invoke('retry_transfer', { taskId: task.id });
       console.log('[TaskCard] 已重试传输:', task.id);
@@ -159,7 +163,8 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
    * 打开文件（本地路径）
    * TODO: 实现打开文件功能
    */
-  const handleOpenFile = async () => {
+  const handleOpenFile = async (e: React.MouseEvent) => {
+    e.stopPropagation();  // 阻止事件冒泡
     try {
       // 假设本地文件路径可以通过某种方式获取
       // await invoke('open_file', { path: localPath });
@@ -170,10 +175,33 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
   };
 
   /**
+   * 关闭任务（先取消传输，再移除）
+   */
+  const handleClose = async (e: React.MouseEvent) => {
+    e.stopPropagation();  // 阻止事件冒泡
+
+    try {
+      // 如果任务正在进行，先取消传输
+      if (task.status === 'active' || task.status === 'paused') {
+        await invoke('cancel_transfer', { taskId: task.id });
+        console.log('[TaskCard] 已取消传输:', task.id);
+      }
+
+      // 从列表中移除任务
+      onRemove(task.id);
+    } catch (error) {
+      console.error('[TaskCard] 关闭任务失败:', error);
+      // 即使取消失败，也尝试移除任务
+      onRemove(task.id);
+    }
+  };
+
+  /**
    * 获取状态对应的进度条样式类名
    */
   const getProgressClass = () => {
     if (task.status === 'error') return 'tc-progress-fill error';
+    if (task.status === 'cancelled') return 'tc-progress-fill cancelled';
     return 'tc-progress-fill';
   };
 
@@ -272,7 +300,7 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
             </button>
             <button
               className="tc-action-btn"
-              onClick={() => onRemove(task.id)}
+              onClick={handleClose}
               aria-label="关闭"
               title="关闭"
             >
@@ -294,7 +322,29 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
             </button>
             <button
               className="tc-action-btn"
-              onClick={() => onRemove(task.id)}
+              onClick={handleClose}
+              aria-label="关闭"
+              title="关闭"
+            >
+              <CloseIcon />
+            </button>
+          </>
+        )}
+
+        {/* 已取消任务：重新开始 + 关闭 */}
+        {task.status === 'cancelled' && (
+          <>
+            <button
+              className="tc-action-btn"
+              onClick={handleRetry}
+              aria-label="重新开始"
+              title="重新开始"
+            >
+              <RefreshIcon />
+            </button>
+            <button
+              className="tc-action-btn"
+              onClick={handleClose}
               aria-label="关闭"
               title="关闭"
             >

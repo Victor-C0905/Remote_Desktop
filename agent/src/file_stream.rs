@@ -3,7 +3,7 @@
 //! 提供文件上传和下载的分块流式传输能力，支持进度跟踪和断点续传。
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufReader, BufWriter, Read, Write};
+use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 /// 默认分块大小 (64KB)
@@ -43,6 +43,22 @@ impl FileStreamReader {
     /// - 权限不足
     /// - IO 错误
     pub fn new(path: &str, file_size: u64) -> Result<Self, String> {
+        Self::with_resume(path, file_size, 0)
+    }
+
+    /// 创建支持断点续传的文件读取器
+    ///
+    /// # 参数
+    /// - `path`: 文件路径
+    /// - `file_size`: 文件大小
+    /// - `resume_from`: 从哪个字节开始读取（0 = 从头开始）
+    ///
+    /// # 错误
+    /// - 文件不存在
+    /// - 权限不足
+    /// - IO 错误
+    /// - `resume_from` 超出文件大小
+    pub fn with_resume(path: &str, file_size: u64, resume_from: u64) -> Result<Self, String> {
         let path = Path::new(path);
 
         // 检查文件是否存在
@@ -56,7 +72,7 @@ impl FileStreamReader {
         }
 
         // 打开文件
-        let file = File::open(path).map_err(|e| {
+        let mut file = File::open(path).map_err(|e| {
             match e.kind() {
                 io::ErrorKind::PermissionDenied => {
                     format!("权限不足，无法读取文件: {}", path.display())
@@ -65,13 +81,32 @@ impl FileStreamReader {
             }
         })?;
 
+        // 如果需要断点续传，跳转到指定位置
+        if resume_from > 0 {
+            if resume_from > file_size {
+                return Err(format!(
+                    "断点续传位置超出文件大小: {} > {}",
+                    resume_from, file_size
+                ));
+            }
+
+            file.seek(SeekFrom::Start(resume_from))
+                .map_err(|e| format!("跳转到断点位置失败: {}", e))?;
+
+            tracing::info!(
+                "断点续传: 从 {} 字节开始读取 (总大小: {})",
+                resume_from,
+                file_size
+            );
+        }
+
         // 创建带缓冲的读取器
         let file = BufReader::new(file);
 
         Ok(Self {
             file,
             file_size,
-            transferred: 0,
+            transferred: resume_from,
             chunk_size: DEFAULT_CHUNK_SIZE,
         })
     }
@@ -190,6 +225,26 @@ impl FileStreamWriter {
     /// - 磁盘空间不足
     /// - IO 错误
     pub fn new(path: &str, file_size: u64) -> Result<Self, String> {
+        Self::with_resume(path, file_size, 0)
+    }
+
+    /// 创建支持断点续传的文件写入器
+    ///
+    /// # 参数
+    /// - `path`: 最终文件路径
+    /// - `file_size`: 文件大小
+    /// - `resume_from`: 从哪个字节开始写入（0 = 从头开始）
+    ///
+    /// # 断点续传逻辑
+    /// - 如果 `resume_from` > 0，尝试打开已存在的临时文件并跳转到指定位置
+    /// - 如果临时文件不存在或大小不匹配，创建新文件并忽略 `resume_from`
+    /// - 记录是否成功续传，用于降级处理
+    ///
+    /// # 错误
+    /// - 权限不足
+    /// - 磁盘空间不足
+    /// - IO 错误
+    pub fn with_resume(path: &str, file_size: u64, resume_from: u64) -> Result<Self, String> {
         let final_path = Path::new(path);
 
         // 创建临时文件路径
@@ -203,29 +258,131 @@ impl FileStreamWriter {
             }
         }
 
-        // 打开临时文件（创建、截断、写入模式）
-        let file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&temp_path)
-            .map_err(|e| match e.kind() {
-                io::ErrorKind::PermissionDenied => {
-                    format!("权限不足，无法创建临时文件: {}", temp_path)
-                }
-                io::ErrorKind::StorageFull => {
-                    "磁盘空间不足".to_string()
-                }
-                _ => format!("无法创建临时文件 {}: {}", temp_path, e),
-            })?;
+        // 尝试断点续传
+        let (file, actual_resume_from, is_resuming) = if resume_from > 0 {
+            // 检查临时文件是否存在
+            if Path::new(&temp_path).exists() {
+                // 尝试打开现有临时文件
+                match OpenOptions::new()
+                    .write(true)
+                    .open(&temp_path)
+                {
+                    Ok(mut existing_file) => {
+                        // 检查临时文件大小
+                        match existing_file.metadata() {
+                            Ok(metadata) => {
+                                let temp_size = metadata.len();
 
-        // 创建带缓冲的写入器
-        let file = BufWriter::new(file);
+                                // 如果临时文件大小匹配断点位置，继续写入
+                                if temp_size == resume_from {
+                                    // 跳转到断点位置
+                                    match existing_file.seek(SeekFrom::Start(resume_from)) {
+                                        Ok(_) => {
+                                            tracing::info!(
+                                                "断点续传: 从 {} 字节继续写入临时文件 (总大小: {})",
+                                                resume_from,
+                                                file_size
+                                            );
+                                            (BufWriter::new(existing_file), resume_from, true)
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                "跳转到断点位置失败，降级为重新传输: {}",
+                                                e
+                                            );
+                                            // 降级：创建新文件
+                                            let file = OpenOptions::new()
+                                                .create(true)
+                                                .write(true)
+                                                .truncate(true)
+                                                .open(&temp_path)
+                                                .map_err(|e| format!("无法创建临时文件: {}", e))?;
+                                            (BufWriter::new(file), 0, false)
+                                        }
+                                    }
+                                } else {
+                                    // 临时文件大小不匹配，降级为重新传输
+                                    tracing::warn!(
+                                        "临时文件大小不匹配 ({} != {})，降级为重新传输",
+                                        temp_size,
+                                        resume_from
+                                    );
+                                    let file = OpenOptions::new()
+                                        .create(true)
+                                        .write(true)
+                                        .truncate(true)
+                                        .open(&temp_path)
+                                        .map_err(|e| format!("无法创建临时文件: {}", e))?;
+                                    (BufWriter::new(file), 0, false)
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!("无法获取临时文件元数据，降级为重新传输: {}", e);
+                                let file = OpenOptions::new()
+                                    .create(true)
+                                    .write(true)
+                                    .truncate(true)
+                                    .open(&temp_path)
+                                    .map_err(|e| format!("无法创建临时文件: {}", e))?;
+                                (BufWriter::new(file), 0, false)
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("无法打开现有临时文件，降级为重新传输: {}", e);
+                        let file = OpenOptions::new()
+                            .create(true)
+                            .write(true)
+                            .truncate(true)
+                            .open(&temp_path)
+                            .map_err(|e| format!("无法创建临时文件: {}", e))?;
+                        (BufWriter::new(file), 0, false)
+                    }
+                }
+            } else {
+                // 临时文件不存在，降级为重新传输
+                tracing::info!("临时文件不存在，从头开始传输");
+                let file = OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .truncate(true)
+                    .open(&temp_path)
+                    .map_err(|e| format!("无法创建临时文件: {}", e))?;
+                (BufWriter::new(file), 0, false)
+            }
+        } else {
+            // 从头开始传输
+            let file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&temp_path)
+                .map_err(|e| match e.kind() {
+                    io::ErrorKind::PermissionDenied => {
+                        format!("权限不足，无法创建临时文件: {}", temp_path)
+                    }
+                    io::ErrorKind::StorageFull => {
+                        "磁盘空间不足".to_string()
+                    }
+                    _ => format!("无法创建临时文件 {}: {}", temp_path, e),
+                })?;
+            (BufWriter::new(file), 0, false)
+        };
+
+        // 如果成功续传，记录日志
+        if is_resuming {
+            tracing::info!(
+                "断点续传成功: {} -> {} (已传输: {} 字节)",
+                temp_path,
+                path,
+                actual_resume_from
+            );
+        }
 
         Ok(Self {
             file,
             file_size,
-            transferred: 0,
+            transferred: actual_resume_from,
             temp_path,
             final_path: path.to_string(),
         })
