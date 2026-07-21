@@ -1,5 +1,5 @@
 use crate::config::AgentConfig;
-use crate::protocol::{Envelope, FileEntry, MetricsSnapshot, MountInfo, Payload, TransferDirection};
+use crate::protocol::{Envelope, FileEntry, MetricsSnapshot, MountInfo, Payload};
 use crate::diff::{apply_diff, FileDiff}; // 只导入 apply_diff
 use crate::transfer_session::{TransferSession, TransferStatus};
 use crate::file_stream::{FileStreamReader, FileStreamWriter};
@@ -321,6 +321,18 @@ pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig) -> Envelope
                 Ok(response) => response,
                 Err(e) => {
                     tracing::error!("处理传输完成失败: {}", e);
+                    error_response(envelope.request_id, &e)
+                }
+            }
+        }
+
+        // 检查文件是否存在
+        Payload::FileExistsRequest { path } => {
+            tracing::info!("检查文件是否存在: {}", path);
+            match handle_file_exists(path, cfg) {
+                Ok(response) => response,
+                Err(e) => {
+                    tracing::error!("检查文件失败: {}", e);
                     error_response(envelope.request_id, &e)
                 }
             }
@@ -812,7 +824,7 @@ fn error_response(request_id: u32, message: &str) -> Envelope {
 ///
 /// # 参数
 /// - `request_id`: 请求 ID
-/// - `direction`: 传输方向（Upload 或 Download）
+/// - `direction`: 传输方向（"upload" 或 "download"）
 /// - `path`: 文件路径
 /// - `file_size`: 文件大小（上传时提供）
 /// - `chunk_size`: 分块大小（可选）
@@ -823,7 +835,7 @@ fn error_response(request_id: u32, message: &str) -> Envelope {
 /// - `Err(String)`: 错误信息
 pub async fn handle_file_transfer_request(
     request_id: u32,
-    direction: &TransferDirection,
+    direction: &str,
     path: &str,
     file_size: Option<u64>,
     chunk_size: Option<u32>,
@@ -846,13 +858,10 @@ pub async fn handle_file_transfer_request(
 
     // 3. 根据方向处理
     match direction {
-        TransferDirection::Upload => {
+        "upload" => {
             // 上传：客户端上传文件到 Agent
             // 需要 file_size 参数
-            let file_size = file_size.unwrap_or(0);
-            if file_size == 0 {
-                return Err("上传文件必须提供 file_size 参数".to_string());
-            }
+            let file_size = file_size.ok_or("上传文件必须提供 file_size 参数".to_string())?;
 
             // 检查文件大小限制
             let max_size = cfg.limits.max_file_transfer_mb * 1024 * 1024;
@@ -873,7 +882,7 @@ pub async fn handle_file_transfer_request(
             // 创建传输会话
             let mut session = TransferSession::new(
                 session_id.clone(),
-                direction.clone(),
+                direction.to_string(),
                 path.to_string(),
                 file_size,
                 chunk_size,
@@ -898,7 +907,7 @@ pub async fn handle_file_transfer_request(
             ))
         }
 
-        TransferDirection::Download => {
+        "download" => {
             // 下载：Agent 发送文件到客户端
             // 获取文件元数据
             let metadata = fs::metadata(path)
@@ -934,7 +943,7 @@ pub async fn handle_file_transfer_request(
             // 创建传输会话
             let mut session = TransferSession::new(
                 session_id.clone(),
-                direction.clone(),
+                direction.to_string(),
                 path.to_string(),
                 file_size,
                 chunk_size,
@@ -957,6 +966,10 @@ pub async fn handle_file_transfer_request(
                     mtime: Some(mtime),
                 },
             ))
+        }
+
+        _ => {
+            Err(format!("无效的传输方向: {}", direction))
         }
     }
 }
@@ -1050,8 +1063,8 @@ async fn handle_file_transfer_complete(
     // 2. 根据成功状态处理
     let mtime = if success {
         // 成功：finish() 写入，获取 mtime
-        match session.direction {
-            TransferDirection::Upload => {
+        match session.direction.as_str() {
+            "upload" => {
                 // 上传完成：写入文件
                 let mut writer = session.writer.ok_or("传输会话没有 writer")?;
                 writer.finish()?;
@@ -1069,25 +1082,27 @@ async fn handle_file_transfer_complete(
                 tracing::info!("文件上传完成: path={}, size={}", session.path, session.file_size);
                 Some(mtime)
             }
-            TransferDirection::Download => {
+            "download" => {
                 // 下载完成：不需要特殊处理
                 tracing::info!("文件下载完成: path={}", session.path);
                 None
             }
+            _ => None,
         }
     } else {
         // 失败：abort() 清理临时文件
-        match session.direction {
-            TransferDirection::Upload => {
+        match session.direction.as_str() {
+            "upload" => {
                 if let Some(mut writer) = session.writer {
                     writer.abort();
                     tracing::info!("文件上传取消: path={}", session.path);
                 }
             }
-            TransferDirection::Download => {
+            "download" => {
                 // 下载取消：不需要清理
                 tracing::info!("文件下载取消: path={}", session.path);
             }
+            _ => {}
         }
         None
     };
@@ -1140,4 +1155,55 @@ async fn handle_cancel_file_transfer(
             success: true,
         },
     ))
+}
+
+/// 检查文件是否存在
+fn handle_file_exists(path: &str, cfg: &AgentConfig) -> Result<Envelope, String> {
+    // 检查路径权限
+    if !cfg.security.allowed_paths.is_empty() {
+        let allowed = cfg.security.allowed_paths
+            .iter()
+            .any(|prefix| path.starts_with(prefix));
+        if !allowed {
+            return Err(format!("访问被拒绝: {}", path));
+        }
+    }
+
+    // 检查文件是否存在
+    let metadata = std::fs::metadata(path);
+
+    match metadata {
+        Ok(meta) => {
+            // 文件存在，返回大小和修改时间
+            let size = meta.len();
+            let mtime = meta.modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs());
+
+            Ok(Envelope::new(
+                uuid::Uuid::new_v4().as_u128() as u32,
+                Payload::FileExistsResponse {
+                    exists: true,
+                    size: Some(size),
+                    mtime,
+                },
+            ))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // 文件不存在
+            Ok(Envelope::new(
+                uuid::Uuid::new_v4().as_u128() as u32,
+                Payload::FileExistsResponse {
+                    exists: false,
+                    size: None,
+                    mtime: None,
+                },
+            ))
+        }
+        Err(e) => {
+            // 其他错误（权限问题等）
+            Err(format!("无法访问文件: {}", e))
+        }
+    }
 }

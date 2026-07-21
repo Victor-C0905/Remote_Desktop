@@ -166,6 +166,20 @@ pub enum Payload {
         success: bool,            // 是否成功取消
     },
 
+    /// 检查文件是否存在（客户端 → Agent）
+    #[serde(rename = "file_exists")]
+    FileExistsRequest {
+        path: String,             // 文件路径
+    },
+
+    /// 文件存在响应（Agent → 客户端）
+    #[serde(rename = "file_exists_resp")]
+    FileExistsResponse {
+        exists: bool,             // 是否存在
+        size: Option<u64>,        // 文件大小（存在时）
+        mtime: Option<u64>,       // 修改时间（存在时）
+    },
+
     // 新增：路径建议
     #[serde(rename = "get_path_suggestions")]
     GetPathSuggestionsRequest { path: String },

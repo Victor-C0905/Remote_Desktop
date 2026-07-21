@@ -23,7 +23,7 @@ export interface TransferTask {
  * 传输进度事件 payload
  */
 interface TransferProgressPayload {
-  task_id: string;
+  id: string;              // ← 改为 id，与后端一致
   session_id: string;
   direction: string;
   file_name: string;
@@ -50,12 +50,12 @@ export function useTransferProgress() {
       const payload = event.payload;
 
       setTransfers(prev => {
-        const existing = prev.find(t => t.id === payload.task_id);
+        const existing = prev.find(t => t.id === payload.id);  // ← 使用 payload.id
 
         if (existing) {
           // 更新现有任务
           return prev.map(t =>
-            t.id === payload.task_id
+            t.id === payload.id  // ← 使用 payload.id
               ? {
                   ...t,
                   transferred: payload.transferred,
@@ -72,7 +72,7 @@ export function useTransferProgress() {
           return [
             ...prev,
             {
-              id: payload.task_id,
+              id: payload.id,  // ← 使用 payload.id
               session_id: payload.session_id,
               direction: payload.direction as 'upload' | 'download',
               file_name: payload.file_name,
