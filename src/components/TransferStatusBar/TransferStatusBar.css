@@ -8,9 +8,10 @@
   height: 32px;
   padding: 0 12px;
 
-  /* GNOME 风格背景 */
-  background: var(--ovelis-card-bg);
-  border-left: 1px solid var(--ovelis-border-color);
+  /* GNOME 风格背景（更柔和） */
+  background: rgba(0, 0, 0, 0.03);
+  border-left: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 0;
 
   /* 字体 */
   font-family: var(--font-ui);
@@ -20,11 +21,12 @@
   /* 可点击样式 */
   cursor: pointer;
   user-select: none;
-  transition: background-color 0.15s ease;
+  transition: all 0.2s cubic-bezier(0.25, 0, 0, 1);
 }
 
 .transfer-status-bar:hover {
-  background: var(--ovelis-hover-bg);
+  background: rgba(0, 0, 0, 0.06);
+  border-left-color: var(--ovelis-accent-bg);
 }
 
 /* ── 图标 + 数量区域 ──────────────────────── */

@@ -296,11 +296,11 @@ async fn handle_stream(
         }
 
         // 文件传输请求
-        Payload::FileTransferRequest { direction, path, file_size, chunk_size } => {
-            tracing::info!("文件传输请求: direction={:?}, path={}", direction, path);
+        Payload::FileTransferRequest { direction, path, file_size, chunk_size, resume_from } => {
+            tracing::info!("文件传输请求: direction={:?}, path={}, resume_from={:?}", direction, path, resume_from);
 
             // 调用 handler 中的处理函数
-            match crate::handler::handle_file_transfer_request(envelope.request_id, direction, path, *file_size, *chunk_size, cfg).await {
+            match crate::handler::handle_file_transfer_request(envelope.request_id, direction, path, *file_size, *chunk_size, *resume_from, cfg).await {
                 Ok(response) => {
                     // 发送 FileTransferAccept 响应
                     match response.encode() {

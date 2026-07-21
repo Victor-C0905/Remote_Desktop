@@ -14,13 +14,13 @@
   height: 40px;
   padding: 8px 12px;
   background: transparent;
-  border-radius: 8px;
-  border-bottom: 1px solid var(--ovelis-border-color);
-  transition: background-color 0.15s ease;
+  border-radius: 0;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+  transition: all 0.2s cubic-bezier(0.25, 0, 0, 1);
 }
 
 .task-card:hover {
-  background: var(--ovelis-card-bg);
+  background: rgba(0, 0, 0, 0.02);
 }
 
 .task-card:last-child {
@@ -95,6 +95,25 @@
 /* 失败任务的进度条样式 */
 .tc-progress-fill.error {
   background: var(--ovelis-error-color);
+}
+
+/* 已取消任务的进度条样式 */
+.tc-progress-fill.cancelled {
+  background: var(--ovelis-text-disabled);
+}
+
+/* 已取消任务的整体样式 */
+.task-card.cancelled .tc-filename {
+  text-decoration: line-through;
+  color: var(--ovelis-text-disabled);
+}
+
+.task-card.cancelled .tc-percent {
+  color: var(--ovelis-text-disabled);
+}
+
+.task-card.cancelled .tc-progress-bar {
+  text-decoration: line-through;
 }
 
 .tc-percent {

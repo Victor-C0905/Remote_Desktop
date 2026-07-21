@@ -114,6 +114,7 @@ pub enum Payload {
         path: String,             // 远程文件路径
         file_size: Option<u64>,   // 文件大小（上传时提供）
         chunk_size: Option<u32>,  // 建议的分块大小（可选）
+        resume_from: Option<u64>, // 断点续传：从哪个字节开始（可选）
     },
 
     /// 文件传输接受响应（Agent → 客户端）

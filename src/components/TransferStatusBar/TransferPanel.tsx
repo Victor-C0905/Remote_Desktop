@@ -14,10 +14,11 @@ import './TransferPanel.css';
 
 interface TransferPanelProps {
   transfers: TransferTask[];
+  onRemoveTask: (taskId: string) => void;
   onClose: () => void;
 }
 
-export function TransferPanel({ transfers, onClose }: TransferPanelProps) {
+export function TransferPanel({ transfers, onRemoveTask, onClose }: TransferPanelProps) {
   const panelRef = useRef<HTMLDivElement>(null);
 
   /**
@@ -42,15 +43,16 @@ export function TransferPanel({ transfers, onClose }: TransferPanelProps) {
 
   /**
    * 排序任务
-   * 优先级：活动 → 排队 → 已暂停 → 完成 → 失败
+   * 优先级：活动 → 排队 → 已暂停 → 已取消 → 完成 → 失败
    */
   const sortedTransfers = [...transfers].sort((a, b) => {
     const statusOrder = {
       active: 0,
       pending: 1,
       paused: 2,
-      completed: 3,
-      error: 4,
+      cancelled: 3,
+      completed: 4,
+      error: 5,
     };
     return statusOrder[a.status] - statusOrder[b.status];
   });
@@ -61,6 +63,7 @@ export function TransferPanel({ transfers, onClose }: TransferPanelProps) {
   const activeCount = transfers.filter((t) => t.status === 'active').length;
   const pendingCount = transfers.filter((t) => t.status === 'pending').length;
   const completedCount = transfers.filter((t) => t.status === 'completed').length;
+  const cancelledCount = transfers.filter((t) => t.status === 'cancelled').length;
   const errorCount = transfers.filter((t) => t.status === 'error').length;
 
   /**
@@ -96,13 +99,16 @@ export function TransferPanel({ transfers, onClose }: TransferPanelProps) {
       {/* 任务列表 */}
       <div className="tp-list">
         {sortedTransfers.length === 0 ? (
-          <div className="tp-empty">暂无传输任务</div>
+          <div className="tp-empty">
+            <p className="tp-empty-text">当前没有正在执行的传输任务</p>
+            <p className="tp-empty-hint">上传或下载文件时，进度会显示在这里</p>
+          </div>
         ) : (
           sortedTransfers.map((task) => (
             <TaskCard
               key={task.id}
               task={task}
-              onRemove={handleRemoveTask}
+              onRemove={onRemoveTask}
             />
           ))
         )}
@@ -133,6 +139,14 @@ export function TransferPanel({ transfers, onClose }: TransferPanelProps) {
               <>
                 <span className="tp-stat-label">完成:</span>
                 <span className="tp-stat-value success">{completedCount}</span>
+              </>
+            )}
+          </span>
+          <span className="tp-stat-item">
+            {cancelledCount > 0 && (
+              <>
+                <span className="tp-stat-label">已取消:</span>
+                <span className="tp-stat-value cancelled">{cancelledCount}</span>
               </>
             )}
           </span>

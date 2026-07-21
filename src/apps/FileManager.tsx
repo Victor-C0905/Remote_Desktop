@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save, ask } from "@tauri-apps/plugin-dialog";
@@ -1216,9 +1216,8 @@ export function FileManager({ preloadData }: FileManagerProps) {
                   {parsePathSegments(currentPath).map((segment, index, array) => {
                     const isLast = index === array.length - 1;
                     return (
-                      <>
+                      <React.Fragment key={segment.path}>
                         <button
-                          key={segment.path}
                           className={`fm-breadcrumb-segment ${isLast ? 'fm-crumb-current' : ''}`}
                           onClick={(e) => {
                             e.stopPropagation();
@@ -1232,7 +1231,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
                         {index >= 1 && index < array.length - 1 && (
                           <span className="fm-breadcrumb-separator">▸</span>
                         )}
-                      </>
+                      </React.Fragment>
                     );
                   })}
                 </div>

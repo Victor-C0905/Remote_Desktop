@@ -291,9 +291,9 @@ pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig) -> Envelope
         // ===== 文件传输处理 =====
 
         // 文件传输请求
-        Payload::FileTransferRequest { direction, path, file_size, chunk_size } => {
-            tracing::info!("文件传输请求: direction={:?}, path={}", direction, path);
-            match handle_file_transfer_request(envelope.request_id, direction, path, *file_size, *chunk_size, cfg).await {
+        Payload::FileTransferRequest { direction, path, file_size, chunk_size, resume_from } => {
+            tracing::info!("文件传输请求: direction={:?}, path={}, resume_from={:?}", direction, path, resume_from);
+            match handle_file_transfer_request(envelope.request_id, direction, path, *file_size, *chunk_size, *resume_from, cfg).await {
                 Ok(response) => response,
                 Err(e) => {
                     tracing::error!("文件传输请求失败: {}", e);
@@ -839,6 +839,7 @@ pub async fn handle_file_transfer_request(
     path: &str,
     file_size: Option<u64>,
     chunk_size: Option<u32>,
+    resume_from: Option<u64>,
     cfg: &AgentConfig,
 ) -> Result<Envelope, String> {
     // 1. 检查路径权限（allowed_paths）
@@ -873,11 +874,35 @@ pub async fn handle_file_transfer_request(
                 ));
             }
 
-            // 创建文件写入器
-            let writer = FileStreamWriter::new(path, file_size)?;
-
             // 默认分块大小 64KB
             let chunk_size = chunk_size.unwrap_or(64 * 1024);
+
+            // 尝试断点续传
+            let writer = if let Some(resume_from) = resume_from {
+                // 尝试从断点续传
+                match FileStreamWriter::with_resume(path, file_size, resume_from) {
+                    Ok(writer) => {
+                        tracing::info!(
+                            "上传断点续传: session_id={}, path={}, resume_from={}",
+                            session_id,
+                            path,
+                            resume_from
+                        );
+                        writer
+                    }
+                    Err(e) => {
+                        // 断点续传失败，降级为重新传输
+                        tracing::warn!(
+                            "断点续传失败，降级为重新传输: {}",
+                            e
+                        );
+                        FileStreamWriter::new(path, file_size)?
+                    }
+                }
+            } else {
+                // 从头开始传输
+                FileStreamWriter::new(path, file_size)?
+            };
 
             // 创建传输会话
             let mut session = TransferSession::new(
@@ -934,11 +959,35 @@ pub async fn handle_file_transfer_request(
                 .map_err(|e| format!("时间转换失败: {}", e))?
                 .as_secs();
 
-            // 创建文件读取器
-            let reader = FileStreamReader::new(path, file_size)?;
-
             // 默认分块大小 64KB
             let chunk_size = chunk_size.unwrap_or(64 * 1024);
+
+            // 尝试断点续传
+            let reader = if let Some(resume_from) = resume_from {
+                // 尝试从断点续传
+                match FileStreamReader::with_resume(path, file_size, resume_from) {
+                    Ok(reader) => {
+                        tracing::info!(
+                            "下载断点续传: session_id={}, path={}, resume_from={}",
+                            session_id,
+                            path,
+                            resume_from
+                        );
+                        reader
+                    }
+                    Err(e) => {
+                        // 断点续传失败，降级为重新传输
+                        tracing::warn!(
+                            "断点续传失败，降级为重新传输: {}",
+                            e
+                        );
+                        FileStreamReader::new(path, file_size)?
+                    }
+                }
+            } else {
+                // 从头开始传输
+                FileStreamReader::new(path, file_size)?
+            };
 
             // 创建传输会话
             let mut session = TransferSession::new(

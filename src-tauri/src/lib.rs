@@ -2,6 +2,7 @@ use serde::Serialize;
 use std::fs;
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
+use tauri::Manager;  // 导入 Manager trait
 
 mod connection;
 mod terminal;
@@ -368,6 +369,12 @@ pub fn run() {
         .manage(pty::PtyManager::new())
         .manage(connection::ConnectionManager::new())
         .manage(Arc::new(terminal::TerminalStreamManager::new()))
+        .setup(|app| {
+            // 创建 TransferManager（需要 AppHandle）
+            let transfer_manager = Arc::new(transfer::TransferManager::new(app.handle().clone()));
+            app.manage(transfer_manager);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             read_dir, stat_file, read_file_text,
             pty::spawn_terminal,
@@ -398,6 +405,9 @@ pub fn run() {
             terminal::remote_terminal_close,
             terminal::remote_terminal_resize,
             transfer::transfer_file,
+            transfer::pause_transfer,
+            transfer::resume_transfer,
+            transfer::retry_transfer,
             transfer::cancel_transfer,
             transfer::check_file_exists,
         ])
