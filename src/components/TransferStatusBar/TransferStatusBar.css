@@ -1,0 +1,112 @@
+/* 传输状态栏组件样式（GNOME Adwaita 风格） */
+
+.transfer-status-bar {
+  position: relative; /* 为 TransferPanel 提供定位上下文 */
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 12px;
+
+  /* GNOME 风格背景 */
+  background: var(--ovelis-card-bg);
+  border-left: 1px solid var(--ovelis-border-color);
+
+  /* 字体 */
+  font-family: var(--font-ui);
+  font-size: var(--font-body);
+  color: var(--ovelis-text-primary);
+
+  /* 可点击样式 */
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.15s ease;
+}
+
+.transfer-status-bar:hover {
+  background: var(--ovelis-hover-bg);
+}
+
+/* ── 图标 + 数量区域 ──────────────────────── */
+.tsb-icon-count {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tsb-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ovelis-accent-bg);
+}
+
+.tsb-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ovelis-text-primary);
+  min-width: 16px;
+  text-align: center;
+}
+
+/* ── 迷你进度条 ──────────────────────── */
+.tsb-progress-mini {
+  width: 80px;
+  height: 4px;
+  background: var(--ovelis-border-color);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.tsb-progress-fill {
+  height: 100%;
+  background: var(--ovelis-accent-bg);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+/* ── 百分比文本 ──────────────────────── */
+.tsb-percent {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ovelis-text-secondary);
+  min-width: 32px;
+  text-align: right;
+}
+
+/* ── 展开/收起指示器 ──────────────────────── */
+.tsb-toggle-indicator {
+  padding: 4px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ovelis-text-secondary);
+  transition: color 0.15s ease;
+}
+
+.transfer-status-bar:hover .tsb-toggle-indicator {
+  color: var(--ovelis-accent-bg);
+}
+
+.tsb-toggle-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: currentColor;
+}
+
+/* ── 响应式设计 ──────────────────────── */
+@media (max-width: 600px) {
+  .transfer-status-bar {
+    gap: 6px;
+    padding: 0 8px;
+  }
+
+  .tsb-progress-mini {
+    width: 60px;
+  }
+
+  .tsb-percent {
+    display: none; /* 窄窗口隐藏百分比 */
+  }
+}

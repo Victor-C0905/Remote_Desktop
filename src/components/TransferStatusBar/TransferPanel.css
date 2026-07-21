@@ -1,0 +1,187 @@
+/**
+ * TransferPanel 样式
+ *
+ * 展开的任务列表面板，显示在状态栏上方
+ * 位置：position absolute，右对齐
+ * 宽度：300px
+ */
+
+/* ── 面板容器 ─────────────────────────────────────────────── */
+
+.transfer-panel {
+  position: absolute;
+  bottom: calc(100% + 4px); /* 状态栏上方 4px 间距 */
+  right: 0;
+  width: 300px;
+  max-height: calc(40vh - 32px);
+  background: var(--ovelis-card-bg);
+  border: 1px solid var(--ovelis-border-color);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+
+  /* 向上滑入动画 */
+  animation: slideUp 0.2s ease-out;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ── 任务列表区域 ───────────────────────────────────────────── */
+
+.tp-list {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  max-height: calc(40vh - 64px); /* 减去底部操作栏高度 */
+}
+
+/* 空状态提示 */
+.tp-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 120px;
+  color: var(--ovelis-text-secondary);
+  font-size: 10pt;
+}
+
+/* 滚动条样式 */
+.tp-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.tp-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.tp-list::-webkit-scrollbar-thumb {
+  background: var(--ovelis-border-color);
+  border-radius: 4px;
+}
+
+.tp-list::-webkit-scrollbar-thumb:hover {
+  background: var(--ovelis-text-secondary);
+}
+
+/* ── 底部操作栏 ─────────────────────────────────────────────── */
+
+.tp-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  height: 32px;
+  border-top: 1px solid var(--ovelis-border-color);
+  background: var(--ovelis-sidebar-bg);
+}
+
+/* ── 统计信息 ───────────────────────────────────────────────── */
+
+.tp-stats {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+}
+
+.tp-stat-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 9pt;
+}
+
+.tp-stat-label {
+  color: var(--ovelis-text-secondary);
+}
+
+.tp-stat-value {
+  color: var(--ovelis-text-primary);
+  font-weight: 500;
+}
+
+.tp-stat-value.success {
+  color: var(--ovelis-success-color);
+}
+
+.tp-stat-value.error {
+  color: var(--ovelis-error-color);
+}
+
+/* ── 操作按钮 ───────────────────────────────────────────────── */
+
+.tp-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tp-action-btn {
+  padding: 4px 12px;
+  font-size: 9pt;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-weight: 500;
+}
+
+.tp-action-btn.cancel {
+  background: transparent;
+  color: var(--ovelis-error-color);
+}
+
+.tp-action-btn.cancel:hover {
+  background: var(--ovelis-card-bg);
+}
+
+.tp-action-btn.close {
+  background: var(--ovelis-accent-bg);
+  color: var(--ovelis-accent-fg);
+}
+
+.tp-action-btn.close:hover {
+  background: var(--ovelis-accent-hover);
+}
+
+.tp-action-btn:active {
+  transform: scale(0.96);
+}
+
+.tp-action-btn:focus {
+  outline: 2px solid var(--ovelis-accent-bg);
+  outline-offset: 1px;
+}
+
+/* ── 响应式适配 ─────────────────────────────────────────────── */
+
+@media (max-width: 600px) {
+  .transfer-panel {
+    width: 250px;
+  }
+
+  .tp-footer {
+    padding: 6px 8px;
+  }
+
+  .tp-stats {
+    gap: 8px;
+    font-size: 8pt;
+  }
+
+  .tp-action-btn {
+    padding: 4px 8px;
+    font-size: 8pt;
+  }
+}
