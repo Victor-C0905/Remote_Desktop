@@ -6,7 +6,7 @@ import { useServerManager } from "../context/ServerManager";
 import { PLACEHOLDER } from "../utils/offlineDefaults";
 import { useWindowManager } from "../window-system/WindowManagerContext";
 import { AppLayout } from "../components/app-shell";
-import { TransferNotification } from "../components/TransferNotification";
+import { TransferStatusBar } from "../components/TransferStatusBar";
 import "./FileManager.css";
 
 export interface FileEntry {
@@ -1489,8 +1489,16 @@ export function FileManager({ preloadData }: FileManagerProps) {
 
       {/* Status Bar */}
       <div className="fm-statusbar">
-        <span>{isOffline ? `${PLACEHOLDER} 个文件夹, ${PLACEHOLDER} 个文件` : `${dirCount} 个文件夹, ${fileCount} 个文件`}</span>
-        <span>总大小: {isOffline ? PLACEHOLDER : formatSize(totalSize)}</span>
+        {/* 左侧：原有的文件数量、总大小信息 */}
+        <div className="fm-statusbar-left">
+          <span>{isOffline ? `${PLACEHOLDER} 个文件夹, ${PLACEHOLDER} 个文件` : `${dirCount} 个文件夹, ${fileCount} 个文件`}</span>
+          <span>总大小: {isOffline ? PLACEHOLDER : formatSize(totalSize)}</span>
+        </div>
+
+        {/* 右侧：传输状态（新功能） */}
+        <div className="fm-statusbar-right">
+          <TransferStatusBar />
+        </div>
       </div>
 
       {/* Context Menu - 使用 Portal 渲染到 body，确保 position: fixed 相对于视口 */}
@@ -1618,9 +1626,6 @@ export function FileManager({ preloadData }: FileManagerProps) {
         </div>,
         document.body
       )}
-
-      {/* 传输进度通知 */}
-      <TransferNotification />
     </div>
   );
 }

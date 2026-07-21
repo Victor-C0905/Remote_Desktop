@@ -1,0 +1,194 @@
+/**
+ * TaskCard 样式
+ *
+ * 单个传输任务卡片样式
+ * 高度：40px，宽度：300px（面板宽度）
+ */
+
+/* ── 任务卡片容器 ───────────────────────────────────────────── */
+
+.task-card {
+  display: flex;
+  align-items: center;
+  width: 300px;
+  height: 40px;
+  padding: 8px 12px;
+  background: transparent;
+  border-radius: 8px;
+  border-bottom: 1px solid var(--ovelis-border-color);
+  transition: background-color 0.15s ease;
+}
+
+.task-card:hover {
+  background: var(--ovelis-card-bg);
+}
+
+.task-card:last-child {
+  border-bottom: none;
+}
+
+/* ── 左侧区域：图标 + 文件名 ───────────────────────────────────── */
+
+.tc-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 160px;
+  flex-shrink: 0;
+}
+
+.tc-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ovelis-text-secondary);
+  flex-shrink: 0;
+}
+
+.tc-filename {
+  font-size: 10pt;
+  color: var(--ovelis-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── 中间区域：进度条 + 百分比 ─────────────────────────────────── */
+
+.tc-middle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.tc-progress-bar {
+  flex: 1;
+  height: 4px;
+  background: var(--ovelis-border-color);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.tc-progress-fill {
+  height: 100%;
+  background: var(--ovelis-accent-bg);
+  border-radius: 2px;
+  transition: width 0.2s ease;
+}
+
+/* 活动任务的进度条脉动动画 */
+.task-card.active .tc-progress-fill {
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 0.8;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* 失败任务的进度条样式 */
+.tc-progress-fill.error {
+  background: var(--ovelis-error-color);
+}
+
+.tc-percent {
+  font-size: 9pt;
+  color: var(--ovelis-text-secondary);
+  flex-shrink: 0;
+  min-width: 32px;
+  text-align: right;
+}
+
+/* ── 右侧区域：控制按钮 ───────────────────────────────────────── */
+
+.tc-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 50px;
+  justify-content: flex-end;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.tc-actions.visible {
+  opacity: 1;
+}
+
+/* ── 控制按钮样式 ─────────────────────────────────────────────── */
+
+.tc-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--ovelis-text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.tc-action-btn:hover {
+  background: var(--ovelis-card-bg);
+  color: var(--ovelis-text-primary);
+}
+
+.tc-action-btn:active {
+  background: var(--ovelis-border-color);
+}
+
+.tc-action-btn:focus {
+  outline: 2px solid var(--ovelis-accent-bg);
+  outline-offset: -2px;
+}
+
+/* ── 状态相关样式 ─────────────────────────────────────────────── */
+
+/* 已完成任务 */
+.task-card.completed {
+  opacity: 0.8;
+}
+
+.task-card.completed .tc-icon {
+  color: var(--ovelis-success-color);
+}
+
+/* 失败任务 */
+.task-card.error .tc-icon {
+  color: var(--ovelis-error-color);
+}
+
+.task-card.error .tc-filename {
+  color: var(--ovelis-error-color);
+}
+
+/* 排队中任务 */
+.task-card.pending .tc-progress-fill {
+  width: 0 !important;
+}
+
+/* ── 响应式适配 ───────────────────────────────────────────────── */
+
+@media (max-width: 600px) {
+  .task-card {
+    padding: 6px 8px;
+  }
+
+  .tc-left {
+    width: 140px;
+  }
+
+  .tc-actions {
+    width: 40px;
+  }
+}
