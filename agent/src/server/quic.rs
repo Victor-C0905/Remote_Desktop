@@ -3,12 +3,16 @@ use quinn::{RecvStream, SendStream};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::{broadcast, Mutex};
 
 // Unix平台特有的导入(终端功能)
 #[cfg(unix)]
 use tokio::io::AsyncReadExt;
 #[cfg(unix)]
 use tokio::time::{sleep, Duration};
+#[cfg(not(unix))]
+use tokio::time::Duration;
 
 use crate::config::AgentConfig;
 use crate::pty::PtyManager;
@@ -18,6 +22,120 @@ use crate::protocol::{Envelope, Payload, TransferDirection};
 
 // 全局 Stream ID 计数器
 static STREAM_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+/// 获取当前 Unix 时间戳（秒）
+fn current_timestamp_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+/// 连接上下文，跟踪连接的生命周期和关联资源
+///
+/// 当 QUIC 连接关闭时，通过 shutdown 信号通知所有关联的持久 Stream 任务
+/// （终端、订阅等），然后统一清理 PTY 会话、订阅和过期传输会话，
+/// 防止资源泄漏。
+pub struct ConnectionContext {
+    /// 关闭信号广播通道（容量 1，只发最后一次信号）
+    shutdown_tx: broadcast::Sender<()>,
+    /// 关联的 PTY 会话 ID 列表（连接关闭时自动清理）
+    pty_session_ids: Arc<Mutex<Vec<String>>>,
+    /// 关联的订阅 Stream ID 列表（连接关闭时自动清理订阅）
+    stream_ids: Arc<Mutex<Vec<u64>>>,
+}
+
+impl ConnectionContext {
+    pub fn new() -> Self {
+        let (shutdown_tx, _) = broadcast::channel(1);
+        Self {
+            shutdown_tx,
+            pty_session_ids: Arc::new(Mutex::new(Vec::new())),
+            stream_ids: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// 订阅关闭信号（每个需要响应关闭的 Stream 调用一次）
+    pub fn subscribe_shutdown(&self) -> broadcast::Receiver<()> {
+        self.shutdown_tx.subscribe()
+    }
+
+    /// 触发关闭信号，通知所有关联的 Stream 任务退出
+    pub fn shutdown(&self) {
+        let _ = self.shutdown_tx.send(());
+    }
+
+    /// 注册 PTY 会话（连接关闭时自动清理）
+    pub async fn register_pty_session(&self, session_id: String) {
+        self.pty_session_ids.lock().await.push(session_id);
+    }
+
+    /// 注册订阅 Stream ID（连接关闭时自动清理订阅）
+    pub async fn register_stream_id(&self, stream_id: u64) {
+        self.stream_ids.lock().await.push(stream_id);
+    }
+
+    /// 清理所有关联资源（连接关闭后调用）
+    ///
+    /// 清理顺序：
+    /// 1. 移除所有 PTY 会话（终止子进程，关闭 master fd）
+    /// 2. 移除所有订阅（停止数据采集器）
+    /// 3. 清理超时的传输会话（安全兜底）
+    pub async fn cleanup(
+        &self,
+        pty_manager: &PtyManager,
+        subscription_manager: &SubscriptionManager,
+    ) {
+        // 1. 清理 PTY 会话
+        let pty_ids = self.pty_session_ids.lock().await.clone();
+        for session_id in &pty_ids {
+            match pty_manager.remove(session_id).await {
+                Ok(_) => {
+                    tracing::info!("[ConnectionContext] 已清理 PTY 会话: {}", session_id);
+                }
+                Err(e) => {
+                    // PTY 会话可能已被 handle_terminal_stream 自行清理，这是正常的
+                    tracing::debug!("[ConnectionContext] PTY 会话清理（可能已移除）: {}: {}", session_id, e);
+                }
+            }
+        }
+
+        // 2. 清理订阅
+        let sids = self.stream_ids.lock().await.clone();
+        for stream_id in &sids {
+            match subscription_manager.remove_all(*stream_id).await {
+                Ok(_) => {
+                    tracing::info!("[ConnectionContext] 已清理订阅: stream_id={}", stream_id);
+                }
+                Err(e) => {
+                    tracing::warn!("[ConnectionContext] 清理订阅失败: stream_id={}: {}", stream_id, e);
+                }
+            }
+        }
+
+        // 3. 清理超时的传输会话（安全兜底，防止连接异常断开时传输会话泄漏）
+        let mut sessions = crate::handler::TRANSFER_SESSIONS.lock().await;
+        let expired_ids: Vec<String> = sessions
+            .iter()
+            .filter(|(_, s)| s.is_timeout())
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in &expired_ids {
+            if let Some(session) = sessions.remove(id) {
+                tracing::info!(
+                    "[ConnectionContext] 已清理过期传输会话: id={}, path={}, direction={}",
+                    id, session.path, session.direction
+                );
+            }
+        }
+    }
+}
+
+impl Default for ConnectionContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 pub async fn run(
     cfg: AgentConfig,
@@ -30,6 +148,9 @@ pub async fn run(
     let addr = format!("{}:{}", cfg.server.bind, cfg.server.quic_port);
     tracing::info!("🔵 QUIC 服务器监听: {}", addr);
 
+    let idle_timeout_secs = cfg.limits.connection_idle_timeout_secs;
+    tracing::info!("⏱️  连接空闲超时: {} 秒", idle_timeout_secs);
+
     let server_config = build_server_config(certs, key)?;
     let endpoint = quinn::Endpoint::server(server_config, addr.parse()?)?;
 
@@ -38,6 +159,7 @@ pub async fn run(
         let subscription_manager_clone = subscription_manager.clone();
         let event_bus_clone = event_bus.clone();
         let pty_manager_clone = pty_manager.clone();
+        let timeout_secs = idle_timeout_secs;
         tokio::spawn(async move {
             let conn = incoming.await;
             match conn {
@@ -48,6 +170,7 @@ pub async fn run(
                         subscription_manager_clone,
                         event_bus_clone,
                         pty_manager_clone,
+                        timeout_secs,
                     ).await {
                         tracing::warn!("QUIC 连接错误: {}", e);
                     }
@@ -83,15 +206,68 @@ async fn handle_connection(
     subscription_manager: Arc<SubscriptionManager>,
     event_bus: Arc<EventBus>,
     pty_manager: Arc<PtyManager>,
+    idle_timeout_secs: u64,
 ) -> Result<()> {
     let remote = connection.remote_address();
     tracing::info!("✅ 新的 QUIC 连接来自: {}", remote);
 
+    // 创建连接上下文，跟踪该连接的所有关联资源
+    let ctx = Arc::new(ConnectionContext::new());
+
+    // 每个连接独立的活动时间追踪（Arc<AtomicU64> 存储最近活动的 Unix 时间戳秒数）
+    let last_activity: Arc<AtomicU64> = Arc::new(AtomicU64::new(current_timestamp_secs()));
+
+    // 用于通知超时检查任务退出的信号
+    let (timeout_cancel_tx, mut timeout_cancel_rx) = tokio::sync::oneshot::channel::<()>();
+
+    // 启动定期超时检查任务
+    // 每 30 秒检查一次自上次活动是否超过 idle_timeout_secs
+    let connection_clone = connection.clone();
+    let last_activity_clone = last_activity.clone();
+    let timeout_check_handle = tokio::spawn(async move {
+        let check_interval = Duration::from_secs(30);
+
+        loop {
+            tokio::select! {
+                _ = &mut timeout_cancel_rx => {
+                    tracing::debug!("[TimeoutChecker] 收到取消信号，退出超时检查任务: remote={}", remote);
+                    break;
+                }
+                _ = tokio::time::sleep(check_interval) => {
+                    let now = current_timestamp_secs();
+                    let last = last_activity_clone.load(Ordering::Relaxed);
+                    let idle_secs = now.saturating_sub(last);
+
+                    if idle_secs >= idle_timeout_secs {
+                        tracing::warn!(
+                            "[TimeoutChecker] 连接空闲超时: remote={}, idle={}s, threshold={}s，即将关闭连接",
+                            remote, idle_secs, idle_timeout_secs
+                        );
+                        // 关闭 QUIC 连接，触发 accept_bi 返回错误，退出主循环
+                        // 资源清理由主循环退出后统一执行，避免重复清理
+                        connection_clone.close(0x01_u32.into(), b"connection idle timeout");
+                        break;
+                    } else {
+                        tracing::debug!(
+                            "[TimeoutChecker] 连接活跃: remote={}, idle={}s/{}s",
+                            remote, idle_secs, idle_timeout_secs
+                        );
+                    }
+                }
+            }
+        }
+    });
+
+    // 主循环：接受新 Stream，每次接受成功后重置活动时间
     while let Ok(stream) = connection.accept_bi().await {
+        // 每次接受到新 Stream，重置活动时间
+        last_activity.store(current_timestamp_secs(), Ordering::Relaxed);
+
         let cfg_inner = cfg.clone();
         let subscription_manager_inner = subscription_manager.clone();
         let event_bus_inner = event_bus.clone();
         let pty_manager_inner = pty_manager.clone();
+        let ctx_inner = ctx.clone();
         tokio::spawn(async move {
             if let Err(e) = handle_stream(
                 stream,
@@ -99,13 +275,23 @@ async fn handle_connection(
                 subscription_manager_inner,
                 event_bus_inner,
                 pty_manager_inner,
+                ctx_inner,
             ).await {
                 tracing::warn!("QUIC Stream 处理错误: {}", e);
             }
         });
     }
 
-    tracing::info!("连接关闭: {}", remote);
+    // 连接关闭（正常断开或超时），取消超时检查任务并触发清理
+    let _ = timeout_cancel_tx.send(());
+    timeout_check_handle.abort();
+
+    // 确保资源被清理（无论正常关闭还是超时）
+    ctx.shutdown();
+    ctx.cleanup(&pty_manager, &subscription_manager).await;
+
+    tracing::info!("QUIC 连接关闭，资源已清理: {}", remote);
+
     Ok(())
 }
 
@@ -116,6 +302,7 @@ async fn handle_stream(
     event_bus: Arc<EventBus>,
     #[cfg(unix)] pty_manager: Arc<PtyManager>,
     #[cfg(not(unix))] _pty_manager: Arc<PtyManager>,
+    ctx: Arc<ConnectionContext>,
 ) -> Result<()> {
     let (mut send, mut recv) = stream;
 
@@ -141,6 +328,9 @@ async fn handle_stream(
             // 添加订阅
             let subscribed_types = subscription_manager.subscribe(stream_id, types.clone()).await?;
 
+            // 注册到连接上下文（连接关闭时自动清理）
+            ctx.register_stream_id(stream_id).await;
+
             // 发送确认响应
             let response = Envelope::new(
                 envelope.request_id,
@@ -164,41 +354,52 @@ async fn handle_stream(
 
             // 订阅 EventBus（用于事件推送）
             let mut event_rx = event_bus.subscribe();
+            // 订阅连接关闭信号
+            let mut shutdown_rx = ctx.subscribe_shutdown();
 
             tracing::info!("开始事件推送: stream_id={}", stream_id);
 
-            // 进入事件推送循环
+            // 进入事件推送循环（带关闭信号响应）
             loop {
-                match event_rx.recv().await {
-                    Ok(event) => {
-                        // 检查是否有订阅者
-                        if subscription_manager.has_subscribers(&event.event_type).await {
-                            // 发送事件
-                            let event_envelope = Envelope::new(
-                                0, // 事件推送不需要 request_id
-                                Payload::Event {
-                                    event_type: event.event_type.clone(),
-                                    data: event.data.clone(),
-                                    timestamp: event.timestamp,
-                                },
-                            );
+                tokio::select! {
+                    result = event_rx.recv() => {
+                        match result {
+                            Ok(event) => {
+                                // 检查是否有订阅者
+                                if subscription_manager.has_subscribers(&event.event_type).await {
+                                    // 发送事件
+                                    let event_envelope = Envelope::new(
+                                        0, // 事件推送不需要 request_id
+                                        Payload::Event {
+                                            event_type: event.event_type.clone(),
+                                            data: event.data.clone(),
+                                            timestamp: event.timestamp,
+                                        },
+                                    );
 
-                            match event_envelope.encode() {
-                                Ok(resp_bytes) => {
-                                    if let Err(e) = write_message(&mut send, &resp_bytes).await {
-                                        tracing::warn!("事件推送失败: {}", e);
-                                        break;
+                                    match event_envelope.encode() {
+                                        Ok(resp_bytes) => {
+                                            if let Err(e) = write_message(&mut send, &resp_bytes).await {
+                                                tracing::warn!("事件推送失败: {}", e);
+                                                break;
+                                            }
+                                            tracing::debug!("事件推送成功: event_type={}", event.event_type);
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!("编码事件失败: {}", e);
+                                        }
                                     }
-                                    tracing::debug!("事件推送成功: event_type={}", event.event_type);
                                 }
-                                Err(e) => {
-                                    tracing::warn!("编码事件失败: {}", e);
-                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!("EventBus 接收失败: {}", e);
+                                break;
                             }
                         }
                     }
-                    Err(e) => {
-                        tracing::warn!("EventBus 接收失败: {}", e);
+                    // 收到连接关闭信号，立即退出推送循环
+                    _ = shutdown_rx.recv() => {
+                        tracing::info!("收到关闭信号，停止事件推送: stream_id={}", stream_id);
                         break;
                     }
                 }
@@ -217,6 +418,12 @@ async fn handle_stream(
             // 创建 PTY 会话
             let session_id = pty_manager.spawn(&shell, *cols, *rows, working_directory.as_deref()).await?;
 
+            // 注册到连接上下文（连接关闭时自动清理 PTY 会话）
+            ctx.register_pty_session(session_id.clone()).await;
+
+            // 订阅连接关闭信号
+            let shutdown_rx = ctx.subscribe_shutdown();
+
             // 修改：先进入终端双向数据隧道循环（数据接收任务会立即启动）
             // 然后在 handle_terminal_stream 内部发送响应，确保接收任务已就绪
             handle_terminal_stream(
@@ -225,6 +432,7 @@ async fn handle_stream(
                 recv,
                 pty_manager,
                 envelope.request_id,  // 传递 request_id 用于发送响应
+                shutdown_rx,          // 传递关闭信号
             ).await?;
 
             tracing::info!("终端 Stream 结束: session_id={}", session_id);
@@ -405,6 +613,7 @@ async fn handle_terminal_stream(
     mut recv: RecvStream,
     pty_manager: Arc<PtyManager>,
     request_id: u32,  // 新增：用于发送响应
+    shutdown_rx: broadcast::Receiver<()>,  // 连接关闭信号
 ) -> Result<()> {
     tracing::info!("终端双向隧道启动: session_id={}", session_id);
 
@@ -572,13 +781,26 @@ async fn handle_terminal_stream(
         tracing::info!("PTY 读取任务结束: session_id={}", session_id_clone);
     });
 
-    // 等待任一任务结束
+    // 订阅连接关闭信号（需要在 select! 之前可变绑定）
+    let mut shutdown_rx = shutdown_rx;
+
+    // 使用 pin! 宏固定 JoinHandle，这样可以在 select! 中使用可变引用
+    tokio::pin!(pty_read_task);
+    tokio::pin!(client_read_task);
+
+    // 等待任一任务结束或收到关闭信号
     tokio::select! {
-        _ = pty_read_task => {
+        _ = &mut pty_read_task => {
             tracing::info!("PTY 读取任务先结束: session_id={}", session_id);
         }
-        _ = client_read_task => {
+        _ = &mut client_read_task => {
             tracing::info!("客户端读取任务先结束: session_id={}", session_id);
+        }
+        // 收到连接关闭信号，强制终止双向隧道
+        _ = shutdown_rx.recv() => {
+            tracing::info!("收到关闭信号，强制终止终端会话: session_id={}", session_id);
+            pty_read_task.abort();
+            client_read_task.abort();
         }
     }
 
@@ -651,6 +873,13 @@ async fn handle_file_download_stream(
 }
 
 /// 处理文件上传流（接收文件数据）
+///
+/// # 临时文件清理保障
+///
+/// - 正常完成：`writer.finish()` 将临时文件重命名为最终文件
+/// - 客户端发送失败标志：`writer.abort()` 删除临时文件
+/// - 流中断（客户端断连）：writer 被 drop，其 Drop impl 自动删除临时文件
+/// - 会话被移除：从 HashMap 中 remove 后 drop，TransferSession::Drop 自动清理
 async fn handle_file_upload_stream(
     mut recv: RecvStream,
     session_id: String,
@@ -669,10 +898,17 @@ async fn handle_file_upload_stream(
 
     drop(sessions);  // 释放锁
 
+    let mut upload_success = false;
+
     // 接收文件块
     loop {
         let data = read_message(&mut recv).await?;
         if data.is_none() {
+            // 流中断（客户端断连）— writer 的 Drop impl 会自动清理临时文件
+            tracing::warn!(
+                "文件上传流中断（客户端断连）: session_id={}, path={}, 已传输: {}/{}",
+                session_id, path, writer.transferred(), file_size
+            );
             break;
         }
 
@@ -686,13 +922,29 @@ async fn handle_file_upload_stream(
             Payload::FileTransferComplete { success, error, .. } => {
                 if success {
                     writer.finish().map_err(|e| anyhow::anyhow!("{}", e))?;
-                    tracing::info!("文件接收完成: session_id={}", session_id);
+                    upload_success = true;
+                    tracing::info!("文件接收完成: session_id={}, path={}", session_id, path);
                 } else {
-                    tracing::error!("文件传输失败: {:?}", error);
+                    // 客户端报告失败，abort 删除临时文件
+                    writer.abort();
+                    tracing::error!("文件传输失败（客户端报告）: session_id={}, error={:?}", session_id, error);
                 }
                 break;
             }
             _ => {}
+        }
+    }
+
+    // 上传完成后，从全局会话管理器中移除会话，防止内存泄漏
+    // 如果流中断，writer 已被 drop（Drop impl 清理临时文件），也需要移除会话
+    let mut sessions = crate::handler::TRANSFER_SESSIONS.lock().await;
+    if let Some(mut removed_session) = sessions.remove(&session_id) {
+        if upload_success {
+            removed_session.mark_completed();
+            tracing::debug!("已移除完成的上传会话: session_id={}", session_id);
+        } else {
+            tracing::info!("已移除中断的上传会话: session_id={}", session_id);
+            // TransferSession::Drop 会自动清理 writer 中残留的临时文件
         }
     }
 

@@ -294,4 +294,9 @@ impl PtyManager {
     pub fn new() -> Self {
         Self
     }
+
+    /// 移除 PTY 会话（非 Unix 平台 stub，直接返回 Ok）
+    pub async fn remove(&self, _session_id: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
 }

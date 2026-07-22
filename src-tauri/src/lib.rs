@@ -63,7 +63,8 @@ async fn graceful_shutdown(app: tauri::AppHandle) {
     }
 
     eprintln!("[Shutdown] 优雅关闭完成");
-    std::process::exit(0);
+    // 不在这里强制退出，让 Tauri 自己管理退出
+    // std::process::exit 会导致 WebView2 无法正确清理
 }
 
 /* ── Shared Types ────────────────────────────────────────── */
@@ -441,6 +442,13 @@ pub fn run() {
 
             // 创建 TransferManager（需要 AppHandle）
             let transfer_manager = Arc::new(transfer::TransferManager::new(app.handle().clone()));
+            
+            // 启动定期清理任务（使用 tauri::async_runtime::spawn 在正确的异步上下文中启动）
+            let manager_clone = transfer_manager.clone();
+            tauri::async_runtime::spawn(async move {
+                manager_clone.start_cleanup_task().await;
+            });
+            
             app.manage(transfer_manager);
             Ok(())
         })

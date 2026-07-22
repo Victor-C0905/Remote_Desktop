@@ -44,6 +44,10 @@ pub struct LimitsConfig {
     pub max_file_transfer_mb: u64,
     #[serde(default = "default_metrics_interval")]
     pub metrics_interval_secs: u64,
+    /// 连接空闲超时（秒）：在此时间内无任何 Stream 活动的连接将被强制关闭
+    /// 默认 300 秒（5 分钟）
+    #[serde(default = "default_connection_idle_timeout")]
+    pub connection_idle_timeout_secs: u64,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -68,6 +72,7 @@ fn default_blocked_commands() -> Vec<String> { vec!["rm -rf /".into(), "dd if=".
 fn default_max_sessions() -> usize { 10 }
 fn default_max_file_mb() -> u64 { 500 }
 fn default_metrics_interval() -> u64 { 2 }
+fn default_connection_idle_timeout() -> u64 { 300 }  // 5 分钟
 fn default_file_changes_delay() -> u64 { 100 }
 fn default_process_scan_interval() -> u64 { 2 }
 fn default_service_status_interval() -> u64 { 5 }
@@ -118,6 +123,7 @@ fn default_config() -> AgentConfig {
             max_terminal_sessions: 10,
             max_file_transfer_mb: 500,
             metrics_interval_secs: 2,
+            connection_idle_timeout_secs: default_connection_idle_timeout(),
         },
         collectors: CollectorsConfig {
             metrics_interval_secs: 2,

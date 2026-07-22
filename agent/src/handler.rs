@@ -1105,7 +1105,7 @@ async fn handle_file_transfer_complete(
     // 1. 从 TRANSFER_SESSIONS 获取会话
     let mut sessions = TRANSFER_SESSIONS.lock().await;
 
-    let session = sessions
+    let mut session = sessions
         .remove(session_id)
         .ok_or_else(|| format!("传输会话不存在: {}", session_id))?;
 
@@ -1115,7 +1115,7 @@ async fn handle_file_transfer_complete(
         match session.direction.as_str() {
             "upload" => {
                 // 上传完成：写入文件
-                let mut writer = session.writer.ok_or("传输会话没有 writer")?;
+                let mut writer = session.writer.take().ok_or("传输会话没有 writer")?;
                 writer.finish()?;
 
                 // 获取文件修改时间
@@ -1142,7 +1142,7 @@ async fn handle_file_transfer_complete(
         // 失败：abort() 清理临时文件
         match session.direction.as_str() {
             "upload" => {
-                if let Some(mut writer) = session.writer {
+                if let Some(mut writer) = session.writer.take() {
                     writer.abort();
                     tracing::info!("文件上传取消: path={}", session.path);
                 }
@@ -1186,12 +1186,13 @@ async fn handle_cancel_file_transfer(
     // 1. 从 TRANSFER_SESSIONS 移除会话
     let mut sessions = TRANSFER_SESSIONS.lock().await;
 
-    let session = sessions
+    let mut session = sessions
         .remove(session_id)
         .ok_or_else(|| format!("传输会话不存在: {}", session_id))?;
 
-    // 2. 如果有 writer，调用 abort()
-    if let Some(mut writer) = session.writer {
+    // 2. 如果有 writer，调用 abort() 清理临时文件
+    //    使用 take() 将 writer 从 session 中取出，避免 Drop 时重复清理
+    if let Some(mut writer) = session.writer.take() {
         writer.abort();
         tracing::info!("取消上传，已删除临时文件: path={}", session.path);
     }
