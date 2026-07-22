@@ -12,7 +12,8 @@
   position: absolute;
   bottom: calc(100% + 8px); /* 状态栏上方 8px 间距 */
   right: 0;
-  width: 300px;
+  width: min(300px, calc(100vw - 32px)); /* 响应式宽度：最大 300px，小于视口宽度 */
+  max-width: 100%; /* 确保不超过父容器 */
   max-height: calc(40vh - 32px);
   background: var(--ovelis-window-bg);
   border: 1px solid rgba(0, 0, 0, 0.08);
@@ -85,6 +86,18 @@
   color: var(--ovelis-text-secondary);
 }
 
+.tp-empty-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  margin-bottom: 16px;
+  background: var(--ovelis-card-bg);
+  border-radius: 50%;
+  color: var(--ovelis-text-disabled);
+}
+
 .tp-empty-text {
   font-size: 14px;
   margin: 0 0 8px 0;
@@ -95,6 +108,8 @@
   font-size: 12px;
   margin: 0;
   color: var(--ovelis-text-secondary);
+  text-align: center;
+  max-width: 250px;
 }
 
 /* ── 底部操作栏 ──────────────────────────────────────────────── */
@@ -195,7 +210,8 @@
 
 @media (max-width: 600px) {
   .transfer-panel {
-    width: 250px;
+    width: calc(100vw - 16px); /* 窄屏幕时减小边距 */
+    max-height: calc(50vh - 32px); /* 增加高度 */
   }
 
   .tp-footer {
@@ -206,6 +222,17 @@
     gap: 8px;
     font-size: 8pt;
   }
+}
+
+/* ── 无障碍：减少动画 ───────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .transfer-panel,
+  .tp-action-btn {
+    animation: none;
+    transition: none;
+  }
+}
 
   .tp-action-btn {
     padding: 4px 8px;

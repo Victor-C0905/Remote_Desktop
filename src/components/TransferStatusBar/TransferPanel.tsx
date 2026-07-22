@@ -12,59 +12,96 @@ import { TransferTask } from '../../hooks/useTransferProgress';
 import { TaskCard } from './TaskCard';
 import './TransferPanel.css';
 
+// ── 内联 SVG 图标组件（Adwaita 风格）────────────────────────────
+
+/**
+ * 下载图标（向下箭头）
+ * 来源：GNOME Adwaita go-down-symbolic.svg
+ */
+function DownloadIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+      <path d="M8 12l-4-4h2.5V4h3v4H12z" />
+    </svg>
+  );
+}
+
 interface TransferPanelProps {
   transfers: TransferTask[];
   onRemoveTask: (taskId: string) => void;
   onClose: () => void;
+  /** 状态栏容器的 ref，点击状态栏时不应该收起面板（由状态栏的 onClick 处理） */
+  statusbarRef?: React.RefObject<HTMLDivElement>;
 }
 
-export function TransferPanel({ transfers, onRemoveTask, onClose }: TransferPanelProps) {
+export function TransferPanel({ transfers, onRemoveTask, onClose, statusbarRef }: TransferPanelProps) {
   const panelRef = useRef<HTMLDivElement>(null);
 
   /**
    * 点击外部时自动收起面板
+   * 使用捕获阶段的事件监听器，确保在 React 合成事件之前触发
    */
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      // 如果点击的不是面板内部，收起面板
-      if (panelRef.current && !panelRef.current.contains(event.target as Node)) {
-        onClose();
+      const target = event.target as Node;
+
+      console.log('[TransferPanel] 外部点击检测', {
+        目标元素: (target as HTMLElement).tagName,
+        在面板内: panelRef.current?.contains(target),
+        在状态栏内: statusbarRef?.current?.contains(target),
+      });
+
+      // 如果点击的是面板内部，不收起
+      if (panelRef.current && panelRef.current.contains(target)) {
+        console.log('[TransferPanel] 面板内部点击，忽略');
+        return;
       }
+
+      // 如果点击的是状态栏（按钮），不收起（由状态栏的 onClick 处理）
+      if (statusbarRef?.current && statusbarRef.current.contains(target)) {
+        console.log('[TransferPanel] 状态栏点击，忽略');
+        return;
+      }
+
+      // 点击其他地方，收起面板
+      console.log('[TransferPanel] 外部区域点击，收起面板');
+      onClose();
     };
 
-    // 添加全局点击监听器
-    document.addEventListener('mousedown', handleClickOutside);
+    // 使用捕获阶段（第三个参数为 true），确保在 React 合成事件之前触发
+    document.addEventListener('click', handleClickOutside, true);
 
     // 清理监听器
     return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('click', handleClickOutside, true);
     };
-  }, [onClose]);
+  }, [onClose, statusbarRef]);
+
+  /**
+   * 过滤任务：只显示正在下载或排队的任务
+   */
+  const visibleTransfers = transfers.filter((t) =>
+    t.status === 'active' || t.status === 'pending' || t.status === 'paused'
+  );
 
   /**
    * 排序任务
-   * 优先级：活动 → 排队 → 已暂停 → 已取消 → 完成 → 失败
+   * 优先级：活动 → 排队 → 已暂停
    */
-  const sortedTransfers = [...transfers].sort((a, b) => {
+  const sortedTransfers = [...visibleTransfers].sort((a, b) => {
     const statusOrder = {
       active: 0,
       pending: 1,
       paused: 2,
-      cancelled: 3,
-      completed: 4,
-      error: 5,
     };
     return statusOrder[a.status] - statusOrder[b.status];
   });
 
   /**
-   * 计算任务统计
+   * 计算任务统计（仅统计可见任务）
    */
-  const activeCount = transfers.filter((t) => t.status === 'active').length;
-  const pendingCount = transfers.filter((t) => t.status === 'pending').length;
-  const completedCount = transfers.filter((t) => t.status === 'completed').length;
-  const cancelledCount = transfers.filter((t) => t.status === 'cancelled').length;
-  const errorCount = transfers.filter((t) => t.status === 'error').length;
+  const activeCount = visibleTransfers.filter((t) => t.status === 'active').length;
+  const pendingCount = visibleTransfers.filter((t) => t.status === 'pending').length;
 
   /**
    * 批量取消所有活动任务
@@ -95,13 +132,16 @@ export function TransferPanel({ transfers, onRemoveTask, onClose }: TransferPane
       className="transfer-panel"
       role="dialog"
       aria-label="传输任务列表"
+      onClick={(e) => e.stopPropagation()} // 阻止事件冒泡，防止触发父元素的 onClick
     >
       {/* 任务列表 */}
       <div className="tp-list">
         {sortedTransfers.length === 0 ? (
-          <div className="tp-empty">
-            <p className="tp-empty-text">当前没有正在执行的传输任务</p>
-            <p className="tp-empty-hint">上传或下载文件时，进度会显示在这里</p>
+          <div className="tp-empty" role="status" aria-live="polite">
+            <div className="tp-empty-icon">
+              <DownloadIcon />
+            </div>
+            <p className="tp-empty-text">暂无传输任务</p>
           </div>
         ) : (
           sortedTransfers.map((task) => (
@@ -116,7 +156,7 @@ export function TransferPanel({ transfers, onRemoveTask, onClose }: TransferPane
 
       {/* 底部操作栏 */}
       <div className="tp-footer">
-        {/* 统计信息 */}
+        {/* 统计信息（仅显示活动和排队） */}
         <div className="tp-stats">
           <span className="tp-stat-item">
             {activeCount > 0 && (
@@ -131,30 +171,6 @@ export function TransferPanel({ transfers, onRemoveTask, onClose }: TransferPane
               <>
                 <span className="tp-stat-label">排队:</span>
                 <span className="tp-stat-value">{pendingCount}</span>
-              </>
-            )}
-          </span>
-          <span className="tp-stat-item">
-            {completedCount > 0 && (
-              <>
-                <span className="tp-stat-label">完成:</span>
-                <span className="tp-stat-value success">{completedCount}</span>
-              </>
-            )}
-          </span>
-          <span className="tp-stat-item">
-            {cancelledCount > 0 && (
-              <>
-                <span className="tp-stat-label">已取消:</span>
-                <span className="tp-stat-value cancelled">{cancelledCount}</span>
-              </>
-            )}
-          </span>
-          <span className="tp-stat-item">
-            {errorCount > 0 && (
-              <>
-                <span className="tp-stat-label">失败:</span>
-                <span className="tp-stat-value error">{errorCount}</span>
               </>
             )}
           </span>
