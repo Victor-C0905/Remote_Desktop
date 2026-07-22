@@ -41,7 +41,7 @@ async fn graceful_shutdown(app: tauri::AppHandle) {
         let tasks = transfer_manager.list_tasks().await;
         for task in tasks {
             if task.status == "pending" || task.status == "transferring" || task.status == "active" {
-                let _ = transfer_manager.cancel_task(&task.id).await;
+                let _ = transfer_manager.cancel_task(&task.id, &app).await;
             }
         }
     }

@@ -158,6 +158,7 @@ pub enum Payload {
     #[serde(rename = "cancel_file_transfer")]
     CancelFileTransfer {
         session_id: String,       // 传输会话 ID
+        reason: String,           // 取消原因
     },
 
     /// 取消文件传输响应（Agent → 客户端）
@@ -237,6 +238,15 @@ pub enum Payload {
         new_mtime: u64,
         error: Option<String>,
     },
+
+    /// 断开连接请求（客户端 → Agent）
+    /// 客户端主动断开前发送，通知 Agent 清理关联资源（传输会话等）
+    #[serde(rename = "disconnect")]
+    DisconnectRequest {},
+
+    /// 断开连接响应（Agent → 客户端）
+    #[serde(rename = "disconnect_resp")]
+    DisconnectResponse { success: bool },
 
     #[serde(rename = "error")]
     Error { code: i32, message: String },
@@ -554,13 +564,47 @@ pub async fn remote_disconnect(server_id: String, app: tauri::AppHandle) -> Resu
     let transfer_manager = app.state::<std::sync::Arc<crate::transfer::TransferManager>>();
     transfer_manager.cleanup_by_connection(&server_id).await;
 
-    // 2. 清理终端会话（如果有）
-    // TODO: 添加终端会话清理
-
-    // 3. 断开连接
+    // 2. 发送断开通知给 Agent（让 Agent 清理传输会话等资源）
+    // 注意：必须在移除连接之前发送，因为发送需要通过 tx 通道
     let manager = app.state::<ConnectionManager>();
+    let disconnect_result = {
+        let conns = manager.connections.lock().unwrap();
+        if let Some(conn) = conns.get(&server_id) {
+            let tx = conn.tx.clone();
+            // 通过消息循环发送 DisconnectRequest 给 Agent
+            let request_id = manager.next_request_id();
+            let envelope = Envelope::new(request_id, Payload::DisconnectRequest {});
+            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+            let send_result = tx.try_send(ClientRequest::Send { envelope, response_tx });
+            Some((send_result, response_rx))
+        } else {
+            None
+        }
+    };
 
-    // 先获取 tx，释放 lock 后再发送
+    // 等待 Agent 的响应（带超时，避免因网络问题无限等待）
+    if let Some((send_result, response_rx)) = disconnect_result {
+        if send_result.is_ok() {
+            match tokio::time::timeout(std::time::Duration::from_secs(3), response_rx).await {
+                Ok(Ok(Ok(_))) => {
+                    eprintln!("[Connection] Agent 已确认断开请求: {}", server_id);
+                }
+                Ok(Ok(Err(e))) => {
+                    eprintln!("[Connection] Agent 断开请求发送失败（非致命）: {}", e);
+                }
+                Ok(Err(_)) => {
+                    eprintln!("[Connection] Agent 断开请求响应通道关闭（非致命）");
+                }
+                Err(_) => {
+                    eprintln!("[Connection] Agent 断开请求超时（3s），继续断开");
+                }
+            }
+        } else {
+            eprintln!("[Connection] 发送断开请求失败（消息队列已满，非致命）");
+        }
+    }
+
+    // 3. 移除连接并通知消息循环退出
     let tx = {
         let mut conns = manager.connections.lock().unwrap();
         conns.remove(&server_id).map(|c| c.tx)

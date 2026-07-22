@@ -43,6 +43,8 @@ pub struct ConnectionContext {
     pty_session_ids: Arc<Mutex<Vec<String>>>,
     /// 关联的订阅 Stream ID 列表（连接关闭时自动清理订阅）
     stream_ids: Arc<Mutex<Vec<u64>>>,
+    /// 关联的传输会话 ID 列表（连接关闭时自动清理传输会话）
+    transfer_session_ids: Arc<Mutex<Vec<String>>>,
 }
 
 impl ConnectionContext {
@@ -52,6 +54,7 @@ impl ConnectionContext {
             shutdown_tx,
             pty_session_ids: Arc::new(Mutex::new(Vec::new())),
             stream_ids: Arc::new(Mutex::new(Vec::new())),
+            transfer_session_ids: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -73,6 +76,40 @@ impl ConnectionContext {
     /// 注册订阅 Stream ID（连接关闭时自动清理订阅）
     pub async fn register_stream_id(&self, stream_id: u64) {
         self.stream_ids.lock().await.push(stream_id);
+    }
+
+    /// 注册传输会话 ID（连接关闭时自动清理传输会话）
+    pub async fn register_transfer_session(&self, session_id: String) {
+        self.transfer_session_ids.lock().await.push(session_id);
+    }
+
+    /// 清理指定连接的所有传输会话
+    ///
+    /// 从全局 TRANSFER_SESSIONS 中移除属于该连接的所有传输会话。
+    /// TransferSession 的 Drop impl 会自动清理未完成上传的临时文件。
+    pub async fn cleanup_transfer_sessions(&self) {
+        let session_ids = self.transfer_session_ids.lock().await.clone();
+        if session_ids.is_empty() {
+            return;
+        }
+
+        let mut sessions = crate::handler::TRANSFER_SESSIONS.lock().await;
+        let mut cleaned = 0;
+        for id in &session_ids {
+            if sessions.remove(id).is_some() {
+                cleaned += 1;
+                tracing::info!(
+                    "[ConnectionContext] 已清理传输会话: session_id={}",
+                    id
+                );
+            }
+        }
+        if cleaned > 0 {
+            tracing::info!(
+                "[ConnectionContext] 共清理了 {} 个传输会话",
+                cleaned
+            );
+        }
     }
 
     /// 清理所有关联资源（连接关闭后调用）
@@ -113,7 +150,10 @@ impl ConnectionContext {
             }
         }
 
-        // 3. 清理超时的传输会话（安全兜底，防止连接异常断开时传输会话泄漏）
+        // 3. 清理该连接关联的所有传输会话（即时清理，不再仅依赖超时）
+        self.cleanup_transfer_sessions().await;
+
+        // 4. 兜底：清理其他已超时的传输会话（防止非正常路径导致的泄漏）
         let mut sessions = crate::handler::TRANSFER_SESSIONS.lock().await;
         let expired_ids: Vec<String> = sessions
             .iter()
@@ -510,6 +550,11 @@ async fn handle_stream(
             // 调用 handler 中的处理函数
             match crate::handler::handle_file_transfer_request(envelope.request_id, direction, path, *file_size, *chunk_size, *resume_from, cfg).await {
                 Ok(response) => {
+                    // 注册传输会话到连接上下文（连接关闭时自动清理）
+                    if let Payload::FileTransferAccept { ref session_id, .. } = response.payload {
+                        ctx.register_transfer_session(session_id.clone()).await;
+                    }
+
                     // 发送 FileTransferAccept 响应
                     match response.encode() {
                         Ok(resp_bytes) => {
@@ -558,6 +603,26 @@ async fn handle_stream(
                     if let Ok(resp_bytes) = response.encode() {
                         write_message(&mut send, &resp_bytes).await?;
                     }
+                }
+            }
+        }
+
+        // 处理断开连接请求（客户端主动断开）
+        Payload::DisconnectRequest {} => {
+            tracing::info!("收到客户端断开连接请求，清理传输会话...");
+            ctx.cleanup_transfer_sessions().await;
+            let response = Envelope::new(
+                envelope.request_id,
+                Payload::DisconnectResponse { success: true },
+            );
+            match response.encode() {
+                Ok(resp_bytes) => {
+                    if let Err(e) = write_message(&mut send, &resp_bytes).await {
+                        tracing::warn!("发送断开响应失败: {}", e);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("编码断开响应失败: {}", e);
                 }
             }
         }

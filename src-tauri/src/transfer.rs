@@ -3,9 +3,9 @@
 //! 负责管理文件上传/下载任务，发送进度事件到前端。
 
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::{BufReader, BufWriter, Read, Write};
-use std::path::PathBuf;
+use std::fs::{File, OpenOptions};
+use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::Serialize;
@@ -14,6 +14,54 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::connection::{ConnectionManager, Envelope, Payload};
+
+/// 生成随机临时文件路径
+///
+/// 使用 UUID v4 生成不可预测的临时文件名，防止符号链接攻击。
+/// 文件名格式: `{原文件名}.{8位随机hex}.tmp`
+///
+/// # 安全性
+/// - UUID v4 提供 128 位随机性，截取前 8 个字符（32 位熵）已足够防止预测
+/// - 临时文件名包含原文件名，便于调试和清理
+fn generate_temp_path(path: &Path) -> PathBuf {
+    let random_part = &uuid::Uuid::new_v4().to_string()[..8];
+
+    let temp_name = format!(
+        "{}.{}.tmp",
+        path.file_name().unwrap_or_default().to_string_lossy(),
+        random_part
+    );
+
+    path.parent().unwrap_or(Path::new(".")).join(temp_name)
+}
+
+/// 查找已存在的临时文件（用于断点续传）
+///
+/// 搜索目录中匹配 `{原文件名}.*.tmp` 模式的文件，
+/// 返回修改时间最新的一个（兼容旧的确定性 `.tmp` 命名格式）。
+fn find_existing_temp_file(path: &Path) -> Option<PathBuf> {
+    let parent = path.parent()?;
+    let file_name = path.file_name()?.to_string_lossy();
+    let prefix = format!("{}.", file_name);
+
+    let entries = std::fs::read_dir(parent).ok()?;
+
+    entries
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let name = e.file_name();
+            let name_str = name.to_string_lossy();
+            // 匹配 `{原文件名}.*.tmp` 模式（同时兼容旧的 `{原文件名}.tmp` 格式）
+            name_str.starts_with(&prefix) && name_str.ends_with(".tmp")
+        })
+        .max_by_key(|e| {
+            e.metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .unwrap_or(std::time::UNIX_EPOCH)
+        })
+        .map(|e| e.path())
+}
 
 /// 传输任务状态
 #[derive(Debug, Clone, Serialize)]
@@ -50,6 +98,8 @@ pub struct TransferTask {
     // ── 原始参数（用于重试和断点续传） ──
     /// 服务器 ID（原始参数）
     pub server_id: String,
+    /// Agent 端的传输会话 ID（用于发送取消请求等操作）
+    pub agent_session_id: Option<String>,
 }
 
 /// 传输管理器
@@ -177,6 +227,7 @@ impl TransferManager {
                 .unwrap()
                 .as_secs(),
             server_id: server_id,  // 保存原始参数
+            agent_session_id: None,  // Agent 端 session_id，在传输开始后设置
         };
 
         // 保存任务
@@ -504,17 +555,57 @@ impl TransferManager {
     }
 
     /// 取消指定任务
-    pub async fn cancel_task(&self, task_id: &str) -> Result<(), String> {
-        let mut tasks = self.tasks.lock().await;
-        if let Some(task) = tasks.get_mut(task_id) {
-            task.status = "cancelled".to_string();
-            let task_clone = task.clone();
-            drop(tasks);
-            self.emit_progress(&task_clone)?;
-            Ok(())
-        } else {
-            Err(format!("任务 {} 不存在", task_id))
+    ///
+    /// 取消时会同时通知 Agent 端清理对应的传输会话。
+    /// 如果发送取消请求失败（如网络中断），不会阻塞本地取消流程，
+    /// Agent 端的超时机制会兜底清理。
+    pub async fn cancel_task(&self, task_id: &str, app_handle: &AppHandle) -> Result<(), String> {
+        let (task_clone, agent_session_id) = {
+            let mut tasks = self.tasks.lock().await;
+            if let Some(task) = tasks.get_mut(task_id) {
+                task.status = "cancelled".to_string();
+                let task_clone = task.clone();
+                let agent_session_id = task.agent_session_id.clone();
+                (task_clone, agent_session_id)
+            } else {
+                return Err(format!("任务 {} 不存在", task_id));
+            }
+        };
+
+        // 发送进度事件到前端
+        self.emit_progress(&task_clone)?;
+
+        // 如果有 Agent 端的 session_id，发送取消请求通知 Agent 清理会话
+        if let Some(session_id) = agent_session_id {
+            let server_id = task_clone.server_id.clone();
+            let task_id_owned = task_id.to_string();
+            let cancel_payload = crate::connection::Payload::CancelFileTransfer {
+                session_id,
+                reason: "用户取消".to_string(),
+            };
+
+            // 异步发送取消请求，不等待结果（fire-and-forget）
+            let app = app_handle.clone();
+            tokio::spawn(async move {
+                match crate::connection::remote_send(server_id.clone(), cancel_payload, app).await {
+                    Ok(_) => {
+                        tracing::info!(
+                            "[TransferManager] 已通知 Agent 取消传输: task_id={}, server_id={}",
+                            task_id_owned, server_id
+                        );
+                    }
+                    Err(e) => {
+                        // 发送失败不影响本地取消，Agent 端超时机制会兜底清理
+                        tracing::warn!(
+                            "[TransferManager] 通知 Agent 取消传输失败（本地已取消）: task_id={}, error={}",
+                            task_id_owned, e
+                        );
+                    }
+                }
+            });
         }
+
+        Ok(())
     }
 
     /// 列出所有任务
@@ -593,30 +684,186 @@ impl FileReader {
 }
 
 /// 文件写入器（用于下载）
+///
+/// 使用原子写入机制：先写入临时文件，完成后原子重命名到最终路径
+/// 这样可以防止中断传输导致的不完整文件问题
 pub struct FileWriter {
     writer: BufWriter<File>,
     file_size: u64,
     pub transferred: u64,
     /// 标记是否为临时文件（未完成传输）
     is_temporary: bool,
-    /// 文件路径（用于清理）
+    /// 最终文件路径
     path: PathBuf,
+    /// 临时文件路径（随机命名: `{原文件名}.{随机hex}.tmp`）
+    temp_path: PathBuf,
 }
 
 impl FileWriter {
-    /// 创建文件写入器
+    /// 创建文件写入器（使用临时文件）
+    ///
+    /// # 参数
+    /// - `path`: 最终文件路径
+    /// - `file_size`: 文件总大小（字节）
+    ///
+    /// # 返回
+    /// 成功返回 FileWriter，失败返回错误信息
     pub fn new(path: &str, file_size: u64) -> Result<Self, String> {
+        Self::with_resume(path, file_size, 0)
+    }
+
+    /// 创建支持断点续传的文件写入器
+    ///
+    /// # 参数
+    /// - `path`: 最终文件路径
+    /// - `file_size`: 文件总大小（字节）
+    /// - `resume_from`: 从哪个字节开始写入（0 = 从头开始）
+    ///
+    /// # 断点续传逻辑
+    /// - 如果 `resume_from` > 0，尝试打开已存在的临时文件并跳转到指定位置
+    /// - 验证临时文件完整性：
+    ///   1. 文件大小是否与 `resume_from` 一致
+    ///   2. 确保已有数据已落盘（sync_all）
+    /// - 如果临时文件不存在、大小不匹配或数据不完整，创建新文件并忽略 `resume_from`
+    ///
+    /// # 返回
+    /// 成功返回 FileWriter，失败返回错误信息
+    pub fn with_resume(path: &str, file_size: u64, resume_from: u64) -> Result<Self, String> {
         let path = PathBuf::from(path);
-        let file = File::create(&path)
-            .map_err(|e| format!("无法创建文件: {}", e))?;
+
+        // 确定临时文件路径：
+        // - 断点续传时查找已存在的临时文件（格式: `{原文件名}.*.tmp`）
+        // - 新传输时生成随机临时文件路径（格式: `{原文件名}.{随机hex}.tmp`）
+        let temp_path = if resume_from > 0 {
+            find_existing_temp_file(&path).unwrap_or_else(|| generate_temp_path(&path))
+        } else {
+            generate_temp_path(&path)
+        };
+
+        // 尝试断点续传
+        let (file, actual_resume_from) = if resume_from > 0 {
+            if temp_path.exists() {
+                // 验证临时文件完整性
+                match Self::verify_temp_file_integrity(&temp_path, resume_from) {
+                    Ok(mut existing_file) => {
+                        // 跳转到断点位置
+                        match existing_file.seek(SeekFrom::Start(resume_from)) {
+                            Ok(_) => {
+                                eprintln!(
+                                    "[FileWriter] 断点续传: 从 {} 字节继续写入临时文件 {:?}",
+                                    resume_from, temp_path
+                                );
+                                (BufWriter::new(existing_file), resume_from)
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "[FileWriter] 跳转到断点位置失败，降级为重新传输: {}",
+                                    e
+                                );
+                                Self::create_fresh_temp_file(&temp_path)?
+                            }
+                        }
+                    }
+                    Err(reason) => {
+                        eprintln!(
+                            "[FileWriter] 临时文件完整性校验失败: {}，降级为重新传输",
+                            reason
+                        );
+                        Self::create_fresh_temp_file(&temp_path)?
+                    }
+                }
+            } else {
+                eprintln!(
+                    "[FileWriter] 临时文件不存在，从头开始传输: {:?}",
+                    temp_path
+                );
+                Self::create_fresh_temp_file(&temp_path)?
+            }
+        } else {
+            Self::create_fresh_temp_file(&temp_path)?
+        };
 
         Ok(Self {
-            writer: BufWriter::new(file),
+            writer: file,
             file_size,
-            transferred: 0,
-            is_temporary: true,  // 默认为临时文件
+            transferred: actual_resume_from,
+            is_temporary: true,
             path,
+            temp_path,
         })
+    }
+
+    /// 验证临时文件完整性（用于断点续传）
+    ///
+    /// # 验证步骤
+    /// 1. 打开现有临时文件（读写模式）
+    /// 2. 获取文件大小并验证与 `expected_size` 匹配
+    /// 3. sync_all 确保之前写入的数据完全落盘
+    /// 4. 再次读取大小确认一致性
+    ///
+    /// # 返回
+    /// - `Ok(File)`: 验证通过，返回可用于继续写入的文件句柄
+    /// - `Err(String)`: 验证失败的原因
+    fn verify_temp_file_integrity(
+        temp_path: &PathBuf,
+        expected_size: u64,
+    ) -> Result<File, String> {
+        // 打开现有临时文件（读写模式，不截断）
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(temp_path)
+            .map_err(|e| format!("无法打开临时文件 {:?}: {}", temp_path, e))?;
+
+        // 获取文件大小
+        let metadata = file
+            .metadata()
+            .map_err(|e| format!("无法获取临时文件元数据: {}", e))?;
+        let temp_size = metadata.len();
+
+        // 验证文件大小是否匹配断点位置
+        if temp_size != expected_size {
+            return Err(format!(
+                "临时文件大小不匹配: 实际 {} 字节, 期望 {} 字节",
+                temp_size, expected_size
+            ));
+        }
+
+        // sync 确保之前写入的数据完全落盘
+        // 即使之前进程异常退出导致部分数据还在内核缓冲区，
+        // sync 也会将其写入磁盘，避免续传后数据不一致
+        file.sync_all()
+            .map_err(|e| format!("同步临时文件到磁盘失败: {}", e))?;
+
+        // 再次读取大小确认一致性（排除 sync 期间的并发修改）
+        let post_sync_metadata = file
+            .metadata()
+            .map_err(|e| format!("同步后重新获取文件元数据失败: {}", e))?;
+        if post_sync_metadata.len() != expected_size {
+            return Err(format!(
+                "同步后临时文件大小发生变化: {} -> {}",
+                temp_size,
+                post_sync_metadata.len()
+            ));
+        }
+
+        eprintln!(
+            "[FileWriter] 临时文件完整性校验通过: {:?} (大小: {} 字节)",
+            temp_path, expected_size
+        );
+
+        Ok(file)
+    }
+
+    /// 创建全新的临时文件（截断模式）
+    ///
+    /// 用于：
+    /// - 从头开始传输（resume_from == 0）
+    /// - 断点续传降级（临时文件不存在或完整性校验失败）
+    fn create_fresh_temp_file(temp_path: &PathBuf) -> Result<(BufWriter<File>, u64), String> {
+        let file = File::create(temp_path)
+            .map_err(|e| format!("无法创建临时文件: {}", e))?;
+        Ok((BufWriter::new(file), 0))
     }
 
     /// 写入数据块
@@ -627,10 +874,29 @@ impl FileWriter {
         Ok(())
     }
 
-    /// 完成写入
+    /// 完成写入（原子操作）
+    ///
+    /// # 操作流程
+    /// 1. 刷新缓冲区到磁盘
+    /// 2. 同步文件元数据到磁盘
+    /// 3. 标记为完成（防止 Drop 删除临时文件）
+    /// 4. 原子重命名：临时文件 -> 最终文件
     pub fn finish(&mut self) -> Result<(), String> {
+        // 刷新缓冲区
         self.writer.flush()
             .map_err(|e| format!("刷新文件失败: {}", e))?;
+        
+        // 同步到磁盘
+        self.writer.get_ref().sync_all()
+            .map_err(|e| format!("同步文件失败: {}", e))?;
+        
+        // 标记为完成，防止 Drop 删除
+        self.is_temporary = false;
+        
+        // 原子重命名：临时文件 -> 最终文件
+        std::fs::rename(&self.temp_path, &self.path)
+            .map_err(|e| format!("重命名文件失败: {}", e))?;
+        
         Ok(())
     }
 
@@ -650,10 +916,11 @@ impl FileWriter {
 
 impl Drop for FileWriter {
     fn drop(&mut self) {
-        // 如果是临时文件且未完成，删除文件
-        if self.is_temporary && self.transferred < self.file_size {
-            eprintln!("[FileWriter] 清理临时文件: {:?}", self.path);
-            let _ = std::fs::remove_file(&self.path);
+        // 如果是临时文件，清理临时文件
+        // 注意：只清理临时文件，不清理最终文件
+        if self.is_temporary {
+            eprintln!("[FileWriter] 清理临时文件: {:?}", self.temp_path);
+            let _ = std::fs::remove_file(&self.temp_path);
         }
     }
 }
@@ -858,6 +1125,14 @@ async fn perform_transfer(
             eprintln!("[Transfer] 文件传输已接受: session_id={}, file_size={}, chunk_size={}",
                 session_id, file_size, chunk_size);
 
+            // 保存 Agent 端的 session_id（用于后续取消等操作）
+            {
+                let mut tasks = manager.tasks.lock().await;
+                if let Some(task) = tasks.get_mut(task_id) {
+                    task.agent_session_id = Some(session_id.clone());
+                }
+            }
+
             // 更新任务的文件大小（下载时）
             if direction == "download" {
                 eprintln!("[Transfer] 下载模式：更新文件大小");
@@ -1004,7 +1279,11 @@ async fn perform_transfer(
             } else {
                 // 下载逻辑
                 eprintln!("[Transfer] 开始下载逻辑：创建 FileWriter");
-                let mut writer = FileWriter::new(&local_path, file_size)?;
+                let resume_pos = resume_from.unwrap_or(0);
+                let mut writer = FileWriter::with_resume(&local_path, file_size, resume_pos)?;
+                if resume_pos > 0 {
+                    eprintln!("[Transfer] 断点续传: 从 {} 字节继续下载", writer.transferred);
+                }
                 let start_time = std::time::Instant::now();
 
                 eprintln!("[Transfer] 进入接收循环：等待 FileChunk");
@@ -1080,11 +1359,13 @@ async fn perform_transfer(
                         Ok(Ok(buf)) => buf,
                         Ok(Err(e)) => {
                             eprintln!("[Transfer] 读取数据块失败: {}", e);
-                            break;
+                            manager.mark_failed(task_id, format!("读取数据块失败: {}", e)).await?;
+                            return Err(format!("读取数据块失败: {}", e));
                         }
                         Err(_) => {
                             eprintln!("[Transfer] 读取数据块超时 ({}s)", FILE_CHUNK_TIMEOUT.as_secs());
-                            break;
+                            manager.mark_failed(task_id, "读取数据块超时".to_string()).await?;
+                            return Err("读取数据块超时".to_string());
                         }
                     };
 
@@ -1132,6 +1413,18 @@ async fn perform_transfer(
                             tracing::warn!("收到意外的消息类型");
                         }
                     }
+                }
+
+                // 检查传输是否完成
+                if writer.transferred >= writer.file_size {
+                    // 传输完成，调用 finish() 执行原子重命名
+                    writer.finish()?;
+                    writer.mark_completed();  // 标记为已完成，不是临时文件
+                    manager.mark_completed(task_id).await?;
+                } else {
+                    // 传输不完整，标记为失败（writer drop 时会自动清理临时文件）
+                    manager.mark_failed(task_id, "传输不完整".to_string()).await?;
+                    return Err("传输不完整".to_string());
                 }
             }
 
@@ -1194,8 +1487,8 @@ pub async fn cancel_transfer(task_id: String, app_handle: AppHandle) -> Result<(
     // 获取全局 TransferManager
     let manager = app_handle.state::<Arc<TransferManager>>();
 
-    // 调用取消方法
-    manager.cancel_task(&task_id).await?;
+    // 调用取消方法（会同时通知 Agent 端清理传输会话）
+    manager.cancel_task(&task_id, &app_handle).await?;
 
     Ok(())
 }

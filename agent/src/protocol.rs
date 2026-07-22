@@ -262,6 +262,7 @@ pub enum Payload {
     #[serde(rename = "cancel_file_transfer")]
     CancelFileTransfer {
         session_id: String,       // 传输会话 ID
+        reason: String,           // 取消原因
     },
 
     /// 取消文件传输响应（Agent → 客户端）
@@ -335,6 +336,15 @@ pub enum Payload {
         new_mtime: u64,         // 新的 mtime（写入后）
         error: Option<String>,  // 错误信息（如果失败）
     },
+
+    /// 断开连接请求（客户端 → Agent）
+    /// 客户端主动断开前发送，通知 Agent 清理关联资源（传输会话等）
+    #[serde(rename = "disconnect")]
+    DisconnectRequest {},
+
+    /// 断开连接响应（Agent → 客户端）
+    #[serde(rename = "disconnect_resp")]
+    DisconnectResponse { success: bool },
 
     #[serde(rename = "error")]
     Error { code: i32, message: String },
