@@ -44,6 +44,8 @@ pub struct TransferTask {
     pub status: String,
     /// 错误信息（如果失败）
     pub error: Option<String>,
+    /// 任务创建时间（Unix 时间戳，秒）
+    pub created_at: u64,
 
     // ── 原始参数（用于重试和断点续传） ──
     /// 服务器 ID（原始参数）
@@ -61,10 +63,59 @@ pub struct TransferManager {
 impl TransferManager {
     /// 创建新的传输管理器
     pub fn new(app_handle: AppHandle) -> Self {
-        Self {
+        let manager = Self {
             app_handle,
             tasks: Arc::new(Mutex::new(HashMap::new())),
-        }
+        };
+
+        // 启动定期清理任务
+        manager.start_cleanup_task();
+
+        manager
+    }
+
+    /// 启动定期清理任务
+    ///
+    /// 每 5 分钟清理一次已完成的任务，保留最近 10 个
+    fn start_cleanup_task(&self) {
+        let tasks = self.tasks.clone();
+
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(300)); // 每5分钟清理一次
+
+            loop {
+                interval.tick().await;
+
+                // 检查关闭标志
+                if *crate::SHUTDOWN_FLAG.lock().await {
+                    break;
+                }
+
+                // 清理已完成的任务（保留最近10个）
+                let mut tasks_guard = tasks.lock().await;
+
+                // 收集已完成的任务（ID 和创建时间）
+                let mut completed: Vec<(&String, u64)> = tasks_guard
+                    .iter()
+                    .filter(|(_, task)| {
+                        task.status == "completed" || task.status == "failed" || task.status == "cancelled"
+                    })
+                    .map(|(id, task)| (id, task.created_at))
+                    .collect();
+
+                // 按创建时间排序（最旧的在前）
+                completed.sort_by_key(|(_, created_at)| *created_at);
+
+                // 保留最近10个已完成的任务（删除最旧的）
+                if completed.len() > 10 {
+                    let to_remove = completed.len() - 10;
+                    for (id, _) in completed.into_iter().take(to_remove) {
+                        tasks_guard.remove(id);
+                    }
+                    tracing::info!("[TransferManager] 自动清理了 {} 个已完成任务", to_remove);
+                }
+            }
+        });
     }
 
     /// 创建传输任务（简化版：仅创建任务，不实际传输）
@@ -119,6 +170,10 @@ impl TransferManager {
             eta_secs: 0,
             status: "pending".to_string(),
             error: None,
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
             server_id: server_id,  // 保存原始参数
         };
 
@@ -409,24 +464,61 @@ impl TransferManager {
         Ok(())
     }
 
-    /// 取消任务
-    #[allow(dead_code)]
-    pub async fn cancel_task(&self, task_id: &str) -> Result<(), String> {
-        let mut tasks = self.tasks.lock().await;
-        let task = tasks
-            .get_mut(task_id)
-            .ok_or_else(|| format!("任务不存在: {}", task_id))?;
+    /// 清理指定连接的所有任务
+    pub async fn cleanup_by_connection(&self, connection_id: &str) {
+        // 1. 在锁内收集需要清理的任务
+        let (tasks_to_cancel, ids_to_remove): (Vec<TransferTask>, Vec<String>) = {
+            let mut tasks = self.tasks.lock().await;
 
-        if task.status != "completed" && task.status != "failed" {
-            task.status = "cancelled".to_string();
+            // 先收集任务和ID
+            let mut to_cancel = Vec::new();
+            let mut ids = Vec::new();
+
+            for (id, task) in tasks.iter_mut() {
+                if task.server_id == connection_id {
+                    task.status = "cancelled".to_string();
+                    to_cancel.push(task.clone());
+                    ids.push(id.clone());
+                }
+            }
+
+            // 统一删除（迭代器已结束）
+            for id in &ids {
+                tasks.remove(id);
+            }
+
+            (to_cancel, ids)
+        };
+        // ← 锁已释放
+
+        let count = tasks_to_cancel.len();
+
+        // 2. 发送事件
+        for task in tasks_to_cancel {
+            let _ = self.emit_progress(&task);
         }
 
-        // 发送进度事件
-        let task_clone = task.clone();
-        drop(tasks);
-        self.emit_progress(&task_clone)?;
+        eprintln!("[TransferManager] 已清理连接 {} 的 {} 个任务", connection_id, count);
+    }
 
-        Ok(())
+    /// 取消指定任务
+    pub async fn cancel_task(&self, task_id: &str) -> Result<(), String> {
+        let mut tasks = self.tasks.lock().await;
+        if let Some(task) = tasks.get_mut(task_id) {
+            task.status = "cancelled".to_string();
+            let task_clone = task.clone();
+            drop(tasks);
+            self.emit_progress(&task_clone)?;
+            Ok(())
+        } else {
+            Err(format!("任务 {} 不存在", task_id))
+        }
+    }
+
+    /// 列出所有任务
+    pub async fn list_tasks(&self) -> Vec<TransferTask> {
+        let tasks = self.tasks.lock().await;
+        tasks.values().cloned().collect()
     }
 
     /// 清理已完成的任务
@@ -503,18 +595,25 @@ pub struct FileWriter {
     writer: BufWriter<File>,
     file_size: u64,
     pub transferred: u64,
+    /// 标记是否为临时文件（未完成传输）
+    is_temporary: bool,
+    /// 文件路径（用于清理）
+    path: PathBuf,
 }
 
 impl FileWriter {
     /// 创建文件写入器
     pub fn new(path: &str, file_size: u64) -> Result<Self, String> {
-        let file = File::create(path)
+        let path = PathBuf::from(path);
+        let file = File::create(&path)
             .map_err(|e| format!("无法创建文件: {}", e))?;
 
         Ok(Self {
             writer: BufWriter::new(file),
             file_size,
             transferred: 0,
+            is_temporary: true,  // 默认为临时文件
+            path,
         })
     }
 
@@ -533,12 +632,27 @@ impl FileWriter {
         Ok(())
     }
 
+    /// 标记文件为已完成（不是临时文件）
+    pub fn mark_completed(&mut self) {
+        self.is_temporary = false;
+    }
+
     /// 获取进度百分比 (0-100)
     pub fn progress(&self) -> u32 {
         if self.file_size == 0 {
             return 100;
         }
         (self.transferred as f64 / self.file_size as f64 * 100.0) as u32
+    }
+}
+
+impl Drop for FileWriter {
+    fn drop(&mut self) {
+        // 如果是临时文件且未完成，删除文件
+        if self.is_temporary && self.transferred < self.file_size {
+            eprintln!("[FileWriter] 清理临时文件: {:?}", self.path);
+            let _ = std::fs::remove_file(&self.path);
+        }
     }
 }
 
@@ -964,6 +1078,7 @@ async fn perform_transfer(
                         Payload::FileTransferComplete { success, error, .. } => {
                             if success {
                                 writer.finish()?;
+                                writer.mark_completed();  // 标记为已完成，不是临时文件
                                 manager.mark_completed(task_id).await?;
                             } else {
                                 manager.mark_failed(
