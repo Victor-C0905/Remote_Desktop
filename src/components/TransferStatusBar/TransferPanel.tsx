@@ -78,21 +78,23 @@ export function TransferPanel({ transfers, onRemoveTask, onClose, statusbarRef }
   }, [onClose, statusbarRef]);
 
   /**
-   * 过滤任务：只显示正在下载或排队的任务
+   * 过滤任务：显示所有任务（包括已完成的）
+   * 只有用户手动关闭或关闭文件管理器时才移除
    */
-  const visibleTransfers = transfers.filter((t) =>
-    t.status === 'active' || t.status === 'pending' || t.status === 'paused'
-  );
+  const visibleTransfers = transfers;
 
   /**
    * 排序任务
-   * 优先级：活动 → 排队 → 已暂停
+   * 优先级：活动 → 排队 → 已暂停 → 已完成 → 失败 → 已取消
    */
   const sortedTransfers = [...visibleTransfers].sort((a, b) => {
     const statusOrder = {
       active: 0,
       pending: 1,
       paused: 2,
+      completed: 3,
+      error: 4,
+      cancelled: 5,
     };
     return statusOrder[a.status] - statusOrder[b.status];
   });

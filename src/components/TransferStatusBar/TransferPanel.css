@@ -12,9 +12,10 @@
   position: absolute;
   bottom: calc(100% + 8px); /* 状态栏上方 8px 间距 */
   right: 0;
-  width: min(300px, calc(100vw - 32px)); /* 响应式宽度：最大 300px，小于视口宽度 */
+  width: min(400px, calc(100vw - 32px)); /* 面板宽度：400px，确保所有元素有足够空间 */
   max-width: 100%; /* 确保不超过父容器 */
   max-height: calc(40vh - 32px);
+  min-width: 360px; /* 最小宽度，确保可用性 */
   background: var(--ovelis-window-bg);
   border: 1px solid rgba(0, 0, 0, 0.08);
   border-radius: 8px;
@@ -208,18 +209,25 @@
 
 /* ── 响应式适配 ─────────────────────────────────────────────── */
 
-@media (max-width: 600px) {
+@media (max-width: 480px) {
   .transfer-panel {
     width: calc(100vw - 16px); /* 窄屏幕时减小边距 */
     max-height: calc(50vh - 32px); /* 增加高度 */
+    min-width: 280px; /* 减小最小宽度 */
   }
 
   .tp-footer {
     padding: 6px 8px;
+    height: 28px;
   }
 
   .tp-stats {
     gap: 8px;
+    font-size: 8pt;
+  }
+
+  .tp-action-btn {
+    padding: 3px 8px;
     font-size: 8pt;
   }
 }

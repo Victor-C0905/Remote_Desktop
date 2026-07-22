@@ -101,6 +101,7 @@ export function useTransferProgress(connectionId?: string) {
             t.id === payload.id
               ? {
                   ...t,
+                  file_size: payload.file_size, // 更新文件大小（解决显示 0B 的问题）
                   transferred: payload.transferred,
                   progress: payload.progress,
                   speed: payload.speed_bps,
@@ -119,10 +120,8 @@ export function useTransferProgress(connectionId?: string) {
             // 显示通知
             showCompletionNotification(payload);
 
-            // 3 秒后自动移除已完成的任务
-            setTimeout(() => {
-              setTransfers(prev => prev.filter(t => t.id !== payload.id));
-            }, 3000);
+            // 任务完成后保留在列表中，只有用户手动关闭或关闭窗口时才移除
+            // 不自动移除已完成任务
           }
 
           return updatedTasks;
