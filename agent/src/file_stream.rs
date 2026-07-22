@@ -6,6 +6,58 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
+/// 生成随机临时文件路径
+///
+/// 使用 UUID v4 生成不可预测的临时文件名，防止符号链接攻击。
+/// 文件名格式: `{原文件名}.{8位随机hex}.tmp`
+///
+/// # 安全性
+/// - UUID v4 提供 128 位随机性，截取前 8 个字符（32 位熵）已足够防止预测
+/// - 临时文件名包含原文件名，便于调试和清理
+fn generate_temp_path(path: &Path) -> String {
+    let random_part = &uuid::Uuid::new_v4().to_string()[..8];
+
+    let temp_name = format!(
+        "{}.{}.tmp",
+        path.file_name().unwrap_or_default().to_string_lossy(),
+        random_part
+    );
+
+    path.parent()
+        .unwrap_or(Path::new("."))
+        .join(temp_name)
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// 查找已存在的临时文件（用于断点续传）
+///
+/// 搜索目录中匹配 `{原文件名}.*.tmp` 模式的文件，
+/// 返回修改时间最新的一个（兼容旧的确定性 `.tmp` 命名格式）。
+fn find_existing_temp_file(path: &Path) -> Option<String> {
+    let parent = path.parent()?;
+    let file_name = path.file_name()?.to_string_lossy();
+    let prefix = format!("{}.", file_name);
+
+    let entries = std::fs::read_dir(parent).ok()?;
+
+    entries
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let name = e.file_name();
+            let name_str = name.to_string_lossy();
+            // 匹配 `{原文件名}.*.tmp` 模式（同时兼容旧的 `{原文件名}.tmp` 格式）
+            name_str.starts_with(&prefix) && name_str.ends_with(".tmp")
+        })
+        .max_by_key(|e| {
+            e.metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .unwrap_or(std::time::UNIX_EPOCH)
+        })
+        .map(|e| e.path().to_string_lossy().into_owned())
+}
+
 /// 默认分块大小 (64KB)
 const DEFAULT_CHUNK_SIZE: u32 = 64 * 1024;
 
@@ -219,14 +271,13 @@ impl FileStreamWriter {
     ///
     /// # 安全性说明
     ///
-    /// 临时文件使用固定后缀 `.tmp`，在生产环境中建议：
-    /// - 使用随机 UUID 生成唯一临时文件名
-    /// - 防止临时文件被恶意替换
+    /// 临时文件使用随机 UUID 生成唯一文件名（格式: `{原文件名}.{随机hex}.tmp`），
+    /// 防止符号链接攻击和临时文件被恶意替换。
     ///
     /// 此方法的路径验证由调用方负责（见 FileReader 说明）。
     ///
     /// # 流程
-    /// 1. 创建临时文件（.tmp 后缀）
+    /// 1. 创建随机命名的临时文件
     /// 2. 写入数据到临时文件
     /// 3. 完成后重命名为最终文件
     ///
@@ -247,7 +298,10 @@ impl FileStreamWriter {
     ///
     /// # 断点续传逻辑
     /// - 如果 `resume_from` > 0，尝试打开已存在的临时文件并跳转到指定位置
-    /// - 如果临时文件不存在或大小不匹配，创建新文件并忽略 `resume_from`
+    /// - 验证临时文件完整性：
+    ///   1. 文件大小是否与 `resume_from` 一致
+    ///   2. 确保已有数据已落盘（flush + sync）
+    /// - 如果临时文件不存在、大小不匹配或数据不完整，创建新文件并忽略 `resume_from`
     /// - 记录是否成功续传，用于降级处理
     ///
     /// # 错误
@@ -257,8 +311,14 @@ impl FileStreamWriter {
     pub fn with_resume(path: &str, file_size: u64, resume_from: u64) -> Result<Self, String> {
         let final_path = Path::new(path);
 
-        // 创建临时文件路径
-        let temp_path = format!("{}.tmp", path);
+        // 确定临时文件路径：
+        // - 断点续传时查找已存在的临时文件（格式: `{原文件名}.*.tmp`）
+        // - 新传输时生成随机临时文件路径（格式: `{原文件名}.{随机hex}.tmp`）
+        let temp_path = if resume_from > 0 {
+            find_existing_temp_file(final_path).unwrap_or_else(|| generate_temp_path(final_path))
+        } else {
+            generate_temp_path(final_path)
+        };
 
         // 检查目标目录是否存在
         let parent = final_path.parent();
@@ -272,111 +332,44 @@ impl FileStreamWriter {
         let (file, actual_resume_from, is_resuming) = if resume_from > 0 {
             // 检查临时文件是否存在
             if Path::new(&temp_path).exists() {
-                // 尝试打开现有临时文件
-                match OpenOptions::new()
-                    .write(true)
-                    .open(&temp_path)
-                {
+                // 验证临时文件完整性并尝试续传
+                match Self::verify_temp_file_integrity(&temp_path, resume_from) {
                     Ok(mut existing_file) => {
-                        // 检查临时文件大小
-                        match existing_file.metadata() {
-                            Ok(metadata) => {
-                                let temp_size = metadata.len();
-
-                                // 如果临时文件大小匹配断点位置，继续写入
-                                if temp_size == resume_from {
-                                    // 跳转到断点位置
-                                    match existing_file.seek(SeekFrom::Start(resume_from)) {
-                                        Ok(_) => {
-                                            tracing::info!(
-                                                "断点续传: 从 {} 字节继续写入临时文件 (总大小: {})",
-                                                resume_from,
-                                                file_size
-                                            );
-                                            (BufWriter::new(existing_file), resume_from, true)
-                                        }
-                                        Err(e) => {
-                                            tracing::warn!(
-                                                "跳转到断点位置失败，降级为重新传输: {}",
-                                                e
-                                            );
-                                            // 降级：创建新文件
-                                            let file = OpenOptions::new()
-                                                .create(true)
-                                                .write(true)
-                                                .truncate(true)
-                                                .open(&temp_path)
-                                                .map_err(|e| format!("无法创建临时文件: {}", e))?;
-                                            (BufWriter::new(file), 0, false)
-                                        }
-                                    }
-                                } else {
-                                    // 临时文件大小不匹配，降级为重新传输
-                                    tracing::warn!(
-                                        "临时文件大小不匹配 ({} != {})，降级为重新传输",
-                                        temp_size,
-                                        resume_from
-                                    );
-                                    let file = OpenOptions::new()
-                                        .create(true)
-                                        .write(true)
-                                        .truncate(true)
-                                        .open(&temp_path)
-                                        .map_err(|e| format!("无法创建临时文件: {}", e))?;
-                                    (BufWriter::new(file), 0, false)
-                                }
+                        // 跳转到断点位置
+                        match existing_file.seek(SeekFrom::Start(resume_from)) {
+                            Ok(_) => {
+                                tracing::info!(
+                                    "断点续传: 从 {} 字节继续写入临时文件 (总大小: {})",
+                                    resume_from,
+                                    file_size
+                                );
+                                (BufWriter::new(existing_file), resume_from, true)
                             }
                             Err(e) => {
-                                tracing::warn!("无法获取临时文件元数据，降级为重新传输: {}", e);
-                                let file = OpenOptions::new()
-                                    .create(true)
-                                    .write(true)
-                                    .truncate(true)
-                                    .open(&temp_path)
-                                    .map_err(|e| format!("无法创建临时文件: {}", e))?;
-                                (BufWriter::new(file), 0, false)
+                                tracing::warn!(
+                                    "跳转到断点位置失败，降级为重新传输: {}",
+                                    e
+                                );
+                                // 降级：创建新文件
+                                let (file, _, _) = Self::create_fresh_temp_file(&temp_path)?;
+                                (file, 0, false)
                             }
                         }
                     }
-                    Err(e) => {
-                        tracing::warn!("无法打开现有临时文件，降级为重新传输: {}", e);
-                        let file = OpenOptions::new()
-                            .create(true)
-                            .write(true)
-                            .truncate(true)
-                            .open(&temp_path)
-                            .map_err(|e| format!("无法创建临时文件: {}", e))?;
-                        (BufWriter::new(file), 0, false)
+                    Err(reason) => {
+                        tracing::warn!("临时文件完整性校验失败: {}，降级为重新传输", reason);
+                        let (file, _, _) = Self::create_fresh_temp_file(&temp_path)?;
+                        (file, 0, false)
                     }
                 }
             } else {
                 // 临时文件不存在，降级为重新传输
                 tracing::info!("临时文件不存在，从头开始传输");
-                let file = OpenOptions::new()
-                    .create(true)
-                    .write(true)
-                    .truncate(true)
-                    .open(&temp_path)
-                    .map_err(|e| format!("无法创建临时文件: {}", e))?;
-                (BufWriter::new(file), 0, false)
+                Self::create_fresh_temp_file(&temp_path)?
             }
         } else {
             // 从头开始传输
-            let file = OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .open(&temp_path)
-                .map_err(|e| match e.kind() {
-                    io::ErrorKind::PermissionDenied => {
-                        format!("权限不足，无法创建临时文件: {}", temp_path)
-                    }
-                    io::ErrorKind::StorageFull => {
-                        "磁盘空间不足".to_string()
-                    }
-                    _ => format!("无法创建临时文件 {}: {}", temp_path, e),
-                })?;
-            (BufWriter::new(file), 0, false)
+            Self::create_fresh_temp_file(&temp_path)?
         };
 
         // 如果成功续传，记录日志
@@ -397,6 +390,87 @@ impl FileStreamWriter {
             final_path: path.to_string(),
             completed: false,
         })
+    }
+
+    /// 验证临时文件完整性（用于断点续传）
+    ///
+    /// # 验证步骤
+    /// 1. 打开现有临时文件（读写模式）
+    /// 2. 获取文件大小并验证与 `expected_size` 匹配
+    /// 3. flush 确保之前写入的数据完全提交到内核缓冲区
+    /// 4. sync_all 确保数据和元数据落盘
+    /// 5. 再次读取大小确认一致性（排除并发修改）
+    ///
+    /// # 返回
+    /// - `Ok(File)`: 验证通过，返回可用于继续写入的文件句柄
+    /// - `Err(String)`: 验证失败的原因
+    fn verify_temp_file_integrity(temp_path: &str, expected_size: u64) -> Result<File, String> {
+        // 打开现有临时文件（读写模式，不截断）
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(temp_path)
+            .map_err(|e| format!("无法打开临时文件 {}: {}", temp_path, e))?;
+
+        // 获取文件大小
+        let metadata = file.metadata()
+            .map_err(|e| format!("无法获取临时文件元数据: {}", e))?;
+        let temp_size = metadata.len();
+
+        // 验证文件大小是否匹配断点位置
+        if temp_size != expected_size {
+            return Err(format!(
+                "临时文件大小不匹配: 实际 {} 字节, 期望 {} 字节",
+                temp_size, expected_size
+            ));
+        }
+
+        // flush + sync 确保之前写入的数据完全落盘
+        // 这样即使之前进程异常退出导致部分数据还在内核缓冲区，
+        // sync 也会将其写入磁盘，避免续传后数据不一致
+        file.sync_all()
+            .map_err(|e| format!("同步临时文件到磁盘失败: {}", e))?;
+
+        // 再次读取大小确认一致性（排除 sync 期间的并发修改）
+        let post_sync_metadata = file.metadata()
+            .map_err(|e| format!("同步后重新获取文件元数据失败: {}", e))?;
+        if post_sync_metadata.len() != expected_size {
+            return Err(format!(
+                "同步后临时文件大小发生变化: {} -> {}",
+                temp_size, post_sync_metadata.len()
+            ));
+        }
+
+        tracing::info!(
+            "临时文件完整性校验通过: {} (大小: {} 字节)",
+            temp_path,
+            expected_size
+        );
+
+        Ok(file)
+    }
+
+    /// 创建全新的临时文件（截断模式）
+    ///
+    /// 用于：
+    /// - 从头开始传输（resume_from == 0）
+    /// - 断点续传降级（临时文件不存在或完整性校验失败）
+    fn create_fresh_temp_file(temp_path: &str) -> Result<(BufWriter<File>, u64, bool), String> {
+        let file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(temp_path)
+            .map_err(|e| match e.kind() {
+                io::ErrorKind::PermissionDenied => {
+                    format!("权限不足，无法创建临时文件: {}", temp_path)
+                }
+                io::ErrorKind::StorageFull => {
+                    "磁盘空间不足".to_string()
+                }
+                _ => format!("无法创建临时文件 {}: {}", temp_path, e),
+            })?;
+        Ok((BufWriter::new(file), 0, false))
     }
 
     /// 写入数据块
@@ -754,11 +828,12 @@ mod tests {
         // 测试 Drop impl：未完成的 writer 被 drop 时应清理临时文件
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("drop_test.txt");
-        let temp_path = format!("{}.tmp", file_path.to_str().unwrap());
 
+        let temp_path;
         {
             // 创建 writer 并写入部分数据（不调用 finish）
             let mut writer = FileStreamWriter::new(file_path.to_str().unwrap(), 100).unwrap();
+            temp_path = writer.temp_path().to_string();
             writer.write_chunk(b"partial data").unwrap();
             // writer 在此被 drop，应自动清理临时文件
         }
@@ -796,15 +871,16 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("abort_test.txt");
 
+        let temp_path;
         {
             let mut writer = FileStreamWriter::new(file_path.to_str().unwrap(), 100).unwrap();
+            temp_path = writer.temp_path().to_string();
             writer.write_chunk(b"some data").unwrap();
             writer.abort(); // 主动删除临时文件
             // writer 在此被 drop，不应 panic 或重复删除
         }
 
         // 验证临时文件已被删除
-        let temp_path = format!("{}.tmp", file_path.to_str().unwrap());
         assert!(!Path::new(&temp_path).exists());
     }
 

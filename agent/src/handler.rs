@@ -339,8 +339,8 @@ pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig) -> Envelope
         }
 
         // 取消文件传输
-        Payload::CancelFileTransfer { session_id } => {
-            tracing::info!("取消文件传输: session_id={}", session_id);
+        Payload::CancelFileTransfer { session_id, reason } => {
+            tracing::info!("取消文件传输: session_id={}, reason={}", session_id, reason);
             match handle_cancel_file_transfer(envelope.request_id, session_id, cfg).await {
                 Ok(response) => response,
                 Err(e) => {
