@@ -186,6 +186,14 @@ impl FileStreamReader {
 }
 
 /// 文件流写入器（用于上传：分块写入文件）
+///
+/// # 临时文件清理策略
+///
+/// - 创建时生成 `.tmp` 后缀的临时文件
+/// - `finish()` 成功后重命名为最终文件，标记 `completed = true`
+/// - `abort()` 主动删除临时文件
+/// - **Drop 保护**：如果 writer 被意外 drop（连接中断、进程异常等）且未完成，
+///   自动删除临时文件，防止磁盘空间泄漏
 #[derive(Debug)]
 pub struct FileStreamWriter {
     /// 文件写入器（带缓冲）
@@ -198,6 +206,8 @@ pub struct FileStreamWriter {
     temp_path: String,
     /// 最终文件路径
     final_path: String,
+    /// 是否已完成传输（finish 成功后为 true）
+    completed: bool,
 }
 
 impl FileStreamWriter {
@@ -385,6 +395,7 @@ impl FileStreamWriter {
             transferred: actual_resume_from,
             temp_path,
             final_path: path.to_string(),
+            completed: false,
         })
     }
 
@@ -447,6 +458,9 @@ impl FileStreamWriter {
             )
         })?;
 
+        // 标记为已完成，防止 Drop 时删除最终文件
+        self.completed = true;
+
         tracing::info!(
             "文件上传完成: {} ({}/{} 字节)",
             self.final_path,
@@ -462,6 +476,8 @@ impl FileStreamWriter {
     /// # 说明
     /// 删除临时文件，忽略所有错误（因为取消操作不应失败）
     pub fn abort(&mut self) {
+        // 标记为已完成，防止 Drop 时重复删除
+        self.completed = true;
         if let Err(e) = fs::remove_file(&self.temp_path) {
             tracing::warn!("删除临时文件失败 {}: {}", self.temp_path, e);
         } else {
@@ -494,6 +510,165 @@ impl FileStreamWriter {
     /// 检查是否已写入全部数据
     pub fn is_complete(&self) -> bool {
         self.transferred == self.file_size
+    }
+
+    /// 获取临时文件路径（用于调试和日志）
+    pub fn temp_path(&self) -> &str {
+        &self.temp_path
+    }
+}
+
+/// Drop 保护：当 FileStreamWriter 被意外 drop 时自动清理临时文件
+///
+/// # 触发场景
+/// - QUIC 连接中断，上传 stream 被关闭
+/// - 进程 panic 导致栈展开
+/// - TransferSession 被从 HashMap 中移除（超时清理等）
+///
+/// # 安全性
+/// - `finish()` 和 `abort()` 会设置 `completed = true`，Drop 不会重复清理
+/// - 删除失败仅打印警告，不 panic（Drop 中不应 panic）
+impl Drop for FileStreamWriter {
+    fn drop(&mut self) {
+        if !self.completed && self.transferred < self.file_size {
+            tracing::warn!(
+                "[FileStreamWriter] 检测到未完成的文件传输，清理临时文件: {} (已传输: {}/{})",
+                self.temp_path,
+                self.transferred,
+                self.file_size
+            );
+            if let Err(e) = fs::remove_file(&self.temp_path) {
+                // 临时文件可能已被 abort() 删除，忽略 NotFound 错误
+                if e.kind() != io::ErrorKind::NotFound {
+                    tracing::warn!(
+                        "[FileStreamWriter] 清理临时文件失败 {}: {}",
+                        self.temp_path,
+                        e
+                    );
+                }
+            } else {
+                tracing::info!(
+                    "[FileStreamWriter] 已清理临时文件: {}",
+                    self.temp_path
+                );
+            }
+        }
+    }
+}
+
+// ===== 启动时临时文件清理 =====
+
+/// 默认临时文件过期时间（1 小时）
+const TEMP_FILE_MAX_AGE_SECS: u64 = 3600;
+
+/// 清理过期的临时文件（`.tmp` 后缀）
+///
+/// 在 Agent 启动时调用，扫描指定目录中超过 `max_age_secs` 的 `.tmp` 文件并删除。
+/// 这些文件通常是上次运行中上传中断遗留的。
+///
+/// # 参数
+/// - `scan_dirs`: 需要扫描的目录列表（通常来自 Agent 配置的 `allowed_paths`）
+/// - `max_age_secs`: 临时文件最大存活时间（秒），超过此时间的 `.tmp` 文件将被删除
+///
+/// # 行为
+/// - 递归扫描目录（最大深度 3 层，避免扫描过深）
+/// - 仅删除 `.tmp` 后缀的文件
+/// - 删除失败仅打印警告，不影响 Agent 启动
+/// - 扫描目录不存在时静默跳过
+pub fn cleanup_stale_temp_files(scan_dirs: &[String], max_age_secs: Option<u64>) {
+    let max_age = max_age_secs.unwrap_or(TEMP_FILE_MAX_AGE_SECS);
+    let now = std::time::SystemTime::now();
+    let mut cleaned_count = 0u32;
+    let mut failed_count = 0u32;
+
+    for dir in scan_dirs {
+        let dir_path = Path::new(dir);
+        if !dir_path.exists() || !dir_path.is_dir() {
+            continue;
+        }
+
+        // 递归扫描（最大深度 3 层）
+        cleanup_stale_temp_files_recursive(dir_path, max_age, now, 0, 3, &mut cleaned_count, &mut failed_count);
+    }
+
+    if cleaned_count > 0 || failed_count > 0 {
+        tracing::info!(
+            "[启动清理] 临时文件清理完成: 删除 {} 个, 失败 {} 个",
+            cleaned_count,
+            failed_count
+        );
+    } else {
+        tracing::info!("[启动清理] 未发现过期的临时文件");
+    }
+}
+
+/// 递归扫描并清理过期临时文件
+fn cleanup_stale_temp_files_recursive(
+    dir: &Path,
+    max_age_secs: u64,
+    now: std::time::SystemTime,
+    current_depth: u32,
+    max_depth: u32,
+    cleaned_count: &mut u32,
+    failed_count: &mut u32,
+) {
+    if current_depth >= max_depth {
+        return;
+    }
+
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return, // 权限不足等，静默跳过
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+
+        if path.is_dir() {
+            // 递归扫描子目录
+            cleanup_stale_temp_files_recursive(
+                &path, max_age_secs, now, current_depth + 1, max_depth, cleaned_count, failed_count,
+            );
+            continue;
+        }
+
+        // 检查是否为 .tmp 文件
+        let file_name = path.file_name().unwrap_or_default().to_string_lossy();
+        if !file_name.ends_with(".tmp") {
+            continue;
+        }
+
+        // 检查文件年龄
+        match entry.metadata() {
+            Ok(metadata) => {
+                let age = now
+                    .duration_since(metadata.modified().unwrap_or(std::time::UNIX_EPOCH))
+                    .unwrap_or_default()
+                    .as_secs();
+
+                if age > max_age_secs {
+                    match fs::remove_file(&path) {
+                        Ok(_) => {
+                            tracing::info!(
+                                "[启动清理] 已删除过期临时文件: {} (年龄: {}秒)",
+                                path.display(),
+                                age
+                            );
+                            *cleaned_count += 1;
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "[启动清理] 删除临时文件失败: {}: {}",
+                                path.display(),
+                                e
+                            );
+                            *failed_count += 1;
+                        }
+                    }
+                }
+            }
+            Err(_) => continue, // 无法获取元数据，跳过
+        }
     }
 }
 
@@ -572,5 +747,93 @@ mod tests {
 
         let reader = FileStreamReader::new(file_path.to_str().unwrap(), 0).unwrap();
         assert_eq!(reader.progress(), 100);
+    }
+
+    #[test]
+    fn test_writer_drop_cleans_up_temp_file() {
+        // 测试 Drop impl：未完成的 writer 被 drop 时应清理临时文件
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("drop_test.txt");
+        let temp_path = format!("{}.tmp", file_path.to_str().unwrap());
+
+        {
+            // 创建 writer 并写入部分数据（不调用 finish）
+            let mut writer = FileStreamWriter::new(file_path.to_str().unwrap(), 100).unwrap();
+            writer.write_chunk(b"partial data").unwrap();
+            // writer 在此被 drop，应自动清理临时文件
+        }
+
+        // 验证临时文件已被删除
+        assert!(!Path::new(&temp_path).exists(), "临时文件应在 writer drop 后被删除");
+        // 最终文件也不应存在（未完成）
+        assert!(!file_path.exists(), "最终文件不应存在（传输未完成）");
+    }
+
+    #[test]
+    fn test_writer_finish_prevents_drop_cleanup() {
+        // 测试 finish() 后 Drop 不会删除最终文件
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("finish_test.txt");
+        let test_data = b"complete data";
+
+        {
+            let mut writer =
+                FileStreamWriter::new(file_path.to_str().unwrap(), test_data.len() as u64).unwrap();
+            writer.write_chunk(test_data).unwrap();
+            writer.finish().unwrap();
+            // writer 在此被 drop，但已完成，不应删除文件
+        }
+
+        // 验证最终文件存在且内容正确
+        assert!(file_path.exists(), "最终文件应在 finish 后存在");
+        let read_data = fs::read(&file_path).unwrap();
+        assert_eq!(read_data.as_slice(), test_data);
+    }
+
+    #[test]
+    fn test_writer_abort_then_drop_no_double_delete() {
+        // 测试 abort() 后 Drop 不会重复删除
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("abort_test.txt");
+
+        {
+            let mut writer = FileStreamWriter::new(file_path.to_str().unwrap(), 100).unwrap();
+            writer.write_chunk(b"some data").unwrap();
+            writer.abort(); // 主动删除临时文件
+            // writer 在此被 drop，不应 panic 或重复删除
+        }
+
+        // 验证临时文件已被删除
+        let temp_path = format!("{}.tmp", file_path.to_str().unwrap());
+        assert!(!Path::new(&temp_path).exists());
+    }
+
+    #[test]
+    fn test_cleanup_stale_temp_files() {
+        // 测试启动时清理过期临时文件
+        let temp_dir = TempDir::new().unwrap();
+        let dir_path = temp_dir.path().to_str().unwrap().to_string();
+
+        // 创建一个 .tmp 文件
+        let tmp_file = temp_dir.path().join("stale_file.tmp");
+        fs::write(&tmp_file, b"stale data").unwrap();
+
+        // 设置文件修改时间为 2 小时前
+        let two_hours_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
+        filetime::set_file_mtime(
+            tmp_file.to_str().unwrap(),
+            filetime::FileTime::from_system_time(two_hours_ago),
+        ).unwrap();
+
+        // 创建一个非 .tmp 文件（不应被删除）
+        let normal_file = temp_dir.path().join("normal_file.txt");
+        fs::write(&normal_file, b"normal data").unwrap();
+
+        // 清理过期临时文件
+        cleanup_stale_temp_files(&[dir_path], Some(3600));
+
+        // 验证 .tmp 文件被删除，普通文件保留
+        assert!(!tmp_file.exists(), "过期的 .tmp 文件应被删除");
+        assert!(normal_file.exists(), "普通文件不应被删除");
     }
 }

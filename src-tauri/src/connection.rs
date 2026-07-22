@@ -455,20 +455,20 @@ pub async fn remote_connect(
         tokio::spawn(async move {
             // ── 心跳任务（Watchdog）：快速检测连接断开 ────────
             // 业界标准（TeamViewer/AnyDesk 级别）：
-            //   - 间隔 2s：每 2 秒发一次 Ping 探测连接活性
-            //   - 超时 3s：等待 Pong 响应的最长时间
-            //   - 最坏延迟：2s(间隔) + 3s(超时) = **5s**
-            //   - 最佳延迟：idle_timeout(5s) 或 conn.closed() 瞬间触发
+            //   - 间隔 5s：每 5 秒发一次 Ping 探测连接活性
+            //   - 超时 5s：等待 Pong 响应的最长时间
+            //   - 最坏延迟：5s(间隔) + 5s(超时) = **10s**
+            //   - 最佳延迟：conn.closed() 瞬间触发
             //
             // 双重保障机制：
-            //   路径 A: 心跳 Ping/Pong → 应用层检测 (2+3=5s)
-            //   路径 B: QUIC idle_timeout(5s) → 传输层自动关闭 → conn.closed() (5s)
+            //   路径 A: 心跳 Ping/Pong → 应用层检测 (5+5=10s)
+            //   路径 B: QUIC idle_timeout(30s) → 传输层自动关闭 → conn.closed()
             //   哪条路径先触发，哪条先通知前端
             let heartbeat_tx = tx.clone();
             let heartbeat_app = app_handle.clone();
             let heartbeat_server_id = server_id_clone.clone();
             let heartbeat_task = tokio::spawn(async move {
-                let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
                 loop {
                     interval.tick().await;
                     let now = std::time::SystemTime::now()
@@ -478,9 +478,9 @@ pub async fn remote_connect(
                     let envelope = Envelope::new(0, Payload::Ping { timestamp: now });
                     let (response_tx, response_rx) = tokio::sync::oneshot::channel();
                     if heartbeat_tx.send(ClientRequest::Send { envelope, response_tx }).await.is_ok() {
-                        // 显式超时 3s：等待 Pong 响应，超时即判定连接异常
+                        // 显式超时 5s：等待 Pong 响应，超时即判定连接异常
                         match tokio::time::timeout(
-                            std::time::Duration::from_secs(3),
+                            std::time::Duration::from_secs(5),
                             response_rx,
                         ).await {
                             Ok(Ok(_)) => { /* Pong 正常收到，连接存活 */ }
@@ -490,7 +490,7 @@ pub async fn remote_connect(
                             }
                             Err(_) => {
                                 // 超时未收到 Pong → 连接已死（对端无响应）
-                                tracing::warn!("Ping 超时 (3s)，连接无响应: {}", heartbeat_server_id);
+                                tracing::warn!("Ping 超时 (5s)，连接无响应: {}", heartbeat_server_id);
                                 break;
                             }
                         }
@@ -629,7 +629,14 @@ pub async fn remote_send(server_id: String, payload: Payload, app: tauri::AppHan
     let (response_tx, response_rx) = tokio::sync::oneshot::channel();
     
     tx.send(ClientRequest::Send { envelope, response_tx }).await.map_err(|_| "发送请求失败")?;
-    let data = response_rx.await.map_err(|_| "等待响应超时")??;
+    // 外层超时保护：如果内部 send_and_receive_quic 的超时未能触发，此层兜底
+    let data = tokio::time::timeout(
+        std::time::Duration::from_secs(STREAM_TIMEOUT_SECS + 5), // 比 Stream 超时多 5 秒作为缓冲
+        response_rx,
+    )
+    .await
+    .map_err(|_| "等待响应超时".to_string())?
+    .map_err(|_| "等待响应超时".to_string())??;
     Envelope::decode(&data)
 }
 
@@ -891,8 +898,13 @@ pub async fn subscribe(
         let types_clone = types.clone();
 
         // 创建持久 Stream
-        let stream = conn.open_bi().await
-            .map_err(|e| format!("创建 Stream 失败: {}", e))?;
+        let stream = tokio::time::timeout(
+            std::time::Duration::from_secs(STREAM_TIMEOUT_SECS),
+            conn.open_bi(),
+        )
+        .await
+        .map_err(|_| "创建 Stream 超时".to_string())?
+        .map_err(|e| format!("创建 Stream 失败: {}", e))?;
 
         let (mut send, mut recv) = stream;
 
@@ -907,27 +919,40 @@ pub async fn subscribe(
             use tokio::io::AsyncWriteExt;
             // 发送消息长度
             let len = (data.len() as u32).to_le_bytes();
-            if send.write_all(&len).await.is_err() {
-                return Err("发送订阅请求失败".into());
+            // 发送操作添加超时
+            let send_result = tokio::time::timeout(
+                std::time::Duration::from_secs(STREAM_TIMEOUT_SECS),
+                async {
+                    send.write_all(&len).await.map_err(|e| format!("发送订阅请求长度失败: {}", e))?;
+                    send.write_all(&data).await.map_err(|e| format!("发送订阅请求数据失败: {}", e))?;
+                    send.flush().await.ok();
+                    Ok::<(), String>(())
+                },
+            )
+            .await;
+            match send_result {
+                Ok(Ok(())) => {}
+                _ => return Err("发送订阅请求超时".into()),
             }
-            // 发送消息数据
-            if send.write_all(&data).await.is_err() {
-                return Err("发送订阅请求失败".into());
-            }
-            send.flush().await.ok();
         }
 
-        // 等待 SubscribeAck 响应
-        let mut len_buf = [0u8; 4];
-        use tokio::io::AsyncReadExt;
-        if recv.read_exact(&mut len_buf).await.is_err() {
-            return Err("等待响应超时".into());
-        }
-        let len = u32::from_le_bytes(len_buf) as usize;
-        let mut data_buf = vec![0u8; len];
-        if recv.read_exact(&mut data_buf).await.is_err() {
-            return Err("读取响应失败".into());
-        }
+        // 等待 SubscribeAck 响应（添加超时）
+        let ack_result = tokio::time::timeout(
+            std::time::Duration::from_secs(STREAM_TIMEOUT_SECS),
+            async {
+                let mut len_buf = [0u8; 4];
+                recv.read_exact(&mut len_buf).await.map_err(|_| "读取响应长度失败".to_string())?;
+                let len = u32::from_le_bytes(len_buf) as usize;
+                let mut data_buf = vec![0u8; len];
+                recv.read_exact(&mut data_buf).await.map_err(|_| "读取响应数据失败".to_string())?;
+                Ok::<Vec<u8>, String>(data_buf)
+            },
+        )
+        .await;
+        let data_buf = match ack_result {
+            Ok(Ok(buf)) => buf,
+            _ => return Err("等待订阅响应超时".into()),
+        };
 
         if let Ok(resp_envelope) = Envelope::decode(&data_buf) {
             if let Payload::SubscribeAck { success, .. } = resp_envelope.payload {
@@ -946,15 +971,20 @@ pub async fn subscribe(
             tracing::info!("订阅成功: server_id={}", server_id_clone);
 
             // 监听 Event payload
+            // 每条消息读取超时 60 秒，防止僵死 Stream
+            let per_msg_timeout = std::time::Duration::from_secs(60);
             loop {
-                // 读取消息长度
+                // 读取消息长度（带超时）
                 let mut len_buf = [0u8; 4];
-                match recv.read_exact(&mut len_buf).await {
-                    Ok(_) => {
+                let read_len_result = tokio::time::timeout(per_msg_timeout, recv.read_exact(&mut len_buf)).await;
+                match read_len_result {
+                    Ok(Ok(_)) => {
                         let len = u32::from_le_bytes(len_buf) as usize;
                         let mut data_buf = vec![0u8; len];
-                        match recv.read_exact(&mut data_buf).await {
-                            Ok(_) => {
+                        // 读取消息数据（带超时）
+                        let read_data_result = tokio::time::timeout(per_msg_timeout, recv.read_exact(&mut data_buf)).await;
+                        match read_data_result {
+                            Ok(Ok(_)) => {
                                 // 解析 Event payload
                                 if let Ok(event_envelope) = Envelope::decode(&data_buf) {
                                     if let Payload::Event { event_type, data, timestamp } = event_envelope.payload {
@@ -970,14 +1000,22 @@ pub async fn subscribe(
                                     }
                                 }
                             }
-                            Err(e) => {
+                            Ok(Err(e)) => {
                                 tracing::warn!("读取事件数据失败: {}", e);
+                                break;
+                            }
+                            Err(_) => {
+                                tracing::warn!("读取事件数据超时 ({}s)", per_msg_timeout.as_secs());
                                 break;
                             }
                         }
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         tracing::warn!("读取事件长度失败: {}", e);
+                        break;
+                    }
+                    Err(_) => {
+                        tracing::warn!("读取事件长度超时 ({}s)", per_msg_timeout.as_secs());
                         break;
                     }
                 }
@@ -1112,13 +1150,17 @@ fn build_quic_client_config() -> Result<quinn::ClientConfig, String> {
         .with_custom_certificate_verifier(std::sync::Arc::new(SkipCertVerification))
         .with_no_client_auth();
 
-    // 传输层配置：设置 idle_timeout 以快速检测死连接
-    // idle_timeout: 5 秒无数据收发 → QUIC 自动关闭连接
-    // 配合心跳(2s)使用：心跳每 2s 发一次，若 5s 内无响应说明连接已死
+    // 传输层配置：设置 idle_timeout 以检测死连接
+    // idle_timeout: 30 秒无数据收发 → QUIC 自动关闭连接
+    // 配合心跳(2s)使用：心跳每 2s 发一次，若连续超时说明连接异常
+    // 30s 空闲超时给予网络波动足够的恢复时间，同时不会让僵死连接长期占用资源
     let mut transport = quinn::TransportConfig::default();
-    if let Ok(timeout) = quinn::IdleTimeout::try_from(std::time::Duration::from_secs(5)) {
+    if let Ok(timeout) = quinn::IdleTimeout::try_from(std::time::Duration::from_secs(30)) {
         transport.max_idle_timeout(Some(timeout));
     }
+    // 流控制窗口：1MB，防止慢速接收端导致发送端阻塞
+    transport.stream_receive_window(quinn::VarInt::from_u32(1024 * 1024)); // 1MB per-stream
+    transport.receive_window(quinn::VarInt::from_u32(1024 * 1024));         // 1MB connection-wide
 
     let mut client = quinn::ClientConfig::new(std::sync::Arc::new(
         quinn::crypto::rustls::QuicClientConfig::try_from(crypto)
@@ -1178,22 +1220,44 @@ impl rustls::client::danger::ServerCertVerifier for SkipCertVerification {
     }
 }
 
+/// Stream 操作默认超时时间（30秒）
+/// 适用于常规请求/响应操作（目录列表、文件读写元数据等）
+const STREAM_TIMEOUT_SECS: u64 = 30;
+
 async fn send_and_receive_quic(conn: &quinn::Connection, request_id: u32, payload: Payload) -> Result<Vec<u8>, String> {
-    let (mut send, mut recv) = conn.open_bi().await.map_err(|e| format!("打开 Stream 失败: {}", e))?;
+    let timeout_duration = std::time::Duration::from_secs(STREAM_TIMEOUT_SECS);
+
+    // Stream 打开也需要超时保护，避免在连接异常时无限等待
+    let (mut send, mut recv) = tokio::time::timeout(timeout_duration, conn.open_bi())
+        .await
+        .map_err(|_| "打开 Stream 超时".to_string())?
+        .map_err(|e| format!("打开 Stream 失败: {}", e))?;
 
     let bytes = Envelope::new(request_id, payload).encode()?;
     let len = (bytes.len() as u32).to_le_bytes();
-    
-    send.write_all(&len).await.map_err(|e| format!("发送长度失败: {}", e))?;
-    send.write_all(&bytes).await.map_err(|e| format!("发送数据失败: {}", e))?;
-    send.finish().map_err(|e| format!("关闭写入流失败: {}", e))?;
 
-    let mut len_buf = [0u8; 4];
-    recv.read_exact(&mut len_buf).await.map_err(|e| format!("读取响应长度失败: {}", e))?;
-    let resp_len = u32::from_le_bytes(len_buf) as usize;
-    
-    let mut data = vec![0u8; resp_len];
-    recv.read_exact(&mut data).await.map_err(|e| format!("读取响应数据失败: {}", e))?;
+    // 发送操作也需要超时
+    tokio::time::timeout(timeout_duration, async {
+        send.write_all(&len).await.map_err(|e| format!("发送长度失败: {}", e))?;
+        send.write_all(&bytes).await.map_err(|e| format!("发送数据失败: {}", e))?;
+        send.finish().map_err(|e| format!("关闭写入流失败: {}", e))?;
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|_| "发送数据超时".to_string())??;
+
+    // 接收操作也需要超时
+    let data = tokio::time::timeout(timeout_duration, async {
+        let mut len_buf = [0u8; 4];
+        recv.read_exact(&mut len_buf).await.map_err(|e| format!("读取响应长度失败: {}", e))?;
+        let resp_len = u32::from_le_bytes(len_buf) as usize;
+
+        let mut data = vec![0u8; resp_len];
+        recv.read_exact(&mut data).await.map_err(|e| format!("读取响应数据失败: {}", e))?;
+        Ok::<Vec<u8>, String>(data)
+    })
+    .await
+    .map_err(|_| "接收响应超时".to_string())??;
 
     Ok(data)
 }

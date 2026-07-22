@@ -68,8 +68,9 @@ impl TransferManager {
             tasks: Arc::new(Mutex::new(HashMap::new())),
         };
 
-        // 启动定期清理任务
-        manager.start_cleanup_task();
+        // 注意：start_cleanup_task() 不能在构造函数中调用
+        // 因为此时 tokio 运行时可能还未启动
+        // 需要在 Tauri 的 setup钩子中调用
 
         manager
     }
@@ -77,45 +78,46 @@ impl TransferManager {
     /// 启动定期清理任务
     ///
     /// 每 5 分钟清理一次已完成的任务，保留最近 10 个
-    fn start_cleanup_task(&self) {
+    /// 注意：此方法必须在 tokio 运行时中调用
+    pub async fn start_cleanup_task(&self) {
         let tasks = self.tasks.clone();
 
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(300)); // 每5分钟清理一次
+        // 不再使用 tokio::spawn，而是直接运行清理循环
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(300)); // 每5分钟清理一次
 
-            loop {
-                interval.tick().await;
+        loop {
+            interval.tick().await;
 
-                // 检查关闭标志
-                if *crate::SHUTDOWN_FLAG.lock().await {
-                    break;
-                }
-
-                // 清理已完成的任务（保留最近10个）
-                let mut tasks_guard = tasks.lock().await;
-
-                // 收集已完成的任务（ID 和创建时间）
-                let mut completed: Vec<(&String, u64)> = tasks_guard
-                    .iter()
-                    .filter(|(_, task)| {
-                        task.status == "completed" || task.status == "failed" || task.status == "cancelled"
-                    })
-                    .map(|(id, task)| (id, task.created_at))
-                    .collect();
-
-                // 按创建时间排序（最旧的在前）
-                completed.sort_by_key(|(_, created_at)| *created_at);
-
-                // 保留最近10个已完成的任务（删除最旧的）
-                if completed.len() > 10 {
-                    let to_remove = completed.len() - 10;
-                    for (id, _) in completed.into_iter().take(to_remove) {
-                        tasks_guard.remove(id);
-                    }
-                    tracing::info!("[TransferManager] 自动清理了 {} 个已完成任务", to_remove);
-                }
+            // 检查关闭标志
+            if *crate::SHUTDOWN_FLAG.lock().await {
+                break;
             }
-        });
+
+            // 清理已完成的任务（保留最近10个）
+            let mut tasks_guard = tasks.lock().await;
+
+            // 收集已完成的任务（ID 和创建时间）
+            let mut completed: Vec<(String, u64)> = tasks_guard
+                .iter()
+                .filter(|(_, task)| {
+                    task.status == "completed" || task.status == "failed" || task.status == "cancelled"
+                })
+                .map(|(id, task)| (id.clone(), task.created_at))
+                .collect();
+
+            // 按创建时间排序（最旧的在前）
+            completed.sort_by_key(|(_, created_at)| *created_at);
+
+            // 保留最近10个已完成的任务（删除最旧的）
+            if completed.len() > 10 {
+                let to_remove = completed.len() - 10;
+                let ids_to_remove: Vec<String> = completed.into_iter().take(to_remove).map(|(id, _)| id).collect();
+                for id in ids_to_remove {
+                    tasks_guard.remove(&id);
+                }
+                tracing::info!("[TransferManager] 自动清理了 {} 个已完成任务", to_remove);
+            }
+        }
     }
 
     /// 创建传输任务（简化版：仅创建任务，不实际传输）
@@ -467,7 +469,7 @@ impl TransferManager {
     /// 清理指定连接的所有任务
     pub async fn cleanup_by_connection(&self, connection_id: &str) {
         // 1. 在锁内收集需要清理的任务
-        let (tasks_to_cancel, ids_to_remove): (Vec<TransferTask>, Vec<String>) = {
+        let tasks_to_cancel = {
             let mut tasks = self.tasks.lock().await;
 
             // 先收集任务和ID
@@ -487,7 +489,7 @@ impl TransferManager {
                 tasks.remove(id);
             }
 
-            (to_cancel, ids)
+            to_cancel
         };
         // ← 锁已释放
 
@@ -760,6 +762,14 @@ pub async fn transfer_file(
     Ok(task_id)
 }
 
+/// 文件传输 Stream 操作超时时间（300秒 / 5分钟）
+/// 文件传输可能涉及大文件，使用更宽松的超时
+const FILE_TRANSFER_STREAM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// 文件传输单块操作超时时间（60秒）
+/// 单个数据块的读写操作不应超过此时间
+const FILE_CHUNK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// 执行文件传输的内部函数（支持断点续传）
 ///
 /// # 参数
@@ -801,32 +811,44 @@ async fn perform_transfer(
         resume_from,  // 添加断点续传参数
     };
 
-    // 创建 Stream
-    let (mut send, mut recv) = conn.open_bi().await
+    // 创建 Stream（添加超时）
+    let (mut send, mut recv) = tokio::time::timeout(FILE_TRANSFER_STREAM_TIMEOUT, conn.open_bi())
+        .await
+        .map_err(|_| "打开文件传输 Stream 超时".to_string())?
         .map_err(|e| format!("打开 Stream 失败: {}", e))?;
 
-    // 发送请求
+    // 发送请求（添加超时）
     let request_envelope = Envelope::new(request_id, request_payload);
     let request_bytes = request_envelope.encode()?;
     let request_len = (request_bytes.len() as u32).to_le_bytes();
 
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    send.write_all(&request_len).await
-        .map_err(|e| format!("发送请求长度失败: {}", e))?;
-    send.write_all(&request_bytes).await
-        .map_err(|e| format!("发送请求数据失败: {}", e))?;
-    send.flush().await
-        .map_err(|e| format!("刷新发送流失败: {}", e))?;
+    use tokio::io::AsyncWriteExt;
+    tokio::time::timeout(FILE_CHUNK_TIMEOUT, async {
+        send.write_all(&request_len).await
+            .map_err(|e| format!("发送请求长度失败: {}", e))?;
+        send.write_all(&request_bytes).await
+            .map_err(|e| format!("发送请求数据失败: {}", e))?;
+        send.flush().await
+            .map_err(|e| format!("刷新发送流失败: {}", e))?;
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|_| "发送文件传输请求超时".to_string())??;
 
-    // 2. 接收 FileTransferAccept
-    let mut response_len_buf = [0u8; 4];
-    recv.read_exact(&mut response_len_buf).await
-        .map_err(|e| format!("读取响应长度失败: {}", e))?;
-    let response_len = u32::from_le_bytes(response_len_buf) as usize;
+    // 2. 接收 FileTransferAccept（添加超时）
+    let response_buf = tokio::time::timeout(FILE_CHUNK_TIMEOUT, async {
+        let mut response_len_buf = [0u8; 4];
+        recv.read_exact(&mut response_len_buf).await
+            .map_err(|e| format!("读取响应长度失败: {}", e))?;
+        let response_len = u32::from_le_bytes(response_len_buf) as usize;
 
-    let mut response_buf = vec![0u8; response_len];
-    recv.read_exact(&mut response_buf).await
-        .map_err(|e| format!("读取响应数据失败: {}", e))?;
+        let mut response_buf = vec![0u8; response_len];
+        recv.read_exact(&mut response_buf).await
+            .map_err(|e| format!("读取响应数据失败: {}", e))?;
+        Ok::<Vec<u8>, String>(response_buf)
+    })
+    .await
+    .map_err(|_| "接收文件传输响应超时".to_string())??;
 
     let response_envelope = Envelope::decode(&response_buf)?;
 
@@ -909,7 +931,7 @@ async fn perform_transfer(
                         }
                     }
 
-                    // 发送 FileChunk
+                    // 发送 FileChunk（添加超时保护）
                     let chunk_payload = Payload::FileChunk {
                         session_id: session_id.clone(),
                         seq,
@@ -923,10 +945,15 @@ async fn perform_transfer(
                     let chunk_bytes = chunk_envelope.encode()?;
                     let chunk_len = (chunk_bytes.len() as u32).to_le_bytes();
 
-                    send.write_all(&chunk_len).await
-                        .map_err(|e| format!("发送块长度失败: {}", e))?;
-                    send.write_all(&chunk_bytes).await
-                        .map_err(|e| format!("发送块数据失败: {}", e))?;
+                    tokio::time::timeout(FILE_CHUNK_TIMEOUT, async {
+                        send.write_all(&chunk_len).await
+                            .map_err(|e| format!("发送块长度失败: {}", e))?;
+                        send.write_all(&chunk_bytes).await
+                            .map_err(|e| format!("发送块数据失败: {}", e))?;
+                        Ok::<(), String>(())
+                    })
+                    .await
+                    .map_err(|_| format!("发送数据块超时 ({}s)", FILE_CHUNK_TIMEOUT.as_secs()))??;
 
                     seq += 1;
 
@@ -946,7 +973,7 @@ async fn perform_transfer(
                     ).await?;
                 }
 
-                // 发送 FileTransferComplete
+                // 发送 FileTransferComplete（添加超时）
                 let complete_payload = Payload::FileTransferComplete {
                     session_id: session_id.clone(),
                     success: true,
@@ -960,12 +987,17 @@ async fn perform_transfer(
                 let complete_bytes = complete_envelope.encode()?;
                 let complete_len = (complete_bytes.len() as u32).to_le_bytes();
 
-                send.write_all(&complete_len).await
-                    .map_err(|e| format!("发送完成消息失败: {}", e))?;
-                send.write_all(&complete_bytes).await
-                    .map_err(|e| format!("发送完成数据失败: {}", e))?;
-                send.flush().await
-                    .map_err(|e| format!("刷新发送流失败: {}", e))?;
+                tokio::time::timeout(FILE_CHUNK_TIMEOUT, async {
+                    send.write_all(&complete_len).await
+                        .map_err(|e| format!("发送完成消息失败: {}", e))?;
+                    send.write_all(&complete_bytes).await
+                        .map_err(|e| format!("发送完成数据失败: {}", e))?;
+                    send.flush().await
+                        .map_err(|e| format!("刷新发送流失败: {}", e))?;
+                    Ok::<(), String>(())
+                })
+                .await
+                .map_err(|_| "发送传输完成消息超时".to_string())??;
 
                 // 标记完成
                 manager.mark_completed(task_id).await?;
@@ -1028,29 +1060,33 @@ async fn perform_transfer(
                         }
                     }
 
-                    // 读取消息长度
+                    // 读取消息长度（添加超时）
                     eprintln!("[Transfer] 等待读取消息长度");
-                    let mut chunk_len_buf = [0u8; 4];
-                    match recv.read_exact(&mut chunk_len_buf).await {
-                        Ok(_) => {
-                            eprintln!("[Transfer] 成功读取消息长度");
-                        }
-                        Err(e) => {
-                            eprintln!("[Transfer] 读取块长度失败: {}", e);
+                    let read_result = tokio::time::timeout(FILE_CHUNK_TIMEOUT, async {
+                        let mut chunk_len_buf = [0u8; 4];
+                        recv.read_exact(&mut chunk_len_buf).await
+                            .map_err(|e| format!("读取块长度失败: {}", e))?;
+
+                        let chunk_len = u32::from_le_bytes(chunk_len_buf) as usize;
+                        let mut chunk_buf = vec![0u8; chunk_len];
+                        recv.read_exact(&mut chunk_buf).await
+                            .map_err(|e| format!("读取块数据失败: {}", e))?;
+
+                        Ok::<Vec<u8>, String>(chunk_buf)
+                    })
+                    .await;
+
+                    let chunk_buf = match read_result {
+                        Ok(Ok(buf)) => buf,
+                        Ok(Err(e)) => {
+                            eprintln!("[Transfer] 读取数据块失败: {}", e);
                             break;
                         }
-                    }
-
-                    let chunk_len = u32::from_le_bytes(chunk_len_buf) as usize;
-                    let mut chunk_buf = vec![0u8; chunk_len];
-
-                    match recv.read_exact(&mut chunk_buf).await {
-                        Ok(_) => {}
-                        Err(e) => {
-                            tracing::error!("读取块数据失败: {}", e);
+                        Err(_) => {
+                            eprintln!("[Transfer] 读取数据块超时 ({}s)", FILE_CHUNK_TIMEOUT.as_secs());
                             break;
                         }
-                    }
+                    };
 
                     // 解析消息
                     let chunk_envelope = Envelope::decode(&chunk_buf)?;

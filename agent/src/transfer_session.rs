@@ -101,4 +101,42 @@ impl TransferSession {
         }
         false
     }
+
+    /// 标记上传完成（临时文件已重命名为最终文件）
+    ///
+    /// 调用此方法后，Drop 不会再清理临时文件。
+    /// 通常在 `writer.finish()` 成功后调用。
+    pub fn mark_completed(&mut self) {
+        // writer.finish() 内部已标记 completed，这里仅更新状态
+        self.status = TransferStatus::Completed;
+    }
+}
+
+/// Drop 保护：当 TransferSession 被意外 drop 时清理未完成的上传临时文件
+///
+/// # 触发场景
+/// - `ConnectionContext::cleanup()` 清理超时会话
+/// - 手动从 `TRANSFER_SESSIONS` HashMap 中移除会话
+/// - 进程 panic 导致栈展开
+///
+/// # 设计说明
+/// - 仅对上传方向的会话进行清理（下载不需要清理临时文件）
+/// - 调用 writer 的 abort() 方法删除临时文件
+/// - FileStreamWriter 自身也有 Drop 保护，这里显式调用是为了确保
+///   临时文件在 session 被移除时立即清理，而非等到 writer 被 drop
+impl Drop for TransferSession {
+    fn drop(&mut self) {
+        if self.direction == "upload" && self.status != TransferStatus::Completed {
+            if let Some(ref mut writer) = self.writer {
+                tracing::warn!(
+                    "[TransferSession] 清理未完成的上传会话: session_id={}, path={}, transferred={}/{}",
+                    self.session_id,
+                    self.path,
+                    self.transferred,
+                    self.file_size
+                );
+                writer.abort();
+            }
+        }
+    }
 }
