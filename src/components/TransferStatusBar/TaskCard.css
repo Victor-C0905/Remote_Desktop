@@ -10,7 +10,7 @@
 .task-card {
   display: flex;
   align-items: center;
-  width: 300px;
+  width: 100%; /* 改为 100% 以适应父容器宽度 */
   height: 40px;
   padding: 8px 12px;
   background: transparent;
@@ -33,7 +33,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  width: 160px;
+  width: 100px; /* 固定宽度 */
   flex-shrink: 0;
 }
 
@@ -51,6 +51,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 1;
+  min-width: 0;
 }
 
 /* ── 中间区域：进度条 + 百分比 ─────────────────────────────────── */
@@ -58,9 +60,9 @@
 .tc-middle {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex: 1;
-  min-width: 0;
+  min-width: 100px;
 }
 
 .tc-progress-bar {
@@ -105,15 +107,27 @@
 /* 已取消任务的整体样式 */
 .task-card.cancelled .tc-filename {
   text-decoration: line-through;
-  color: var(--ovelis-text-disabled);
+  color: var(--ovelis-text-secondary); /* 提高对比度：从 text-disabled 改为 text-secondary */
 }
 
 .task-card.cancelled .tc-percent {
-  color: var(--ovelis-text-disabled);
+  color: var(--ovelis-text-secondary); /* 提高对比度 */
 }
 
 .task-card.cancelled .tc-progress-bar {
   text-decoration: line-through;
+}
+
+/* ── 无障碍：减少动画 ───────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .task-card,
+  .tc-progress-fill,
+  .tc-actions,
+  .tc-action-btn {
+    transition: none;
+    animation: none;
+  }
 }
 
 .tc-percent {

@@ -6,7 +6,7 @@
  * 展开状态：浮层面板显示任务列表（后续任务实现）
  */
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useTransferProgress } from '../../hooks/useTransferProgress';
 import { TransferPanel } from './TransferPanel';
 import './TransferStatusBar.css';
@@ -52,18 +52,31 @@ function CollapseIcon({ className }: { className?: string }) {
 export function TransferStatusBar() {
   const { transfers, removeTask } = useTransferProgress();
   const [isExpanded, setIsExpanded] = useState(false);
+  const statusbarRef = useRef<HTMLDivElement>(null);
+  const isClickOnButton = useRef(false); // 标记是否点击了按钮
 
   // 展开/收起切换函数
   const toggleExpand = () => {
     setIsExpanded(!isExpanded);
   };
 
-  // 如果没有传输任务，显示占位状态
+  // 处理状态栏的点击：设置标志位
+  const handleStatusbarClick = () => {
+    isClickOnButton.current = true;
+    toggleExpand();
+    // 在下一个事件循环重置标志位
+    setTimeout(() => {
+      isClickOnButton.current = false;
+    }, 0);
+  };
+
+  // 如果没有传输任务，显示占位状态（与有任务时保持一致的布局）
   if (transfers.length === 0) {
     return (
       <div
+        ref={statusbarRef}
         className="transfer-status-bar"
-        onClick={toggleExpand}
+        onClick={handleStatusbarClick}
         role="button"
         tabIndex={0}
         onKeyDown={(e) => {
@@ -75,13 +88,34 @@ export function TransferStatusBar() {
         aria-label="传输任务"
         aria-expanded={isExpanded}
       >
-        <div className="tsb-left">
+        {/* 图标 + 文本（保持与有任务时相同的布局） */}
+        <div className="tsb-icon-count">
           <DownloadIcon className="tsb-icon" />
-          <span className="tsb-count">无传输任务</span>
+          <span className="tsb-count" aria-live="polite">无传输</span>
         </div>
-        <button className="tsb-expand-btn">
-          <ExpandIcon />
-        </button>
+
+        {/* 空进度条（保持视觉一致性） */}
+        <div className="tsb-progress-mini">
+          <div className="tsb-progress-fill tsb-progress-empty" style={{ width: '0%' }} />
+        </div>
+
+        {/* 占位百分比 */}
+        <span className="tsb-percent tsb-percent-empty">—</span>
+
+        {/* 展开/收起指示器 */}
+        <div className="tsb-toggle-indicator">
+          {isExpanded ? <CollapseIcon className="tsb-toggle-icon" /> : <ExpandIcon className="tsb-toggle-icon" />}
+        </div>
+
+        {/* 展开的空状态面板 */}
+        {isExpanded && (
+          <TransferPanel
+            transfers={transfers}
+            onRemoveTask={removeTask}
+            onClose={() => setIsExpanded(false)}
+            statusbarRef={statusbarRef}
+          />
+        )}
       </div>
     );
   }
@@ -117,22 +151,23 @@ export function TransferStatusBar() {
 
   return (
     <div
+      ref={statusbarRef}
       className="transfer-status-bar"
-      onClick={() => setIsExpanded(!isExpanded)}
+      onClick={handleStatusbarClick}
       role="button"
       aria-label={isExpanded ? '收起传输列表' : '展开传输列表'}
       tabIndex={0}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          setIsExpanded(!isExpanded);
+          toggleExpand();
         }
       }}
     >
       {/* 图标 + 数量 */}
       <div className="tsb-icon-count">
         <DownloadIcon className="tsb-icon" />
-        <span className="tsb-count" aria-label={`${transfers.length}个传输任务`}>
+        <span className="tsb-count" aria-label={`${transfers.length}个传输任务`} aria-live="polite">
           {transfers.length}
         </span>
       </div>
@@ -153,7 +188,7 @@ export function TransferStatusBar() {
       </div>
 
       {/* 百分比 */}
-      <span className="tsb-percent">{Math.round(totalProgress)}%</span>
+      <span className="tsb-percent" aria-live="polite">{Math.round(totalProgress)}%</span>
 
       {/* 展开/收起指示器 */}
       <div className="tsb-toggle-indicator">
@@ -166,6 +201,7 @@ export function TransferStatusBar() {
           transfers={transfers}
           onRemoveTask={removeTask}
           onClose={() => setIsExpanded(false)}
+          statusbarRef={statusbarRef}
         />
       )}
     </div>
