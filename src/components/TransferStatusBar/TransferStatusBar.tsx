@@ -120,31 +120,20 @@ export function TransferStatusBar() {
     );
   }
 
-  // 按权重计算总进度：活动任务 70%，已完成任务 30%
+  // 计算总进度：只统计未完成的任务（排除100%的已完成任务）
   const calculateWeightedProgress = () => {
-    const activeTasks = transfers.filter(t => t.status === 'active');
-    const completedTasks = transfers.filter(t => t.status === 'completed');
+    // 只统计未完成的任务（活动、排队、暂停、失败、已取消）
+    const unfinishedTasks = transfers.filter(t => t.status !== 'completed');
 
-    const activeProgress = activeTasks.length > 0
-      ? activeTasks.reduce((sum, t) => sum + t.progress, 0) / activeTasks.length
-      : 0;
-
-    const completedProgress = completedTasks.length > 0
-      ? completedTasks.reduce((sum, t) => sum + t.progress, 0) / completedTasks.length
-      : 0;
-
-    // 如果有活动任务，权重 70% 活动任务 + 30% 已完成任务
-    // 如果没有活动任务，只显示已完成任务的进度
-    if (activeTasks.length > 0) {
-      return activeProgress * 0.7 + completedProgress * 0.3;
-    } else if (completedTasks.length > 0) {
-      return completedProgress;
-    } else {
-      // 其他情况（排队、失败等），计算平均值
-      return transfers.length > 0
-        ? transfers.reduce((sum, t) => sum + t.progress, 0) / transfers.length
-        : 0;
+    if (unfinishedTasks.length === 0) {
+      // 所有任务都已完成，显示100%
+      const completedTasks = transfers.filter(t => t.status === 'completed');
+      return completedTasks.length > 0 ? 100 : 0;
     }
+
+    // 计算未完成任务的平均进度
+    const totalProgress = unfinishedTasks.reduce((sum, t) => sum + t.progress, 0);
+    return totalProgress / unfinishedTasks.length;
   };
 
   const totalProgress = calculateWeightedProgress();

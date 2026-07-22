@@ -728,6 +728,11 @@ async fn perform_transfer(
                 let mut tasks = manager.tasks.lock().await;
                 if let Some(task) = tasks.get_mut(task_id) {
                     task.file_size = file_size;
+                    // 克隆任务用于发送进度事件
+                    let task_clone = task.clone();
+                    drop(tasks);
+                    // 发送进度事件，通知前端文件大小已更新
+                    manager.emit_progress(&task_clone)?;
                 }
             }
 

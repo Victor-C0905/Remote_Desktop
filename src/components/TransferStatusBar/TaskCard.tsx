@@ -1,14 +1,47 @@
 /**
  * 单个任务卡片组件
  *
- * 显示单个传输任务的详细信息，包括文件名、进度条和控制按钮
- * 悬停时显示控制按钮（淡入动画 200ms）
+ * 显示单个传输任务的详细信息，包括文件名、文件大小、进度条、速度和控制按钮
+ * 对齐浏览器下载列表设计：文件名下方显示文件大小，进度条旁边显示下载速度
  */
 
-import { useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { TransferTask } from '../../hooks/useTransferProgress';
 import './TaskCard.css';
+
+// ── 工具函数：格式化文件大小和速度 ─────────────────────────────
+
+/**
+ * 格式化文件大小
+ * @param bytes 字节数
+ * @returns 格式化后的文件大小字符串（如 "2.3 MB"）
+ */
+function formatFileSize(bytes: number): string {
+  if (bytes === 0) return '0 B';
+
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const k = 1024;
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  const size = bytes / Math.pow(k, i);
+
+  return `${size.toFixed(1)} ${units[i]}`;
+}
+
+/**
+ * 格式化下载/上传速度
+ * @param bytesPerSecond 字节每秒
+ * @returns 格式化后的速度字符串（如 "1.2 MB/s"）
+ */
+function formatSpeed(bytesPerSecond: number): string {
+  if (bytesPerSecond === 0) return '0 B/s';
+
+  const units = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
+  const k = 1024;
+  const i = Math.floor(Math.log(bytesPerSecond) / Math.log(k));
+  const speed = bytesPerSecond / Math.pow(k, i);
+
+  return `${speed.toFixed(1)} ${units[i]}`;
+}
 
 // ── 内联 SVG 图标组件（Adwaita 风格）────────────────────────────
 
@@ -105,8 +138,6 @@ interface TaskCardProps {
 }
 
 export function TaskCard({ task, onRemove }: TaskCardProps) {
-  const [isHovered, setIsHovered] = useState(false);
-
   /**
    * 取消传输
    */
@@ -208,22 +239,25 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
   return (
     <div
       className={`task-card ${task.status}`}
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
       role="listitem"
       aria-label={`${task.direction === 'upload' ? '上传' : '下载'} ${task.file_name}`}
     >
-      {/* 左侧：图标 + 文件名 */}
+      {/* 第一行：图标 + 文件名 + 文件大小 */}
       <div className="tc-left">
         <span className="tc-icon">
           {task.direction === 'upload' ? <UploadIcon /> : <DownloadIcon />}
         </span>
-        <span className="tc-filename" title={task.file_name}>
-          {task.file_name}
-        </span>
+        <div className="tc-file-info">
+          <span className="tc-filename" title={task.file_name || '未知文件'}>
+            {task.file_name || '未知文件'}
+          </span>
+          <span className="tc-file-size">
+            {formatFileSize(task.file_size)}
+          </span>
+        </div>
       </div>
 
-      {/* 中间：进度条 + 百分比 */}
+      {/* 第二行：进度条 + 百分比 + 速度 */}
       <div className="tc-middle">
         <div
           className="tc-progress-bar"
@@ -239,11 +273,14 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
           />
         </div>
         <span className="tc-percent">{Math.round(task.progress)}%</span>
+        {task.status === 'active' && task.speed > 0 && (
+          <span className="tc-speed">{formatSpeed(task.speed)}</span>
+        )}
       </div>
 
-      {/* 右侧：控制按钮（悬停显示） */}
-      <div className={`tc-actions ${isHovered ? 'visible' : ''}`}>
-        {/* 活动任务：暂停 + 取消 */}
+      {/* 右侧：控制按钮（跨两行，垂直居中） */}
+      <div className="tc-actions">
+        {/* 活动任务：暂停 + 关闭 */}
         {task.status === 'active' && (
           <>
             <button
@@ -256,16 +293,16 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
             </button>
             <button
               className="tc-action-btn"
-              onClick={handleCancel}
-              aria-label="取消传输"
-              title="取消"
+              onClick={handleClose}
+              aria-label="关闭任务"
+              title="关闭"
             >
               <CloseIcon />
             </button>
           </>
         )}
 
-        {/* 已暂停任务：继续 + 取消 */}
+        {/* 已暂停任务：继续 + 关闭 */}
         {task.status === 'paused' && (
           <>
             <button
@@ -278,9 +315,9 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
             </button>
             <button
               className="tc-action-btn"
-              onClick={handleCancel}
-              aria-label="取消传输"
-              title="取消"
+              onClick={handleClose}
+              aria-label="关闭任务"
+              title="关闭"
             >
               <CloseIcon />
             </button>
@@ -301,7 +338,7 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
             <button
               className="tc-action-btn"
               onClick={handleClose}
-              aria-label="关闭"
+              aria-label="关闭任务"
               title="关闭"
             >
               <CloseIcon />
@@ -323,7 +360,7 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
             <button
               className="tc-action-btn"
               onClick={handleClose}
-              aria-label="关闭"
+              aria-label="关闭任务"
               title="关闭"
             >
               <CloseIcon />
@@ -345,7 +382,7 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
             <button
               className="tc-action-btn"
               onClick={handleClose}
-              aria-label="关闭"
+              aria-label="关闭任务"
               title="关闭"
             >
               <CloseIcon />
@@ -353,13 +390,13 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
           </>
         )}
 
-        {/* 排队中任务：取消 */}
+        {/* 排队中任务：关闭 */}
         {task.status === 'pending' && (
           <button
             className="tc-action-btn"
-            onClick={handleCancel}
-            aria-label="取消传输"
-            title="取消"
+            onClick={handleClose}
+            aria-label="关闭任务"
+            title="关闭"
           >
             <CloseIcon />
           </button>
