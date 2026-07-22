@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { listen } from '@tauri-apps/api/event';
+import { transferStorage } from '../utils/transferStorage';
 
 /**
  * 显示完成通知
@@ -53,6 +54,7 @@ export interface TransferTask {
   status: 'pending' | 'active' | 'paused' | 'completed' | 'error';
   error?: string;
   progress: number;
+  start_time: number; // 任务开始时间戳（毫秒）
 }
 
 /**
@@ -81,7 +83,23 @@ interface TransferProgressPayload {
  * 完成时自动显示通知并移除任务
  */
 export function useTransferProgress(connectionId?: string) {
-  const [transfers, setTransfers] = useState<TransferTask[]>([]);
+  // 从 localStorage 加载初始状态，只保留最近24小时的任务
+  const [transfers, setTransfers] = useState<TransferTask[]>(() => {
+    const saved = transferStorage.load();
+    const now = Date.now();
+    const oneDayMs = 24 * 60 * 60 * 1000;
+    
+    return saved.filter(task => {
+      // 只保留最近24小时的任务
+      const age = now - task.start_time;
+      return age < oneDayMs;
+    });
+  });
+
+  // 监听变化并保存到 localStorage
+  useEffect(() => {
+    transferStorage.save(transfers);
+  }, [transfers]);
 
   useEffect(() => {
     const unlisten = listen<TransferProgressPayload>('transfer-progress', (event) => {
@@ -142,6 +160,7 @@ export function useTransferProgress(connectionId?: string) {
               eta: payload.eta_secs,
               status: payload.status as TransferTask['status'],
               error: payload.error,
+              start_time: Date.now(), // 记录任务开始时间
             },
           ];
         }

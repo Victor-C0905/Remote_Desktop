@@ -3,10 +3,68 @@ use std::fs;
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 use tauri::Manager;  // 导入 Manager trait
+use tokio::sync::Mutex;
 
 mod connection;
 mod terminal;
 mod transfer;
+
+/* ── 优雅关闭机制 ───────────────────────────────────────── */
+
+/// 全局关闭标志
+pub static SHUTDOWN_FLAG: once_cell::sync::Lazy<Arc<Mutex<bool>>> =
+    once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(false)));
+
+/// 注册关闭钩子
+pub fn setup_shutdown_hook(app: &tauri::AppHandle) {
+    let app_handle = app.clone();
+
+    // Ctrl+C 处理
+    ctrlc::set_handler(move || {
+        eprintln!("[Shutdown] 收到关闭信号");
+        let app = app_handle.clone();
+        tokio::spawn(async move {
+            graceful_shutdown(app).await;
+        });
+    }).expect("无法设置 Ctrl+C 处理器");
+}
+
+/// 优雅关闭
+async fn graceful_shutdown(app: tauri::AppHandle) {
+    eprintln!("[Shutdown] 开始优雅关闭...");
+
+    // 1. 设置关闭标志
+    *SHUTDOWN_FLAG.lock().await = true;
+
+    // 2. 取消所有传输任务
+    if let Some(transfer_manager) = app.try_state::<Arc<transfer::TransferManager>>() {
+        let tasks = transfer_manager.list_tasks().await;
+        for task in tasks {
+            if task.status == "pending" || task.status == "transferring" || task.status == "active" {
+                let _ = transfer_manager.cancel_task(&task.id).await;
+            }
+        }
+    }
+
+    // 3. 断开所有连接
+    if let Some(connection_manager) = app.try_state::<connection::ConnectionManager>() {
+        // 获取所有连接 ID
+        let server_ids: Vec<String> = {
+            let conns = connection_manager.connections.lock().unwrap();
+            conns.keys().cloned().collect()
+        };
+
+        // 移除连接
+        for server_id in &server_ids {
+            eprintln!("[Shutdown] 断开连接: {}", server_id);
+            let mut conns = connection_manager.connections.lock().unwrap();
+            conns.remove(server_id);
+        }
+    }
+
+    eprintln!("[Shutdown] 优雅关闭完成");
+    std::process::exit(0);
+}
 
 /* ── Shared Types ────────────────────────────────────────── */
 
@@ -358,6 +416,14 @@ fn read_file_text(path: String) -> Result<String, String> {
     fs::read_to_string(&path).map_err(|e| format!("读取文件失败: {}", e))
 }
 
+#[tauri::command]
+async fn prepare_shutdown(app: tauri::AppHandle) -> Result<(), String> {
+    eprintln!("[Frontend] 收到关闭通知");
+    // 前端会在 beforeunload 时调用此命令
+    // 可以在这里执行一些快速清理操作
+    Ok(())
+}
+
 /* ── App Entry ──────────────────────────────────────────── */
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -370,6 +436,9 @@ pub fn run() {
         .manage(connection::ConnectionManager::new())
         .manage(Arc::new(terminal::TerminalStreamManager::new()))
         .setup(|app| {
+            // 注册关闭钩子
+            setup_shutdown_hook(&app.handle());
+
             // 创建 TransferManager（需要 AppHandle）
             let transfer_manager = Arc::new(transfer::TransferManager::new(app.handle().clone()));
             app.manage(transfer_manager);
@@ -377,6 +446,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             read_dir, stat_file, read_file_text,
+            prepare_shutdown,
             pty::spawn_terminal,
             pty::terminal_write,
             pty::terminal_read,

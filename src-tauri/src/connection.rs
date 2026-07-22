@@ -548,16 +548,27 @@ pub async fn remote_connect(
 
 #[tauri::command]
 pub async fn remote_disconnect(server_id: String, app: tauri::AppHandle) -> Result<(), String> {
+    eprintln!("[Connection] 断开连接: {}", server_id);
+
+    // 1. 清理传输任务
+    let transfer_manager = app.state::<std::sync::Arc<crate::transfer::TransferManager>>();
+    transfer_manager.cleanup_by_connection(&server_id).await;
+
+    // 2. 清理终端会话（如果有）
+    // TODO: 添加终端会话清理
+
+    // 3. 断开连接
     let manager = app.state::<ConnectionManager>();
-    
+
     // 先获取 tx，释放 lock 后再发送
     let tx = {
         let mut conns = manager.connections.lock().unwrap();
         conns.remove(&server_id).map(|c| c.tx)
     };
-    
+
     if let Some(tx) = tx {
         let _ = tx.send(ClientRequest::Disconnect).await;
+        eprintln!("[Connection] 连接已断开: {}", server_id);
         Ok(())
     } else {
         Err("未找到该服务器的连接".into())
