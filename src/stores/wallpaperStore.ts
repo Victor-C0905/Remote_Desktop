@@ -1,6 +1,9 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import { settingsStorage } from "../utils/storage";
+import { createLogger } from "../utils/logger";
+
+const log = createLogger('WallpaperStore');
 
 /* ── Types ─────────────────────────────────────────────── */
 
@@ -63,7 +66,7 @@ export const useWallpaperStore = create<WallpaperState & WallpaperActions>()(
       // Hydration 完成后的回调
       onRehydrateStorage: () => (state) => {
         if (state) {
-          console.log("[WallpaperStore] Rehydrated:", state.wallpaper);
+          log.debug("Rehydrated:", state.wallpaper);
         }
       },
     }

@@ -10,8 +10,11 @@ import {
   formatSpeedSafe,
 } from "../utils/offlineDefaults";
 import { MonitorSkeleton } from "../components/skeleton/MonitorSkeleton";
+import { createLogger } from '../utils/logger';
 // import { useWindowState } from "../window-system/hooks/useWindowState"; // 未来集成时使用
 import "./SystemMonitor.css";
+
+const log = createLogger('SystemMonitor');
 
 interface MetricsSnapshot {
   cpu_percent: number;
@@ -230,7 +233,7 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
               const rxSpeed = rxDiff > 0 ? rxDiff / timeDiff : 0;
               const txSpeed = txDiff > 0 ? txDiff / timeDiff : 0;
 
-              console.log('网络速率计算:', {
+              log.debug('网络速率计算:', {
                 rxDiff,
                 txDiff,
                 timeDiff,

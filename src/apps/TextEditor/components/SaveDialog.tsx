@@ -11,6 +11,9 @@
  */
 
 import { useState } from 'react';
+import { createLogger } from '../../../utils/logger';
+
+const log = createLogger('SaveDialog');
 
 /**
  * SaveDialog 组件 Props
@@ -57,7 +60,7 @@ export function SaveDialog({ isOpen, defaultPath, onSave, onCancel }: SaveDialog
   const handleSave = () => {
     // 验证路径不为空
     if (!path.trim()) {
-      console.warn('[SaveDialog] 路径为空，无法保存');
+      log.warn('路径为空，无法保存');
       return;
     }
 

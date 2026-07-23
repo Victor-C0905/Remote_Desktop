@@ -1,4 +1,7 @@
 import { load } from "@tauri-apps/plugin-store";
+import { createLogger } from "./logger";
+
+const log = createLogger('Storage');
 
 /* ── Types ─────────────────────────────────────────────── */
 
@@ -27,12 +30,12 @@ export async function createTauriStorage(storePath: string): Promise<TauriStorag
     getItem: async (name: string): Promise<string | null> => {
       try {
         const value = await store.get(name);
-        console.log(`[TauriStorage] GET "${name}" from ${storePath}:`, value);
+        log.debug(`GET "${name}" from ${storePath}:`, value);
         return value !== null && value !== undefined 
           ? JSON.stringify(value) 
           : null;
       } catch (e) {
-        console.warn(`[TauriStorage] Failed to get "${name}" from ${storePath}:`, e);
+        log.warn(`Failed to get "${name}" from ${storePath}:`, e);
         return null;
       }
     },
@@ -40,11 +43,11 @@ export async function createTauriStorage(storePath: string): Promise<TauriStorag
     setItem: async (name: string, value: string): Promise<void> => {
       try {
         const parsedValue = JSON.parse(value);
-        console.log(`[TauriStorage] SET "${name}" in ${storePath}:`, parsedValue);
+        log.debug(`SET "${name}" in ${storePath}:`, parsedValue);
         await store.set(name, parsedValue);
         await store.save();
       } catch (e) {
-        console.warn(`[TauriStorage] Failed to set "${name}" in ${storePath}:`, e);
+        log.warn(`Failed to set "${name}" in ${storePath}:`, e);
       }
     },
 
@@ -53,7 +56,7 @@ export async function createTauriStorage(storePath: string): Promise<TauriStorag
         await store.delete(name);
         await store.save();
       } catch (e) {
-        console.warn(`[TauriStorage] Failed to delete "${name}" from ${storePath}:`, e);
+        log.warn(`Failed to delete "${name}" from ${storePath}:`, e);
       }
     },
   };

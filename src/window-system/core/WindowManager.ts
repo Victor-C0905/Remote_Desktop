@@ -12,6 +12,9 @@ import {
   IWindowManager,
   PersistedWindowData,
 } from '../types';
+import { createLogger } from '../../utils/logger';
+
+const log = createLogger('WindowManager');
 
 /**
  * WindowManager - singleton orchestrator for window system
@@ -153,7 +156,7 @@ export class WindowManager implements IWindowManager {
         const preloadData = await app.lifecycle.onBeforeCreate(context);
         newWindow.setPreloadData(preloadData);
       } catch (error) {
-        console.error(`[WindowManager] Preload failed for "${appId}"`, error);
+        log.error(`Preload failed for "${appId}"`, error);
         newWindow.setPreloadState('error');
       }
     } else {
@@ -372,14 +375,14 @@ export class WindowManager implements IWindowManager {
         const data = this.windows.getAll().map(w => w.serialize());
         localStorage.setItem('gnome-remote-windows', JSON.stringify(data));
       } catch (error) {
-        console.error('[WindowManager] Failed to save window states:', error);
+        log.error('Failed to save window states:', error);
         // ✅ 尝试清理旧数据后再保存
         try {
           const data = this.windows.getAll().map(w => w.serialize());
           localStorage.removeItem('gnome-remote-windows');
           localStorage.setItem('gnome-remote-windows', JSON.stringify(data));
         } catch (retryError) {
-          console.error('[WindowManager] Retry save failed:', retryError);
+          log.error('Retry save failed:', retryError);
           // 最终失败，不影响应用运行
         }
       }
@@ -426,7 +429,7 @@ export class WindowManager implements IWindowManager {
         this.windows.add(window);
       });
     } catch (error) {
-      console.error('[WindowManager] Failed to load window states', error);
+      log.error('Failed to load window states', error);
     }
   }
 }

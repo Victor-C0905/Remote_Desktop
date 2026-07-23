@@ -1,6 +1,9 @@
 // src/window-system/core/WindowRegistry.ts
 
 import { AppDefinition } from '../types';
+import { createLogger } from '../../utils/logger';
+
+const log = createLogger('WindowRegistry');
 
 /**
  * Application registry for window system
@@ -14,7 +17,7 @@ export class WindowRegistry {
    */
   register(app: AppDefinition): void {
     if (this.apps.has(app.id)) {
-      console.warn(`[WindowRegistry] App "${app.id}" already registered, overwriting`);
+      log.warn(`App "${app.id}" already registered, overwriting`);
     }
     this.apps.set(app.id, app);
   }

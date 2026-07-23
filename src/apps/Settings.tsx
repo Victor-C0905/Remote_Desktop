@@ -5,8 +5,11 @@ import { PRESET_WALLPAPERS } from "../stores/wallpaperStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import { themes, accentColors } from "../config/themes";
 import { ThemeId } from "../config/themes";
+import { createLogger } from '../utils/logger';
 // import { useWindowState } from "../window-system/hooks/useWindowState"; // 未来集成时使用
 import "./Settings.css";
+
+const log = createLogger('Settings');
 
 /* ── Types ─────────────────────────────────────────────── */
 
@@ -282,11 +285,11 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
   };
 
   const handleConnect = async (id: string) => {
-    console.log("[Settings] handleConnect 被调用, id:", id);
+    log.debug("handleConnect 被调用, id:", id);
     setSelectedServerId(id);
-    console.log("[Settings] 调用 connectServer");
+    log.debug("调用 connectServer");
     await connectServer(id);
-    console.log("[Settings] connectServer 完成");
+    log.debug("connectServer 完成");
   };
 
   const handleDisconnect = (id: string) => {

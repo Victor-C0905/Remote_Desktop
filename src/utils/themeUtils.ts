@@ -4,6 +4,9 @@
  */
 
 import { ThemeId, AccentColorId, themes, accentColors } from '../config/themes';
+import { createLogger } from './logger';
+
+const log = createLogger('ThemeUtils');
 
 /**
  * 调整颜色亮度
@@ -14,7 +17,7 @@ import { ThemeId, AccentColorId, themes, accentColors } from '../config/themes';
 export function adjustBrightness(hex: string, percent: number): string {
   // 验证hex格式：必须是#RRGGBB格式
   if (!/^#[0-9A-Fa-f]{6}$/.test(hex)) {
-    console.error(`Invalid hex color format: ${hex}`);
+    log.error(`Invalid hex color format: ${hex}`);
     return hex; // 返回原值，避免破坏应用
   }
 
@@ -112,7 +115,7 @@ export function applyThemeColors(
     root.style.setProperty('--ovelis-text-disabled', colors.textDisabled);
     root.style.setProperty('--ovelis-border-color', colors.borderColor);
   } catch (error) {
-    console.error('应用主题颜色失败:', error);
+    log.error('应用主题颜色失败:', error);
   }
 }
 

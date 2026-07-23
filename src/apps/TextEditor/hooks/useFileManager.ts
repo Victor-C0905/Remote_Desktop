@@ -13,6 +13,9 @@ import { useState, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import type { FileState, ApplyDiffResponse } from '../types/editor';
 import { calculateDiff, convertToTauriFormat } from '../utils/diff';
+import { createLogger } from '../../../utils/logger';
+
+const log = createLogger('useFileManager');
 
 /**
  * Tauri API 返回的文件读取结果
@@ -291,12 +294,12 @@ export function useFileManager(): UseFileManagerReturn {
     setIsSaving(true);
 
     try {
-      console.log('[saveWithDiff] 开始差异同步保存:', fileState.path);
+      log.info('开始差异同步保存:', fileState.path);
 
       // 检查原始内容是否存在（关键保护）
       if (originalContent === null) {
-        console.error('[saveWithDiff] 错误：原始内容为 null，无法计算差异');
-        console.log('[saveWithDiff] 当前 fileState:', fileState);
+        log.error('错误：原始内容为 null，无法计算差异');
+        log.debug('当前 fileState:', fileState);
 
         // 尝试修复：使用当前内容作为"原始内容"（但不应该发生）
         setOriginalContent(fileState.content);
@@ -315,7 +318,7 @@ export function useFileManager(): UseFileManagerReturn {
       // 转换为 Tauri 端期望的格式
       const diffs = convertToTauriFormat(clientDiffs);
 
-      console.log('[saveWithDiff] 计算差异完成:', {
+      log.debug('计算差异完成:', {
         diffCount: diffs.length,
         oldLines: oldContent.split('\n').length,
         newLines: newContent.split('\n').length,
@@ -335,7 +338,7 @@ export function useFileManager(): UseFileManagerReturn {
 
       // 步骤 3：处理响应
       if (response.success) {
-        console.log('[saveWithDiff] 保存成功:', response);
+        log.info('保存成功:', response);
 
         // 重新计算校验和
         const newChecksum = await calculateChecksum(newContent);
@@ -359,7 +362,7 @@ export function useFileManager(): UseFileManagerReturn {
       } else {
         // 版本冲突或其他错误
         const errorMsg = response.error || '未知错误';
-        console.error('[saveWithDiff] 保存失败:', errorMsg);
+        log.error('保存失败:', errorMsg);
 
         if (errorMsg.includes('版本冲突')) {
           setError('文件已被其他程序修改，请重新打开文件后再编辑。');
@@ -369,7 +372,7 @@ export function useFileManager(): UseFileManagerReturn {
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
-      console.error('[saveWithDiff] 保存失败:', err);
+      log.error('保存失败:', err);
       setError(`无法保存文件 "${fileState.path}": ${errorMessage}`);
     } finally {
       setIsSaving(false);
@@ -391,7 +394,7 @@ export function useFileManager(): UseFileManagerReturn {
     setIsSaving(true);
 
     try {
-      console.log('[saveFileFull] 开始全量保存:', fileState.path);
+      log.info('开始全量保存:', fileState.path);
 
       const result = await invoke<WriteFileResult>('remote_write_file', {
         serverId,
@@ -399,7 +402,7 @@ export function useFileManager(): UseFileManagerReturn {
         content: fileState.content,
       });
 
-      console.log('[saveFileFull] 保存成功:', result);
+      log.info('保存成功:', result);
 
       // 重新计算校验和
       const newChecksum = await calculateChecksum(fileState.content);
@@ -419,7 +422,7 @@ export function useFileManager(): UseFileManagerReturn {
       setOriginalChecksum(newChecksum);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
-      console.error('[saveFileFull] 保存失败:', err);
+      log.error('保存失败:', err);
       setError(`无法保存文件 "${fileState.path}": ${errorMessage}`);
     } finally {
       setIsSaving(false);

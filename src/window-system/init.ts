@@ -1,6 +1,7 @@
 // src/window-system/init.ts
 
 import { WindowRegistry } from './core/WindowRegistry';
+import { createLogger } from '../utils/logger';
 
 // Import app components
 import { TerminalApp } from '../apps/Terminal';
@@ -8,6 +9,8 @@ import { FileManager } from '../apps/FileManager';
 import { SystemMonitor } from '../apps/SystemMonitor';
 import { Settings } from '../apps/Settings';
 import { TextEditor } from '../apps/TextEditor/TextEditor';
+
+const log = createLogger('WindowInit');
 
 /**
  * Initialize the window registry with all registered applications
@@ -76,5 +79,5 @@ export function initWindowRegistry(registry: WindowRegistry): void {
     component: Settings,
   });
 
-  console.log('[WindowRegistry] Registered apps:', registry.getAll().map(a => a.id));
+  log.info('Registered apps:', registry.getAll().map(a => a.id));
 }

@@ -10,7 +10,10 @@ import { useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { TransferTask } from '../../hooks/useTransferProgress';
 import { TaskCard } from './TaskCard';
+import { createLogger } from '../../utils/logger';
 import './TransferPanel.css';
+
+const log = createLogger('TransferPanel');
 
 // ── 工具函数 ──────────────────────────────────────────────────
 
@@ -63,7 +66,7 @@ export function TransferPanel({ transfers, onRemoveTask, onClose, statusbarRef }
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as Node;
 
-      console.log('[TransferPanel] 外部点击检测', {
+      log.debug('外部点击检测', {
         目标元素: (target as HTMLElement).tagName,
         在面板内: panelRef.current?.contains(target),
         在状态栏内: statusbarRef?.current?.contains(target),
@@ -71,18 +74,18 @@ export function TransferPanel({ transfers, onRemoveTask, onClose, statusbarRef }
 
       // 如果点击的是面板内部，不收起
       if (panelRef.current && panelRef.current.contains(target)) {
-        console.log('[TransferPanel] 面板内部点击，忽略');
+        log.debug('面板内部点击，忽略');
         return;
       }
 
       // 如果点击的是状态栏（按钮），不收起（由状态栏的 onClick 处理）
       if (statusbarRef?.current && statusbarRef.current.contains(target)) {
-        console.log('[TransferPanel] 状态栏点击，忽略');
+        log.debug('状态栏点击，忽略');
         return;
       }
 
       // 点击其他地方，收起面板
-      console.log('[TransferPanel] 外部区域点击，收起面板');
+      log.debug('外部区域点击，收起面板');
       onClose();
     };
 
@@ -141,7 +144,7 @@ export function TransferPanel({ transfers, onRemoveTask, onClose, statusbarRef }
       try {
         await invoke('pause_transfer', { taskId: task.id });
       } catch (error) {
-        console.error('[TransferPanel] 暂停任务失败:', task.id, error);
+        log.error('暂停任务失败:', task.id, error);
       }
     }
   };
@@ -155,7 +158,7 @@ export function TransferPanel({ transfers, onRemoveTask, onClose, statusbarRef }
       try {
         await invoke('resume_transfer', { taskId: task.id });
       } catch (error) {
-        console.error('[TransferPanel] 继续任务失败:', task.id, error);
+        log.error('继续任务失败:', task.id, error);
       }
     }
   };
@@ -169,7 +172,7 @@ export function TransferPanel({ transfers, onRemoveTask, onClose, statusbarRef }
       try {
         await invoke('cancel_transfer', { taskId: task.id });
       } catch (error) {
-        console.error('[TransferPanel] 取消任务失败:', task.id, error);
+        log.error('取消任务失败:', task.id, error);
       }
     }
   };

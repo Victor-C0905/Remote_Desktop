@@ -7,6 +7,9 @@
  */
 
 import type { FileChange } from '../types/editor';
+import { createLogger } from '../../../utils/logger';
+
+const log = createLogger('DiffUtils');
 
 /**
  * 计算两个文本的差异（LCS 算法）
@@ -228,9 +231,9 @@ export function testDiff(): void {
   const oldText = 'line1\nline2\nline3';
   const newText = 'line1\nmodified\nline3';
   const diffs = calculateDiff(oldText, newText);
-  console.log('Diffs:', diffs);
+  log.debug('Diffs:', diffs);
 
   const applied = applyDiff(oldText, diffs);
-  console.log('Applied:', applied);
-  console.log('Match:', applied === newText);
+  log.debug('Applied:', applied);
+  log.debug('Match:', applied === newText);
 }

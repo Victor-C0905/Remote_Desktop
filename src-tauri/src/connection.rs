@@ -399,6 +399,7 @@ impl Default for ConnectionManager {
 // ── Tauri Commands ─────────────────────────────────
 
 #[tauri::command]
+#[tracing::instrument(skip(token, app), fields(server_id = %server_id, host = %host, port = port))]
 pub async fn remote_connect(
     server_id: String,
     host: String,
@@ -558,8 +559,9 @@ pub async fn remote_connect(
 }
 
 #[tauri::command]
+#[tracing::instrument(skip(app), fields(server_id = %server_id))]
 pub async fn remote_disconnect(server_id: String, app: tauri::AppHandle) -> Result<(), String> {
-    eprintln!("[Connection] 断开连接: {}", server_id);
+    tracing::info!("[Connection] 断开连接: {}", server_id);
 
     // 1. 清理传输任务
     let transfer_manager = app.state::<std::sync::Arc<crate::transfer::TransferManager>>();
@@ -588,20 +590,20 @@ pub async fn remote_disconnect(server_id: String, app: tauri::AppHandle) -> Resu
         if send_result.is_ok() {
             match tokio::time::timeout(std::time::Duration::from_secs(3), response_rx).await {
                 Ok(Ok(Ok(_))) => {
-                    eprintln!("[Connection] Agent 已确认断开请求: {}", server_id);
+                    tracing::info!("[Connection] Agent 已确认断开请求: {}", server_id);
                 }
                 Ok(Ok(Err(e))) => {
-                    eprintln!("[Connection] Agent 断开请求发送失败（非致命）: {}", e);
+                    tracing::warn!("[Connection] Agent 断开请求发送失败（非致命）: {}", e);
                 }
                 Ok(Err(_)) => {
-                    eprintln!("[Connection] Agent 断开请求响应通道关闭（非致命）");
+                    tracing::warn!("[Connection] Agent 断开请求响应通道关闭（非致命）");
                 }
                 Err(_) => {
-                    eprintln!("[Connection] Agent 断开请求超时（3s），继续断开");
+                    tracing::warn!("[Connection] Agent 断开请求超时（3s），继续断开");
                 }
             }
         } else {
-            eprintln!("[Connection] 发送断开请求失败（消息队列已满，非致命）");
+            tracing::warn!("[Connection] 发送断开请求失败（消息队列已满，非致命）");
         }
     }
 
@@ -613,7 +615,7 @@ pub async fn remote_disconnect(server_id: String, app: tauri::AppHandle) -> Resu
 
     if let Some(tx) = tx {
         let _ = tx.send(ClientRequest::Disconnect).await;
-        eprintln!("[Connection] 连接已断开: {}", server_id);
+        tracing::info!("[Connection] 连接已断开: {}", server_id);
         Ok(())
     } else {
         Err("未找到该服务器的连接".into())
@@ -661,6 +663,7 @@ pub struct PingResult {
 }
 
 #[tauri::command]
+#[tracing::instrument(skip(payload, app), fields(server_id = %server_id))]
 pub async fn remote_send(server_id: String, payload: Payload, app: tauri::AppHandle) -> Result<Envelope, String> {
     let manager = app.state::<ConnectionManager>();
     
@@ -788,7 +791,7 @@ pub async fn remote_delete(server_id: String, path: String, app: tauri::AppHandl
 
 #[tauri::command]
 pub async fn remote_mkdir(server_id: String, path: String, app: tauri::AppHandle) -> Result<bool, String> {
-    println!("[Connection] remote_mkdir: server_id={}, path={}", server_id, path);
+    tracing::debug!("[Connection] remote_mkdir: server_id={}, path={}", server_id, path);
 
     let resp = remote_send(server_id, Payload::MkdirRequest { path }, app).await?;
 
@@ -806,7 +809,7 @@ pub async fn remote_rename(
     new_path: String,
     app: tauri::AppHandle
 ) -> Result<bool, String> {
-    println!("[Connection] remote_rename: old={}, new={}", old_path, new_path);
+    tracing::debug!("[Connection] remote_rename: old={}, new={}", old_path, new_path);
 
     let resp = remote_send(server_id, Payload::RenameRequest { old_path, new_path }, app).await?;
 
@@ -824,7 +827,7 @@ pub async fn remote_copy(
     dst: String,
     app: tauri::AppHandle
 ) -> Result<bool, String> {
-    println!("[Connection] remote_copy: src={}, dst={}", src, dst);
+    tracing::debug!("[Connection] remote_copy: src={}, dst={}", src, dst);
 
     let resp = remote_send(server_id, Payload::CopyRequest { src, dst }, app).await?;
 
@@ -853,7 +856,7 @@ pub async fn remote_apply_diff(
     diffs: Vec<FileDiff>, // 使用本地定义的 FileDiff
     app: tauri::AppHandle
 ) -> Result<RemoteApplyDiffResponse, String> {
-    println!("[Connection] remote_apply_diff: server_id={}, path={}, base_mtime={}, diffs={}", 
+    tracing::debug!("[Connection] remote_apply_diff: server_id={}, path={}, base_mtime={}, diffs={}", 
         server_id, path, base_mtime, diffs.len());
 
     // 发送差异到 Agent
@@ -898,7 +901,7 @@ pub async fn remote_move(
     dst: String,
     app: tauri::AppHandle
 ) -> Result<bool, String> {
-    println!("[Connection] remote_move: src={}, dst={}", src, dst);
+    tracing::debug!("[Connection] remote_move: src={}, dst={}", src, dst);
 
     let resp = remote_send(server_id, Payload::MoveRequest { src, dst }, app).await?;
 

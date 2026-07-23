@@ -1,6 +1,9 @@
 // src/window-system/persistence/WindowSerializer.ts
 
 import { PersistedWindowData } from '../types';
+import { createLogger } from '../../utils/logger';
+
+const log = createLogger('WindowSerializer');
 
 /**
  * Window state serializer
@@ -53,7 +56,7 @@ export class WindowSerializer {
 
       return parsed.windows;
     } catch (error) {
-      console.error('[WindowSerializer] Failed to deserialize', error);
+      log.error('Failed to deserialize', error);
       return [];
     }
   }
@@ -62,7 +65,7 @@ export class WindowSerializer {
    * Migrate from legacy format (version 0)
    */
   private migrateFromLegacy(data: PersistedWindowData[]): PersistedWindowData[] {
-    console.log('[WindowSerializer] Migrating from legacy format');
+    log.info('Migrating from legacy format');
     // Legacy format is already compatible with current format
     return data.map(w => ({
       ...w,
@@ -74,7 +77,7 @@ export class WindowSerializer {
    * Migrate from older version to current version
    */
   private migrate(data: VersionedWindowData): PersistedWindowData[] {
-    console.log(`[WindowSerializer] Migrating from version ${data.version} to ${CURRENT_VERSION}`);
+    log.info(`Migrating from version ${data.version} to ${CURRENT_VERSION}`);
 
     // Version migration logic
     // Currently only version 1, so no migration needed
