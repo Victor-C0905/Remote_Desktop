@@ -31,7 +31,7 @@ interface TransferPanelProps {
   onRemoveTask: (taskId: string) => void;
   onClose: () => void;
   /** 状态栏容器的 ref，点击状态栏时不应该收起面板（由状态栏的 onClick 处理） */
-  statusbarRef?: React.RefObject<HTMLDivElement>;
+  statusbarRef?: React.RefObject<HTMLDivElement | null>;
 }
 
 export function TransferPanel({ transfers, onRemoveTask, onClose, statusbarRef }: TransferPanelProps) {
@@ -117,15 +117,6 @@ export function TransferPanel({ transfers, onRemoveTask, onClose, statusbarRef }
         console.error('[TransferPanel] 取消任务失败:', task.id, error);
       }
     }
-  };
-
-  /**
-   * 移除单个任务（从列表中移除）
-   */
-  const handleRemoveTask = async (taskId: string) => {
-    // 在实际应用中，这里可能需要调用后端 API 来清除任务记录
-    // 目前仅在父组件中过滤掉该任务
-    console.log('[TransferPanel] 移除任务:', taskId);
   };
 
   return (

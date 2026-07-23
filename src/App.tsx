@@ -10,7 +10,7 @@ import "./styles/skeleton.css";      // ✅ 层 5：Skeleton 全局样式
 
 function App() {
   useEffect(() => {
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+    const handleBeforeUnload = (_e: BeforeUnloadEvent) => {
       // 通知后端准备关闭
       invoke('prepare_shutdown').catch(console.error);
     };

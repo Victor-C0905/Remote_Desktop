@@ -175,6 +175,7 @@ impl PtySession {
     }
 
     /// 检查子进程是否存活
+    #[allow(dead_code)]
     pub fn is_alive(&self) -> bool {
         use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
         use nix::unistd::Pid;
@@ -186,6 +187,7 @@ impl PtySession {
     }
 
     /// 获取子进程 PID
+    #[allow(dead_code)]
     pub fn child_pid(&self) -> i32 {
         self.child_pid
     }
@@ -273,6 +275,7 @@ impl PtyManager {
     }
 
     /// 获取会话管理器的 Arc 引用
+    #[allow(dead_code)]
     pub fn inner(&self) -> Arc<Mutex<HashMap<String, PtySession>>> {
         self.sessions.clone()
     }

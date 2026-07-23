@@ -40,7 +40,7 @@ async fn graceful_shutdown(app: tauri::AppHandle) {
     if let Some(transfer_manager) = app.try_state::<Arc<transfer::TransferManager>>() {
         let tasks = transfer_manager.list_tasks().await;
         for task in tasks {
-            if task.status == "pending" || task.status == "transferring" || task.status == "active" {
+            if task.status == transfer::TransferStatus::Pending || task.status == transfer::TransferStatus::Active {
                 let _ = transfer_manager.cancel_task(&task.id, &app).await;
             }
         }
@@ -418,7 +418,7 @@ fn read_file_text(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn prepare_shutdown(app: tauri::AppHandle) -> Result<(), String> {
+async fn prepare_shutdown(_app: tauri::AppHandle) -> Result<(), String> {
     eprintln!("[Frontend] 收到关闭通知");
     // 前端会在 beforeunload 时调用此命令
     // 可以在这里执行一些快速清理操作

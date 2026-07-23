@@ -7,6 +7,7 @@ use std::time::SystemTime;
 
 /// 传输会话状态
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum TransferStatus {
     /// 传输中
     Active,
@@ -41,6 +42,7 @@ pub struct TransferSession {
     /// 已传输字节数
     pub transferred: u64,
     /// 分块大小
+    #[allow(dead_code)]
     pub chunk_size: u32,
     /// 传输状态
     pub status: TransferStatus,
@@ -82,6 +84,7 @@ impl TransferSession {
     }
 
     /// 获取进度百分比
+    #[allow(dead_code)]
     pub fn progress(&self) -> u32 {
         if self.file_size == 0 {
             return 100;

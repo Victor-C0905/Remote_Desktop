@@ -150,18 +150,6 @@ interface TaskCardProps {
 
 export function TaskCard({ task, onRemove }: TaskCardProps) {
   const startTimeText = formatTime(task.start_time);
-  /**
-   * 取消传输
-   */
-  const handleCancel = async (e: React.MouseEvent) => {
-    e.stopPropagation();  // 阻止事件冒泡，避免触发父元素的点击事件
-    try {
-      await invoke('cancel_transfer', { taskId: task.id });
-      console.log('[TaskCard] 已取消传输:', task.id);
-    } catch (error) {
-      console.error('[TaskCard] 取消传输失败:', error);
-    }
-  };
 
   /**
    * 暂停传输

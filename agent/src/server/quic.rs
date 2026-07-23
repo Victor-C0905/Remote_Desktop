@@ -8,8 +8,6 @@ use tokio::sync::{broadcast, Mutex};
 
 // Unix平台特有的导入(终端功能)
 #[cfg(unix)]
-use tokio::io::AsyncReadExt;
-#[cfg(unix)]
 use tokio::time::{sleep, Duration};
 #[cfg(not(unix))]
 use tokio::time::Duration;
@@ -18,7 +16,7 @@ use crate::config::AgentConfig;
 use crate::pty::PtyManager;
 use crate::subscription::SubscriptionManager;
 use crate::event_bus::EventBus;
-use crate::protocol::{Envelope, Payload, TransferDirection};
+use crate::protocol::{Envelope, Payload};
 
 // 全局 Stream ID 计数器
 static STREAM_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -69,6 +67,7 @@ impl ConnectionContext {
     }
 
     /// 注册 PTY 会话（连接关闭时自动清理）
+    #[allow(dead_code)]
     pub async fn register_pty_session(&self, session_id: String) {
         self.pty_session_ids.lock().await.push(session_id);
     }
