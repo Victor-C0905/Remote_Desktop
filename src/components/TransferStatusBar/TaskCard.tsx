@@ -54,6 +54,24 @@ function formatTime(timestamp: number): string {
   return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 }
 
+/**
+ * 格式化剩余时间
+ * @param seconds 秒数
+ * @returns 格式化后的剩余时间（如 "2分30秒"）
+ */
+function formatEta(seconds: number): string {
+  if (seconds <= 0) return '';
+  if (seconds < 60) return `${Math.ceil(seconds)}秒`;
+  if (seconds < 3600) {
+    const m = Math.floor(seconds / 60);
+    const s = Math.ceil(seconds % 60);
+    return s > 0 ? `${m}分${s}秒` : `${m}分`;
+  }
+  const h = Math.floor(seconds / 3600);
+  const m = Math.ceil((seconds % 3600) / 60);
+  return m > 0 ? `${h}小时${m}分` : `${h}小时`;
+}
+
 // ── 内联 SVG 图标组件（Adwaita 风格）────────────────────────────
 
 /**
@@ -277,7 +295,13 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
         {task.status === 'active' && task.speed > 0 && (
           <span className="tc-speed">{formatSpeed(task.speed)}</span>
         )}
-        {startTimeText && (
+        {task.status === 'active' && task.eta > 0 && (
+          <span className="tc-eta">剩余 {formatEta(task.eta)}</span>
+        )}
+        {task.status === 'error' && task.error && (
+          <span className="tc-error-msg" title={task.error}>{task.error}</span>
+        )}
+        {startTimeText && task.status !== 'active' && (
           <span className="tc-elapsed">{startTimeText}</span>
         )}
       </div>
