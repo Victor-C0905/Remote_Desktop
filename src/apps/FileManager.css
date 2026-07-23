@@ -640,6 +640,155 @@
   background: var(--ovelis-accent-hover);
 }
 
+/* ── Rename Dialog (重命名弹窗) ─────────────────── */
+.fm-rename-dialog {
+  position: relative;
+  width: 480px;
+  background: var(--ovelis-card-bg);
+  border: 1px solid var(--ovelis-border-color);
+  border-radius: var(--radius-md);
+  padding: 20px;
+  box-shadow: var(--shadow-popup);
+  pointer-events: auto;
+}
+
+.rd-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--ovelis-border-color);
+}
+
+.rd-icon {
+  font-size: 22px;
+}
+
+.rd-title {
+  font-size: 14pt;
+  font-weight: 600;
+  color: var(--ovelis-text-primary);
+}
+
+.rd-content {
+  margin-bottom: 16px;
+}
+
+.rd-original {
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  background: var(--ovelis-view-bg);
+  border-radius: var(--radius-xs);
+}
+
+.rd-label {
+  font-size: 12px;
+  color: var(--ovelis-text-secondary);
+  margin-bottom: 6px;
+}
+
+.rd-original-name {
+  font-size: var(--font-body);
+  color: var(--ovelis-text-primary);
+  word-break: break-all;
+  opacity: 0.7;
+}
+
+.rd-input-section {
+  margin-bottom: 12px;
+}
+
+.rd-input {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--ovelis-input-bg);
+  border: 1px solid var(--ovelis-border-color);
+  border-radius: var(--radius-xs);
+  color: var(--ovelis-text-primary);
+  font-size: var(--font-body);
+  outline: none;
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+.rd-input:focus {
+  border-color: var(--ovelis-accent-bg);
+}
+
+.rd-input::placeholder {
+  color: var(--ovelis-text-secondary);
+  opacity: 0.6;
+}
+
+.rd-byte-counter {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  font-size: 12px;
+  margin-top: 6px;
+}
+
+.rd-byte-valid {
+  color: var(--ovelis-text-secondary);
+}
+
+.rd-byte-invalid {
+  color: #ef4444;
+  font-weight: 500;
+}
+
+.rd-byte-hint {
+  color: var(--ovelis-text-secondary);
+  opacity: 0.7;
+  margin-left: 4px;
+}
+
+.rd-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--ovelis-border-color);
+}
+
+.rd-btn-cancel {
+  padding: 8px 20px;
+  background: transparent;
+  color: var(--ovelis-text-secondary);
+  border: 1px solid var(--ovelis-border-color);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  font-size: var(--font-body);
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.rd-btn-cancel:hover {
+  background: var(--ovelis-view-bg);
+  color: var(--ovelis-text-primary);
+}
+
+.rd-btn-confirm {
+  padding: 8px 20px;
+  background: var(--ovelis-accent-bg);
+  color: var(--ovelis-accent-fg);
+  border: none;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  font-size: var(--font-body);
+  font-weight: 500;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.rd-btn-confirm:hover:not(:disabled) {
+  background: var(--ovelis-accent-hover);
+}
+
+.rd-btn-confirm:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* ── Offline Empty State (离线空状态) ─────────────────── */
 .fm-offline {
   display: flex;

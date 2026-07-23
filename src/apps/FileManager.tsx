@@ -153,7 +153,45 @@ export function FileManager({ preloadData }: FileManagerProps) {
   // 路径不存在时的错误弹窗
   const [pathErrorDialog, setPathErrorDialog] = useState<string | null>(null);
 
-  // 输入框 ref（用于检测点击位置）
+  // 文件重命名弹窗状态
+  const [renameDialog, setRenameDialog] = useState<{
+    localPath: string;
+    originalName: string;
+    newName: string;
+    maxBytes: number;
+  } | null>(null);
+
+  // 重命名输入框 ref
+  const renameInputRef = useRef<HTMLInputElement>(null);
+
+  // 自动选中文件名部分（不包含后缀）
+  // 类似 Windows 文件重命名逻辑
+  useEffect(() => {
+    if (renameDialog && renameInputRef.current) {
+      // 等待输入框渲染完成
+      const timer = setTimeout(() => {
+        if (renameInputRef.current) {
+          const fileName = renameDialog.newName;
+
+          // 查找最后一个点号（文件扩展名分隔符）
+          const lastDotIndex = fileName.lastIndexOf('.');
+
+          if (lastDotIndex > 0) {
+            // 选中文件名部分（不包含后缀）
+            // 例如：文件名.txt -> 选中 "文件名"
+            renameInputRef.current.setSelectionRange(0, lastDotIndex);
+          } else {
+            // 没有扩展名，全选
+            renameInputRef.current.select();
+          }
+        }
+      }, 0);
+
+      return () => clearTimeout(timer);
+    }
+  }, [renameDialog?.localPath]); // 只在弹窗首次打开时执行（依赖文件路径而不是整个对象）
+
+  // 全局点击监听：点击外部时让输入框失焦输入框 ref（用于检测点击位置）
   const pathInputRef = useRef<HTMLInputElement>(null);
 
   // 全局点击监听：点击外部时让输入框失焦
@@ -944,7 +982,26 @@ export function FileManager({ preloadData }: FileManagerProps) {
 
       // 为每个文件创建传输任务
       for (const localPath of files) {
-        const fileName = localPath.split(/[\\/]/).pop() || 'unknown';
+        let fileName = localPath.split(/[\\/]/).pop() || 'unknown';
+
+        // 检查文件名长度（Linux 最大 255 字节）
+        // 注意：临时文件会添加 ".{random}.tmp" 后缀（约 13 字节），所以实际限制为 242 字节
+        const MAX_NAME_BYTES = 242;
+        const getByteLength = (str: string) => new TextEncoder().encode(str).length;
+        const fileNameBytes = getByteLength(fileName);
+
+        if (fileNameBytes > MAX_NAME_BYTES) {
+          // 文件名超长，弹出重命名对话框
+          // 默认显示完整原始文件名，让用户自己修改
+          setRenameDialog({
+            localPath,
+            originalName: fileName,
+            newName: fileName, // 显示完整原始文件名
+            maxBytes: MAX_NAME_BYTES,
+          });
+          return; // 暂停上传流程，等待用户处理
+        }
+
         const remotePath = currentPath === "/"
           ? `/${fileName}`
           : `${currentPath}/${fileName}`;
@@ -998,6 +1055,80 @@ export function FileManager({ preloadData }: FileManagerProps) {
           localPath,
         });
       }
+
+      // 关闭右键菜单
+      setContextMenu(null);
+    } catch (err) {
+      console.error('[FileManager] 上传失败:', err);
+      alert(`上传失败: ${err}`);
+    }
+  }, [activeServerId, currentPath]);
+
+  /**
+   * 处理重命名后的文件上传
+   *
+   * 用户在重命名弹窗中确认新文件名后，使用新名称继续上传
+   */
+  const handleUploadWithNewName = useCallback(async (localPath: string, newName: string) => {
+    // 检查是否有活跃服务器
+    if (!activeServerId) {
+      alert("请先连接到远程服务器");
+      return;
+    }
+
+    try {
+      const remotePath = currentPath === "/"
+        ? `/${newName}`
+        : `${currentPath}/${newName}`;
+
+      console.log(`[FileManager] 检查文件是否存在: ${remotePath}`);
+
+      // 检查远程文件是否存在
+      try {
+        const fileInfo = await invoke<{ exists: boolean; size?: number; mtime?: number } | null>(
+          "check_file_exists",
+          { serverId: activeServerId, path: remotePath }
+        );
+
+        // 如果文件存在，询问用户是否覆盖
+        if (fileInfo && fileInfo.exists) {
+          const size = fileInfo.size ? formatSize(fileInfo.size) : '未知';
+          const mtime = fileInfo.mtime
+            ? new Date(fileInfo.mtime * 1000).toLocaleString('zh-CN')
+            : '未知';
+
+          const confirmed = await ask(
+            `文件已存在：${newName}\n\n大小：${size}\n修改时间：${mtime}\n\n是否覆盖？`,
+            {
+              title: '确认覆盖',
+              kind: 'warning',
+              okLabel: '是',
+              cancelLabel: '否',
+            }
+          );
+
+          // 用户选择"否"，取消上传
+          if (!confirmed) {
+            console.log(`[FileManager] 用户取消覆盖: ${newName}`);
+            return;
+          }
+
+          console.log(`[FileManager] 用户确认覆盖: ${newName}`);
+        }
+      } catch (checkErr) {
+        // 检查失败，记录错误但继续上传（向后兼容）
+        console.warn(`[FileManager] 检查文件存在失败，直接上传:`, checkErr);
+      }
+
+      console.log(`[FileManager] 上传文件（重命名）: ${localPath} -> ${remotePath}`);
+
+      // 调用 Tauri 后端开始上传
+      await invoke("transfer_file", {
+        serverId: activeServerId,
+        direction: "upload",
+        remotePath,
+        localPath,
+      });
 
       // 关闭右键菜单
       setContextMenu(null);
@@ -1588,6 +1719,110 @@ export function FileManager({ preloadData }: FileManagerProps) {
             <div className="ped-message">{pathErrorDialog}</div>
             <div className="ped-footer">
               <button autoFocus onClick={() => setPathErrorDialog(null)}>确定</button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Rename Dialog - 文件名过长时弹窗重命名（模态）- 使用 Portal */}
+      {renameDialog && createPortal(
+        <div
+          className="fm-path-error-overlay"
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
+          onKeyUp={(e) => e.stopPropagation()}
+          onKeyPress={(e) => e.stopPropagation()}
+        >
+          <div className="fm-rename-dialog">
+            <div className="rd-header">
+              <span className="rd-icon">📝</span>
+              <span className="rd-title">文件名过长，请重命名</span>
+            </div>
+            <div className="rd-content">
+              <div className="rd-original">
+                <div className="rd-label">原始文件名：</div>
+                <div className="rd-original-name">
+                  {renameDialog.originalName.length > 60
+                    ? renameDialog.originalName.substring(0, 60) + '...'
+                    : renameDialog.originalName}
+                </div>
+              </div>
+              <div className="rd-input-section">
+                <div className="rd-label">新文件名：</div>
+                <input
+                  ref={renameInputRef}
+                  type="text"
+                  className="rd-input"
+                  value={renameDialog.newName}
+                  onChange={(e) => {
+                    const newName = e.target.value;
+                    setRenameDialog(prev => prev ? { ...prev, newName } : null);
+                  }}
+                  onInput={(e) => {
+                    // 阻止事件冒泡
+                    e.stopPropagation();
+                  }}
+                  onKeyDown={(e) => {
+                    // 阻止事件冒泡，防止触发文件管理器的快捷键
+                    e.stopPropagation();
+                    // Enter 键确认
+                    if (e.key === 'Enter') {
+                      const currentBytes = new TextEncoder().encode(renameDialog.newName).length;
+                      if (currentBytes <= renameDialog.maxBytes && renameDialog.newName.trim() !== '') {
+                        setRenameDialog(null);
+                        handleUploadWithNewName(renameDialog.localPath, renameDialog.newName.trim());
+                      }
+                    }
+                    // Escape 键取消
+                    if (e.key === 'Escape') {
+                      setRenameDialog(null);
+                    }
+                  }}
+                  onKeyUp={(e) => e.stopPropagation()}
+                  onKeyPress={(e) => e.stopPropagation()}
+                  placeholder="请输入新文件名"
+                  autoFocus
+                />
+              </div>
+              <div className="rd-byte-counter">
+                {(() => {
+                  const currentBytes = new TextEncoder().encode(renameDialog.newName).length;
+                  const isValid = currentBytes <= renameDialog.maxBytes;
+                  const remaining = renameDialog.maxBytes - currentBytes;
+
+                  return (
+                    <span className={isValid ? 'rd-byte-valid' : 'rd-byte-invalid'}>
+                      {isValid ? (
+                        <>剩余 {remaining} 字节</>
+                      ) : (
+                        <>超出 {Math.abs(remaining)} 字节</>
+                      )}
+                      <span className="rd-byte-hint">（当前 {currentBytes} / 最大 {renameDialog.maxBytes} 字节）</span>
+                    </span>
+                  );
+                })()}
+              </div>
+            </div>
+            <div className="rd-footer">
+              <button className="rd-btn-cancel" onClick={() => setRenameDialog(null)}>
+                取消
+              </button>
+              <button
+                className="rd-btn-confirm"
+                disabled={new TextEncoder().encode(renameDialog.newName).length > renameDialog.maxBytes || renameDialog.newName.trim() === ''}
+                onClick={() => {
+                  const newName = renameDialog.newName.trim();
+                  if (newName && new TextEncoder().encode(newName).length <= renameDialog.maxBytes) {
+                    // 用户确认重命名，继续上传流程
+                    setRenameDialog(null);
+                    // 调用上传逻辑（使用新文件名）
+                    handleUploadWithNewName(renameDialog.localPath, newName);
+                  }
+                }}
+              >
+                确定
+              </button>
             </div>
           </div>
         </div>,

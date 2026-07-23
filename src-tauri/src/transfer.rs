@@ -339,11 +339,21 @@ impl TransferManager {
         };
 
         // 获取文件名
-        let file_name = PathBuf::from(&local_path)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("unknown")
-            .to_string();
+        // 上传时：使用 remote_path 的文件名（用户可能重命名）
+        // 下载时：使用 local_path 的文件名（用户可能重命名）
+        let file_name = if direction == "upload" {
+            PathBuf::from(&remote_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown")
+                .to_string()
+        } else {
+            PathBuf::from(&local_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown")
+                .to_string()
+        };
 
         // 创建任务
         let task = TransferTask {
