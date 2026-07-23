@@ -1,4 +1,5 @@
 import { createContext, useContext, useCallback, ReactNode } from "react";
+import { createLogger } from "../utils/logger";
 import {
   useWallpaperStore,
   PRESET_WALLPAPERS,
@@ -26,6 +27,10 @@ type WallpaperContextType = WallpaperState & WallpaperActions;
 
 const WallpaperContext = createContext<WallpaperContextType | null>(null);
 
+/* ── Logger ───────────────────────────────────────────── */
+
+const log = createLogger('WallpaperContext');
+
 /* ── Provider ────────────────────────────────────────── */
 
 export function WallpaperProvider({ children }: { children: ReactNode }) {
@@ -46,7 +51,7 @@ export function WallpaperProvider({ children }: { children: ReactNode }) {
         setCustomWallpaper(selected);
       }
     } catch (e) {
-      console.warn("[WallpaperContext] Tauri dialog not available, using fallback");
+      log.warn('Tauri dialog not available, using fallback');
 
       const input = document.createElement("input");
       input.type = "file";

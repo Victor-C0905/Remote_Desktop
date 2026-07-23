@@ -13,7 +13,10 @@ import '@xterm/xterm/css/xterm.css';
 import { useServerManager } from '../context/ServerManager';
 // import { useWindowState } from '../window-system/hooks/useWindowState'; // 未来集成时使用
 import { useWindowEvent } from '../window-system/hooks/useWindowEvent';
+import { createLogger } from '../utils/logger';
 import './Terminal.css';
+
+const log = createLogger('Terminal');
 
 // ── GNOME Terminal 主题 ────────────────────────────────────────────
 const GNOME_TERMINAL_THEME = {
@@ -82,7 +85,7 @@ function TerminalInstance({
     }
 
     try {
-      console.log('[Terminal] 开始创建 xterm 实例，容器尺寸:', container.offsetWidth, 'x', container.offsetHeight);
+      log.debug('开始创建 xterm 实例，容器尺寸:', container.offsetWidth, 'x', container.offsetHeight);
 
       // 1. 创建 xterm 实例
       const terminal = new Terminal({
@@ -107,13 +110,13 @@ function TerminalInstance({
 
       // 4. 挂载到 DOM
       terminal.open(container);
-      console.log('[Terminal] ✅ xterm 已挂载到 DOM');
+      log.debug('✅ xterm 已挂载到 DOM');
 
       // 5. 等待下一帧，让浏览器完成 flex 布局后再 fit()
       requestAnimationFrame(async () => {
         try {
           fitAddon.fit();
-          console.log('[Terminal] ✅ fit() 完成，cols:', terminal.cols, 'rows:', terminal.rows);
+          log.debug('✅ fit() 完成，cols:', terminal.cols, 'rows:', terminal.rows);
 
           // 6. 尝试连接远程 PTY 或启动演示模式
           if (activeServerId) {
@@ -132,9 +135,9 @@ function TerminalInstance({
 
           // 8. 聚焦
           terminal.focus();
-          console.log('[Terminal] ✅ 初始化完成');
+          log.info('✅ 初始化完成');
         } catch (err) {
-          console.error('[Terminal] ❌ 初始化失败:', err);
+          log.error('❌ 初始化失败:', err);
           setInitializationStatus('❌ 初始化失败: ' + err);
           // 回退到演示模式
           terminal.write(`\x1b[31m[连接失败]\x1b[0m ${err}\r\n`);
@@ -171,7 +174,7 @@ function TerminalInstance({
             // 检查容器是否可见且尺寸有效（避免最小化时的无效 resize）
             const isVisible = container.offsetWidth > 0 && container.offsetHeight > 0;
             if (!isVisible) {
-              console.log('[Terminal] 容器不可见，跳过 resize');
+              log.debug('容器不可见，跳过 resize');
               resizeRAF = null;
               return;
             }
@@ -186,7 +189,7 @@ function TerminalInstance({
             const minCols = 10;
             const minRows = 5;
             if (!terminal || terminal.cols < minCols || terminal.rows < minRows) {
-              console.log('[Terminal] 尺寸太小，跳过 resize:', terminal?.cols, 'x', terminal?.rows);
+              log.debug('尺寸太小，跳过 resize:', terminal?.cols, 'x', terminal?.rows);
               resizeRAF = null;
               return;
             }
@@ -197,7 +200,7 @@ function TerminalInstance({
                 lastCols = terminal.cols;
                 lastRows = terminal.rows;
 
-                console.log('[Terminal] resize:', terminal.cols, 'x', terminal.rows);
+                log.debug('resize:', terminal.cols, 'x', terminal.rows);
 
                 // 发送 resize 到远程 PTY（远程会重新发送完整屏幕内容）
                 invoke('remote_terminal_resize', {
@@ -205,7 +208,7 @@ function TerminalInstance({
                   cols: terminal.cols,
                   rows: terminal.rows,
                   serverId: activeServerId,
-                }).catch(e => console.warn('[Terminal] resize 同步失败:', e));
+                }).catch(e => log.warn('resize 同步失败:', e));
               }
             }
 
@@ -233,7 +236,7 @@ function TerminalInstance({
         // 关闭远程终端会话
         if (sessionIdRef.current) {
           invoke('remote_terminal_close', { sessionId: sessionIdRef.current })
-            .catch(e => console.warn('[Terminal] 关闭远程终端失败:', e));
+            .catch(e => log.warn('关闭远程终端失败:', e));
           sessionIdRef.current = null;
         }
 
@@ -248,7 +251,7 @@ function TerminalInstance({
         }
       };
     } catch (err) {
-      console.error('[Terminal] ❌ 初始化失败:', err);
+      log.error('❌ 初始化失败:', err);
       setInitializationStatus('❌ 初始化失败: ' + err);
       container.innerHTML = `<div style="color:#ff4444;padding:12px;font-family:monospace;">终端初始化失败: ${err}</div>`;
     }
@@ -300,7 +303,7 @@ async function connectRemotePty(
   sessionIdRef.current = sessionId;
   (terminal as any).__sessionId = sessionId;
 
-  console.log('[Terminal] ✅ 远程终端创建成功:', sessionId);
+  log.info('✅ 远程终端创建成功:', sessionId);
 
   // 2. 显示连接信息
   terminal.write(`\x1b[1;32m✅ 远程终端已连接\x1b[0m\r\n`);
@@ -345,7 +348,7 @@ async function connectRemotePty(
         sessionId: sid,
         data: Array.from(bytes),
         serverId: serverId,
-      }).catch(e => console.warn('[Terminal] 写入失败:', e));
+      }).catch(e => log.warn('写入失败:', e));
     }
   });
   // 存储 disposable 以便 cleanup
@@ -353,7 +356,7 @@ async function connectRemotePty(
 
   // 6. resize 事件监听器（仅用于日志，远程同步由 handleResize 处理）
   const onResizeDisposable = terminal.onResize(({ cols, rows }) => {
-    console.log('[Terminal] 本地 resize:', cols, 'x', rows);
+    log.debug('本地 resize:', cols, 'x', rows);
   });
   unlistenRefs.current.push(() => onResizeDisposable.dispose());
 
@@ -512,9 +515,9 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
         // 有选中文本：直接复制
         try {
           await navigator.clipboard.writeText(selection);
-          console.log('[Terminal] ✅ 已复制选中文本到剪贴板');
+          log.info('✅ 已复制选中文本到剪贴板');
         } catch (err) {
-          console.warn('[Terminal] ❌ 复制失败:', err);
+          log.warn('❌ 复制失败:', err);
         }
         terminal.clearSelection();
       } else {
@@ -533,9 +536,9 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
       if (selection) {
         try {
           await navigator.clipboard.writeText(selection);
-          console.log('[Terminal] ✅ 已复制到剪贴板');
+          log.info('✅ 已复制到剪贴板');
         } catch (e) {
-          console.warn('[Terminal] ❌ 复制失败:', e);
+          log.warn('❌ 复制失败:', e);
         }
       }
     }
@@ -562,15 +565,15 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
             data: Array.from(bytes),
             serverId: activeServerId,
           });
-          console.log('[Terminal] ✅ 已粘贴到远程终端（bracketed paste mode）');
+          log.info('✅ 已粘贴到远程终端（bracketed paste mode）');
         } else {
           // 演示模式：直接写入
           terminal.write(text);
-          console.log('[Terminal] ✅ 已粘贴到演示终端');
+          log.info('✅ 已粘贴到演示终端');
         }
       }
     } catch (e) {
-      console.warn('[Terminal] ❌ 粘贴失败:', e);
+      log.warn('❌ 粘贴失败:', e);
     }
     setContextMenu(null);
     // 粘贴后重新聚焦终端，避免需要手动点击
@@ -586,9 +589,9 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
           caseSensitive: false,
           wholeWord: false,
         });
-        console.log('[Terminal] ✅ 搜索:', searchText);
+        log.info('✅ 搜索:', searchText);
       } catch (e) {
-        console.warn('[Terminal] ❌ 搜索失败:', e);
+        log.warn('❌ 搜索失败:', e);
       }
     }
     setContextMenu(null);
@@ -672,7 +675,7 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
   // 监听窗口获得焦点事件：自动聚焦活动的终端
   useWindowEvent('window:focused', (event) => {
     if (event.windowId === windowId) {
-      console.log('[Terminal] 窗口获得焦点，自动聚焦终端');
+      log.debug('窗口获得焦点，自动聚焦终端');
       activeTerminalRef.current?.focus();
     }
   });
@@ -680,7 +683,7 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
   // 监听窗口尺寸变化事件：触发终端 fit()（ResizeObserver 已处理，此处作为补充）
   useWindowEvent('window:resized', (event) => {
     if (event.windowId === windowId) {
-      console.log('[Terminal] 窗口尺寸变化，触发终端 fit()');
+      log.debug('窗口尺寸变化，触发终端 fit()');
       // ResizeObserver 已经在 TerminalInstance 中处理，这里不需要额外操作
       // 但可以添加一些额外的逻辑，比如记录窗口尺寸等
     }

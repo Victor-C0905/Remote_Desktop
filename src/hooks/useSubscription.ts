@@ -4,6 +4,9 @@ import { useEffect, useCallback, useRef, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { SubscriptionType, SubscriptionEvent } from '../config/subscription';
+import { createLogger } from '../utils/logger';
+
+const log = createLogger('Subscription');
 
 export function useSubscription(
   serverId: string | null,
@@ -40,7 +43,7 @@ export function useSubscription(
 
         unlistenRef.current = fn;
       } catch (e) {
-        console.error('订阅失败:', e);
+        log.error('订阅失败:', e);
         subscribedRef.current = false;
       }
     };
@@ -58,7 +61,7 @@ export function useSubscription(
       // 取消订阅
       if (subscribedRef.current) {
         invoke('unsubscribe', { serverId, types }).catch((e) => {
-          console.error('取消订阅失败:', e);
+          log.error('取消订阅失败:', e);
         });
         subscribedRef.current = false;
       }

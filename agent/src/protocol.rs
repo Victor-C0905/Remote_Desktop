@@ -351,6 +351,66 @@ pub enum Payload {
     Error { code: i32, message: String },
 }
 
+impl Payload {
+    /// 获取 Payload 变体名称（用于日志记录）
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Payload::Ping { .. } => "Ping",
+            Payload::Pong { .. } => "Pong",
+            Payload::AuthRequest { .. } => "AuthRequest",
+            Payload::AuthResponse { .. } => "AuthResponse",
+            Payload::MetricsSubscribeRequest {} => "MetricsSubscribeRequest",
+            Payload::MetricsData(_) => "MetricsData",
+            Payload::ReadDirRequest { .. } => "ReadDirRequest",
+            Payload::ReadDirResponse { .. } => "ReadDirResponse",
+            Payload::ReadFileRequest { .. } => "ReadFileRequest",
+            Payload::ReadFileResponse { .. } => "ReadFileResponse",
+            Payload::WriteFileRequest { .. } => "WriteFileRequest",
+            Payload::WriteFileResponse { .. } => "WriteFileResponse",
+            Payload::DeleteRequest { .. } => "DeleteRequest",
+            Payload::DeleteResponse { .. } => "DeleteResponse",
+            Payload::MkdirRequest { .. } => "MkdirRequest",
+            Payload::MkdirResponse { .. } => "MkdirResponse",
+            Payload::RenameRequest { .. } => "RenameRequest",
+            Payload::RenameResponse { .. } => "RenameResponse",
+            Payload::CopyRequest { .. } => "CopyRequest",
+            Payload::CopyResponse { .. } => "CopyResponse",
+            Payload::MoveRequest { .. } => "MoveRequest",
+            Payload::MoveResponse { .. } => "MoveResponse",
+            Payload::TerminalSpawnRequest { .. } => "TerminalSpawnRequest",
+            Payload::TerminalSpawnResponse { .. } => "TerminalSpawnResponse",
+            Payload::TerminalResizeRequest { .. } => "TerminalResizeRequest",
+            Payload::TerminalResizeResponse => "TerminalResizeResponse",
+            Payload::TerminalData { .. } => "TerminalData",
+            Payload::GetCurrentUser => "GetCurrentUser",
+            Payload::CurrentUserResponse { .. } => "CurrentUserResponse",
+            Payload::GetMounts => "GetMounts",
+            Payload::MountsResponse { .. } => "MountsResponse",
+            Payload::FileTransferRequest { .. } => "FileTransferRequest",
+            Payload::FileTransferAccept { .. } => "FileTransferAccept",
+            Payload::FileChunk { .. } => "FileChunk",
+            Payload::FileTransferComplete { .. } => "FileTransferComplete",
+            Payload::FileTransferProgress { .. } => "FileTransferProgress",
+            Payload::FileExistsRequest { .. } => "FileExistsRequest",
+            Payload::FileExistsResponse { .. } => "FileExistsResponse",
+            Payload::CancelFileTransfer { .. } => "CancelFileTransfer",
+            Payload::CancelFileTransferResponse { .. } => "CancelFileTransferResponse",
+            Payload::Subscribe { .. } => "Subscribe",
+            Payload::Unsubscribe { .. } => "Unsubscribe",
+            Payload::Event { .. } => "Event",
+            Payload::SubscribeAck { .. } => "SubscribeAck",
+            Payload::UnsubscribeAck { .. } => "UnsubscribeAck",
+            Payload::CalculateDiffRequest { .. } => "CalculateDiffRequest",
+            Payload::CalculateDiffResponse { .. } => "CalculateDiffResponse",
+            Payload::ApplyDiffRequest { .. } => "ApplyDiffRequest",
+            Payload::ApplyDiffResponse { .. } => "ApplyDiffResponse",
+            Payload::DisconnectRequest {} => "DisconnectRequest",
+            Payload::DisconnectResponse { .. } => "DisconnectResponse",
+            Payload::Error { .. } => "Error",
+        }
+    }
+}
+
 /// 系统指标快照
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetricsSnapshot {

@@ -8,6 +8,7 @@ import {
   getStatusColor,
 } from "../stores/serversStore";
 import type { ServerConfig } from "../stores/serversStore";
+import { createLogger } from "../utils/logger";
 
 /* ── Types ─────────────────────────────────────────────── */
 
@@ -38,6 +39,10 @@ interface ServerManagerActions {
 
 type ServerManagerContextType = ServerManagerState & ServerManagerActions;
 
+/* ── Logger ──────────────────────────────────────────── */
+
+const log = createLogger('ServerManager');
+
 /* ── Context ──────────────────────────────────────────── */
 
 const ServerManagerContext = createContext<ServerManagerContextType | null>(null);
@@ -64,11 +69,11 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
 
   // 监听连接丢失事件
   useEffect(() => {
-    console.log("[ServerManager] 设置连接丢失监听器");
+    log.info("设置连接丢失监听器");
 
     const setupListener = async () => {
       const unlisten = await listen<string>("connection-lost", (event) => {
-        console.log("[ServerManager] 收到连接丢失事件:", event.payload);
+        log.info("收到连接丢失事件:", event.payload);
         const lostServerId = event.payload;
 
         // 更新服务器状态为 disconnected
@@ -76,12 +81,12 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
 
         // 如果是当前活跃服务器，设置 activeServerId 为 null
         if (activeServerId === lostServerId) {
-          console.log("[ServerManager] 当前活跃服务器断开，清空 activeServerId");
+          log.info("当前活跃服务器断开，清空 activeServerId");
           setActiveServerId(null);
         }
 
         // TODO: 显示通知提示用户（可以在 UI 中添加通知系统）
-        console.warn(`[ServerManager] 服务器 ${lostServerId} 连接已断开`);
+        log.warn(`服务器 ${lostServerId} 连接已断开`);
       });
 
       return unlisten;
@@ -95,7 +100,7 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
     // 清理监听器
     return () => {
       if (unlistenFn) {
-        console.log("[ServerManager] 清理连接丢失监听器");
+        log.info("清理连接丢失监听器");
         unlistenFn();
       }
     };
@@ -105,31 +110,31 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
   // onRehydrateStorage 已经在 serversStore 中处理了重置逻辑
 
   const connectServer = useCallback(async (id: string) => {
-    console.log("[ServerManager] 开始连接服务器:", id);
+    log.info("开始连接服务器:", id);
     const server = servers.find((s) => s.id === id);
     if (!server) {
-      console.error("[ServerManager] 未找到服务器:", id);
+      log.error("未找到服务器:", id);
       return;
     }
 
     // 如果当前有其他连接，先断开（像切换WiFi一样）
     if (activeServerId && activeServerId !== id) {
-      console.log("[ServerManager] 断开当前连接:", activeServerId);
+      log.info("断开当前连接:", activeServerId);
       try {
         await invoke("remote_disconnect", { serverId: activeServerId });
         setServerStatus(activeServerId, "disconnected");
       } catch (e) {
-        console.warn("[ServerManager] 断开旧连接时出错:", e);
+        log.warn("断开旧连接时出错:", e);
       }
     }
 
-    console.log("[ServerManager] 服务器信息:", server);
+    log.info("服务器信息:", server);
 
     // 设置连接中状态
     setServerStatus(id, "connecting");
 
     try {
-      console.log("[ServerManager] 调用 remote_connect:", {
+      log.info("调用 remote_connect:", {
         serverId: id,
         host: server.host,
         port: server.port,
@@ -143,7 +148,7 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
         token: server.token || null,
       });
 
-      console.log("[ServerManager] 连接成功:", info);
+      log.info("连接成功:", info);
 
       setServerStatus(id, "connected", undefined, info.rttMs >= 0 ? info.rttMs : undefined);
       setActiveServerId(id);
@@ -155,13 +160,13 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
           types: [{ type: 'metrics', params: { interval_secs: 1 } }]
         });
       } catch (e) {
-        console.warn("[ServerManager] 系统指标订阅失败:", e);
+        log.warn("系统指标订阅失败:", e);
       }
 
-      console.log("[ServerManager] 连接成功:", info.transport, `RTT=${info.rttMs}ms`);
+      log.info("连接成功:", info.transport, `RTT=${info.rttMs}ms`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error("[ServerManager] 连接失败:", msg);
+      log.error("连接失败:", msg);
 
       setServerStatus(id, "error", msg);
     }
@@ -173,14 +178,14 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
       serverId: id,
       types: [{ type: 'metrics', params: { interval_secs: 1 } }]
     }).catch((e) => {
-      console.warn("[ServerManager] 取消订阅失败（非关键）:", e);
+      log.warn("取消订阅失败（非关键）:", e);
     });
 
     // 断开连接（不等待 unsubscribe 完成，后端 Disconnect 会清理所有子任务）
     try {
       await invoke("remote_disconnect", { serverId: id });
     } catch (e) {
-      console.warn("[ServerManager] 断开连接时出错:", e);
+      log.warn("断开连接时出错:", e);
     }
 
     setServerStatus(id, "disconnected");

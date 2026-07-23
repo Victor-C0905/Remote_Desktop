@@ -1,6 +1,9 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import { serversStorage } from "../utils/storage";
+import { createLogger } from "../utils/logger";
+
+const log = createLogger('ServersStore');
 
 /* ── Types ─────────────────────────────────────────────── */
 
@@ -101,18 +104,18 @@ export const useServersStore = create<ServersState & ServersActions>()(
       storage: createJSONStorage(() => serversStorage),
       // 加载时重置所有服务器状态为 disconnected
       onRehydrateStorage: () => {
-        console.log("[serversStore] onRehydrateStorage 开始");
+        log.debug("onRehydrateStorage 开始");
         return (state) => {
-          console.log("[serversStore] onRehydrateStorage 回调，state:", state);
+          log.debug("onRehydrateStorage 回调，state:", state);
           if (state && state.servers) {
-            console.log("[serversStore] 重置服务器状态");
+            log.debug("重置服务器状态");
             state.servers = state.servers.map((s) => ({
               ...s,
               status: "disconnected" as const,
               error: undefined,
             }));
             state.activeServerId = null;
-            console.log("[serversStore] 重置后，activeServerId:", state.activeServerId);
+            log.debug("重置后，activeServerId:", state.activeServerId);
           }
         };
       },

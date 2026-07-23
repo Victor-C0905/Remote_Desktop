@@ -1,4 +1,7 @@
 import { TransferTask } from '../hooks/useTransferProgress';
+import { createLogger } from './logger';
+
+const log = createLogger('TransferStorage');
 
 const STORAGE_KEY = 'gnome-remote-transfers';
 
@@ -15,7 +18,7 @@ export const transferStorage = {
         try {
             localStorage.setItem(STORAGE_KEY, JSON.stringify(transfers));
         } catch (error) {
-            console.error('保存传输状态失败:', error);
+            log.error('保存传输状态失败:', error);
         }
     },
 
@@ -28,7 +31,7 @@ export const transferStorage = {
             const data = localStorage.getItem(STORAGE_KEY);
             return data ? JSON.parse(data) : [];
         } catch (error) {
-            console.error('加载传输状态失败:', error);
+            log.error('加载传输状态失败:', error);
             return [];
         }
     },

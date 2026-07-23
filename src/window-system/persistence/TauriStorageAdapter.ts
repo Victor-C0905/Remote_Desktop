@@ -1,6 +1,9 @@
 // src/window-system/persistence/TauriStorageAdapter.ts
 
 import { StorageAdapter } from './StorageAdapter';
+import { createLogger } from '../../utils/logger';
+
+const log = createLogger('TauriStorageAdapter');
 
 /**
  * Tauri file system storage adapter
@@ -41,7 +44,7 @@ export class TauriStorageAdapter implements StorageAdapter {
         const appDataDirPath = await appDataDir();
         await writeTextFile(`${appDataDirPath}/${key}.json`, data);
       } catch (error) {
-        console.error('[TauriStorageAdapter] Failed to save to Tauri fs', error);
+        log.error('Failed to save to Tauri fs', error);
         // Fallback to localStorage
         this.fallbackAdapter.save(key, data);
       }

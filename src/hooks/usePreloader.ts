@@ -1,5 +1,8 @@
 import { useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { createLogger } from "../utils/logger";
+
+const log = createLogger('Preloader');
 
 /* ── Types (与 FileManager 共享) ─────────────────────── */
 
@@ -172,7 +175,7 @@ export function usePreloader(): PreloaderResult {
       setData(result);
       setState('ready');
     } catch (err) {
-      console.error("[usePreload] 预加载失败:", err);
+      log.error("预加载失败:", err);
       setError(err instanceof Error ? err.message : String(err));
       setState('error');
     }

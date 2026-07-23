@@ -25,6 +25,7 @@
  */
 
 import { useEffect, useState, useRef, useCallback } from 'react';
+import { createLogger } from '../../utils/logger';
 import { AppLayout } from '../../components/app-shell/AppLayout';
 import { useServerManager } from '../../context/ServerManager';
 import { useFileManager } from './hooks/useFileManager';
@@ -36,6 +37,8 @@ import { StatusBar } from './components/StatusBar';
 import { SaveDialog } from './components/SaveDialog';
 import type { EditorMode as EditorModeType } from './types/editor';
 import './TextEditor.css';
+
+const log = createLogger('TextEditor');
 
 /**
  * TextEditor 组件 Props
@@ -120,15 +123,15 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
     if (preloadData && preloadData.path && preloadData.serverId) {
       // 检查是否已经打开过这个文件
       if (lastOpenedPath.current === preloadData.path) {
-        console.log('[TextEditor] 文件已打开，跳过重复打开:', preloadData.path);
+        log.debug('文件已打开，跳过重复打开:', preloadData.path);
         return;
       }
 
-      console.log('[TextEditor] 预加载文件:', preloadData.path);
+      log.info('预加载文件:', preloadData.path);
       lastOpenedPath.current = preloadData.path; // 记录已打开的文件
 
       openFile(preloadData.serverId, preloadData.path).catch((err) => {
-        console.error('[TextEditor] 预加载文件失败:', err);
+        log.error('预加载文件失败:', err);
         lastOpenedPath.current = null; // 失败时重置，允许重试
       });
     }
@@ -144,7 +147,7 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
   const handleSave = useCallback(async () => {
     // 检查是否有活跃服务器
     if (!activeServerId) {
-      console.error('[TextEditor] 未连接到服务器，无法保存文件');
+      log.error('未连接到服务器，无法保存文件');
       return;
     }
 
@@ -207,9 +210,9 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
    */
   useEffect(() => {
     if (preloadData && preloadData.path && preloadData.serverId) {
-      console.log('[TextEditor] 预加载文件:', preloadData.path);
+      log.info('预加载文件:', preloadData.path);
       openFile(preloadData.serverId, preloadData.path).catch((err) => {
-        console.error('[TextEditor] 预加载文件失败:', err);
+        log.error('预加载文件失败:', err);
       });
     }
   }, [preloadData, openFile]);
@@ -221,7 +224,7 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
    */
   useEffect(() => {
     return () => {
-      console.log('[TextEditor] 窗口关闭，清理资源:', windowId);
+      log.info('窗口关闭，清理资源:', windowId);
       closeFile();
     };
   }, [windowId, closeFile]);
@@ -345,7 +348,7 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
             data={fileState.fileType === 'binary' ? fileState.binaryData : undefined}
             onChange={() => {
               // 当前版本十六进制编辑器为只读
-              console.warn('[TextEditor] 十六进制编辑器当前不支持编辑');
+              log.warn('十六进制编辑器当前不支持编辑');
             }}
           />
         );

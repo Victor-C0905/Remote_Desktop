@@ -7,7 +7,10 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { TransferTask } from '../../hooks/useTransferProgress';
+import { createLogger } from '../../utils/logger';
 import './TaskCard.css';
+
+const log = createLogger('TaskCard');
 
 // ── 工具函数：格式化文件大小和速度 ─────────────────────────────
 
@@ -176,9 +179,9 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
     e.stopPropagation();  // 阻止事件冒泡
     try {
       await invoke('pause_transfer', { taskId: task.id });
-      console.log('[TaskCard] 已暂停传输:', task.id);
+      log.info('已暂停传输:', task.id);
     } catch (error) {
-      console.error('[TaskCard] 暂停传输失败:', error);
+      log.error('暂停传输失败:', error);
     }
   };
 
@@ -189,9 +192,9 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
     e.stopPropagation();  // 阻止事件冒泡
     try {
       await invoke('resume_transfer', { taskId: task.id });
-      console.log('[TaskCard] 已继续传输:', task.id);
+      log.info('已继续传输:', task.id);
     } catch (error) {
-      console.error('[TaskCard] 继续传输失败:', error);
+      log.error('继续传输失败:', error);
     }
   };
 
@@ -202,9 +205,9 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
     e.stopPropagation();  // 阻止事件冒泡
     try {
       await invoke('retry_transfer', { taskId: task.id });
-      console.log('[TaskCard] 已重试传输:', task.id);
+      log.info('已重试传输:', task.id);
     } catch (error) {
-      console.error('[TaskCard] 重试传输失败:', error);
+      log.error('重试传输失败:', error);
     }
   };
 
@@ -217,9 +220,9 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
     try {
       // 假设本地文件路径可以通过某种方式获取
       // await invoke('open_file', { path: localPath });
-      console.log('[TaskCard] 打开文件:', task.file_name);
+      log.debug('打开文件:', task.file_name);
     } catch (error) {
-      console.error('[TaskCard] 打开文件失败:', error);
+      log.error('打开文件失败:', error);
     }
   };
 
@@ -233,13 +236,13 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
       // 如果任务正在进行，先取消传输
       if (task.status === 'active' || task.status === 'paused') {
         await invoke('cancel_transfer', { taskId: task.id });
-        console.log('[TaskCard] 已取消传输:', task.id);
+        log.info('已取消传输:', task.id);
       }
 
       // 从列表中移除任务
       onRemove(task.id);
     } catch (error) {
-      console.error('[TaskCard] 关闭任务失败:', error);
+      log.error('关闭任务失败:', error);
       // 即使取消失败，也尝试移除任务
       onRemove(task.id);
     }

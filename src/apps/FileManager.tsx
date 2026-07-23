@@ -7,7 +7,10 @@ import { PLACEHOLDER } from "../utils/offlineDefaults";
 import { useWindowManager } from "../window-system/WindowManagerContext";
 import { AppLayout } from "../components/app-shell";
 import { TransferStatusBar } from "../components/TransferStatusBar";
+import { createLogger } from '../utils/logger';
 import "./FileManager.css";
+
+const log = createLogger('FileManager');
 
 export interface FileEntry {
   name: string;
@@ -223,7 +226,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
     setContextMenu(null);
 
     // 调试：打印当前状态
-    console.log("[FileManager] loadDir 调用:", {
+    log.debug("loadDir 调用:", {
       path,
       activeServerId,
       isRemote: !!activeServerId,
@@ -234,7 +237,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
 
       if (activeServerId) {
         // 远程模式：通过 QUIC 从 Agent 获取
-        console.log("[FileManager] 远程模式，调用 remote_read_dir");
+        log.debug("远程模式，调用 remote_read_dir");
         resp = await invoke<ReadDirResponse>("remote_read_dir", {
           serverId: activeServerId,
           path,
@@ -292,7 +295,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
         partialName = parts.length === 0 ? "" : parts[parts.length - 1];
       }
 
-      console.log("[FileManager] fetchSuggestions: 输入路径:", path, "父目录:", parentPath, "部分名称:", partialName);
+      log.debug("fetchSuggestions: 输入路径:", path, "父目录:", parentPath, "部分名称:", partialName);
 
       // 调用 remote_read_dir 获取父目录的文件列表
       const resp = await invoke<ReadDirResponse>("remote_read_dir", {
@@ -317,13 +320,13 @@ export function FileManager({ preloadData }: FileManagerProps) {
         }
       }
 
-      console.log("[FileManager] fetchSuggestions: 建议列表:", suggestions);
+      log.debug("fetchSuggestions: 建议列表:", suggestions);
 
       setSuggestions(suggestions);
       setShowSuggestions(suggestions.length > 0);
       setSelectedSuggestionIdx(null);
     } catch (err) {
-      console.error("[FileManager] 获取建议失败:", err);
+      log.error("获取建议失败:", err);
       setSuggestions([]);
       setShowSuggestions(false);
     }
@@ -334,7 +337,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
   // 直接初始化所有状态，跳过后续的首次加载 useEffect
   useEffect(() => {
     if (initialData) {
-      console.log("[FileManager] 使用父级注入的初始数据");
+      log.debug("使用父级注入的初始数据");
       setUsername(initialData.username);
       setCurrentPath(initialData.currentPath);
       setEntries(initialData.entries);
@@ -352,17 +355,17 @@ export function FileManager({ preloadData }: FileManagerProps) {
   // 获取远程服务器用户名
   useEffect(() => {
     if (initialData) return; // 有注入数据时跳过，已通过 initialData 初始化
-    console.log("[FileManager] 获取用户名 useEffect, activeServerId:", activeServerId);
+    log.debug("获取用户名 useEffect, activeServerId:", activeServerId);
     if (activeServerId) {
       // 连接建立后，获取用户名
-      console.log("[FileManager] 调用 remote_get_current_user, serverId:", activeServerId);
+      log.debug("调用 remote_get_current_user, serverId:", activeServerId);
       invoke<string>("remote_get_current_user", { serverId: activeServerId })
         .then((username) => {
-          console.log("[FileManager] 获取用户名成功:", username);
+          log.info("获取用户名成功:", username);
           setUsername(username);
         })
         .catch(err => {
-          console.error("[FileManager] 获取用户名失败:", err);
+          log.error("获取用户名失败:", err);
           setUsername("user");  // 默认值
         });
     } else {
@@ -374,34 +377,34 @@ export function FileManager({ preloadData }: FileManagerProps) {
   // Initial load
   useEffect(() => {
     if (initialData) return; // 有注入数据时跳过，已通过 initialData 初始化
-    console.log("[FileManager] 初始加载 useEffect, activeServerId:", activeServerId, "username:", username);
+    log.debug("初始加载 useEffect, activeServerId:", activeServerId, "username:", username);
     if (activeServerId && username) {
       // 远程模式：有用户名后，加载初始目录
       const homePath = `/home/${username}`;
-      console.log("[FileManager] 远程模式，加载路径:", homePath);
+      log.debug("远程模式，加载路径:", homePath);
       loadDir(homePath);
     } else if (!activeServerId) {
       // 离线模式：不加载（显示离线占位符）
-      console.log("[FileManager] 离线模式，不加载");
+      log.debug("离线模式，不加载");
     } else {
-      console.log("[FileManager] 等待用户名...");
+      log.debug("等待用户名...");
     }
   }, [activeServerId, username, loadDir, HOME_PATH, initialData]);
 
   // 获取挂载点列表
   useEffect(() => {
     if (initialData) return; // 有注入数据时跳过，已通过 initialData 初始化
-    console.log("[FileManager] 获取挂载点 useEffect, activeServerId:", activeServerId);
+    log.debug("获取挂载点 useEffect, activeServerId:", activeServerId);
     if (activeServerId) {
       // 远程模式：获取挂载点列表
-      console.log("[FileManager] 调用 remote_get_mounts, serverId:", activeServerId);
+      log.debug("调用 remote_get_mounts, serverId:", activeServerId);
       invoke<MountInfo[]>("remote_get_mounts", { serverId: activeServerId })
         .then((mounts) => {
-          console.log("[FileManager] 获取挂载点成功:", mounts);
+          log.debug("获取挂载点成功:", mounts);
           setMounts(mounts);
         })
         .catch(err => {
-          console.error("[FileManager] 获取挂载点失败:", err);
+          log.error("获取挂载点失败:", err);
           setMounts([]);  // 默认空列表
         });
     } else {
@@ -413,7 +416,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
   // 生成侧边栏
   useEffect(() => {
     if (initialData) return; // 有注入数据时跳过，已通过 initialData 初始化
-    console.log("[FileManager] 生成侧边栏 useEffect, activeServerId:", activeServerId, "username:", username, "mounts:", mounts.length);
+    log.debug("生成侧边栏 useEffect, activeServerId:", activeServerId, "username:", username, "mounts:", mounts.length);
     if (activeServerId && username) {
       // 远程模式：生成远程侧边栏
       const sections: SidebarSection[] = [
@@ -444,7 +447,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
           ]
         }
       ];
-      console.log("[FileManager] 远程侧边栏生成完成:", sections);
+      log.debug("远程侧边栏生成完成:", sections);
       setSidebarSections(sections);
     } else {
       // 离线模式：使用默认 Linux 侧边栏（保持 UI 结构一致）
@@ -481,7 +484,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
       setLoading(false);
       setSelectedIdx(null);
       setContextMenu(null);
-      console.log("[FileManager] 检测到断连，切换到离线模式");
+      log.debug("检测到断连，切换到离线模式");
     }
   }, [activeServerId]);
 
@@ -508,7 +511,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
       setHistory(["/home"]);
       setHistoryIdx(0);
       setPathInput("/home");
-      console.log("[FileManager] 检测到新连接，已清空本地残留数据");
+      log.debug("检测到新连接，已清空本地残留数据");
     }
     prevServerIdRef.current = activeServerId;
   }, [activeServerId]);
@@ -675,7 +678,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
     // 格式化路径
     const cleanPath = normalizePath(path);
 
-    console.log("[FileManager] navigateTo: 输入路径:", path, "清理后:", cleanPath);
+    log.debug("navigateTo: 输入路径:", path, "清理后:", cleanPath);
 
     const success = await loadDir(cleanPath);
     if (success) {
@@ -737,7 +740,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
         ? `${currentPath}${sep}${entry.name}`
         : `${currentPath}${sep}${entry.name}`;
 
-      console.log(`[FileManager] Open file in editor: ${filePath}`);
+      log.debug(`Open file in editor: ${filePath}`);
 
       // 创建编辑器窗口，传递文件路径和服务器 ID
       manager.create('editor', {
@@ -764,7 +767,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
       ? `${currentPath}${sep}${name.trim()}`
       : `${currentPath}${sep}${name.trim()}`;
 
-    console.log("[FileManager] mkdir:", newPath);
+    log.debug("mkdir:", newPath);
 
     try {
       if (activeServerId) {
@@ -777,7 +780,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
       // 刷新当前目录
       loadDir(currentPath);
     } catch (err) {
-      console.error("[FileManager] mkdir 失败:", err);
+      log.error("mkdir 失败:", err);
       alert(`创建文件夹失败: ${err}`);
     }
   }, [currentPath, activeServerId, loadDir]);
@@ -811,7 +814,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
       ? `${currentPath}${sep}${trimmedName}`
       : `${currentPath}${sep}${trimmedName}`;
 
-    console.log("[FileManager] rename:", oldPath, "->", newPath);
+    log.debug("rename:", oldPath, "->", newPath);
 
     try {
       if (activeServerId) {
@@ -830,7 +833,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
       // 刷新当前目录
       loadDir(currentPath);
     } catch (err) {
-      console.error("[FileManager] rename 失败:", err);
+      log.error("rename 失败:", err);
       alert(`重命名失败: ${err}`);
     }
 
@@ -869,7 +872,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
       ? `${currentPath}${sep}${entry.name}`
       : `${currentPath}${sep}${entry.name}`;
 
-    console.log("[FileManager] delete:", path);
+    log.debug("delete:", path);
 
     try {
       if (activeServerId) {
@@ -882,7 +885,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
       // 刷新当前目录
       loadDir(currentPath);
     } catch (err) {
-      console.error("[FileManager] delete 失败:", err);
+      log.error("delete 失败:", err);
       alert(`删除失败: ${err}`);
     }
   }, [currentPath, activeServerId, loadDir]);
@@ -912,7 +915,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
         alert("请先连接到远程服务器");
       }
     } catch (err) {
-      console.error("[FileManager] mkdir 失败:", err);
+      log.error("mkdir 失败:", err);
       alert(`创建文件夹失败: ${err}`);
     }
   }, [currentPath, activeServerId, loadDir]);
@@ -941,7 +944,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
         alert("请先连接到远程服务器");
       }
     } catch (err) {
-      console.error("[FileManager] new file 失败:", err);
+      log.error("new file 失败:", err);
       alert(`创建文件失败: ${err}`);
     }
   }, [currentPath, activeServerId, loadDir]);
@@ -1006,7 +1009,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
           ? `/${fileName}`
           : `${currentPath}/${fileName}`;
 
-        console.log(`[FileManager] 检查文件是否存在: ${remotePath}`);
+        log.debug(`检查文件是否存在: ${remotePath}`);
 
         // 检查远程文件是否存在
         try {
@@ -1034,18 +1037,18 @@ export function FileManager({ preloadData }: FileManagerProps) {
 
             // 用户选择"否"，跳过该文件
             if (!confirmed) {
-              console.log(`[FileManager] 用户取消覆盖: ${fileName}`);
+              log.debug(`用户取消覆盖: ${fileName}`);
               continue;
             }
 
-            console.log(`[FileManager] 用户确认覆盖: ${fileName}`);
+            log.debug(`用户确认覆盖: ${fileName}`);
           }
         } catch (checkErr) {
           // 检查失败，记录错误但继续上传（向后兼容）
-          console.warn(`[FileManager] 检查文件存在失败，直接上传:`, checkErr);
+          log.warn(`检查文件存在失败，直接上传:`, checkErr);
         }
 
-        console.log(`[FileManager] 上传文件: ${localPath} -> ${remotePath}`);
+        log.debug(`上传文件: ${localPath} -> ${remotePath}`);
 
         // 调用 Tauri 后端开始上传
         await invoke("transfer_file", {
@@ -1059,7 +1062,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
       // 关闭右键菜单
       setContextMenu(null);
     } catch (err) {
-      console.error('[FileManager] 上传失败:', err);
+      log.error('上传失败:', err);
       alert(`上传失败: ${err}`);
     }
   }, [activeServerId, currentPath]);
@@ -1081,7 +1084,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
         ? `/${newName}`
         : `${currentPath}/${newName}`;
 
-      console.log(`[FileManager] 检查文件是否存在: ${remotePath}`);
+      log.debug(`检查文件是否存在: ${remotePath}`);
 
       // 检查远程文件是否存在
       try {
@@ -1109,18 +1112,18 @@ export function FileManager({ preloadData }: FileManagerProps) {
 
           // 用户选择"否"，取消上传
           if (!confirmed) {
-            console.log(`[FileManager] 用户取消覆盖: ${newName}`);
+            log.debug(`用户取消覆盖: ${newName}`);
             return;
           }
 
-          console.log(`[FileManager] 用户确认覆盖: ${newName}`);
+          log.debug(`用户确认覆盖: ${newName}`);
         }
       } catch (checkErr) {
         // 检查失败，记录错误但继续上传（向后兼容）
-        console.warn(`[FileManager] 检查文件存在失败，直接上传:`, checkErr);
+        log.warn(`检查文件存在失败，直接上传:`, checkErr);
       }
 
-      console.log(`[FileManager] 上传文件（重命名）: ${localPath} -> ${remotePath}`);
+      log.info(`上传文件（重命名）: ${localPath} -> ${remotePath}`);
 
       // 调用 Tauri 后端开始上传
       await invoke("transfer_file", {
@@ -1133,7 +1136,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
       // 关闭右键菜单
       setContextMenu(null);
     } catch (err) {
-      console.error('[FileManager] 上传失败:', err);
+      log.error('上传失败:', err);
       alert(`上传失败: ${err}`);
     }
   }, [activeServerId, currentPath]);
@@ -1162,7 +1165,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
         ? `/${entry.name}`
         : `${currentPath}/${entry.name}`;
 
-      console.log(`[FileManager] 下载文件: ${remotePath}`);
+      log.info(`下载文件: ${remotePath}`);
 
       // 打开 Windows 保存对话框
       const localPath = await save({
@@ -1187,7 +1190,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
       // 关闭右键菜单
       setContextMenu(null);
     } catch (err) {
-      console.error('[FileManager] 下载失败:', err);
+      log.error('下载失败:', err);
       alert(`下载失败: ${err}`);
     }
   }, [activeServerId, currentPath]);
@@ -1273,12 +1276,12 @@ export function FileManager({ preloadData }: FileManagerProps) {
     const setupListener = async () => {
       const { listen } = await import('@tauri-apps/api/event');
       unlisten = await listen<{ dir_path: string; file_name: string }>('upload-completed', (event) => {
-        console.log('[FileManager] 收到上传完成事件:', event.payload);
+        log.debug('收到上传完成事件:', event.payload);
         const { dir_path } = event.payload;
 
         // 如果上传的目录是当前目录，刷新
         if (dir_path === currentPath) {
-          console.log('[FileManager] 上传目录匹配，刷新当前目录');
+          log.debug('上传目录匹配，刷新当前目录');
           loadDir(currentPath);
         }
       });

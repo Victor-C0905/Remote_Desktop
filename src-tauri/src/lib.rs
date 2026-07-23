@@ -4,10 +4,90 @@ use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 use tauri::Manager;  // 导入 Manager trait
 use tokio::sync::Mutex;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
 mod connection;
 mod terminal;
 mod transfer;
+
+/* ── 日志系统初始化 ───────────────────────────────────────── */
+
+/// 初始化客户端日志系统
+///
+/// - **调试模式**（`RUST_LOG` 环境变量存在）：pretty 格式输出到 stdout
+/// - **生产模式**：紧凑格式 stdout + JSON 结构化写入日志文件（按天轮转）
+/// - 日志文件路径：`{app_data_dir}/logs/client.YYYY-MM-DD.log`
+fn init_logging(app: &tauri::App) {
+    use tracing_appender::rolling;
+
+    let is_debug = std::env::var("RUST_LOG").is_ok();
+
+    // 默认过滤规则：客户端模块 info，第三方库 warn
+    let default_filter = "gnome_remote_lib=info,gnome_remote_lib::connection=info,gnome_remote_lib::transfer=info,tokio=info";
+
+    let env_filter = if is_debug {
+        tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| "gnome_remote_lib=debug".into())
+    } else {
+        tracing_subscriber::EnvFilter::new(default_filter)
+    };
+
+    // 日志文件目录：优先使用 Tauri 数据目录，保证跨平台写入合法
+    let log_dir = app
+        .path()
+        .app_data_dir()
+        .ok()
+        .map(|p| p.join("logs"))
+        .unwrap_or_else(|| std::path::PathBuf::from("logs"));
+
+    let _ = fs::create_dir_all(&log_dir);
+
+    let file_appender = rolling::daily(&log_dir, "client.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+    // 泄漏 guard 使其存活到进程结束
+    std::mem::forget(_guard);
+
+    // stdout 层先注册（subscriber 类型为 Registry），file_layer 后注册
+    if is_debug {
+        tracing_subscriber::registry()
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .pretty()
+                    .with_filter(env_filter),
+            )
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .json()
+                    .with_ansi(false)
+                    .with_writer(non_blocking)
+                    .with_filter(tracing_subscriber::EnvFilter::new(
+                        "gnome_remote_lib=debug,gnome_remote_lib::connection=debug,gnome_remote_lib::transfer=debug,tokio=info",
+                    )),
+            )
+            .init();
+    } else {
+        tracing_subscriber::registry()
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .compact()
+                    .with_filter(env_filter),
+            )
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .json()
+                    .with_ansi(false)
+                    .with_writer(non_blocking)
+                    .with_filter(tracing_subscriber::EnvFilter::new(
+                        "gnome_remote_lib=debug,gnome_remote_lib::connection=debug,gnome_remote_lib::transfer=debug,tokio=info",
+                    )),
+            )
+            .init();
+    }
+
+    // 桥接 rustls / tokio-rustls 的 `log` crate 输出到 tracing
+    // （这些 crate 使用 `log` 宏，不桥接的话它们的日志会被丢弃）
+    tracing_log::LogTracer::init().ok();
+}
 
 /* ── 优雅关闭机制 ───────────────────────────────────────── */
 
@@ -21,7 +101,7 @@ pub fn setup_shutdown_hook(app: &tauri::AppHandle) {
 
     // Ctrl+C 处理
     ctrlc::set_handler(move || {
-        eprintln!("[Shutdown] 收到关闭信号");
+        tracing::info!("[Shutdown] 收到关闭信号");
         let app = app_handle.clone();
         tokio::spawn(async move {
             graceful_shutdown(app).await;
@@ -31,7 +111,7 @@ pub fn setup_shutdown_hook(app: &tauri::AppHandle) {
 
 /// 优雅关闭
 async fn graceful_shutdown(app: tauri::AppHandle) {
-    eprintln!("[Shutdown] 开始优雅关闭...");
+    tracing::info!("[Shutdown] 开始优雅关闭...");
 
     // 1. 设置关闭标志
     *SHUTDOWN_FLAG.lock().await = true;
@@ -56,13 +136,13 @@ async fn graceful_shutdown(app: tauri::AppHandle) {
 
         // 移除连接
         for server_id in &server_ids {
-            eprintln!("[Shutdown] 断开连接: {}", server_id);
+            tracing::info!("[Shutdown] 断开连接: {}", server_id);
             let mut conns = connection_manager.connections.lock().unwrap();
             conns.remove(server_id);
         }
     }
 
-    eprintln!("[Shutdown] 优雅关闭完成");
+    tracing::info!("[Shutdown] 优雅关闭完成");
     // 不在这里强制退出，让 Tauri 自己管理退出
     // std::process::exit 会导致 WebView2 无法正确清理
 }
@@ -419,7 +499,7 @@ fn read_file_text(path: String) -> Result<String, String> {
 
 #[tauri::command]
 async fn prepare_shutdown(_app: tauri::AppHandle) -> Result<(), String> {
-    eprintln!("[Frontend] 收到关闭通知");
+    tracing::info!("[Frontend] 收到关闭通知");
     // 前端会在 beforeunload 时调用此命令
     // 可以在这里执行一些快速清理操作
     Ok(())
@@ -437,6 +517,10 @@ pub fn run() {
         .manage(connection::ConnectionManager::new())
         .manage(Arc::new(terminal::TerminalStreamManager::new()))
         .setup(|app| {
+            // 初始化日志系统（必须在所有其他操作之前）
+            init_logging(app);
+            tracing::info!("GNOME Remote 客户端启动中...");
+
             // 注册关闭钩子
             setup_shutdown_hook(&app.handle());
 

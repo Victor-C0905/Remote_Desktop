@@ -16,6 +16,7 @@ lazy_static::lazy_static! {
         Arc::new(Mutex::new(HashMap::new()));
 }
 
+#[tracing::instrument(skip(envelope, cfg), fields(request_id = envelope.request_id, payload_type = envelope.payload.type_name()))]
 pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig) -> Envelope {
     match &envelope.payload {
         Payload::Ping { timestamp } => {
@@ -523,13 +524,14 @@ fn handle_write_file(path: &str, content: &str, cfg: &AgentConfig) -> Result<(u6
 ///
 /// # 返回
 /// - `new_mtime`: 新的 mtime（写入后）
+#[tracing::instrument(skip(diffs, cfg), fields(path = %path, base_mtime = base_mtime, diffs_count = diffs.len()))]
 fn handle_apply_diff(
     path: &str,
     base_mtime: u64,
     diffs: &[FileDiff],
     cfg: &AgentConfig,
 ) -> Result<u64, String> {
-    println!("[handle_apply_diff] 开始处理: path={}, base_mtime={}, diffs_count={}", 
+    tracing::debug!("[handle_apply_diff] 开始处理: path={}, base_mtime={}, diffs_count={}", 
         path, base_mtime, diffs.len());
 
     // 检查路径权限
@@ -554,38 +556,38 @@ fn handle_apply_diff(
         .map_err(|e| format!("时间转换失败: {}", e))?
         .as_secs();
 
-    println!("[handle_apply_diff] Mtime 检查: expected={}, actual={}, match={}", 
+    tracing::debug!("[handle_apply_diff] Mtime 检查: expected={}, actual={}, match={}", 
         base_mtime, current_mtime, base_mtime == current_mtime);
 
     // 检查版本冲突（mtime 验证）
     if current_mtime != base_mtime {
-        println!("[handle_apply_diff] ❌ Mtime 不匹配，返回错误");
+        tracing::warn!("[handle_apply_diff] Mtime 不匹配，返回错误");
         return Err(format!(
             "文件版本冲突: 期望 mtime={}, 实际 mtime={}",
             base_mtime, current_mtime
         ));
     }
 
-    println!("[handle_apply_diff] ✅ Mtime 匹配，继续应用差异");
+    tracing::debug!("[handle_apply_diff] Mtime 匹配，继续应用差异");
 
     // 读取原文件内容
     let old_content = fs::read_to_string(path)
         .map_err(|e| format!("读取文件失败: {}", e))?;
 
-    println!("[handle_apply_diff] 读取文件: {} bytes, {} lines", 
+    tracing::debug!("[handle_apply_diff] 读取文件: {} bytes, {} lines", 
         old_content.len(), old_content.lines().count());
 
     // 应用差异
     let new_content = apply_diff(&old_content, diffs);
 
-    println!("[handle_apply_diff] 应用差异后: {} bytes, {} lines", 
+    tracing::debug!("[handle_apply_diff] 应用差异后: {} bytes, {} lines", 
         new_content.len(), new_content.lines().count());
 
     // 写入文件
     fs::write(path, &new_content)
         .map_err(|e| format!("写入文件失败: {}", e))?;
 
-    println!("[handle_apply_diff] 文件写入成功");
+    tracing::info!("[handle_apply_diff] 文件写入成功");
 
     // 获取新的 mtime
     let new_metadata = fs::metadata(path)
