@@ -55,6 +55,7 @@ export interface TransferTask {
   error?: string;
   progress: number;
   start_time: number; // 任务开始时间戳（毫秒）
+  completed_at?: number; // 任务完成时间戳（毫秒）
 }
 
 /**
@@ -132,6 +133,10 @@ export function useTransferProgress(connectionId?: string) {
         if (existing) {
           console.log(`[useTransferProgress] 更新现有任务: id=${payload.id}, progress=${payload.progress}%`);
           // 更新现有任务
+          const newStatus = payload.status as TransferTask['status'];
+          const statusChanged = existing.status !== newStatus;
+          const isTerminal = newStatus === 'completed' || newStatus === 'error' || newStatus === 'cancelled';
+
           const updatedTasks = prev.map(t =>
             t.id === payload.id
               ? {
@@ -141,8 +146,10 @@ export function useTransferProgress(connectionId?: string) {
                   progress: payload.progress,
                   speed: payload.speed_bps,
                   eta: payload.eta_secs,
-                  status: payload.status as TransferTask['status'],
+                  status: newStatus,
                   error: payload.error,
+                  // 状态变为终态时记录完成时间
+                  ...(statusChanged && isTerminal && !t.completed_at ? { completed_at: Date.now() } : {}),
                 }
               : t
           );
@@ -152,11 +159,17 @@ export function useTransferProgress(connectionId?: string) {
           const nowCompleted = payload.status === 'completed';
 
           if (!wasCompleted && nowCompleted) {
+            // 记录完成时间
+            const finalTasks = updatedTasks.map(t =>
+              t.id === payload.id ? { ...t, completed_at: Date.now() } : t
+            );
+
             // 显示通知
             showCompletionNotification(payload);
 
             // 任务完成后保留在列表中，只有用户手动关闭或关闭窗口时才移除
             // 不自动移除已完成任务
+            return finalTasks;
           }
 
           return updatedTasks;
