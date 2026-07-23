@@ -29,6 +29,11 @@
   --ovelis-text-disabled:    rgba(0, 0, 0, 0.38);
   --ovelis-text-on-accent:   #ffffff;
 
+  /* Status Colors */
+  --ovelis-success-color:    #26a269;      /* GNOME Green - 成功状态 */
+  --ovelis-error-color:      #e01b24;      /* GNOME Red - 错误状态 */
+  --ovelis-warning-color:    #f5c211;      /* GNOME Yellow - 警告状态 */
+
   /* Borders */
   --ovelis-border-color:   rgba(0, 0, 0, 0.15);
   --ovelis-border-focus:   #3584e4;

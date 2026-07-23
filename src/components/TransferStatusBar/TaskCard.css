@@ -130,6 +130,11 @@
   background: var(--ovelis-text-disabled);
 }
 
+/* 已完成任务的进度条样式 */
+.tc-progress-fill.completed {
+  background: var(--ovelis-success-color);
+}
+
 /* 已取消任务的整体样式 */
 .task-card.cancelled .tc-filename {
   text-decoration: line-through;

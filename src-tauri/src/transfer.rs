@@ -15,190 +15,37 @@ use uuid::Uuid;
 
 use crate::connection::{ConnectionManager, Envelope, Payload};
 
-/// 生成随机临时文件路径
+/// 生成确定性临时文件路径
 ///
-/// 使用 UUID v4 生成不可预测的临时文件名，防止符号链接攻击。
-/// 文件名格式: `{原文件名}.{8位随机hex}.tmp`
+/// 使用目标路径的 SHA-256 哈希生成临时文件名。
+/// 同一个目标文件总是生成相同的临时文件名，便于：
+/// - 断点续传：无需搜索，直接找到之前的临时文件
+/// - 避免中文/长文件名导致的路径长度问题
 ///
-/// # 安全性
-/// - UUID v4 提供 128 位随机性，截取前 8 个字符（32 位熵）已足够防止预测
-/// - 临时文件名包含原文件名，便于调试和清理
-/// - 如果原文件名太长（超过 Linux 255 字节限制），会自动截断
+/// 文件名格式: `gnome_remote_{hash前16位}.tmp`
 fn generate_temp_path(path: &Path) -> PathBuf {
-    let random_part = &uuid::Uuid::new_v4().to_string()[..8];
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
 
-    let original_name = path.file_name().unwrap_or_default().to_string_lossy();
+    let path_str = path.to_string_lossy();
+    let mut hasher = DefaultHasher::new();
+    path_str.hash(&mut hasher);
+    let hash = hasher.finish();
 
-    // Linux 文件名最大长度为 255 字节
-    // 临时文件名格式：{原文件名}.{random}.tmp
-    // 后缀长度：1 (.) + 8 (random) + 1 (.) + 3 (tmp) = 13 字符 = 13 字节
-    // 安全阈值：预留 50 字节作为安全边际
-    const MAX_NAME_LEN: usize = 200;
-
-    let truncated_name = if original_name.len() > MAX_NAME_LEN {
-        // 尝试保留文件扩展名
-        let (base, ext) = if let Some(dot_pos) = original_name.rfind('.') {
-            let ext_part = &original_name[dot_pos..]; // 包含点号
-            let base_part = &original_name[..dot_pos];
-
-            // 确保扩展名不超过 20 字符
-            if ext_part.len() <= 20 {
-                // 计算可用的字节数（预留扩展名长度）
-                let available_bytes = MAX_NAME_LEN.saturating_sub(ext_part.len());
-
-                // 使用 chars() 迭代器按字符截断，避免切在 UTF-8 字符中间
-                let truncated_base: String = base_part
-                    .chars()
-                    .scan(0, |byte_count, c| {
-                        let char_len = c.len_utf8();
-                        if *byte_count + char_len <= available_bytes {
-                            *byte_count += char_len;
-                            Some(c)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-
-                (truncated_base, ext_part)
-            } else {
-                // 扩展名太长，不保留
-                let truncated: String = original_name
-                    .chars()
-                    .scan(0, |byte_count, c| {
-                        let char_len = c.len_utf8();
-                        if *byte_count + char_len <= MAX_NAME_LEN {
-                            *byte_count += char_len;
-                            Some(c)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                (truncated, "")
-            }
-        } else {
-            // 没有扩展名，直接截断
-            let truncated: String = original_name
-                .chars()
-                .scan(0, |byte_count, c| {
-                    let char_len = c.len_utf8();
-                    if *byte_count + char_len <= MAX_NAME_LEN {
-                        *byte_count += char_len;
-                        Some(c)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            (truncated, "")
-        };
-
-        format!("{}{}", base, ext)
-    } else {
-        original_name.to_string()
-    };
-
-    let temp_name = format!("{}.{}.tmp", truncated_name, random_part);
-
+    let temp_name = format!("gnome_remote_{:016x}.tmp", hash);
     path.parent().unwrap_or(Path::new(".")).join(temp_name)
 }
 
 /// 查找已存在的临时文件（用于断点续传）
 ///
-/// 搜索目录中匹配 `{原文件名}.*.tmp` 模式的文件，
-/// 返回修改时间最新的一个（兼容旧的确定性 `.tmp` 命名格式）。
-///
-/// # 文件名截断处理
-/// 如果原文件名超过 200 字符，临时文件名会被截断。
-/// 此时使用截断后的前缀进行匹配。
+/// 使用确定性哈希生成临时文件名，直接检查是否存在。
 fn find_existing_temp_file(path: &Path) -> Option<PathBuf> {
-    let parent = path.parent()?;
-    let file_name = path.file_name()?.to_string_lossy();
-
-    // 如果文件名超过 200 字符，使用截断后的前缀
-    // （与 generate_temp_path 的截断逻辑一致）
-    const MAX_NAME_LEN: usize = 200;
-    let prefix = if file_name.len() > MAX_NAME_LEN {
-        // 尝试保留文件扩展名（与 generate_temp_path 逻辑一致）
-        let (base, ext) = if let Some(dot_pos) = file_name.rfind('.') {
-            let ext_part = &file_name[dot_pos..];
-            let base_part = &file_name[..dot_pos];
-
-            if ext_part.len() <= 20 {
-                // 计算可用的字节数（预留扩展名长度）
-                let available_bytes = MAX_NAME_LEN.saturating_sub(ext_part.len());
-
-                // 使用 chars() 迭代器按字符截断，避免切在 UTF-8 字符中间
-                let truncated_base: String = base_part
-                    .chars()
-                    .scan(0, |byte_count, c| {
-                        let char_len = c.len_utf8();
-                        if *byte_count + char_len <= available_bytes {
-                            *byte_count += char_len;
-                            Some(c)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-
-                (truncated_base, ext_part)
-            } else {
-                // 扩展名太长，不保留
-                let truncated: String = file_name
-                    .chars()
-                    .scan(0, |byte_count, c| {
-                        let char_len = c.len_utf8();
-                        if *byte_count + char_len <= MAX_NAME_LEN {
-                            *byte_count += char_len;
-                            Some(c)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                (truncated, "")
-            }
-        } else {
-            // 没有扩展名，直接截断
-            let truncated: String = file_name
-                .chars()
-                .scan(0, |byte_count, c| {
-                    let char_len = c.len_utf8();
-                    if *byte_count + char_len <= MAX_NAME_LEN {
-                        *byte_count += char_len;
-                        Some(c)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            (truncated, "")
-        };
-
-        format!("{}{}.", base, ext)
+    let temp_path = generate_temp_path(path);
+    if temp_path.exists() {
+        Some(temp_path)
     } else {
-        format!("{}.", file_name)
-    };
-
-    let entries = std::fs::read_dir(parent).ok()?;
-
-    entries
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            let name = e.file_name();
-            let name_str = name.to_string_lossy();
-            // 匹配 `{截断后的前缀}.*.tmp` 模式（同时兼容旧的 `{原文件名}.tmp` 格式）
-            name_str.starts_with(&prefix) && name_str.ends_with(".tmp")
-        })
-        .max_by_key(|e| {
-            e.metadata()
-                .ok()
-                .and_then(|m| m.modified().ok())
-                .unwrap_or(std::time::UNIX_EPOCH)
-        })
-        .map(|e| e.path())
+        None
+    }
 }
 
 /// 传输任务状态
@@ -442,7 +289,8 @@ impl TransferManager {
         }
 
         // 更新状态
-        if task.progress >= 100 {
+        // 注意：只有在上传时才自动完成，下载需要等待 FileTransferComplete 消息
+        if task.progress >= 100 && task.direction == "upload" {
             task.status = "completed".to_string();
         } else if task.status == "pending" {
             task.status = "active".to_string();
@@ -888,6 +736,28 @@ impl FileWriter {
             generate_temp_path(&path)
         };
 
+        tracing::info!(
+            "[FileWriter] 创建文件写入器:\n  最终路径: {} ({} 字符)\n  临时路径: {} ({} 字符)",
+            path.display(),
+            path.to_string_lossy().len(),
+            temp_path.display(),
+            temp_path.to_string_lossy().len()
+        );
+
+        // 检查路径长度是否超过 Windows 限制
+        #[cfg(windows)]
+        {
+            let path_str = path.to_string_lossy();
+            let temp_str = temp_path.to_string_lossy();
+            if path_str.len() > 260 || temp_str.len() > 260 {
+                tracing::warn!(
+                    "[FileWriter] 路径长度超过 Windows 限制 (260 字符):\n  最终路径: {} 字符\n  临时路径: {} 字符",
+                    path_str.len(),
+                    temp_str.len()
+                );
+            }
+        }
+
         // 尝试断点续传
         let (file, actual_resume_from) = if resume_from > 0 {
             if temp_path.exists() {
@@ -1009,8 +879,10 @@ impl FileWriter {
     /// - 从头开始传输（resume_from == 0）
     /// - 断点续传降级（临时文件不存在或完整性校验失败）
     fn create_fresh_temp_file(temp_path: &PathBuf) -> Result<(BufWriter<File>, u64), String> {
+        eprintln!("[FileWriter] 创建临时文件: {:?}", temp_path);
         let file = File::create(temp_path)
-            .map_err(|e| format!("无法创建临时文件: {}", e))?;
+            .map_err(|e| format!("无法创建临时文件: {:?}\n错误: {}", temp_path, e))?;
+        eprintln!("[FileWriter] 临时文件创建成功: {:?} (存在: {})", temp_path, temp_path.exists());
         Ok((BufWriter::new(file), 0))
     }
 
@@ -1033,18 +905,39 @@ impl FileWriter {
         // 刷新缓冲区
         self.writer.flush()
             .map_err(|e| format!("刷新文件失败: {}", e))?;
-        
+
         // 同步到磁盘
         self.writer.get_ref().sync_all()
             .map_err(|e| format!("同步文件失败: {}", e))?;
-        
+
         // 标记为完成，防止 Drop 删除
         self.is_temporary = false;
-        
+
+        // 检查临时文件是否存在
+        if !std::path::Path::new(&self.temp_path).exists() {
+            let temp_str = self.temp_path.to_string_lossy();
+            let path_str = self.path.to_string_lossy();
+            let error = format!(
+                "临时文件不存在: {} (长度: {} 字符)\n最终路径: {} (长度: {} 字符)",
+                temp_str, temp_str.len(), path_str, path_str.len()
+            );
+            tracing::error!("{}", error);
+            return Err(error);
+        }
+
         // 原子重命名：临时文件 -> 最终文件
         std::fs::rename(&self.temp_path, &self.path)
-            .map_err(|e| format!("重命名文件失败: {}", e))?;
-        
+            .map_err(|e| {
+                tracing::error!(
+                    "重命名文件失败: {} -> {}\n错误: {}",
+                    self.temp_path.display(),
+                    self.path.display(),
+                    e
+                );
+                format!("重命名文件失败: {}", e)
+            })?;
+
+        tracing::info!("文件重命名成功: {} -> {}", self.temp_path.display(), self.path.display());
         Ok(())
     }
 
@@ -1429,6 +1322,13 @@ async fn perform_transfer(
                 eprintln!("[Transfer] 开始下载逻辑：创建 FileWriter");
                 let resume_pos = resume_from.unwrap_or(0);
                 let mut writer = FileWriter::with_resume(&local_path, file_size, resume_pos)?;
+                eprintln!(
+                    "[Transfer] FileWriter 创建成功:\n  临时路径: {:?} (存在: {})\n  最终路径: {:?}\n  已传输: {} 字节",
+                    writer.temp_path,
+                    std::path::Path::new(&writer.temp_path).exists(),
+                    writer.path,
+                    writer.transferred
+                );
                 if resume_pos > 0 {
                     eprintln!("[Transfer] 断点续传: 从 {} 字节继续下载", writer.transferred);
                 }
@@ -1488,7 +1388,6 @@ async fn perform_transfer(
                     }
 
                     // 读取消息长度（添加超时）
-                    eprintln!("[Transfer] 等待读取消息长度");
                     let read_result = tokio::time::timeout(FILE_CHUNK_TIMEOUT, async {
                         let mut chunk_len_buf = [0u8; 4];
                         recv.read_exact(&mut chunk_len_buf).await
@@ -1541,10 +1440,20 @@ async fn perform_transfer(
                             ).await?;
                         }
                         Payload::FileTransferComplete { success, error, .. } => {
+                            eprintln!(
+                                "[Transfer] 收到 FileTransferComplete: success={}, writer.transferred={}, writer.file_size={}",
+                                success, writer.transferred, writer.file_size
+                            );
                             if success {
+                                eprintln!(
+                                    "[Transfer] finish() 前检查: temp_path={:?}, exists={}",
+                                    writer.temp_path,
+                                    std::path::Path::new(&writer.temp_path).exists()
+                                );
                                 writer.finish()?;
                                 writer.mark_completed();  // 标记为已完成，不是临时文件
                                 manager.mark_completed(task_id).await?;
+                                eprintln!("[Transfer] 下载完成并重命名成功");
                             } else {
                                 manager.mark_failed(
                                     task_id,
@@ -1563,16 +1472,19 @@ async fn perform_transfer(
                     }
                 }
 
-                // 检查传输是否完成
-                if writer.transferred >= writer.file_size {
-                    // 传输完成，调用 finish() 执行原子重命名
-                    writer.finish()?;
-                    writer.mark_completed();  // 标记为已完成，不是临时文件
-                    manager.mark_completed(task_id).await?;
-                } else {
-                    // 传输不完整，标记为失败（writer drop 时会自动清理临时文件）
-                    manager.mark_failed(task_id, "传输不完整".to_string()).await?;
-                    return Err("传输不完整".to_string());
+                // 检查传输是否完成（仅在 FileTransferComplete 未处理时执行）
+                // 如果 FileTransferComplete 已经处理过（is_temporary == false），跳过
+                if writer.is_temporary {
+                    if writer.transferred >= writer.file_size {
+                        // 传输完成，调用 finish() 执行原子重命名
+                        writer.finish()?;
+                        writer.mark_completed();
+                        manager.mark_completed(task_id).await?;
+                    } else {
+                        // 传输不完整，标记为失败（writer drop 时会自动清理临时文件）
+                        manager.mark_failed(task_id, "传输不完整".to_string()).await?;
+                        return Err("传输不完整".to_string());
+                    }
                 }
             }
 
