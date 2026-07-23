@@ -491,6 +491,7 @@ export function useFileManager(): UseFileManagerReturn {
     } catch (err) {
       // 处理错误
       const errorMessage = err instanceof Error ? err.message : String(err);
+      log.error('saveAsNewFile 失败:', err);
       setError(`无法保存文件 "${path}": ${errorMessage}`);
     } finally {
       setIsSaving(false);

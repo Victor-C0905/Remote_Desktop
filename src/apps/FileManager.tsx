@@ -261,6 +261,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
       setCurrentPath(path);
       return true;
     } catch (e: any) {
+      log.error('加载目录失败:', e);
       setError(e.toString());
       setEntries([]);
       return false;
@@ -1287,7 +1288,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
       });
     };
 
-    setupListener();
+    setupListener().catch((e) => log.error('上传完成事件监听设置失败:', e));
 
     return () => {
       if (unlisten) {

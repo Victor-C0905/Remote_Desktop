@@ -145,9 +145,9 @@ export function usePreloader(): PreloaderResult {
       // 并行获取 username 和 mounts
       const [username, mounts] = await Promise.all([
         invoke<string>("remote_get_current_user", { serverId })
-          .catch(() => "user"),
+          .catch((e) => { log.warn('获取用户名失败，使用默认值:', e); return "user"; }),
         invoke<MountInfo[]>("remote_get_mounts", { serverId })
-          .catch(() => []),
+          .catch((e) => { log.warn('获取挂载点失败，返回空数组:', e); return []; }),
       ]);
 
       // 用 username 加载初始目录

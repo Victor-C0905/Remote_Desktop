@@ -111,6 +111,7 @@ impl FileStreamReader {
 
         // 打开文件
         let mut file = File::open(path).map_err(|e| {
+            tracing::warn!("[FileStreamReader] 打开文件失败: path={}, error={}", path.display(), e);
             match e.kind() {
                 io::ErrorKind::PermissionDenied => {
                     format!("权限不足，无法读取文件: {}", path.display())
@@ -129,7 +130,10 @@ impl FileStreamReader {
             }
 
             file.seek(SeekFrom::Start(resume_from))
-                .map_err(|e| format!("跳转到断点位置失败: {}", e))?;
+                .map_err(|e| {
+                    tracing::warn!("[FileStreamReader] seek 失败: error={}", e);
+                    format!("跳转到断点位置失败: {}", e)
+                })?;
 
             tracing::info!(
                 "断点续传: 从 {} 字节开始读取 (总大小: {})",
@@ -451,14 +455,17 @@ impl FileStreamWriter {
             .write(true)
             .truncate(true)
             .open(temp_path)
-            .map_err(|e| match e.kind() {
-                io::ErrorKind::PermissionDenied => {
-                    format!("权限不足，无法创建临时文件: {}", temp_path)
+            .map_err(|e| {
+                tracing::warn!("[FileStreamWriter] 创建临时文件失败: error={}", e);
+                match e.kind() {
+                    io::ErrorKind::PermissionDenied => {
+                        format!("权限不足，无法创建临时文件: {}", temp_path)
+                    }
+                    io::ErrorKind::StorageFull => {
+                        "磁盘空间不足".to_string()
+                    }
+                    _ => format!("无法创建临时文件 {}: {}", temp_path, e),
                 }
-                io::ErrorKind::StorageFull => {
-                    "磁盘空间不足".to_string()
-                }
-                _ => format!("无法创建临时文件 {}: {}", temp_path, e),
             })?;
         Ok((BufWriter::new(file), 0, false))
     }
@@ -486,9 +493,12 @@ impl FileStreamWriter {
         // 写入数据
         self.file
             .write_all(data)
-            .map_err(|e| match e.kind() {
-                io::ErrorKind::StorageFull => "磁盘空间不足".to_string(),
-                _ => format!("写入文件失败: {}", e),
+            .map_err(|e| {
+                tracing::warn!("[FileStreamWriter] 写入失败: offset={}, error={}", self.transferred, e);
+                match e.kind() {
+                    io::ErrorKind::StorageFull => "磁盘空间不足".to_string(),
+                    _ => format!("写入文件失败: {}", e),
+                }
             })?;
 
         // 更新已传输字节数
@@ -507,15 +517,22 @@ impl FileStreamWriter {
         // 刷新缓冲区
         self.file
             .flush()
-            .map_err(|e| format!("刷新缓冲区失败: {}", e))?;
+            .map_err(|e| {
+                tracing::warn!("[FileStreamWriter] flush/sync 失败: error={}", e);
+                format!("刷新缓冲区失败: {}", e)
+            })?;
 
         // 获取底层文件引用并同步到磁盘
         let file = self.file.get_ref();
         file.sync_all()
-            .map_err(|e| format!("同步到磁盘失败: {}", e))?;
+            .map_err(|e| {
+                tracing::warn!("[FileStreamWriter] flush/sync 失败: error={}", e);
+                format!("同步到磁盘失败: {}", e)
+            })?;
 
         // 重命名临时文件为最终文件
         fs::rename(&self.temp_path, &self.final_path).map_err(|e| {
+            tracing::warn!("[FileStreamWriter] 重命名失败: temp={}, final={}, error={}", self.temp_path, self.final_path, e);
             format!(
                 "重命名文件失败: {} -> {}: {}",
                 self.temp_path, self.final_path, e

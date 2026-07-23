@@ -431,6 +431,7 @@ fn handle_read_dir(path: &str, cfg: &AgentConfig) -> Result<Vec<FileEntry>, Stri
 }
 
 fn handle_read_file(path: &str, cfg: &AgentConfig) -> Result<(String, u64, u64), String> {
+    tracing::debug!("[handle_read_file] path={}", path);
     // 如果 allowed_paths 不为空，则检查白名单
     // 如果 allowed_paths 为空，则不限制，依赖 Linux 文件系统权限
     if !cfg.security.allowed_paths.is_empty() {
@@ -447,13 +448,14 @@ fn handle_read_file(path: &str, cfg: &AgentConfig) -> Result<(String, u64, u64),
     let metadata = fs::metadata(path)
         .map_err(|e| {
             let error_msg = e.to_string();
+            tracing::warn!("[handle_read_file] 访问文件失败: path={}, error={}", path, e);
             if error_msg.contains("Permission denied") {
                 format!("权限不足: 无法访问文件 '{}' (需要相应的 Linux 用户权限)", path)
             } else {
                 format!("无法访问文件 '{}': {}", path, e)
             }
         })?;
-    
+
     if metadata.is_dir() {
         return Err("这是一个目录，不能作为文件读取".to_string());
     }
@@ -464,20 +466,30 @@ fn handle_read_file(path: &str, cfg: &AgentConfig) -> Result<(String, u64, u64),
     }
 
     let content = fs::read_to_string(path)
-        .map_err(|e| format!("读取文件失败: {}", e))?;
+        .map_err(|e| {
+            tracing::warn!("[handle_read_file] 读取文件失败: path={}, error={}", path, e);
+            format!("读取文件失败: {}", e)
+        })?;
 
     // 获取文件修改时间（mtime）
     let mtime = metadata
         .modified()
-        .map_err(|e| format!("无法获取修改时间: {}", e))?
+        .map_err(|e| {
+            tracing::warn!("[handle_read_file] 获取修改时间失败: path={}, error={}", path, e);
+            format!("无法获取修改时间: {}", e)
+        })?
         .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| format!("时间转换失败: {}", e))?
+        .map_err(|e| {
+            tracing::warn!("[handle_read_file] 时间转换失败: path={}, error={}", path, e);
+            format!("时间转换失败: {}", e)
+        })?
         .as_secs();
 
     Ok((content, mtime, metadata.len()))
 }
 
 fn handle_write_file(path: &str, content: &str, cfg: &AgentConfig) -> Result<(u64, u64), String> {
+    tracing::info!("[handle_write_file] path={}", path);
     // 如果 allowed_paths 不为空，则检查白名单
     // 如果 allowed_paths 为空，则不限制，依赖 Linux 文件系统权限
     if !cfg.security.allowed_paths.is_empty() {
@@ -494,6 +506,7 @@ fn handle_write_file(path: &str, content: &str, cfg: &AgentConfig) -> Result<(u6
     fs::write(path, content)
         .map_err(|e| {
             let error_msg = e.to_string();
+            tracing::warn!("[handle_write_file] 写入失败: path={}, error={}", path, e);
             if error_msg.contains("Permission denied") {
                 format!("权限不足: 无法写入文件 '{}' (需要相应的 Linux 用户权限)", path)
             } else {
@@ -503,12 +516,21 @@ fn handle_write_file(path: &str, content: &str, cfg: &AgentConfig) -> Result<(u6
 
     // 获取写入后的 mtime
     let metadata = fs::metadata(path)
-        .map_err(|e| format!("无法获取文件信息: {}", e))?;
+        .map_err(|e| {
+            tracing::warn!("[handle_write_file] 获取文件信息失败: path={}, error={}", path, e);
+            format!("无法获取文件信息: {}", e)
+        })?;
     let mtime = metadata
         .modified()
-        .map_err(|e| format!("无法获取修改时间: {}", e))?
+        .map_err(|e| {
+            tracing::warn!("[handle_write_file] 获取修改时间失败: path={}, error={}", path, e);
+            format!("无法获取修改时间: {}", e)
+        })?
         .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| format!("时间转换失败: {}", e))?
+        .map_err(|e| {
+            tracing::warn!("[handle_write_file] 时间转换失败: path={}, error={}", path, e);
+            format!("时间转换失败: {}", e)
+        })?
         .as_secs();
 
     Ok((mtime, content.len() as u64))
@@ -603,6 +625,7 @@ fn handle_apply_diff(
 }
 
 fn handle_delete(path: &str, cfg: &AgentConfig) -> Result<(), String> {
+    tracing::info!("[handle_delete] path={}", path);
     // 如果 allowed_paths 不为空，则检查白名单
     // 如果 allowed_paths 为空，则不限制，依赖 Linux 文件系统权限
     if !cfg.security.allowed_paths.is_empty() {
@@ -624,14 +647,23 @@ fn handle_delete(path: &str, cfg: &AgentConfig) -> Result<(), String> {
     }
 
     let metadata = fs::metadata(path)
-        .map_err(|e| format!("无法访问 '{}': {}", path, e))?;
+        .map_err(|e| {
+            tracing::warn!("[handle_delete] 访问失败: path={}, error={}", path, e);
+            format!("无法访问 '{}': {}", path, e)
+        })?;
 
     if metadata.is_dir() {
         fs::remove_dir_all(path)
-            .map_err(|e| format!("删除目录失败: {}", e))?;
+            .map_err(|e| {
+                tracing::warn!("[handle_delete] 删除目录失败: path={}, error={}", path, e);
+                format!("删除目录失败: {}", e)
+            })?;
     } else {
         fs::remove_file(path)
-            .map_err(|e| format!("删除文件失败: {}", e))?;
+            .map_err(|e| {
+                tracing::warn!("[handle_delete] 删除文件失败: path={}, error={}", path, e);
+                format!("删除文件失败: {}", e)
+            })?;
     }
 
     Ok(())
@@ -697,6 +729,7 @@ fn handle_rename(old_path: &str, new_path: &str, cfg: &AgentConfig) -> Result<(S
 }
 
 fn handle_copy(src: &str, dst: &str, cfg: &AgentConfig) -> Result<(String, String), String> {
+    tracing::info!("[handle_copy] src={}, dst={}", src, dst);
     // 如果 allowed_paths 不为空，则检查白名单
     // 如果 allowed_paths 为空，则不限制，依赖 Linux 文件系统权限
     if !cfg.security.allowed_paths.is_empty() {
@@ -719,6 +752,7 @@ fn handle_copy(src: &str, dst: &str, cfg: &AgentConfig) -> Result<(String, Strin
     let metadata = fs::metadata(src)
         .map_err(|e| {
             let error_msg = e.to_string();
+            tracing::warn!("[handle_copy] 访问源文件失败: src={}, error={}", src, e);
             if error_msg.contains("Permission denied") {
                 format!("权限不足: 无法访问源文件 '{}' (需要相应的 Linux 用户权限)", src)
             } else if error_msg.contains("No such file") {
@@ -736,6 +770,7 @@ fn handle_copy(src: &str, dst: &str, cfg: &AgentConfig) -> Result<(String, Strin
     fs::copy(src, dst)
         .map_err(|e| {
             let error_msg = e.to_string();
+            tracing::warn!("[handle_copy] 复制失败: src={}, dst={}, error={}", src, dst, e);
             if error_msg.contains("Permission denied") {
                 format!("权限不足: 无法复制 '{}' (需要相应的 Linux 用户权限)", src)
             } else {
@@ -1211,6 +1246,7 @@ async fn handle_cancel_file_transfer(
 
 /// 检查文件是否存在
 fn handle_file_exists(path: &str, cfg: &AgentConfig) -> Result<Envelope, String> {
+    tracing::debug!("[handle_file_exists] path={}", path);
     // 检查路径权限
     if !cfg.security.allowed_paths.is_empty() {
         let allowed = cfg.security.allowed_paths

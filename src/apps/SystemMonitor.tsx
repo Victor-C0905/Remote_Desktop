@@ -258,7 +258,7 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
     let unlistenFn: (() => void) | undefined;
     setupListener().then((fn) => {
       unlistenFn = fn;
-    });
+    }).catch((e) => log.error('事件监听设置失败:', e));
 
     return () => {
       if (unlistenFn) {

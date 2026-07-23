@@ -214,7 +214,7 @@ function TerminalInstance({
 
             // resize 完成
             resizeRAF = null;
-          } catch (_) {}
+          } catch (e) { log.debug('resize observer 回调失败:', e); }
         });
       });
 
@@ -241,7 +241,7 @@ function TerminalInstance({
         }
 
         // 释放 xterm
-        try { terminal.dispose(); } catch (_) {}
+        try { terminal.dispose(); } catch (e) { log.debug('terminal.dispose 失败:', e); }
         terminalRef.current = null;
         fitAddonRef.current = null;
 
@@ -263,7 +263,7 @@ function TerminalInstance({
     if (!t) return;
     t.options.fontSize = fontSize;
     t.options.cursorBlink = cursorBlink;
-    try { fitAddonRef.current?.fit(); } catch (_) {}
+    try { fitAddonRef.current?.fit(); } catch (e) { log.debug('fit 调整失败:', e); }
   }, [fontSize, cursorBlink]);
 
   // 渲染容器 div
