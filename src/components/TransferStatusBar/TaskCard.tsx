@@ -231,6 +231,7 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
    * 获取状态对应的进度条样式类名
    */
   const getProgressClass = () => {
+    if (task.status === 'completed') return 'tc-progress-fill completed';
     if (task.status === 'error') return 'tc-progress-fill error';
     if (task.status === 'cancelled') return 'tc-progress-fill cancelled';
     return 'tc-progress-fill';
