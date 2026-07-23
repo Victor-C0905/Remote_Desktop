@@ -12,6 +12,24 @@ import { TransferTask } from '../../hooks/useTransferProgress';
 import { TaskCard } from './TaskCard';
 import './TransferPanel.css';
 
+// ── 工具函数 ──────────────────────────────────────────────────
+
+function formatFileSize(bytes: number): string {
+  if (bytes === 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const k = 1024;
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${units[i]}`;
+}
+
+function formatSpeed(bytesPerSecond: number): string {
+  if (bytesPerSecond === 0) return '0 B/s';
+  const units = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
+  const k = 1024;
+  const i = Math.floor(Math.log(bytesPerSecond) / Math.log(k));
+  return `${(bytesPerSecond / Math.pow(k, i)).toFixed(1)} ${units[i]}`;
+}
+
 // ── 内联 SVG 图标组件（Adwaita 风格）────────────────────────────
 
 /**
@@ -104,6 +122,43 @@ export function TransferPanel({ transfers, onRemoveTask, onClose, statusbarRef }
    */
   const activeCount = visibleTransfers.filter((t) => t.status === 'active').length;
   const pendingCount = visibleTransfers.filter((t) => t.status === 'pending').length;
+  const pausedCount = visibleTransfers.filter((t) => t.status === 'paused').length;
+
+  /**
+   * 计算总传输大小和平均速度
+   */
+  const totalSize = visibleTransfers.reduce((sum, t) => sum + t.file_size, 0);
+  const activeSpeed = visibleTransfers
+    .filter((t) => t.status === 'active')
+    .reduce((sum, t) => sum + t.speed, 0);
+
+  /**
+   * 批量暂停所有活动任务
+   */
+  const handlePauseAll = async () => {
+    const activeTasks = transfers.filter((t) => t.status === 'active');
+    for (const task of activeTasks) {
+      try {
+        await invoke('pause_transfer', { taskId: task.id });
+      } catch (error) {
+        console.error('[TransferPanel] 暂停任务失败:', task.id, error);
+      }
+    }
+  };
+
+  /**
+   * 批量继续所有已暂停任务
+   */
+  const handleResumeAll = async () => {
+    const pausedTasks = transfers.filter((t) => t.status === 'paused');
+    for (const task of pausedTasks) {
+      try {
+        await invoke('resume_transfer', { taskId: task.id });
+      } catch (error) {
+        console.error('[TransferPanel] 继续任务失败:', task.id, error);
+      }
+    }
+  };
 
   /**
    * 批量取消所有活动任务
@@ -149,28 +204,54 @@ export function TransferPanel({ transfers, onRemoveTask, onClose, statusbarRef }
 
       {/* 底部操作栏 */}
       <div className="tp-footer">
-        {/* 统计信息（仅显示活动和排队） */}
+        {/* 统计信息 */}
         <div className="tp-stats">
-          <span className="tp-stat-item">
-            {activeCount > 0 && (
-              <>
-                <span className="tp-stat-label">活动:</span>
-                <span className="tp-stat-value">{activeCount}</span>
-              </>
-            )}
-          </span>
-          <span className="tp-stat-item">
-            {pendingCount > 0 && (
-              <>
-                <span className="tp-stat-label">排队:</span>
-                <span className="tp-stat-value">{pendingCount}</span>
-              </>
-            )}
-          </span>
+          {totalSize > 0 && (
+            <span className="tp-stat-item">
+              <span className="tp-stat-label">总大小:</span>
+              <span className="tp-stat-value">{formatFileSize(totalSize)}</span>
+            </span>
+          )}
+          {activeSpeed > 0 && (
+            <span className="tp-stat-item">
+              <span className="tp-stat-label">速度:</span>
+              <span className="tp-stat-value">{formatSpeed(activeSpeed)}</span>
+            </span>
+          )}
+          {activeCount > 0 && (
+            <span className="tp-stat-item">
+              <span className="tp-stat-label">活动:</span>
+              <span className="tp-stat-value">{activeCount}</span>
+            </span>
+          )}
+          {pausedCount > 0 && (
+            <span className="tp-stat-item">
+              <span className="tp-stat-label">暂停:</span>
+              <span className="tp-stat-value">{pausedCount}</span>
+            </span>
+          )}
         </div>
 
         {/* 操作按钮 */}
         <div className="tp-actions">
+          {activeCount > 0 && (
+            <button
+              className="tp-action-btn pause"
+              onClick={handlePauseAll}
+              aria-label="暂停所有活动任务"
+            >
+              全部暂停
+            </button>
+          )}
+          {pausedCount > 0 && (
+            <button
+              className="tp-action-btn resume"
+              onClick={handleResumeAll}
+              aria-label="继续所有已暂停任务"
+            >
+              全部继续
+            </button>
+          )}
           {activeCount > 0 && (
             <button
               className="tp-action-btn cancel"

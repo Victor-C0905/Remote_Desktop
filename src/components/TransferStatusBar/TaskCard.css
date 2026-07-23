@@ -133,6 +133,22 @@
 /* 已完成任务的进度条样式 */
 .tc-progress-fill.completed {
   background: var(--ovelis-success-color);
+  animation: progress-complete 0.4s ease-out;
+}
+
+@keyframes progress-complete {
+  0% {
+    opacity: 0.6;
+    transform: scaleY(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scaleY(1.5);
+  }
+  100% {
+    opacity: 1;
+    transform: scaleY(1);
+  }
 }
 
 /* 已取消任务的整体样式 */
@@ -172,6 +188,26 @@
   min-width: 40px;
   text-align: left;
   font-variant-numeric: tabular-nums;
+}
+
+/* 剩余时间 */
+.tc-eta {
+  font-size: 11px;
+  color: var(--ovelis-accent-bg);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 错误信息 */
+.tc-error-msg {
+  font-size: 11px;
+  color: var(--ovelis-error-color);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 160px;
+  flex-shrink: 1;
+  min-width: 0;
 }
 
 /* ── 右侧区域：控制按钮（跨两行，垂直居中）──────────────── */

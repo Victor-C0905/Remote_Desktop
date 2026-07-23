@@ -513,8 +513,6 @@ impl TransferManager {
 
         // 重新启动传输（需要在后台任务中执行）
         let task_id_clone = task_clone.id.clone();
-        let manager_clone = Arc::new(TransferManager::new(app_handle.clone()));
-        let _ = manager_clone;  // 避免未使用警告
 
         // 获取连接管理器和 QUIC Connection
         let connection_manager = app_handle.state::<ConnectionManager>();
@@ -532,7 +530,11 @@ impl TransferManager {
 
         let request_id = connection_manager.next_request_id();
 
+        // 使用现有的 manager（不是创建新的）
+        let manager = app_handle.state::<Arc<TransferManager>>();
+
         // 在后台任务中重新执行传输
+        let manager_clone = Arc::clone(&manager);
         tokio::spawn(async move {
             let result = perform_transfer(
                 &conn,

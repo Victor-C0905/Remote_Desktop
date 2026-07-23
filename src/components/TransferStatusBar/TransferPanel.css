@@ -189,6 +189,25 @@
   background: var(--ovelis-card-bg);
 }
 
+.tp-action-btn.pause {
+  background: transparent;
+  color: var(--ovelis-text-secondary);
+}
+
+.tp-action-btn.pause:hover {
+  background: var(--ovelis-card-bg);
+  color: var(--ovelis-text-primary);
+}
+
+.tp-action-btn.resume {
+  background: transparent;
+  color: var(--ovelis-accent-bg);
+}
+
+.tp-action-btn.resume:hover {
+  background: var(--ovelis-card-bg);
+}
+
 .tp-action-btn.close {
   background: var(--ovelis-accent-bg);
   color: var(--ovelis-accent-fg);
