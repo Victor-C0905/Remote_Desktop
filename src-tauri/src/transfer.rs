@@ -15,6 +15,49 @@ use uuid::Uuid;
 
 use crate::connection::{ConnectionManager, Envelope, Payload};
 
+// ── 传输状态枚举 ─────────────────────────────────────────────
+
+/// 传输任务状态
+///
+/// 替代字符串状态，提供类型安全和编译期检查。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TransferStatus {
+    Pending,
+    Active,
+    Paused,
+    Completed,
+    Error,
+    Cancelled,
+}
+
+impl TransferStatus {
+    /// 是否为终态（完成后不可变更）
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Error | Self::Cancelled)
+    }
+
+    /// 是否可重试
+    pub fn is_retryable(self) -> bool {
+        matches!(self, Self::Error | Self::Cancelled)
+    }
+}
+
+impl std::fmt::Display for TransferStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Pending => write!(f, "pending"),
+            Self::Active => write!(f, "active"),
+            Self::Paused => write!(f, "paused"),
+            Self::Completed => write!(f, "completed"),
+            Self::Error => write!(f, "error"),
+            Self::Cancelled => write!(f, "cancelled"),
+        }
+    }
+}
+
+// ── 临时文件工具函数 ──────────────────────────────────────────
+
 /// 生成确定性临时文件路径
 ///
 /// 使用目标路径的 SHA-256 哈希生成临时文件名。
@@ -73,8 +116,8 @@ pub struct TransferTask {
     pub speed_bps: u64,
     /// 预估剩余时间（秒）
     pub eta_secs: u64,
-    /// 任务状态: "pending" | "active" | "paused" | "completed" | "error" | "cancelled"
-    pub status: String,
+    /// 任务状态
+    pub status: TransferStatus,
     /// 错误信息（如果失败）
     pub error: Option<String>,
     /// 任务创建时间（Unix 时间戳，秒）
@@ -135,7 +178,7 @@ impl TransferManager {
             let mut completed: Vec<(String, u64)> = tasks_guard
                 .iter()
                 .filter(|(_, task)| {
-                    task.status == "completed" || task.status == "failed" || task.status == "cancelled"
+                    task.status.is_terminal()
                 })
                 .map(|(id, task)| (id.clone(), task.created_at))
                 .collect();
@@ -215,7 +258,7 @@ impl TransferManager {
             progress: 0,
             speed_bps: 0,
             eta_secs: 0,
-            status: "pending".to_string(),
+            status: TransferStatus::Pending,
             error: None,
             created_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -254,13 +297,13 @@ impl TransferManager {
     }
 
     /// 获取任务信息
+    #[allow(dead_code)]
     pub async fn get_task(&self, task_id: &str) -> Option<TransferTask> {
         let tasks = self.tasks.lock().await;
         tasks.get(task_id).cloned()
     }
 
     /// 更新任务进度
-    #[allow(dead_code)]
     pub async fn update_progress(
         &self,
         task_id: &str,
@@ -291,9 +334,9 @@ impl TransferManager {
         // 更新状态
         // 注意：只有在上传时才自动完成，下载需要等待 FileTransferComplete 消息
         if task.progress >= 100 && task.direction == "upload" {
-            task.status = "completed".to_string();
-        } else if task.status == "pending" {
-            task.status = "active".to_string();
+            task.status = TransferStatus::Completed;
+        } else if task.status == TransferStatus::Pending {
+            task.status = TransferStatus::Active;
         }
 
         // 节流：只在进度变化超过 1% 时发送事件
@@ -319,14 +362,13 @@ impl TransferManager {
     }
 
     /// 标记任务失败
-    #[allow(dead_code)]
     pub async fn mark_failed(&self, task_id: &str, error: String) -> Result<(), String> {
         let mut tasks = self.tasks.lock().await;
         let task = tasks
             .get_mut(task_id)
             .ok_or_else(|| format!("任务不存在: {}", task_id))?;
 
-        task.status = "error".to_string();  // ← 改为 "error"，与前端一致
+        task.status = TransferStatus::Error;  // ← 改为 Error，与前端一致
         task.error = Some(error);
 
         // 发送进度事件
@@ -338,14 +380,13 @@ impl TransferManager {
     }
 
     /// 标记任务完成
-    #[allow(dead_code)]
     pub async fn mark_completed(&self, task_id: &str) -> Result<(), String> {
         let mut tasks = self.tasks.lock().await;
         let task = tasks
             .get_mut(task_id)
             .ok_or_else(|| format!("任务不存在: {}", task_id))?;
 
-        task.status = "completed".to_string();
+        task.status = TransferStatus::Completed;
         task.progress = 100;
 
         // 发送进度事件
@@ -386,11 +427,11 @@ impl TransferManager {
             .ok_or_else(|| format!("任务不存在: {}", task_id))?;
 
         // 只能暂停活动任务
-        if task.status != "active" {
+        if task.status != TransferStatus::Active {
             return Err(format!("只能暂停活动中的任务，当前状态: {}", task.status));
         }
 
-        task.status = "paused".to_string();
+        task.status = TransferStatus::Paused;
 
         // 发送进度事件
         let task_clone = task.clone();
@@ -409,11 +450,11 @@ impl TransferManager {
             .ok_or_else(|| format!("任务不存在: {}", task_id))?;
 
         // 只能继续暂停的任务
-        if task.status != "paused" {
+        if task.status != TransferStatus::Paused {
             return Err(format!("只能继续暂停的任务，当前状态: {}", task.status));
         }
 
-        task.status = "active".to_string();
+        task.status = TransferStatus::Active;
 
         // 发送进度事件
         let task_clone = task.clone();
@@ -440,7 +481,7 @@ impl TransferManager {
             .ok_or_else(|| format!("任务不存在: {}", task_id))?;
 
         // 只能重试失败的任务
-        if task.status != "error" {
+        if !task.status.is_retryable() {
             return Err(format!("只能重试失败的任务，当前状态: {}", task.status));
         }
 
@@ -452,7 +493,7 @@ impl TransferManager {
         };
 
         // 重置任务状态
-        task.status = "pending".to_string();
+        task.status = TransferStatus::Pending;
         task.error = None;
 
         // 保存任务副本用于重新启动传输
@@ -525,7 +566,7 @@ impl TransferManager {
 
             for (id, task) in tasks.iter_mut() {
                 if task.server_id == connection_id {
-                    task.status = "cancelled".to_string();
+                    task.status = TransferStatus::Cancelled;
                     to_cancel.push(task.clone());
                     ids.push(id.clone());
                 }
@@ -547,7 +588,7 @@ impl TransferManager {
             let _ = self.emit_progress(&task);
         }
 
-        eprintln!("[TransferManager] 已清理连接 {} 的 {} 个任务", connection_id, count);
+        tracing::info!(connection_id, count, "已清理连接的传输任务");
     }
 
     /// 取消指定任务
@@ -559,7 +600,7 @@ impl TransferManager {
         let (task_clone, agent_session_id) = {
             let mut tasks = self.tasks.lock().await;
             if let Some(task) = tasks.get_mut(task_id) {
-                task.status = "cancelled".to_string();
+                task.status = TransferStatus::Cancelled;
                 let task_clone = task.clone();
                 let agent_session_id = task.agent_session_id.clone();
                 (task_clone, agent_session_id)
@@ -615,8 +656,74 @@ impl TransferManager {
     pub async fn cleanup_completed(&self) {
         let mut tasks = self.tasks.lock().await;
         tasks.retain(|_, task| {
-            task.status != "completed" && task.status != "failed" && task.status != "cancelled"
+            !task.status.is_terminal()
         });
+    }
+
+    /// 获取任务状态
+    pub async fn get_status(&self, task_id: &str) -> Option<TransferStatus> {
+        let tasks = self.tasks.lock().await;
+        tasks.get(task_id).map(|t| t.status)
+    }
+
+    /// 设置 Agent 端传输会话 ID
+    pub async fn set_agent_session_id(&self, task_id: &str, session_id: String) {
+        let mut tasks = self.tasks.lock().await;
+        if let Some(task) = tasks.get_mut(task_id) {
+            task.agent_session_id = Some(session_id);
+        }
+    }
+
+    /// 更新文件大小（下载时，从 Agent 获取实际大小）
+    pub async fn update_file_size(&self, task_id: &str, file_size: u64) -> Result<(), String> {
+        let mut tasks = self.tasks.lock().await;
+        if let Some(task) = tasks.get_mut(task_id) {
+            task.file_size = file_size;
+            let task_clone = task.clone();
+            drop(tasks);
+            self.emit_progress(&task_clone)?;
+        }
+        Ok(())
+    }
+}
+
+/* ── 暂停等待逻辑 ──────────────────────────────────────── */
+
+/// 等待暂停任务恢复
+///
+/// 如果任务被暂停，轮询等待直到恢复或取消。
+/// - 返回 `Ok(())` 表示已恢复或未暂停
+/// - 返回 `Err(msg)` 表示已取消或任务已删除
+async fn wait_if_paused(
+    manager: &TransferManager,
+    task_id: &str,
+) -> Result<(), String> {
+    let status = match manager.get_status(task_id).await {
+        Some(s) => s,
+        None => return Err("任务已删除".to_string()),
+    };
+
+    if status != TransferStatus::Paused {
+        return Ok(());
+    }
+
+    tracing::info!("传输已暂停: task_id={}", task_id);
+
+    // 轮询等待恢复
+    loop {
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        match manager.get_status(task_id).await {
+            Some(TransferStatus::Active) => {
+                tracing::info!("传输已恢复: task_id={}", task_id);
+                return Ok(());
+            }
+            Some(TransferStatus::Cancelled) => {
+                tracing::info!("传输已取消: task_id={}", task_id);
+                return Err("传输已取消".to_string());
+            }
+            None => return Err("任务已删除".to_string()),
+            _ => continue, // 继续等待（paused 状态）
+        }
     }
 }
 
@@ -671,6 +778,7 @@ impl FileReader {
     }
 
     /// 获取进度百分比 (0-100)
+    #[allow(dead_code)]
     pub fn progress(&self) -> u32 {
         if self.file_size == 0 {
             return 100;
@@ -689,6 +797,8 @@ pub struct FileWriter {
     pub transferred: u64,
     /// 标记是否为临时文件（未完成传输）
     is_temporary: bool,
+    /// 标记是否保留临时文件（取消/暂停时保留，用于断点续传）
+    preserved: bool,
     /// 最终文件路径
     path: PathBuf,
     /// 临时文件路径（随机命名: `{原文件名}.{随机hex}.tmp`）
@@ -704,6 +814,7 @@ impl FileWriter {
     ///
     /// # 返回
     /// 成功返回 FileWriter，失败返回错误信息
+    #[allow(dead_code)]
     pub fn new(path: &str, file_size: u64) -> Result<Self, String> {
         Self::with_resume(path, file_size, 0)
     }
@@ -767,45 +878,71 @@ impl FileWriter {
                         // 跳转到断点位置
                         match existing_file.seek(SeekFrom::Start(resume_from)) {
                             Ok(_) => {
-                                eprintln!(
-                                    "[FileWriter] 断点续传: 从 {} 字节继续写入临时文件 {:?}",
-                                    resume_from, temp_path
+                                tracing::debug!(
+                                    resume_from,
+                                    temp_path = %temp_path.display(),
+                                    "断点续传: 继续写入临时文件"
                                 );
                                 (BufWriter::new(existing_file), resume_from)
                             }
                             Err(e) => {
-                                eprintln!(
-                                    "[FileWriter] 跳转到断点位置失败，降级为重新传输: {}",
-                                    e
+                                tracing::warn!(
+                                    error = %e,
+                                    "跳转到断点位置失败，降级为重新传输"
                                 );
                                 Self::create_fresh_temp_file(&temp_path)?
                             }
                         }
                     }
                     Err(reason) => {
-                        eprintln!(
-                            "[FileWriter] 临时文件完整性校验失败: {}，降级为重新传输",
-                            reason
+                        tracing::warn!(
+                            reason = %reason,
+                            "临时文件完整性校验失败，降级为重新传输"
                         );
                         Self::create_fresh_temp_file(&temp_path)?
                     }
                 }
             } else {
-                eprintln!(
-                    "[FileWriter] 临时文件不存在，从头开始传输: {:?}",
-                    temp_path
+                tracing::debug!(
+                    temp_path = %temp_path.display(),
+                    "临时文件不存在，从头开始传输"
                 );
                 Self::create_fresh_temp_file(&temp_path)?
             }
         } else {
-            Self::create_fresh_temp_file(&temp_path)?
+            // resume_from == 0，但可能有保留的临时文件（之前的下载被取消/删除）
+            if temp_path.exists() {
+                let existing_size = temp_path.metadata().map(|m| m.len()).unwrap_or(0);
+                if existing_size > 0 {
+                    tracing::debug!(
+                        temp_path = %temp_path.display(),
+                        existing_size,
+                        "发现保留的临时文件，尝试断点续传"
+                    );
+                    // 打开已有文件，追加模式
+                    let file = std::fs::OpenOptions::new()
+                        .write(true)
+                        .append(true)
+                        .open(&temp_path)
+                        .map_err(|e| format!("打开保留的临时文件失败: {}", e))?;
+                    (BufWriter::new(file), existing_size)
+                } else {
+                    Self::create_fresh_temp_file(&temp_path)?
+                }
+            } else {
+                Self::create_fresh_temp_file(&temp_path)?
+            }
         };
+
+        // 如果文件已有数据，标记为 preserved（防止 Drop 删除）
+        let has_existing_data = actual_resume_from > 0;
 
         Ok(Self {
             writer: file,
             file_size,
             transferred: actual_resume_from,
             is_temporary: true,
+            preserved: has_existing_data,
             path,
             temp_path,
         })
@@ -865,25 +1002,50 @@ impl FileWriter {
             ));
         }
 
-        eprintln!(
-            "[FileWriter] 临时文件完整性校验通过: {:?} (大小: {} 字节)",
-            temp_path, expected_size
+        tracing::debug!(
+            temp_path = %temp_path.display(),
+            expected_size,
+            "临时文件完整性校验通过"
         );
 
         Ok(file)
     }
 
-    /// 创建全新的临时文件（截断模式）
+    /// 创建或打开临时文件
     ///
-    /// 用于：
-    /// - 从头开始传输（resume_from == 0）
-    /// - 断点续传降级（临时文件不存在或完整性校验失败）
+    /// 如果文件已存在（保留的断点续传文件），以追加模式打开，不截断数据。
+    /// 如果文件不存在，创建新文件。
     fn create_fresh_temp_file(temp_path: &PathBuf) -> Result<(BufWriter<File>, u64), String> {
-        eprintln!("[FileWriter] 创建临时文件: {:?}", temp_path);
-        let file = File::create(temp_path)
+        let exists = temp_path.exists();
+        tracing::debug!(
+            temp_path = %temp_path.display(),
+            exists,
+            "{}临时文件",
+            if exists { "打开已有" } else { "创建新" }
+        );
+
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(!exists)  // 仅在文件不存在时截断
+            .open(temp_path)
             .map_err(|e| format!("无法创建临时文件: {:?}\n错误: {}", temp_path, e))?;
-        eprintln!("[FileWriter] 临时文件创建成功: {:?} (存在: {})", temp_path, temp_path.exists());
-        Ok((BufWriter::new(file), 0))
+
+        // 如果文件已存在，获取已有数据大小
+        let existing_size = if exists {
+            file.metadata().map(|m| m.len()).unwrap_or(0)
+        } else {
+            0
+        };
+
+        if existing_size > 0 {
+            tracing::debug!(existing_size, "断点续传: 已有数据");
+            // 追加到文件末尾
+            file.seek(std::io::SeekFrom::End(0))
+                .map_err(|e| format!("定位到文件末尾失败: {}", e))?;
+        }
+
+        Ok((BufWriter::new(file), existing_size))
     }
 
     /// 写入数据块
@@ -946,7 +1108,18 @@ impl FileWriter {
         self.is_temporary = false;
     }
 
+    /// 保留临时文件（取消/暂停时调用）
+    ///
+    /// 防止 Drop 删除临时文件，以便后续断点续传
+    pub fn preserve(&mut self) {
+        self.preserved = true;
+        // 刷新缓冲区确保数据落盘
+        let _ = self.writer.flush();
+        let _ = self.writer.get_ref().sync_all();
+    }
+
     /// 获取进度百分比 (0-100)
+    #[allow(dead_code)]
     pub fn progress(&self) -> u32 {
         if self.file_size == 0 {
             return 100;
@@ -957,11 +1130,13 @@ impl FileWriter {
 
 impl Drop for FileWriter {
     fn drop(&mut self) {
-        // 如果是临时文件，清理临时文件
-        // 注意：只清理临时文件，不清理最终文件
-        if self.is_temporary {
-            eprintln!("[FileWriter] 清理临时文件: {:?}", self.temp_path);
+        // 只在错误时清理临时文件
+        // 取消/暂停时保留临时文件，以便后续断点续传
+        if self.is_temporary && !self.preserved {
+            tracing::debug!(temp_path = %self.temp_path.display(), "清理临时文件");
             let _ = std::fs::remove_file(&self.temp_path);
+        } else if self.preserved {
+            tracing::debug!(temp_path = %self.temp_path.display(), "保留临时文件（用于断点续传）");
         }
     }
 }
@@ -999,35 +1174,30 @@ pub async fn transfer_file(
     let manager = Arc::clone(&manager);  // 克隆 Arc，共享状态
 
     // 创建任务
-    eprintln!("[Transfer] 开始创建传输任务: server_id={}, direction={}", server_id, direction);
+    tracing::info!(server_id, direction, "开始创建传输任务");
     let task_id = manager
         .create_task(server_id.clone(), direction.clone(), remote_path.clone(), local_path.clone())
         .await?;
-    eprintln!("[Transfer] 任务创建成功: task_id={}", task_id);
+    tracing::info!(task_id, "任务创建成功");
 
     // 获取连接管理器和 QUIC Connection
-    eprintln!("[Transfer] 获取连接管理器: server_id={}", server_id);
     let connection_manager = app_handle.state::<ConnectionManager>();
     
     let quic_conn = {
-        eprintln!("[Transfer] 锁定连接映射表");
         let conns = connection_manager.connections.lock().unwrap();
-        eprintln!("[Transfer] 当前连接数: {}", conns.len());
         
         let active_conn = conns.get(&server_id)
             .ok_or_else(|| {
-                eprintln!("[Transfer] 错误: 服务器未连接: server_id={}, 已连接的服务器: {:?}", 
-                    server_id, conns.keys().collect::<Vec<_>>());
+                tracing::warn!(server_id, "服务器未连接");
                 format!("服务器未连接: {}", server_id)
             })?;
         
-        eprintln!("[Transfer] 找到活跃连接: server_id={}, quic_conn={:?}", server_id, active_conn.quic_conn);
         active_conn.quic_conn.clone()
     };
 
     // 如果没有 QUIC Connection，返回错误
     let conn = quic_conn.ok_or_else(|| {
-        eprintln!("[Transfer] 错误: QUIC Connection 为 None: server_id={}", server_id);
+        tracing::error!(server_id, "QUIC Connection 为 None");
         "未找到 QUIC Connection，可能只使用了 WebSocket 连接".to_string()
     })?;
 
@@ -1037,16 +1207,19 @@ pub async fn transfer_file(
     // 在后台任务中执行传输
     let task_id_clone = task_id.clone();
     let manager_clone = Arc::clone(&manager);
-    let _server_id_clone = server_id.clone();
     let direction_clone = direction.clone();
     let remote_path_clone = remote_path.clone();
     let local_path_clone = local_path.clone();
 
-    eprintln!("[Transfer] 启动后台传输任务: task_id={}, direction={}, remote={}",
-        task_id_clone, direction_clone, remote_path_clone);
+    tracing::info!(
+        task_id = %task_id_clone,
+        direction = %direction_clone,
+        remote = %remote_path_clone,
+        "启动后台传输任务"
+    );
 
     tokio::spawn(async move {
-        eprintln!("[Transfer] 后台任务开始执行: task_id={}", task_id_clone);
+        tracing::info!(task_id = %task_id_clone, "后台任务开始执行");
 
         let result = perform_transfer(
             &conn,
@@ -1059,10 +1232,10 @@ pub async fn transfer_file(
             None,  // 新任务从头开始传输
         ).await;
 
-        eprintln!("[Transfer] 后台任务执行完成: task_id={}, result={:?}", task_id_clone, result);
+        tracing::info!(task_id = %task_id_clone, ?result, "后台任务执行完成");
 
         if let Err(e) = result {
-            eprintln!("[Transfer] 文件传输失败: task_id={}, error={}", task_id_clone, e);
+            tracing::error!(task_id = %task_id_clone, error = %e, "文件传输失败");
             let _ = manager_clone.mark_failed(&task_id_clone, e).await;
         }
     });
@@ -1099,12 +1272,46 @@ async fn perform_transfer(
     task_id: &str,
     resume_from: Option<u64>,
 ) -> Result<(), String> {
-    eprintln!("[Transfer] 开始执行文件传输: task_id={}, direction={}, remote={}, local={}, resume_from={:?}",
-        task_id, direction, remote_path, local_path, resume_from);
+    tracing::info!(
+        task_id, direction, remote = %remote_path, local = %local_path, ?resume_from,
+        "开始执行文件传输"
+    );
 
-    // 1. 发送 FileTransferRequest
+    // ── 1. 握手：发送请求 + 接收响应 ──
+    let (session_id, file_size, mut send, mut recv) =
+        handshake_transfer(conn, request_id, &direction, &remote_path, &local_path, resume_from)
+            .await?;
+
+    // 保存 Agent 端的 session_id
+    manager.set_agent_session_id(task_id, session_id.clone()).await;
+
+    // 下载时更新文件大小
+    if direction == "download" {
+        manager.update_file_size(task_id, file_size).await?;
+    }
+
+    // ── 2. 执行传输 ──
+    if direction == "upload" {
+        run_upload_loop(&mut send, &session_id, &local_path, manager, task_id).await
+    } else {
+        run_download_loop(&mut recv, &session_id, &local_path, file_size, resume_from, manager, task_id).await
+    }
+}
+
+/// 传输握手：发送 FileTransferRequest + 接收 FileTransferAccept
+///
+/// 返回 (session_id, file_size, send_stream, recv_stream)
+async fn handshake_transfer(
+    conn: &quinn::Connection,
+    request_id: u32,
+    direction: &str,
+    remote_path: &str,
+    local_path: &str,
+    resume_from: Option<u64>,
+) -> Result<(String, u64, quinn::SendStream, quinn::RecvStream), String> {
+    // 获取文件大小（上传时）
     let file_size = if direction == "upload" {
-        Some(std::fs::metadata(&local_path)
+        Some(std::fs::metadata(local_path)
             .map_err(|e| format!("无法访问本地文件: {}", e))?
             .len())
     } else {
@@ -1112,20 +1319,20 @@ async fn perform_transfer(
     };
 
     let request_payload = Payload::FileTransferRequest {
-        direction: direction.clone(),
-        path: remote_path.clone(),
+        direction: direction.to_string(),
+        path: remote_path.to_string(),
         file_size,
         chunk_size: Some(64 * 1024),
-        resume_from,  // 添加断点续传参数
+        resume_from,
     };
 
-    // 创建 Stream（添加超时）
+    // 创建 Stream
     let (mut send, mut recv) = tokio::time::timeout(FILE_TRANSFER_STREAM_TIMEOUT, conn.open_bi())
         .await
         .map_err(|_| "打开文件传输 Stream 超时".to_string())?
         .map_err(|e| format!("打开 Stream 失败: {}", e))?;
 
-    // 发送请求（添加超时）
+    // 发送请求
     let request_envelope = Envelope::new(request_id, request_payload);
     let request_bytes = request_envelope.encode()?;
     let request_len = (request_bytes.len() as u32).to_le_bytes();
@@ -1143,7 +1350,7 @@ async fn perform_transfer(
     .await
     .map_err(|_| "发送文件传输请求超时".to_string())??;
 
-    // 2. 接收 FileTransferAccept（添加超时）
+    // 接收响应
     let response_buf = tokio::time::timeout(FILE_CHUNK_TIMEOUT, async {
         let mut response_len_buf = [0u8; 4];
         recv.read_exact(&mut response_len_buf).await
@@ -1160,347 +1367,237 @@ async fn perform_transfer(
 
     let response_envelope = Envelope::decode(&response_buf)?;
 
-    // 处理响应
     match response_envelope.payload {
-        Payload::FileTransferAccept { session_id, file_size, chunk_size, mtime: _ } => {
-            eprintln!("[Transfer] 文件传输已接受: session_id={}, file_size={}, chunk_size={}",
-                session_id, file_size, chunk_size);
-
-            // 保存 Agent 端的 session_id（用于后续取消等操作）
-            {
-                let mut tasks = manager.tasks.lock().await;
-                if let Some(task) = tasks.get_mut(task_id) {
-                    task.agent_session_id = Some(session_id.clone());
-                }
-            }
-
-            // 更新任务的文件大小（下载时）
-            if direction == "download" {
-                eprintln!("[Transfer] 下载模式：更新文件大小");
-                let mut tasks = manager.tasks.lock().await;
-                if let Some(task) = tasks.get_mut(task_id) {
-                    task.file_size = file_size;
-                    // 克隆任务用于发送进度事件
-                    let task_clone = task.clone();
-                    drop(tasks);
-                    // 发送进度事件，通知前端文件大小已更新
-                    manager.emit_progress(&task_clone)?;
-                }
-            }
-
-            // 3. 开始传输数据
-            if direction == "upload" {
-                // 上传逻辑
-                let mut reader = FileReader::new(&local_path)?;
-                let mut seq = 1u32;
-                let start_time = std::time::Instant::now();
-
-                while let Some(chunk) = reader.read_next_chunk()? {
-                    // 检查任务状态：是否被暂停或取消
-                    {
-                        let tasks = manager.tasks.lock().await;
-                        if let Some(task) = tasks.get(task_id) {
-                            if task.status.as_str() == "paused" {
-                                // 暂停传输，等待恢复
-                                drop(tasks);
-                                tracing::info!("传输已暂停: task_id={}", task_id);
-
-                                // 等待恢复信号（轮询检查）
-                                loop {
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                                    let tasks = manager.tasks.lock().await;
-                                    if let Some(task) = tasks.get(task_id) {
-                                        match task.status.as_str() {
-                                            "active" => {
-                                                // 已恢复，继续传输
-                                                drop(tasks);
-                                                tracing::info!("传输已恢复: task_id={}", task_id);
-                                                break;
-                                            }
-                                            "cancelled" => {
-                                                // 已取消，终止传输
-                                                drop(tasks);
-                                                tracing::info!("传输已取消: task_id={}", task_id);
-                                                return Err("传输已取消".to_string());
-                                            }
-                                            _ => {
-                                                // 继续等待（paused 状态）
-                                                drop(tasks);
-                                                continue;
-                                            }
-                                        }
-                                    } else {
-                                        // 任务已删除
-                                        return Err("任务已删除".to_string());
-                                    }
-                                }
-                            } else if task.status.as_str() == "cancelled" {
-                                // 已取消，终止传输
-                                drop(tasks);
-                                tracing::info!("传输已取消: task_id={}", task_id);
-                                return Err("传输已取消".to_string());
-                            }
-                        } else {
-                            // 任务已删除
-                            drop(tasks);
-                            return Err("任务已删除".to_string());
-                        }
-                    }
-
-                    // 发送 FileChunk（添加超时保护）
-                    let chunk_payload = Payload::FileChunk {
-                        session_id: session_id.clone(),
-                        seq,
-                        data: chunk.clone(),
-                        size: chunk.len() as u32,
-                    };
-
-                    // 使用 UUID 生成随机 request_id
-                    let chunk_request_id = uuid::Uuid::new_v4().as_u128() as u32;
-                    let chunk_envelope = Envelope::new(chunk_request_id, chunk_payload);
-                    let chunk_bytes = chunk_envelope.encode()?;
-                    let chunk_len = (chunk_bytes.len() as u32).to_le_bytes();
-
-                    tokio::time::timeout(FILE_CHUNK_TIMEOUT, async {
-                        send.write_all(&chunk_len).await
-                            .map_err(|e| format!("发送块长度失败: {}", e))?;
-                        send.write_all(&chunk_bytes).await
-                            .map_err(|e| format!("发送块数据失败: {}", e))?;
-                        Ok::<(), String>(())
-                    })
-                    .await
-                    .map_err(|_| format!("发送数据块超时 ({}s)", FILE_CHUNK_TIMEOUT.as_secs()))??;
-
-                    seq += 1;
-
-                    // 计算速度和进度
-                    let elapsed = start_time.elapsed().as_secs();
-                    let speed_bps = if elapsed > 0 {
-                        reader.transferred / elapsed
-                    } else {
-                        0
-                    };
-
-                    // 更新进度
-                    manager.update_progress(
-                        task_id,
-                        reader.transferred,
-                        speed_bps,
-                    ).await?;
-                }
-
-                // 发送 FileTransferComplete（添加超时）
-                let complete_payload = Payload::FileTransferComplete {
-                    session_id: session_id.clone(),
-                    success: true,
-                    mtime: None,
-                    error: None,
-                };
-
-                // 使用 UUID 生成随机 request_id
-                let complete_request_id = uuid::Uuid::new_v4().as_u128() as u32;
-                let complete_envelope = Envelope::new(complete_request_id, complete_payload);
-                let complete_bytes = complete_envelope.encode()?;
-                let complete_len = (complete_bytes.len() as u32).to_le_bytes();
-
-                tokio::time::timeout(FILE_CHUNK_TIMEOUT, async {
-                    send.write_all(&complete_len).await
-                        .map_err(|e| format!("发送完成消息失败: {}", e))?;
-                    send.write_all(&complete_bytes).await
-                        .map_err(|e| format!("发送完成数据失败: {}", e))?;
-                    send.flush().await
-                        .map_err(|e| format!("刷新发送流失败: {}", e))?;
-                    Ok::<(), String>(())
-                })
-                .await
-                .map_err(|_| "发送传输完成消息超时".to_string())??;
-
-                // 标记完成
-                manager.mark_completed(task_id).await?;
-            } else {
-                // 下载逻辑
-                eprintln!("[Transfer] 开始下载逻辑：创建 FileWriter");
-                let resume_pos = resume_from.unwrap_or(0);
-                let mut writer = FileWriter::with_resume(&local_path, file_size, resume_pos)?;
-                eprintln!(
-                    "[Transfer] FileWriter 创建成功:\n  临时路径: {:?} (存在: {})\n  最终路径: {:?}\n  已传输: {} 字节",
-                    writer.temp_path,
-                    std::path::Path::new(&writer.temp_path).exists(),
-                    writer.path,
-                    writer.transferred
-                );
-                if resume_pos > 0 {
-                    eprintln!("[Transfer] 断点续传: 从 {} 字节继续下载", writer.transferred);
-                }
-                let start_time = std::time::Instant::now();
-
-                eprintln!("[Transfer] 进入接收循环：等待 FileChunk");
-                loop {
-                    // 检查任务状态：是否被暂停或取消
-                    {
-                        let tasks = manager.tasks.lock().await;
-                        if let Some(task) = tasks.get(task_id) {
-                            if task.status.as_str() == "paused" {
-                                // 暂停传输，等待恢复
-                                drop(tasks);
-                                tracing::info!("传输已暂停: task_id={}", task_id);
-
-                                // 等待恢复信号（轮询检查）
-                                loop {
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                                    let tasks = manager.tasks.lock().await;
-                                    if let Some(task) = tasks.get(task_id) {
-                                        match task.status.as_str() {
-                                            "active" => {
-                                                // 已恢复，继续传输
-                                                drop(tasks);
-                                                tracing::info!("传输已恢复: task_id={}", task_id);
-                                                break;
-                                            }
-                                            "cancelled" => {
-                                                // 已取消，终止传输
-                                                drop(tasks);
-                                                tracing::info!("传输已取消: task_id={}", task_id);
-                                                return Err("传输已取消".to_string());
-                                            }
-                                            _ => {
-                                                // 继续等待（paused 状态）
-                                                drop(tasks);
-                                                continue;
-                                            }
-                                        }
-                                    } else {
-                                        // 任务已删除
-                                        return Err("任务已删除".to_string());
-                                    }
-                                }
-                            } else if task.status.as_str() == "cancelled" {
-                                // 已取消，终止传输
-                                drop(tasks);
-                                tracing::info!("传输已取消: task_id={}", task_id);
-                                return Err("传输已取消".to_string());
-                            }
-                        } else {
-                            // 任务已删除
-                            drop(tasks);
-                            return Err("任务已删除".to_string());
-                        }
-                    }
-
-                    // 读取消息长度（添加超时）
-                    let read_result = tokio::time::timeout(FILE_CHUNK_TIMEOUT, async {
-                        let mut chunk_len_buf = [0u8; 4];
-                        recv.read_exact(&mut chunk_len_buf).await
-                            .map_err(|e| format!("读取块长度失败: {}", e))?;
-
-                        let chunk_len = u32::from_le_bytes(chunk_len_buf) as usize;
-                        let mut chunk_buf = vec![0u8; chunk_len];
-                        recv.read_exact(&mut chunk_buf).await
-                            .map_err(|e| format!("读取块数据失败: {}", e))?;
-
-                        Ok::<Vec<u8>, String>(chunk_buf)
-                    })
-                    .await;
-
-                    let chunk_buf = match read_result {
-                        Ok(Ok(buf)) => buf,
-                        Ok(Err(e)) => {
-                            eprintln!("[Transfer] 读取数据块失败: {}", e);
-                            manager.mark_failed(task_id, format!("读取数据块失败: {}", e)).await?;
-                            return Err(format!("读取数据块失败: {}", e));
-                        }
-                        Err(_) => {
-                            eprintln!("[Transfer] 读取数据块超时 ({}s)", FILE_CHUNK_TIMEOUT.as_secs());
-                            manager.mark_failed(task_id, "读取数据块超时".to_string()).await?;
-                            return Err("读取数据块超时".to_string());
-                        }
-                    };
-
-                    // 解析消息
-                    let chunk_envelope = Envelope::decode(&chunk_buf)?;
-
-                    match chunk_envelope.payload {
-                        Payload::FileChunk { data, .. } => {
-                            // 写入文件
-                            writer.write_chunk(&data)?;
-
-                            // 计算速度
-                            let elapsed = start_time.elapsed().as_secs();
-                            let speed_bps = if elapsed > 0 {
-                                writer.transferred / elapsed
-                            } else {
-                                0
-                            };
-
-                            // 更新进度
-                            manager.update_progress(
-                                task_id,
-                                writer.transferred,
-                                speed_bps,
-                            ).await?;
-                        }
-                        Payload::FileTransferComplete { success, error, .. } => {
-                            eprintln!(
-                                "[Transfer] 收到 FileTransferComplete: success={}, writer.transferred={}, writer.file_size={}",
-                                success, writer.transferred, writer.file_size
-                            );
-                            if success {
-                                eprintln!(
-                                    "[Transfer] finish() 前检查: temp_path={:?}, exists={}",
-                                    writer.temp_path,
-                                    std::path::Path::new(&writer.temp_path).exists()
-                                );
-                                writer.finish()?;
-                                writer.mark_completed();  // 标记为已完成，不是临时文件
-                                manager.mark_completed(task_id).await?;
-                                eprintln!("[Transfer] 下载完成并重命名成功");
-                            } else {
-                                manager.mark_failed(
-                                    task_id,
-                                    error.unwrap_or_else(|| "未知错误".to_string())
-                                ).await?;
-                            }
-                            break;
-                        }
-                        Payload::Error { message, .. } => {
-                            manager.mark_failed(task_id, message).await?;
-                            break;
-                        }
-                        _ => {
-                            tracing::warn!("收到意外的消息类型");
-                        }
-                    }
-                }
-
-                // 检查传输是否完成（仅在 FileTransferComplete 未处理时执行）
-                // 如果 FileTransferComplete 已经处理过（is_temporary == false），跳过
-                if writer.is_temporary {
-                    if writer.transferred >= writer.file_size {
-                        // 传输完成，调用 finish() 执行原子重命名
-                        writer.finish()?;
-                        writer.mark_completed();
-                        manager.mark_completed(task_id).await?;
-                    } else {
-                        // 传输不完整，标记为失败（writer drop 时会自动清理临时文件）
-                        manager.mark_failed(task_id, "传输不完整".to_string()).await?;
-                        return Err("传输不完整".to_string());
-                    }
-                }
-            }
-
-            Ok(())
+        Payload::FileTransferAccept { session_id, file_size, .. } => {
+            tracing::info!(
+                session_id, file_size,
+                "文件传输已接受"
+            );
+            Ok((session_id, file_size, send, recv))
         }
         Payload::Error { message, .. } => {
             Err(format!("Agent 返回错误: {}", message))
         }
-        _ => Err("意外的响应类型".to_string()),
+        _ => {
+            Err("Agent 返回了意外的响应类型".to_string())
+        }
     }
+}
+
+/// 上传循环：读取本地文件 → 发送 FileChunk → 发送 Complete
+async fn run_upload_loop(
+    send: &mut quinn::SendStream,
+    session_id: &str,
+    local_path: &str,
+    manager: &TransferManager,
+    task_id: &str,
+) -> Result<(), String> {
+    let mut reader = FileReader::new(local_path)?;
+    let mut seq = 1u32;
+    let start_time = std::time::Instant::now();
+
+    while let Some(chunk) = reader.read_next_chunk()? {
+        // 检查任务状态
+        if let Err(e) = wait_if_paused(manager, task_id).await {
+            return Err(e);
+        }
+        check_cancelled_or_deleted(manager, task_id).await?;
+
+        // 发送 FileChunk
+        let chunk_payload = Payload::FileChunk {
+            session_id: session_id.to_string(),
+            seq,
+            data: chunk.clone(),
+            size: chunk.len() as u32,
+        };
+
+        let chunk_request_id = uuid::Uuid::new_v4().as_u128() as u32;
+        let chunk_envelope = Envelope::new(chunk_request_id, chunk_payload);
+        let chunk_bytes = chunk_envelope.encode()?;
+        let chunk_len = (chunk_bytes.len() as u32).to_le_bytes();
+
+        tokio::time::timeout(FILE_CHUNK_TIMEOUT, async {
+            send.write_all(&chunk_len).await
+                .map_err(|e| format!("发送块长度失败: {}", e))?;
+            send.write_all(&chunk_bytes).await
+                .map_err(|e| format!("发送块数据失败: {}", e))?;
+            Ok::<(), String>(())
+        })
+        .await
+        .map_err(|_| format!("发送数据块超时 ({}s)", FILE_CHUNK_TIMEOUT.as_secs()))??;
+
+        seq += 1;
+
+        // 更新进度
+        let elapsed = start_time.elapsed().as_secs();
+        let speed_bps = if elapsed > 0 { reader.transferred / elapsed } else { 0 };
+        manager.update_progress(task_id, reader.transferred, speed_bps).await?;
+    }
+
+    // 发送 FileTransferComplete
+    send_complete_message(send, session_id).await?;
+
+    manager.mark_completed(task_id).await
+}
+
+/// 下载循环：接收 FileChunk → 写入临时文件 → 收到 Complete 后重命名
+async fn run_download_loop(
+    recv: &mut quinn::RecvStream,
+    _session_id: &str,
+    local_path: &str,
+    file_size: u64,
+    resume_from: Option<u64>,
+    manager: &TransferManager,
+    task_id: &str,
+) -> Result<(), String> {
+    let resume_pos = resume_from.unwrap_or(0);
+    let mut writer = FileWriter::with_resume(local_path, file_size, resume_pos)?;
+    tracing::info!(
+        temp_path = %writer.temp_path.display(),
+        final_path = %writer.path.display(),
+        transferred = writer.transferred,
+        "FileWriter 创建成功"
+    );
+
+    let start_time = std::time::Instant::now();
+
+    loop {
+        // 检查任务状态
+        if let Err(e) = wait_if_paused(manager, task_id).await {
+            writer.preserve();
+            return Err(e);
+        }
+        if let Err(e) = check_cancelled_or_deleted(manager, task_id).await {
+            writer.preserve();
+            return Err(e);
+        }
+
+        // 读取消息
+        let read_result = tokio::time::timeout(FILE_CHUNK_TIMEOUT, async {
+            let mut chunk_len_buf = [0u8; 4];
+            recv.read_exact(&mut chunk_len_buf).await
+                .map_err(|e| format!("读取块长度失败: {}", e))?;
+            let chunk_len = u32::from_le_bytes(chunk_len_buf) as usize;
+            let mut chunk_buf = vec![0u8; chunk_len];
+            recv.read_exact(&mut chunk_buf).await
+                .map_err(|e| format!("读取块数据失败: {}", e))?;
+            Ok::<Vec<u8>, String>(chunk_buf)
+        })
+        .await;
+
+        let chunk_buf = match read_result {
+            Ok(Ok(buf)) => buf,
+            Ok(Err(e)) => {
+                manager.mark_failed(task_id, format!("读取数据块失败: {}", e)).await?;
+                return Err(format!("读取数据块失败: {}", e));
+            }
+            Err(_) => {
+                manager.mark_failed(task_id, "读取数据块超时".to_string()).await?;
+                return Err("读取数据块超时".to_string());
+            }
+        };
+
+        let chunk_envelope = Envelope::decode(&chunk_buf)?;
+
+        match chunk_envelope.payload {
+            Payload::FileChunk { data, .. } => {
+                writer.write_chunk(&data)?;
+                let elapsed = start_time.elapsed().as_secs();
+                let speed_bps = if elapsed > 0 { writer.transferred / elapsed } else { 0 };
+                manager.update_progress(task_id, writer.transferred, speed_bps).await?;
+            }
+            Payload::FileTransferComplete { success, error, .. } => {
+                if success {
+                    writer.finish()?;
+                    writer.mark_completed();
+                    manager.mark_completed(task_id).await?;
+                    tracing::info!("下载完成并重命名成功");
+                } else {
+                    manager.mark_failed(
+                        task_id,
+                        error.unwrap_or_else(|| "未知错误".to_string())
+                    ).await?;
+                }
+                break;
+            }
+            Payload::Error { message, .. } => {
+                manager.mark_failed(task_id, message).await?;
+                break;
+            }
+            _ => {
+                tracing::warn!("收到意外的消息类型");
+            }
+        }
+    }
+
+    // 处理未收到 FileTransferComplete 的情况
+    if writer.is_temporary {
+        if writer.transferred >= writer.file_size {
+            writer.finish()?;
+            writer.mark_completed();
+            manager.mark_completed(task_id).await?;
+        } else {
+            manager.mark_failed(task_id, "传输不完整".to_string()).await?;
+            return Err("传输不完整".to_string());
+        }
+    }
+
+    Ok(())
+}
+
+/// 检查任务是否已取消或已删除
+async fn check_cancelled_or_deleted(
+    manager: &TransferManager,
+    task_id: &str,
+) -> Result<(), String> {
+    match manager.get_status(task_id).await {
+        Some(TransferStatus::Cancelled) => {
+            tracing::info!("传输已取消: task_id={}", task_id);
+            Err("传输已取消".to_string())
+        }
+        None => Err("任务已删除".to_string()),
+        _ => Ok(()),
+    }
+}
+
+/// 发送 FileTransferComplete 消息
+async fn send_complete_message(
+    send: &mut quinn::SendStream,
+    session_id: &str,
+) -> Result<(), String> {
+    use tokio::io::AsyncWriteExt;
+
+    let complete_payload = Payload::FileTransferComplete {
+        session_id: session_id.to_string(),
+        success: true,
+        mtime: None,
+        error: None,
+    };
+
+    let complete_request_id = uuid::Uuid::new_v4().as_u128() as u32;
+    let complete_envelope = Envelope::new(complete_request_id, complete_payload);
+    let complete_bytes = complete_envelope.encode()?;
+    let complete_len = (complete_bytes.len() as u32).to_le_bytes();
+
+    tokio::time::timeout(FILE_CHUNK_TIMEOUT, async {
+        send.write_all(&complete_len).await
+            .map_err(|e| format!("发送完成消息失败: {}", e))?;
+        send.write_all(&complete_bytes).await
+            .map_err(|e| format!("发送完成数据失败: {}", e))?;
+        send.flush().await
+            .map_err(|e| format!("刷新发送流失败: {}", e))?;
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|_| "发送传输完成消息超时".to_string())??;
+
+    Ok(())
 }
 
 /// 暂停文件传输
 #[command]
 pub async fn pause_transfer(task_id: String, app_handle: AppHandle) -> Result<(), String> {
-    eprintln!("[Transfer] 暂停传输请求: task_id={}", task_id);
+    tracing::info!(task_id, "暂停传输请求");
 
     // 获取全局 TransferManager
     let manager = app_handle.state::<Arc<TransferManager>>();
@@ -1514,7 +1611,7 @@ pub async fn pause_transfer(task_id: String, app_handle: AppHandle) -> Result<()
 /// 继续文件传输
 #[command]
 pub async fn resume_transfer(task_id: String, app_handle: AppHandle) -> Result<(), String> {
-    eprintln!("[Transfer] 继续传输请求: task_id={}", task_id);
+    tracing::info!(task_id, "继续传输请求");
 
     // 获取全局 TransferManager
     let manager = app_handle.state::<Arc<TransferManager>>();
@@ -1528,7 +1625,7 @@ pub async fn resume_transfer(task_id: String, app_handle: AppHandle) -> Result<(
 /// 重试文件传输（支持断点续传）
 #[command]
 pub async fn retry_transfer(task_id: String, app_handle: AppHandle) -> Result<(), String> {
-    eprintln!("[Transfer] 重试传输请求: task_id={}", task_id);
+    tracing::info!(task_id, "重试传输请求");
 
     // 获取全局 TransferManager
     let manager = app_handle.state::<Arc<TransferManager>>();
@@ -1542,7 +1639,7 @@ pub async fn retry_transfer(task_id: String, app_handle: AppHandle) -> Result<()
 /// 取消文件传输
 #[command]
 pub async fn cancel_transfer(task_id: String, app_handle: AppHandle) -> Result<(), String> {
-    eprintln!("[Transfer] 取消传输请求: task_id={}", task_id);
+    tracing::info!(task_id, "取消传输请求");
 
     // 获取全局 TransferManager
     let manager = app_handle.state::<Arc<TransferManager>>();
@@ -1562,7 +1659,7 @@ pub async fn check_file_exists(
 ) -> Result<FileExistsInfo, String> {
     use crate::connection::{remote_send, Payload};
 
-    eprintln!("[Transfer] 检查文件是否存在: server_id={}, path={}", server_id, path);
+    tracing::info!(server_id, path, "检查文件是否存在");
 
     // 发送请求
     let request = Payload::FileExistsRequest { path };

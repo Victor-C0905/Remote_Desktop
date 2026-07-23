@@ -35,6 +35,7 @@ impl TerminalStreamManager {
     }
 
     /// 获取内部的 Arc（用于克隆）
+    #[allow(dead_code)]
     pub fn inner(&self) -> Arc<Mutex<HashMap<String, mpsc::Sender<Vec<u8>>>>> {
         self.sessions.clone()
     }

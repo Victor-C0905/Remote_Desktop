@@ -358,6 +358,7 @@ pub struct ConnectionManager {
 }
 
 pub struct ActiveConnection {
+    #[allow(dead_code)]
     info: ConnectionInfo,
     tx: mpsc::Sender<ClientRequest>,
     // QUIC Connection（用于创建持久 Stream）

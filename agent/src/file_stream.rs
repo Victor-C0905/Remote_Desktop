@@ -153,6 +153,7 @@ impl FileStreamReader {
     ///
     /// # 参数
     /// - `size`: 分块大小（字节）
+    #[allow(dead_code)]
     pub fn set_chunk_size(&mut self, size: u32) {
         self.chunk_size = size;
     }
@@ -205,6 +206,7 @@ impl FileStreamReader {
     /// # 返回
     /// - 0-100 的百分比数值
     /// - 如果 file_size 为 0，返回 100（避免除零）
+    #[allow(dead_code)]
     pub fn progress(&self) -> u32 {
         if self.file_size == 0 {
             return 100; // 空文件直接返回完成
@@ -213,11 +215,13 @@ impl FileStreamReader {
     }
 
     /// 获取已传输字节数
+    #[allow(dead_code)]
     pub fn transferred(&self) -> u64 {
         self.transferred
     }
 
     /// 获取文件总大小
+    #[allow(dead_code)]
     pub fn file_size(&self) -> u64 {
         self.file_size
     }
@@ -550,6 +554,7 @@ impl FileStreamWriter {
     /// # 返回
     /// - 0-100 的百分比数值
     /// - 如果 file_size 为 0，返回 100（避免除零）
+    #[allow(dead_code)]
     pub fn progress(&self) -> u32 {
         if self.file_size == 0 {
             return 100; // 空文件直接返回完成
@@ -558,21 +563,25 @@ impl FileStreamWriter {
     }
 
     /// 获取已传输字节数
+    #[allow(dead_code)]
     pub fn transferred(&self) -> u64 {
         self.transferred
     }
 
     /// 获取文件总大小
+    #[allow(dead_code)]
     pub fn file_size(&self) -> u64 {
         self.file_size
     }
 
     /// 检查是否已写入全部数据
+    #[allow(dead_code)]
     pub fn is_complete(&self) -> bool {
         self.transferred == self.file_size
     }
 
     /// 获取临时文件路径（用于调试和日志）
+    #[allow(dead_code)]
     pub fn temp_path(&self) -> &str {
         &self.temp_path
     }

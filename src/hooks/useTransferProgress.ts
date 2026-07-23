@@ -51,7 +51,7 @@ export interface TransferTask {
   transferred: number;
   speed: number;
   eta: number;
-  status: 'pending' | 'active' | 'paused' | 'completed' | 'error';
+  status: 'pending' | 'active' | 'paused' | 'completed' | 'error' | 'cancelled';
   error?: string;
   progress: number;
   start_time: number; // 任务开始时间戳（毫秒）

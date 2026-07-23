@@ -5,6 +5,7 @@ use crate::diff::FileDiff; // 导入差异类型
 /// 文件传输方向
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+#[allow(dead_code)]
 pub enum TransferDirection {
     /// 上传：本地 → 远程
     Upload,
