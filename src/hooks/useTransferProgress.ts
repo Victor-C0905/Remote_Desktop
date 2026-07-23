@@ -102,11 +102,27 @@ export function useTransferProgress(connectionId?: string) {
   }, [transfers]);
 
   useEffect(() => {
+    console.log('[useTransferProgress] 初始化 localStorage 数据:', transfers.length, '个任务');
+    transfers.forEach(t => {
+      console.log(`[useTransferProgress] - 任务: id=${t.id}, file=${t.file_name}, status=${t.status}, progress=${t.progress}%`);
+    });
+  }, []); // 只在初始化时打印一次
+
+  useEffect(() => {
     const unlisten = listen<TransferProgressPayload>('transfer-progress', (event) => {
       const payload = event.payload;
 
+      console.log('[useTransferProgress] 收到事件:', {
+        id: payload.id,
+        file_name: payload.file_name,
+        status: payload.status,
+        progress: payload.progress,
+        session_id: payload.session_id,
+      });
+
       // 如果指定了连接 ID，只处理该连接的任务
       if (connectionId && payload.session_id !== connectionId) {
+        console.log('[useTransferProgress] 忽略其他连接的任务');
         return;
       }
 
@@ -114,6 +130,7 @@ export function useTransferProgress(connectionId?: string) {
         const existing = prev.find(t => t.id === payload.id);
 
         if (existing) {
+          console.log(`[useTransferProgress] 更新现有任务: id=${payload.id}, progress=${payload.progress}%`);
           // 更新现有任务
           const updatedTasks = prev.map(t =>
             t.id === payload.id
@@ -144,6 +161,7 @@ export function useTransferProgress(connectionId?: string) {
 
           return updatedTasks;
         } else {
+          console.log(`[useTransferProgress] 创建新任务: id=${payload.id}, file=${payload.file_name}`);
           // 添加新任务
           return [
             ...prev,

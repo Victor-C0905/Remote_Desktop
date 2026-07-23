@@ -14,14 +14,83 @@ use std::path::Path;
 /// # 安全性
 /// - UUID v4 提供 128 位随机性，截取前 8 个字符（32 位熵）已足够防止预测
 /// - 临时文件名包含原文件名，便于调试和清理
+/// - 如果原文件名太长（超过 Linux 255 字节限制），会自动截断
 fn generate_temp_path(path: &Path) -> String {
     let random_part = &uuid::Uuid::new_v4().to_string()[..8];
 
-    let temp_name = format!(
-        "{}.{}.tmp",
-        path.file_name().unwrap_or_default().to_string_lossy(),
-        random_part
-    );
+    let original_name = path.file_name().unwrap_or_default().to_string_lossy();
+
+    // Linux 文件名最大长度为 255 字节
+    // 临时文件名格式：{原文件名}.{random}.tmp
+    // 后缀长度：1 (.) + 8 (random) + 1 (.) + 3 (tmp) = 13 字符 = 13 字节
+    // 安全阈值：预留 50 字节作为安全边际
+    const MAX_NAME_LEN: usize = 200;
+
+    let truncated_name = if original_name.len() > MAX_NAME_LEN {
+        // 尝试保留文件扩展名
+        let (base, ext) = if let Some(dot_pos) = original_name.rfind('.') {
+            let ext_part = &original_name[dot_pos..]; // 包含点号
+            let base_part = &original_name[..dot_pos];
+
+            // 确保扩展名不超过 20 字符
+            if ext_part.len() <= 20 {
+                // 计算可用的字节数（预留扩展名长度）
+                let available_bytes = MAX_NAME_LEN.saturating_sub(ext_part.len());
+
+                // 使用 chars() 迭代器按字符截断，避免切在 UTF-8 字符中间
+                let truncated_base: String = base_part
+                    .chars()
+                    .scan(0, |byte_count, c| {
+                        let char_len = c.len_utf8();
+                        if *byte_count + char_len <= available_bytes {
+                            *byte_count += char_len;
+                            Some(c)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                (truncated_base, ext_part)
+            } else {
+                // 扩展名太长，不保留
+                let truncated: String = original_name
+                    .chars()
+                    .scan(0, |byte_count, c| {
+                        let char_len = c.len_utf8();
+                        if *byte_count + char_len <= MAX_NAME_LEN {
+                            *byte_count += char_len;
+                            Some(c)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                (truncated, "")
+            }
+        } else {
+            // 没有扩展名，直接截断
+            let truncated: String = original_name
+                .chars()
+                .scan(0, |byte_count, c| {
+                    let char_len = c.len_utf8();
+                    if *byte_count + char_len <= MAX_NAME_LEN {
+                        *byte_count += char_len;
+                        Some(c)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            (truncated, "")
+        };
+
+        format!("{}{}", base, ext)
+    } else {
+        original_name.to_string()
+    };
+
+    let temp_name = format!("{}.{}.tmp", truncated_name, random_part);
 
     path.parent()
         .unwrap_or(Path::new("."))
@@ -34,10 +103,79 @@ fn generate_temp_path(path: &Path) -> String {
 ///
 /// 搜索目录中匹配 `{原文件名}.*.tmp` 模式的文件，
 /// 返回修改时间最新的一个（兼容旧的确定性 `.tmp` 命名格式）。
+///
+/// # 文件名截断处理
+/// 如果原文件名超过 200 字符，临时文件名会被截断。
+/// 此时使用截断后的前缀进行匹配。
 fn find_existing_temp_file(path: &Path) -> Option<String> {
     let parent = path.parent()?;
     let file_name = path.file_name()?.to_string_lossy();
-    let prefix = format!("{}.", file_name);
+
+    // 如果文件名超过 200 字符，使用截断后的前缀
+    // （与 generate_temp_path 的截断逻辑一致）
+    const MAX_NAME_LEN: usize = 200;
+    let prefix = if file_name.len() > MAX_NAME_LEN {
+        // 尝试保留文件扩展名（与 generate_temp_path 逻辑一致）
+        let (base, ext) = if let Some(dot_pos) = file_name.rfind('.') {
+            let ext_part = &file_name[dot_pos..];
+            let base_part = &file_name[..dot_pos];
+
+            if ext_part.len() <= 20 {
+                // 计算可用的字节数（预留扩展名长度）
+                let available_bytes = MAX_NAME_LEN.saturating_sub(ext_part.len());
+
+                // 使用 chars() 迭代器按字符截断，避免切在 UTF-8 字符中间
+                let truncated_base: String = base_part
+                    .chars()
+                    .scan(0, |byte_count, c| {
+                        let char_len = c.len_utf8();
+                        if *byte_count + char_len <= available_bytes {
+                            *byte_count += char_len;
+                            Some(c)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                (truncated_base, ext_part)
+            } else {
+                // 扩展名太长，不保留
+                let truncated: String = file_name
+                    .chars()
+                    .scan(0, |byte_count, c| {
+                        let char_len = c.len_utf8();
+                        if *byte_count + char_len <= MAX_NAME_LEN {
+                            *byte_count += char_len;
+                            Some(c)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                (truncated, "")
+            }
+        } else {
+            // 没有扩展名，直接截断
+            let truncated: String = file_name
+                .chars()
+                .scan(0, |byte_count, c| {
+                    let char_len = c.len_utf8();
+                    if *byte_count + char_len <= MAX_NAME_LEN {
+                        *byte_count += char_len;
+                        Some(c)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            (truncated, "")
+        };
+
+        format!("{}{}.", base, ext)
+    } else {
+        format!("{}.", file_name)
+    };
 
     let entries = std::fs::read_dir(parent).ok()?;
 
@@ -46,7 +184,7 @@ fn find_existing_temp_file(path: &Path) -> Option<String> {
         .filter(|e| {
             let name = e.file_name();
             let name_str = name.to_string_lossy();
-            // 匹配 `{原文件名}.*.tmp` 模式（同时兼容旧的 `{原文件名}.tmp` 格式）
+            // 匹配 `{截断后的前缀}.*.tmp` 模式（同时兼容旧的 `{原文件名}.tmp` 格式）
             name_str.starts_with(&prefix) && name_str.ends_with(".tmp")
         })
         .max_by_key(|e| {
