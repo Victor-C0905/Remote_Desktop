@@ -623,7 +623,9 @@ pub async fn remote_disconnect(server_id: String, app: tauri::AppHandle) -> Resu
 }
 
 #[tauri::command]
+#[tracing::instrument(skip(app), fields(server_id = %server_id))]
 pub async fn remote_ping(server_id: String, app: tauri::AppHandle) -> Result<PingResult, String> {
+    tracing::debug!("[Ping] server_id={}", server_id);
     let manager = app.state::<ConnectionManager>();
     
     let (tx, request_id) = {
@@ -669,27 +671,41 @@ pub async fn remote_send(server_id: String, payload: Payload, app: tauri::AppHan
     
     let (tx, request_id) = {
         let conns = manager.connections.lock().unwrap();
-        let conn = conns.get(&server_id).ok_or("未找到连接")?;
+        let conn = conns.get(&server_id).ok_or_else(|| {
+            tracing::warn!("[RemoteSend] 未找到连接: server_id={}", server_id);
+            "未找到连接".to_string()
+        })?;
         (conn.tx.clone(), manager.next_request_id())
     };
 
     let envelope = Envelope::new(request_id, payload);
     let (response_tx, response_rx) = tokio::sync::oneshot::channel();
     
-    tx.send(ClientRequest::Send { envelope, response_tx }).await.map_err(|_| "发送请求失败")?;
+    tx.send(ClientRequest::Send { envelope, response_tx }).await.map_err(|e| {
+        tracing::warn!("[RemoteSend] 发送请求失败: server_id={}, error={}", server_id, e);
+        "发送请求失败".to_string()
+    })?;
     // 外层超时保护：如果内部 send_and_receive_quic 的超时未能触发，此层兜底
     let data = tokio::time::timeout(
         std::time::Duration::from_secs(STREAM_TIMEOUT_SECS + 5), // 比 Stream 超时多 5 秒作为缓冲
         response_rx,
     )
     .await
-    .map_err(|_| "等待响应超时".to_string())?
-    .map_err(|_| "等待响应超时".to_string())??;
+    .map_err(|_| {
+        tracing::warn!("[RemoteSend] 等待响应超时: server_id={}", server_id);
+        "等待响应超时".to_string()
+    })?
+    .map_err(|_| {
+        tracing::warn!("[RemoteSend] 等待响应通道关闭: server_id={}", server_id);
+        "等待响应超时".to_string()
+    })??;
     Envelope::decode(&data)
 }
 
 #[tauri::command]
+#[tracing::instrument(skip(app), fields(server_id = %server_id, path = %path))]
 pub async fn remote_read_dir(server_id: String, path: String, app: tauri::AppHandle) -> Result<RemoteReadDirResponse, String> {
+    tracing::debug!("[ReadDir] server_id={}, path={}", server_id, path);
     let resp = remote_send(server_id, Payload::ReadDirRequest { path }, app).await?;
     match resp.payload {
         Payload::ReadDirResponse { path, entries } => Ok(RemoteReadDirResponse { path, entries }),
@@ -705,7 +721,9 @@ pub struct RemoteReadDirResponse {
 }
 
 #[tauri::command]
+#[tracing::instrument(skip(app), fields(server_id = %server_id))]
 pub async fn remote_get_current_user(server_id: String, app: tauri::AppHandle) -> Result<String, String> {
+    tracing::debug!("[GetCurrentUser] server_id={}", server_id);
     let resp = remote_send(server_id, Payload::GetCurrentUser, app).await?;
     match resp.payload {
         Payload::CurrentUserResponse { username } => Ok(username),
@@ -715,7 +733,9 @@ pub async fn remote_get_current_user(server_id: String, app: tauri::AppHandle) -
 }
 
 #[tauri::command]
+#[tracing::instrument(skip(app), fields(server_id = %server_id))]
 pub async fn remote_get_mounts(server_id: String, app: tauri::AppHandle) -> Result<Vec<MountInfo>, String> {
+    tracing::debug!("[GetMounts] server_id={}", server_id);
     let resp = remote_send(server_id, Payload::GetMounts, app).await?;
     match resp.payload {
         Payload::MountsResponse { mounts } => Ok(mounts),
@@ -725,7 +745,9 @@ pub async fn remote_get_mounts(server_id: String, app: tauri::AppHandle) -> Resu
 }
 
 #[tauri::command]
+#[tracing::instrument(skip(app), fields(server_id = %server_id, path = %path))]
 pub async fn remote_get_path_suggestions(server_id: String, path: String, app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    tracing::debug!("[GetPathSuggestions] server_id={}, path={}", server_id, path);
     let resp = remote_send(server_id, Payload::GetPathSuggestionsRequest { path }, app).await?;
     match resp.payload {
         Payload::PathSuggestionsResponse { suggestions } => Ok(suggestions),
@@ -735,7 +757,9 @@ pub async fn remote_get_path_suggestions(server_id: String, path: String, app: t
 }
 
 #[tauri::command]
+#[tracing::instrument(skip(app), fields(server_id = %server_id))]
 pub async fn remote_get_metrics(server_id: String, app: tauri::AppHandle) -> Result<MetricsSnapshot, String> {
+    tracing::debug!("[GetMetrics] server_id={}", server_id);
     let resp = remote_send(server_id, Payload::MetricsSubscribeRequest {}, app).await?;
     match resp.payload {
         Payload::MetricsData(metrics) => Ok(metrics),
@@ -745,7 +769,9 @@ pub async fn remote_get_metrics(server_id: String, app: tauri::AppHandle) -> Res
 }
 
 #[tauri::command]
+#[tracing::instrument(skip(app), fields(server_id = %server_id, path = %path))]
 pub async fn remote_read_file(server_id: String, path: String, app: tauri::AppHandle) -> Result<RemoteReadFileResponse, String> {
+    tracing::debug!("[ReadFile] server_id={}, path={}", server_id, path);
     let resp = remote_send(server_id, Payload::ReadFileRequest { path }, app).await?;
     match resp.payload {
         Payload::ReadFileResponse { path, content, mtime, size } => Ok(RemoteReadFileResponse { path, content, mtime, size }),
@@ -763,7 +789,9 @@ pub struct RemoteReadFileResponse {
 }
 
 #[tauri::command]
+#[tracing::instrument(skip(content, app), fields(server_id = %server_id, path = %path))]
 pub async fn remote_write_file(server_id: String, path: String, content: String, app: tauri::AppHandle) -> Result<RemoteWriteFileResponse, String> {
+    tracing::info!("[WriteFile] server_id={}, path={}", server_id, path);
     let resp = remote_send(server_id, Payload::WriteFileRequest { path, content }, app).await?;
     match resp.payload {
         Payload::WriteFileResponse { path, mtime, size } => Ok(RemoteWriteFileResponse { path, mtime, size }),
@@ -780,7 +808,9 @@ pub struct RemoteWriteFileResponse {
 }
 
 #[tauri::command]
+#[tracing::instrument(skip(app), fields(server_id = %server_id, path = %path))]
 pub async fn remote_delete(server_id: String, path: String, app: tauri::AppHandle) -> Result<bool, String> {
+    tracing::info!("[DeleteFile] server_id={}, path={}", server_id, path);
     let resp = remote_send(server_id, Payload::DeleteRequest { path }, app).await?;
     match resp.payload {
         Payload::DeleteResponse { success } => Ok(success),
@@ -1148,13 +1178,19 @@ async fn try_quic_connect(host: &str, port: u16) -> Result<(quinn::Connection, f
     // 解析域名或 IP 地址
     let addr = if host.contains(':') || host.parse::<std::net::IpAddr>().is_ok() {
         // 已经是 IP 地址格式
-        format!("{}:{}", host, port).parse().map_err(|e| format!("地址解析失败: {}", e))?
+        format!("{}:{}", host, port).parse().map_err(|e| {
+            tracing::warn!("[QUIC] 地址解析失败: host={}:{}, error={}", host, port, e);
+            format!("地址解析失败: {}", e)
+        })?
     } else {
         // 需要解析域名，优先使用 IPv4
         let addr_str = format!("{}:{}", host, port);
         let resolved_addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host(&addr_str)
             .await
-            .map_err(|e| format!("DNS 解析失败: {}", e))?
+            .map_err(|e| {
+                tracing::warn!("[QUIC] DNS 解析失败: host={}, error={}", host, e);
+                format!("DNS 解析失败: {}", e)
+            })?
             .collect();
 
         // 优先选择 IPv4 地址
@@ -1171,7 +1207,10 @@ async fn try_quic_connect(host: &str, port: u16) -> Result<(quinn::Connection, f
 
     // 创建 Endpoint
     let mut endpoint = quinn::Endpoint::client("0.0.0.0:0".parse().unwrap())
-        .map_err(|e| format!("创建 Endpoint 失败: {}", e))?;
+        .map_err(|e| {
+            tracing::warn!("[QUIC] 创建 Endpoint 失败: {}", e);
+            format!("创建 Endpoint 失败: {}", e)
+        })?;
     
     endpoint.set_default_client_config(client_config);
 
@@ -1182,11 +1221,20 @@ async fn try_quic_connect(host: &str, port: u16) -> Result<(quinn::Connection, f
         std::time::Duration::from_secs(5),
         endpoint
             .connect(addr, "gnome-remote")
-            .map_err(|e| format!("发起连接失败: {}", e))?
+            .map_err(|e| {
+                tracing::warn!("[QUIC] 发起连接失败: addr={}, error={}", addr, e);
+                format!("发起连接失败: {}", e)
+            })?
     )
     .await
-    .map_err(|_| "QUIC 连接超时 (5秒)".to_string())?
-    .map_err(|e| format!("QUIC 握手失败: {}", e))?;
+    .map_err(|_| {
+        tracing::warn!("[QUIC] 连接超时 (5秒): addr={}", addr);
+        "QUIC 连接超时 (5秒)".to_string()
+    })?
+    .map_err(|e| {
+        tracing::warn!("[QUIC] 握手失败: addr={}, error={}", addr, e);
+        format!("QUIC 握手失败: {}", e)
+    })?;
 
     Ok((conn, start.elapsed().as_secs_f64() * 1000.0))
 }
@@ -1212,7 +1260,10 @@ fn build_quic_client_config() -> Result<quinn::ClientConfig, String> {
 
     let mut client = quinn::ClientConfig::new(std::sync::Arc::new(
         quinn::crypto::rustls::QuicClientConfig::try_from(crypto)
-            .map_err(|e| format!("QUIC TLS 配置错误: {}", e))?
+            .map_err(|e| {
+                tracing::warn!("[QUIC] TLS 配置错误: {}", e);
+                format!("QUIC TLS 配置错误: {}", e)
+            })?
     ));
     client.transport_config(std::sync::Arc::new(transport));
 
@@ -1278,8 +1329,14 @@ async fn send_and_receive_quic(conn: &quinn::Connection, request_id: u32, payloa
     // Stream 打开也需要超时保护，避免在连接异常时无限等待
     let (mut send, mut recv) = tokio::time::timeout(timeout_duration, conn.open_bi())
         .await
-        .map_err(|_| "打开 Stream 超时".to_string())?
-        .map_err(|e| format!("打开 Stream 失败: {}", e))?;
+        .map_err(|_| {
+            tracing::warn!("[QUIC] 打开 Stream 超时: request_id={}", request_id);
+            "打开 Stream 超时".to_string()
+        })?
+        .map_err(|e| {
+            tracing::warn!("[QUIC] 打开 Stream 失败: request_id={}, error={}", request_id, e);
+            format!("打开 Stream 失败: {}", e)
+        })?;
 
     let bytes = Envelope::new(request_id, payload).encode()?;
     let len = (bytes.len() as u32).to_le_bytes();
@@ -1292,7 +1349,10 @@ async fn send_and_receive_quic(conn: &quinn::Connection, request_id: u32, payloa
         Ok::<(), String>(())
     })
     .await
-    .map_err(|_| "发送数据超时".to_string())??;
+    .map_err(|_| {
+        tracing::warn!("[QUIC] 发送数据超时: request_id={}", request_id);
+        "发送数据超时".to_string()
+    })??;
 
     // 接收操作也需要超时
     let data = tokio::time::timeout(timeout_duration, async {
@@ -1305,7 +1365,10 @@ async fn send_and_receive_quic(conn: &quinn::Connection, request_id: u32, payloa
         Ok::<Vec<u8>, String>(data)
     })
     .await
-    .map_err(|_| "接收响应超时".to_string())??;
+    .map_err(|_| {
+        tracing::warn!("[QUIC] 接收响应超时: request_id={}", request_id);
+        "接收响应超时".to_string()
+    })??;
 
     Ok(data)
 }

@@ -228,7 +228,11 @@ fn build_server_config(
     certs: Vec<CertificateDer<'static>>,
     key: PrivateKeyDer<'static>,
 ) -> Result<quinn::ServerConfig> {
-    let mut quic_config = quinn::ServerConfig::with_single_cert(certs, key)?;
+    let mut quic_config = quinn::ServerConfig::with_single_cert(certs, key)
+        .map_err(|e| {
+            tracing::warn!("[QUIC] 服务器配置构建失败: {}", e);
+            e
+        })?;
     
     // 配置传输参数，禁用空闲超时
     let mut transport = quinn::TransportConfig::default();
@@ -651,10 +655,15 @@ async fn read_message(recv: &mut RecvStream) -> Result<Option<Vec<u8>>> {
         Ok(()) => {
             let len = u32::from_le_bytes(len_buf) as usize;
             if len == 0 || len > 10 * 1024 * 1024 {
+                tracing::warn!("[QUIC] 无效消息长度: {}", len);
                 anyhow::bail!("无效的消息长度: {}", len);
             }
             let mut data = vec![0u8; len];
-            recv.read_exact(&mut data).await?;
+            recv.read_exact(&mut data).await
+                .map_err(|e| {
+                    tracing::warn!("[QUIC] 读取消息失败: {}", e);
+                    e
+                })?;
             Ok(Some(data))
         }
         Err(quinn::ReadExactError::FinishedEarly(_)) => Ok(None),
@@ -664,8 +673,16 @@ async fn read_message(recv: &mut RecvStream) -> Result<Option<Vec<u8>>> {
 
 async fn write_message(send: &mut SendStream, data: &[u8]) -> Result<()> {
     let len = (data.len() as u32).to_le_bytes();
-    send.write_all(&len).await?;
-    send.write_all(data).await?;
+    send.write_all(&len).await
+        .map_err(|e| {
+            tracing::warn!("[QUIC] 写入消息失败: {}", e);
+            e
+        })?;
+    send.write_all(data).await
+        .map_err(|e| {
+            tracing::warn!("[QUIC] 写入消息失败: {}", e);
+            e
+        })?;
     Ok(())
 }
 

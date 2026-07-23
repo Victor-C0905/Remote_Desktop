@@ -95,7 +95,7 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
     let unlistenFn: (() => void) | undefined;
     setupListener().then((fn) => {
       unlistenFn = fn;
-    });
+    }).catch((e) => log.error('连接丢失监听设置失败:', e));
 
     // 清理监听器
     return () => {

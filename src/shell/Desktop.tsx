@@ -12,7 +12,10 @@ import { WindowShell } from "../components/window-shell";
 import { WindowManagerProvider, useWindowManager, useWindowGlobalState, useWindowState } from "../window-system/WindowManagerContext";
 import { AppDefinition } from "../window-system/types";
 import { listen } from "@tauri-apps/api/event";
+import { createLogger } from "../utils/logger";
 import "./Desktop.css";
+
+const log = createLogger('Desktop');
 
 // ─── MetricsSnapshot 类型（匹配 Agent）───────────────
 interface MetricsSnapshot {
@@ -196,7 +199,7 @@ function DesktopContent() {
     let unlistenFn: (() => void) | undefined;
     setupListener().then((fn) => {
       unlistenFn = fn;
-    });
+    }).catch((e) => log.error('事件监听设置失败:', e));
 
     return () => {
       if (unlistenFn) {

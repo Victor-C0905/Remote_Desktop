@@ -69,6 +69,7 @@ export class TauriStorageAdapter implements StorageAdapter {
       } catch (error) {
         // File doesn't exist or error reading
         // Fallback to localStorage
+        log.warn('Tauri 存储加载失败，降级到内存:', key, error);
         return this.fallbackAdapter.load(key);
       }
     } else {
@@ -90,6 +91,7 @@ export class TauriStorageAdapter implements StorageAdapter {
         await remove(`${appDataDirPath}/${key}.json`);
       } catch (error) {
         // Fallback to localStorage
+        log.warn('Tauri 存储删除失败，降级到内存:', key, error);
         this.fallbackAdapter.remove(key);
       }
     } else {

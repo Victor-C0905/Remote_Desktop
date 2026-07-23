@@ -69,6 +69,7 @@ impl Default for TerminalStreamManager {
 
 /// 创建远程终端会话（符合 GNOME Terminal 标准）
 #[tauri::command]
+#[tracing::instrument(skip(app), fields(server_id = %server_id))]
 pub async fn remote_spawn_terminal(
     server_id: String,
     shell: String,
@@ -237,12 +238,14 @@ pub async fn remote_spawn_terminal(
 
 /// 写入数据到远程终端（使用持久 Stream）
 #[tauri::command]
+#[tracing::instrument(skip(data, app), fields(server_id = %_server_id, session_id = %session_id))]
 pub async fn remote_terminal_write(
     session_id: String,
     data: Vec<u8>,
     _server_id: String,  // 不再需要 server_id，使用持久 Stream
     app: tauri::AppHandle,
 ) -> Result<(), String> {
+    tracing::debug!("[Terminal] 写入远程终端: bytes={}", data.len());
     let terminal_manager = app.state::<Arc<TerminalStreamManager>>();
 
     // 获取输入通道
@@ -258,6 +261,7 @@ pub async fn remote_terminal_write(
 
 /// 关闭远程终端会话
 #[tauri::command]
+#[tracing::instrument(skip(app), fields(session_id = %session_id))]
 pub async fn remote_terminal_close(
     session_id: String,
     app: tauri::AppHandle,
@@ -273,6 +277,7 @@ pub async fn remote_terminal_close(
 
 /// 调整远程终端大小（同步到远程 PTY）
 #[tauri::command]
+#[tracing::instrument(skip(app), fields(server_id = %_server_id, session_id = %session_id))]
 pub async fn remote_terminal_resize(
     session_id: String,
     cols: u16,

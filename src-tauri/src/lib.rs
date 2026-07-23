@@ -284,6 +284,7 @@ mod pty {
 
     #[tauri::command]
     pub fn spawn_terminal(shell: String, cols: u16, rows: u16, app: tauri::AppHandle) -> Result<SpawnResult, String> {
+        tracing::info!("[PTY] 创建终端: shell={}", shell);
         let _ = shell; // Use default shell (cmd.exe on Windows)
         let session = PtySession::new(cols, rows)?;
         let id = format!("pty-{}", uuid::Uuid::new_v4());
@@ -296,6 +297,7 @@ mod pty {
 
     #[tauri::command]
     pub fn terminal_write(pty_id: String, data: String, app: tauri::AppHandle) -> Result<(), String> {
+        tracing::debug!("[PTY] 写入数据: pty_id={}, bytes={}", pty_id, data.len());
         let manager = app.state::<PtyManager>();
         let mut sessions = manager.sessions.lock().unwrap();
         let session = sessions.get_mut(&pty_id).ok_or("PTY 会话不存在")?;
@@ -309,6 +311,7 @@ mod pty {
 
     #[tauri::command]
     pub fn terminal_read(pty_id: String, _timeout_ms: u64, app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+        tracing::debug!("[PTY] 读取数据: pty_id={}", pty_id);
         let manager = app.state::<PtyManager>();
         let mut sessions = manager.sessions.lock().unwrap();
         let session = sessions.get_mut(&pty_id).ok_or("PTY 会话不存在")?;
@@ -319,6 +322,7 @@ mod pty {
 
     #[tauri::command]
     pub fn terminal_resize(pty_id: String, cols: u16, rows: u16, app: tauri::AppHandle) -> Result<(), String> {
+        tracing::debug!("[PTY] 调整大小: pty_id={}, cols={}, rows={}", pty_id, cols, rows);
         let manager = app.state::<PtyManager>();
         let mut sessions = manager.sessions.lock().unwrap();
         let session = sessions.get_mut(&pty_id).ok_or("PTY 会话不存在")?;
@@ -403,6 +407,7 @@ mod pty {
 
     #[tauri::command]
     pub fn spawn_terminal(shell: String, cols: u16, rows: u16, app: tauri::AppHandle) -> Result<SpawnResult, String> {
+        tracing::info!("[PTY] 创建终端: shell={}", shell);
         let _ = shell;
         let session = PtySession::new(cols, rows)?;
         let id = format!("pty-{}", uuid::Uuid::new_v4());
@@ -413,6 +418,7 @@ mod pty {
 
     #[tauri::command]
     pub fn terminal_write(pty_id: String, data: String, app: tauri::AppHandle) -> Result<(), String> {
+        tracing::debug!("[PTY] 写入数据: pty_id={}, bytes={}", pty_id, data.len());
         let manager = app.state::<PtyManager>();
         let mut sessions = manager.sessions.lock().unwrap();
         let session = sessions.get_mut(&pty_id).ok_or("PTY 会话不存在")?;
@@ -423,6 +429,7 @@ mod pty {
 
     #[tauri::command]
     pub fn terminal_read(pty_id: String, _timeout_ms: u64, app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+        tracing::debug!("[PTY] 读取数据: pty_id={}", pty_id);
         let manager = app.state::<PtyManager>();
         let mut sessions = manager.sessions.lock().unwrap();
         let session = sessions.get_mut(&pty_id).ok_or("PTY 会话不存在")?;
@@ -432,6 +439,7 @@ mod pty {
 
     #[tauri::command]
     pub fn terminal_resize(pty_id: String, cols: u16, rows: u16, app: tauri::AppHandle) -> Result<(), String> {
+        tracing::debug!("[PTY] 调整大小: pty_id={}, cols={}, rows={}", pty_id, cols, rows);
         let manager = app.state::<PtyManager>();
         let mut sessions = manager.sessions.lock().unwrap();
         let session = sessions.get_mut(&pty_id).ok_or("PTY 会话不存在")?;
@@ -443,6 +451,7 @@ mod pty {
 
 #[tauri::command]
 fn read_dir(path: String) -> Result<ReadDirResponse, String> {
+    tracing::debug!("[ReadDir] path={}", path);
     let entries = fs::read_dir(&path)
         .map_err(|e| format!("无法读取目录 '{}': {}", path, e))?
         .filter_map(|entry| {
@@ -473,6 +482,7 @@ fn read_dir(path: String) -> Result<ReadDirResponse, String> {
 
 #[tauri::command]
 fn stat_file(path: String) -> Result<FileEntry, String> {
+    tracing::debug!("[StatFile] path={}", path);
     let metadata = fs::metadata(&path).map_err(|e| format!("无法访问 '{}': {}", path, e))?;
     let name = std::path::Path::new(&path)
         .file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.clone());
@@ -490,6 +500,7 @@ fn stat_file(path: String) -> Result<FileEntry, String> {
 
 #[tauri::command]
 fn read_file_text(path: String) -> Result<String, String> {
+    tracing::debug!("[ReadFileText] path={}", path);
     const MAX_SIZE: u64 = 1_048_576;
     let metadata = fs::metadata(&path).map_err(|e| format!("无法访问 '{}': {}", path, e))?;
     if metadata.is_dir() { return Err("这是一个目录，不能作为文本打开".to_string()); }
