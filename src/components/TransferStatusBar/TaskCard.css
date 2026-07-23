@@ -164,6 +164,16 @@
   font-variant-numeric: tabular-nums; /* 数字等宽 */
 }
 
+/* 传输耗时 */
+.tc-elapsed {
+  font-size: 11px;
+  color: var(--ovelis-text-secondary);
+  flex-shrink: 0;
+  min-width: 40px;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ── 右侧区域：控制按钮（跨两行，垂直居中）──────────────── */
 
 .tc-actions {

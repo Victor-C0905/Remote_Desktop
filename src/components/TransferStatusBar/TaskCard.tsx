@@ -43,6 +43,17 @@ function formatSpeed(bytesPerSecond: number): string {
   return `${speed.toFixed(1)} ${units[i]}`;
 }
 
+/**
+ * 格式化时间点
+ * @param timestamp 毫秒时间戳
+ * @returns 格式化后的时间字符串（如 "14:30:25"）
+ */
+function formatTime(timestamp: number): string {
+  if (!timestamp) return '';
+  const date = new Date(timestamp);
+  return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+}
+
 // ── 内联 SVG 图标组件（Adwaita 风格）────────────────────────────
 
 /**
@@ -138,6 +149,7 @@ interface TaskCardProps {
 }
 
 export function TaskCard({ task, onRemove }: TaskCardProps) {
+  const startTimeText = formatTime(task.start_time);
   /**
    * 取消传输
    */
@@ -276,6 +288,9 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
         <span className="tc-percent">{Math.round(task.progress)}%</span>
         {task.status === 'active' && task.speed > 0 && (
           <span className="tc-speed">{formatSpeed(task.speed)}</span>
+        )}
+        {startTimeText && (
+          <span className="tc-elapsed">{startTimeText}</span>
         )}
       </div>
 
