@@ -2,8 +2,10 @@ use anyhow::Result;
 use clap::Parser;
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
+use auth::CompositeAuthenticator;
 
 mod auth;
+mod audit;
 mod cert;
 mod collectors;
 mod config;
@@ -172,9 +174,32 @@ async fn main() -> Result<()> {
     // 创建 PTY 管理器
     let pty_manager = Arc::new(pty::PtyManager::new());
 
+    // 初始化审计日志
+    let audit_log = Arc::new(audit::AuditLogger::new(&cfg.audit.log_path)
+        .expect("无法创建审计日志文件"));
+    tracing::info!("审计日志已启用: {}", cfg.audit.log_path);
+
+    // 初始化认证器
+    let authenticator = Arc::new(CompositeAuthenticator::new(
+        cfg.auth.ssh.pam_service.clone(),
+        cfg.auth.ssh.enable_pubkey,
+        cfg.auth.ssh.enable_password,
+    ));
+    tracing::info!("认证器已初始化 (公钥认证: {}, 密码认证: {})",
+        cfg.auth.ssh.enable_pubkey, cfg.auth.ssh.enable_password);
+
     let key_clone = key.clone_key();
     tokio::try_join!(
-        server::quic::run(cfg.clone(), cert.clone(), key_clone, subscription_manager.clone(), event_bus.clone(), pty_manager.clone()),
+        server::quic::run(
+            cfg.clone(),
+            cert.clone(),
+            key_clone,
+            subscription_manager.clone(),
+            event_bus.clone(),
+            pty_manager.clone(),
+            authenticator.clone(),
+            audit_log.clone(),
+        ),
         server::websocket::run(cfg.clone(), cert, key),
     )?;
 

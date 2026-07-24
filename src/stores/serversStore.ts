@@ -2,22 +2,16 @@ import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import { serversStorage } from "../utils/storage";
 import { createLogger } from "../utils/logger";
+import { ServerConfig, AuthMethod } from "../types/server";
 
 const log = createLogger('ServersStore');
 
 /* ── Types ─────────────────────────────────────────────── */
 
-export interface ServerConfig {
-  id: string;
-  name: string;
-  host: string;
-  port: number;
-  token?: string;
-  lastConnected?: number;
-  status: "connected" | "disconnected" | "connecting" | "error";
-  error?: string;
-  rttMs?: number;
-}
+// ServerConfig 类型已移动到 src/types/server.ts
+// 重新导出以保持向后兼容
+export type { ServerConfig } from "../types/server";
+export { AuthMethod } from "../types/server";
 
 export interface ServersState {
   servers: ServerConfig[];
@@ -25,7 +19,7 @@ export interface ServersState {
 }
 
 export interface ServersActions {
-  addServer: (server: Omit<ServerConfig, "id" | "status" | "lastConnected">) => void;
+  addServer: (server: Omit<ServerConfig, "id" | "status" | "lastConnected" | "auth"> & { auth?: Partial<ServerConfig["auth"]> }) => void;
   removeServer: (id: string) => void;
   updateServer: (id: string, updates: Partial<ServerConfig>) => void;
   setActiveServerId: (id: string | null) => void;
@@ -46,10 +40,23 @@ export const useServersStore = create<ServersState & ServersActions>()(
       activeServerId: null,
 
       addServer: (server) => {
+        // 提供默认的认证配置
+        const defaultAuth: ServerConfig["auth"] = {
+          method: AuthMethod.PASSWORD,
+          username: "",
+          password: undefined,
+          privateKey: undefined,
+          passphrase: undefined,
+        };
+
         const newServer: ServerConfig = {
           ...server,
           id: generateId(),
           status: "disconnected",
+          auth: {
+            ...defaultAuth,
+            ...server.auth,
+          },
         };
         set({ servers: [...get().servers, newServer] });
       },

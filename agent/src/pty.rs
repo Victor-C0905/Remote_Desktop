@@ -14,6 +14,9 @@ use tokio::sync::Mutex;
 #[cfg(unix)]
 use tracing::{info, warn};
 
+#[cfg(unix)]
+use crate::auth::session::UserSession;
+
 /// PTY 会话（仅 Unix 平台）
 #[cfg(unix)]
 pub struct PtySession {
@@ -107,6 +110,121 @@ impl PtySession {
                     .env("LANG", "en_US.UTF-8")
                     // 如果系统不支持 en_US.UTF-8，尝试 C.UTF-8（大写）
                     .env("LC_CTYPE", "C.UTF-8");
+
+                // 使用 exec 替换当前进程
+                let err = cmd.exec();
+                warn!("Shell 执行失败: {}", err);
+                std::process::exit(1);
+            }
+        }
+    }
+
+    /// 以指定用户身份创建 PTY 会话
+    ///
+    /// 在子进程中切换到指定用户，设置正确的环境变量和工作目录
+    pub fn spawn_as_user(
+        shell: &str,
+        cols: u16,
+        rows: u16,
+        working_directory: Option<&str>,
+        session: &UserSession,
+    ) -> Result<Self> {
+        use nix::pty::{forkpty, Winsize};
+        use std::os::fd::IntoRawFd;
+
+        // 使用用户的 shell，如果未指定则使用会话中的 shell
+        let shell = if shell.is_empty() {
+            session.shell.to_string_lossy().to_string()
+        } else {
+            shell.to_string()
+        };
+
+        // 设置终端大小
+        let winsize = Winsize {
+            ws_col: cols,
+            ws_row: rows,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+
+        // 使用 forkpty 创建 PTY
+        let result = unsafe { forkpty(Some(&winsize), None)? };
+
+        match result {
+            nix::pty::ForkptyResult::Parent { child, master } => {
+                // 父进程：保存 master fd（使用 into_raw_fd 转移所有权）
+                let master_fd = master.into_raw_fd();
+
+                // 设置非阻塞模式（避免阻塞读取）
+                let flags = nix::fcntl::OFlag::from_bits_truncate(
+                    nix::fcntl::fcntl(master_fd, nix::fcntl::FcntlArg::F_GETFL)
+                        .map_err(|e| anyhow::anyhow!("获取文件标志失败: {}", e))?
+                );
+                let new_flags = flags | nix::fcntl::OFlag::O_NONBLOCK;
+                nix::fcntl::fcntl(master_fd, nix::fcntl::FcntlArg::F_SETFL(new_flags))
+                    .map_err(|e| anyhow::anyhow!("设置非阻塞模式失败: {}", e))?;
+
+                info!(
+                    "PTY 创建成功（用户 {}）: master_fd={}, child_pid={}",
+                    session.username, master_fd, child
+                );
+
+                Ok(Self {
+                    master_fd,
+                    child_pid: child.as_raw() as i32,
+                    cols,
+                    rows,
+                })
+            }
+            nix::pty::ForkptyResult::Child => {
+                // 子进程：切换用户并执行 shell
+
+                // 切换到目标用户（必须先设置 GID，再设置 UID）
+                // 注意：这里需要 root 权限才能切换用户
+                unsafe {
+                    // 先设置组ID
+                    if libc::setgid(session.gid) != 0 {
+                        warn!("setgid 失败: gid={}", session.gid);
+                        std::process::exit(1);
+                    }
+
+                    // 再设置用户ID
+                    if libc::setuid(session.uid) != 0 {
+                        warn!("setuid 失败: uid={}", session.uid);
+                        std::process::exit(1);
+                    }
+                }
+
+                use std::os::unix::process::CommandExt;
+                let mut cmd = std::process::Command::new(&shell);
+
+                // 设置工作目录（优先使用参数，否则使用用户的 home_dir）
+                let home = session.home_dir.to_string_lossy().to_string();
+                if let Some(path) = working_directory {
+                    if std::path::Path::new(path).is_dir() {
+                        cmd.current_dir(path);
+                        info!("使用指定工作目录: {}", path);
+                    } else {
+                        cmd.current_dir(&home);
+                        warn!("路径不存在或不是目录，回退到 home: {} -> {}", path, home);
+                    }
+                } else {
+                    cmd.current_dir(&home);
+                    info!("使用默认工作目录: {}", home);
+                }
+
+                // 设置用户环境变量
+                cmd.env("TERM", "xterm-256color")
+                    .env("COLORTERM", "truecolor")
+                    .env("COLUMNS", cols.to_string())
+                    .env("LINES", rows.to_string())
+                    .env("LANG", "en_US.UTF-8")
+                    .env("LC_CTYPE", "C.UTF-8")
+                    // 设置用户相关环境变量
+                    .env("HOME", &home)
+                    .env("USER", &session.username)
+                    .env("LOGNAME", &session.username)
+                    .env("SHELL", &shell);
 
                 // 使用 exec 替换当前进程
                 let err = cmd.exec();
@@ -239,6 +357,30 @@ impl PtyManager {
 
         info!("PTY 会话创建: id={}, shell={}, cwd={:?}",
             session_id, shell, working_directory);
+        Ok(session_id)
+    }
+
+    /// 以指定用户身份创建 PTY 会话
+    ///
+    /// 在用户上下文中启动终端会话，确保正确的用户权限和环境
+    pub async fn spawn_as_user(
+        &self,
+        shell: &str,
+        cols: u16,
+        rows: u16,
+        working_directory: Option<&str>,
+        user_session: &UserSession,
+    ) -> Result<String> {
+        let session = PtySession::spawn_as_user(shell, cols, rows, working_directory, user_session)?;
+        let session_id = format!("pty-{}", uuid::Uuid::new_v4());
+
+        let mut sessions = self.sessions.lock().await;
+        sessions.insert(session_id.clone(), session);
+
+        info!(
+            "PTY 会话创建（用户 {}）: id={}, shell={}, cwd={:?}",
+            user_session.username, session_id, shell, working_directory
+        );
         Ok(session_id)
     }
 

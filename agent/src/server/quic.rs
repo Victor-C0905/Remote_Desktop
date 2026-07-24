@@ -17,6 +17,8 @@ use crate::pty::PtyManager;
 use crate::subscription::SubscriptionManager;
 use crate::event_bus::EventBus;
 use crate::protocol::{Envelope, Payload};
+use crate::auth::{Authenticator, CompositeAuthenticator, UserSession};
+use crate::audit::AuditLogger;
 
 // 全局 Stream ID 计数器
 static STREAM_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -183,6 +185,8 @@ pub async fn run(
     subscription_manager: Arc<SubscriptionManager>,
     event_bus: Arc<EventBus>,
     pty_manager: Arc<PtyManager>,
+    authenticator: Arc<CompositeAuthenticator>,
+    audit_log: Arc<AuditLogger>,
 ) -> Result<()> {
     let addr = format!("{}:{}", cfg.server.bind, cfg.server.quic_port);
     tracing::info!("🔵 QUIC 服务器监听: {}", addr);
@@ -198,6 +202,8 @@ pub async fn run(
         let subscription_manager_clone = subscription_manager.clone();
         let event_bus_clone = event_bus.clone();
         let pty_manager_clone = pty_manager.clone();
+        let authenticator_clone = authenticator.clone();
+        let audit_log_clone = audit_log.clone();
         let timeout_secs = idle_timeout_secs;
         tokio::spawn(async move {
             let conn = incoming.await;
@@ -209,6 +215,8 @@ pub async fn run(
                         subscription_manager_clone,
                         event_bus_clone,
                         pty_manager_clone,
+                        authenticator_clone,
+                        audit_log_clone,
                         timeout_secs,
                     ).await {
                         tracing::warn!("QUIC 连接错误: {}", e);
@@ -249,6 +257,8 @@ async fn handle_connection(
     subscription_manager: Arc<SubscriptionManager>,
     event_bus: Arc<EventBus>,
     pty_manager: Arc<PtyManager>,
+    authenticator: Arc<CompositeAuthenticator>,
+    audit_log: Arc<AuditLogger>,
     idle_timeout_secs: u64,
 ) -> Result<()> {
     let remote = connection.remote_address();
@@ -262,6 +272,68 @@ async fn handle_connection(
 
     // 用于通知超时检查任务退出的信号
     let (timeout_cancel_tx, mut timeout_cancel_rx) = tokio::sync::oneshot::channel::<()>();
+
+    // ========== 认证流程 ==========
+    // 等待客户端的第一个 Stream（认证流）
+    let auth_stream = connection.accept_bi().await?;
+    let (mut auth_send, mut auth_recv) = auth_stream;
+
+    // 读取认证请求
+    let auth_data = read_message(&mut auth_recv).await?;
+    if auth_data.is_none() {
+        tracing::warn!("认证流已关闭: remote={}", remote);
+        connection.close(0u32.into(), b"auth stream closed");
+        return Ok(());
+    }
+
+    let auth_data = auth_data.unwrap();
+    let auth_envelope = Envelope::decode(&auth_data).map_err(|e| anyhow::anyhow!(e))?;
+
+    // 验证是否为认证请求
+    let session = match &auth_envelope.payload {
+        Payload::AuthRequest { token } => {
+            tracing::info!("收到认证请求: remote={}", remote);
+
+            // 简单Token认证（保持向后兼容）
+            let token_valid = !cfg.auth.token.is_empty() && token == &cfg.auth.token;
+
+            if token_valid {
+                // 创建默认用户会话（Token模式）
+                let default_identity = crate::auth::UserIdentity::new(
+                    whoami::username(),
+                    1000, // 默认UID
+                    1000, // 默认GID
+                    format!("/home/{}", whoami::username()),
+                    "/bin/bash".to_string(),
+                );
+                let session = UserSession::new(default_identity);
+
+                // 记录审计日志
+                audit_log.log_auth_success(&session.username, session.uid, "token");
+
+                // 发送认证成功响应
+                send_auth_response(&mut auth_send, auth_envelope.request_id, true, None).await?;
+
+                tracing::info!("✅ 认证成功: remote={}, user={}", remote, session.username);
+                session
+            } else {
+                // 认证失败
+                audit_log.log_auth_failure("unknown", 0, "invalid_token");
+
+                // 发送认证失败响应
+                send_auth_response(&mut auth_send, auth_envelope.request_id, false, Some("Token 无效")).await?;
+
+                tracing::warn!("❌ 认证失败: remote={}", remote);
+                connection.close(0u32.into(), b"authentication failed");
+                return Ok(());
+            }
+        }
+        other => {
+            tracing::warn!("期望认证请求,收到: {:?}", other);
+            connection.close(0u32.into(), b"expected auth request");
+            return Ok(());
+        }
+    };
 
     // 启动定期超时检查任务
     // 每 30 秒检查一次自上次活动是否超过 idle_timeout_secs
@@ -311,6 +383,7 @@ async fn handle_connection(
         let event_bus_inner = event_bus.clone();
         let pty_manager_inner = pty_manager.clone();
         let ctx_inner = ctx.clone();
+        let session_inner = session.clone();
         tokio::spawn(async move {
             if let Err(e) = handle_stream(
                 stream,
@@ -319,6 +392,7 @@ async fn handle_connection(
                 event_bus_inner,
                 pty_manager_inner,
                 ctx_inner,
+                &session_inner,
             ).await {
                 tracing::warn!("QUIC Stream 处理错误: {}", e);
             }
@@ -346,6 +420,7 @@ async fn handle_stream(
     #[cfg(unix)] pty_manager: Arc<PtyManager>,
     #[cfg(not(unix))] _pty_manager: Arc<PtyManager>,
     ctx: Arc<ConnectionContext>,
+    session: &UserSession,
 ) -> Result<()> {
     let (mut send, mut recv) = stream;
 
@@ -550,8 +625,7 @@ async fn handle_stream(
         Payload::FileTransferRequest { direction, path, file_size, chunk_size, resume_from } => {
             tracing::info!("文件传输请求: direction={:?}, path={}, resume_from={:?}", direction, path, resume_from);
 
-            // 调用 handler 中的处理函数
-            match crate::handler::handle_file_transfer_request(envelope.request_id, direction, path, *file_size, *chunk_size, *resume_from, cfg).await {
+            match crate::handler::handle_file_transfer_request(envelope.request_id, direction, path, *file_size, *chunk_size, *resume_from, cfg, session).await {
                 Ok(response) => {
                     // 注册传输会话到连接上下文（连接关闭时自动清理）
                     if let Payload::FileTransferAccept { ref session_id, .. } = response.payload {
@@ -601,7 +675,7 @@ async fn handle_stream(
                     tracing::error!("文件传输请求失败: {}", e);
                     let response = Envelope::new(
                         envelope.request_id,
-                        Payload::Error { code: -1, message: e },
+                        Payload::Error { code: -1, message: e.to_string() },
                     );
                     if let Ok(resp_bytes) = response.encode() {
                         write_message(&mut send, &resp_bytes).await?;
@@ -632,7 +706,7 @@ async fn handle_stream(
 
         _ => {
             // 其他请求使用异步 handler
-            let response = crate::handler::handle_envelope(&envelope, cfg).await;
+            let response = crate::handler::handle_envelope(&envelope, cfg, session).await;
             match response.encode() {
                 Ok(resp_bytes) => {
                     if let Err(e) = write_message(&mut send, &resp_bytes).await {
@@ -683,6 +757,27 @@ async fn write_message(send: &mut SendStream, data: &[u8]) -> Result<()> {
             tracing::warn!("[QUIC] 写入消息失败: {}", e);
             e
         })?;
+    Ok(())
+}
+
+/// 发送认证响应
+async fn send_auth_response(
+    send: &mut SendStream,
+    request_id: u32,
+    success: bool,
+    error: Option<&str>,
+) -> Result<()> {
+    let response = Envelope::new(
+        request_id,
+        Payload::AuthResponse {
+            success,
+            error: error.map(|s| s.to_string()),
+        },
+    );
+
+    let resp_bytes = response.encode().map_err(|e| anyhow::anyhow!(e))?;
+    write_message(send, &resp_bytes).await?;
+
     Ok(())
 }
 

@@ -9,6 +9,8 @@ pub struct AgentConfig {
     pub security: SecurityConfig,
     pub limits: LimitsConfig,
     pub collectors: CollectorsConfig, // 新增
+    #[serde(default)]
+    pub audit: AuditConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -83,6 +85,20 @@ pub struct CollectorsConfig {
     pub service_status_interval_secs: u64,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AuditConfig {
+    #[serde(default = "default_audit_log_path")]
+    pub log_path: String,
+}
+
+impl Default for AuditConfig {
+    fn default() -> Self {
+        Self {
+            log_path: default_audit_log_path(),
+        }
+    }
+}
+
 fn default_quic_port() -> u16 { 8443 }
 fn default_ws_port() -> u16 { 443 }
 fn default_allowed_paths() -> Vec<String> { vec!["/home".into(), "/etc".into(), "/var/log".into(), "/opt".into()] }
@@ -94,6 +110,7 @@ fn default_connection_idle_timeout() -> u64 { 300 }  // 5 分钟
 fn default_file_changes_delay() -> u64 { 100 }
 fn default_process_scan_interval() -> u64 { 2 }
 fn default_service_status_interval() -> u64 { 5 }
+fn default_audit_log_path() -> String { "/var/log/gnome-remote/audit.log".into() }
 
 // SSH 认证默认值
 fn default_enable_pubkey() -> bool { true }
@@ -162,5 +179,6 @@ fn default_config() -> AgentConfig {
             process_scan_interval_secs: 2,
             service_status_interval_secs: 5,
         },
+        audit: AuditConfig::default(),
     }
 }
