@@ -26,6 +26,24 @@ pub struct ServerConfig {
 pub struct AuthConfig {
     #[serde(default)]
     pub token: String,
+
+    #[serde(default)]
+    pub mode: String,
+
+    #[serde(default)]
+    pub ssh: SshAuthConfig,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct SshAuthConfig {
+    #[serde(default = "default_enable_pubkey")]
+    pub enable_pubkey: bool,
+
+    #[serde(default = "default_enable_password")]
+    pub enable_password: bool,
+
+    #[serde(default = "default_pam_service")]
+    pub pam_service: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -77,6 +95,11 @@ fn default_file_changes_delay() -> u64 { 100 }
 fn default_process_scan_interval() -> u64 { 2 }
 fn default_service_status_interval() -> u64 { 5 }
 
+// SSH 认证默认值
+fn default_enable_pubkey() -> bool { true }
+fn default_enable_password() -> bool { true }
+fn default_pam_service() -> String { "sshd".into() }
+
 pub fn load(path: &str) -> Result<AgentConfig, anyhow::Error> {
     let p = Path::new(path);
     if !p.exists() {
@@ -114,7 +137,15 @@ fn default_config() -> AgentConfig {
             cert_path: "./cert.pem".into(),
             key_path: "./key.pem".into(),
         },
-        auth: AuthConfig { token: String::new() },
+        auth: AuthConfig {
+            token: String::new(),
+            mode: String::new(),
+            ssh: SshAuthConfig {
+                enable_pubkey: true,
+                enable_password: true,
+                pam_service: "sshd".into(),
+            },
+        },
         security: SecurityConfig {
             allowed_paths: default_allowed_paths(),
             blocked_commands: default_blocked_commands(),
