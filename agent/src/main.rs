@@ -3,6 +3,7 @@ use clap::Parser;
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
+mod auth;
 mod cert;
 mod collectors;
 mod config;
