@@ -60,7 +60,15 @@ async fn handle_ws_socket(mut ws_stream: tokio_tungstenite::WebSocketStream<toki
             Ok(WsMessage::Binary(data)) => {
                 match crate::protocol::Envelope::decode(&data) {
                     Ok(envelope) => {
-                        let response = crate::handler::handle_envelope(&envelope, &cfg).await;
+                        // TODO: Phase 3集成认证流程时恢复,需要传入 session 参数
+                        // let response = crate::handler::handle_envelope(&envelope, &cfg, &session).await;
+                        let response = crate::protocol::Envelope::new(
+                            envelope.request_id,
+                            crate::protocol::Payload::Error {
+                                code: -1,
+                                message: "认证功能尚未实现".to_string(),
+                            },
+                        );
                         if let Ok(resp_bytes) = response.encode() {
                             if ws_stream.send(WsMessage::Binary(resp_bytes)).await.is_err() {
                                 break;

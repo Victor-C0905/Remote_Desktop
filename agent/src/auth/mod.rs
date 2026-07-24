@@ -13,6 +13,8 @@ use anyhow::Result;
 use std::fmt;
 use std::sync::Arc;
 
+pub mod executor;
+pub mod namespace;
 pub mod pam;
 pub mod session;
 pub mod ssh;
@@ -72,6 +74,12 @@ impl fmt::Display for UserIdentity {
 
 // 重导出会话类型
 pub use session::UserSession;
+
+// 重导出Namespace类型
+pub use namespace::UserNamespace;
+
+// 重导出Executor类型
+pub use executor::UserExecutor;
 
 // ============================================================================
 // Authenticator Trait - 统一认证接口
