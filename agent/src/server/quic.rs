@@ -297,45 +297,6 @@ async fn handle_connection(
 
     // 验证是否为认证请求
     let session = match &auth_envelope.payload {
-        // ========== 旧版 Token 认证（保持向后兼容）==========
-        Payload::AuthRequest { token } => {
-            tracing::info!("收到 Token 认证请求: remote={}", remote);
-
-            // 简单Token认证（保持向后兼容）
-            let token_valid = !cfg.auth.token.is_empty() && token == &cfg.auth.token;
-
-            if token_valid {
-                // 创建默认用户会话（Token模式）
-                let default_identity = crate::auth::UserIdentity::new(
-                    whoami::username(),
-                    1000, // 默认UID
-                    1000, // 默认GID
-                    format!("/home/{}", whoami::username()),
-                    "/bin/bash".to_string(),
-                );
-                let session = UserSession::new(default_identity);
-
-                // 记录审计日志
-                audit_log.log_auth_success(&session.username, session.uid, "token");
-
-                // 发送认证成功响应
-                send_auth_response(&mut auth_send, auth_envelope.request_id, true, None, Some(&session.session_id)).await?;
-
-                tracing::info!("✅ Token 认证成功: remote={}, user={}", remote, session.username);
-                session
-            } else {
-                // 认证失败
-                audit_log.log_auth_failure("unknown", 0, "invalid_token");
-
-                // 发送认证失败响应
-                send_auth_response(&mut auth_send, auth_envelope.request_id, false, Some("Token 无效"), None).await?;
-
-                tracing::warn!("❌ Token 认证失败: remote={}", remote);
-                connection.close(0u32.into(), b"authentication failed");
-                return Ok(());
-            }
-        }
-
         // ========== 密码认证（PAM）==========
         Payload::AuthPasswordRequest { username, password } => {
             tracing::info!("收到密码认证请求: remote={}, username={}", remote, username);

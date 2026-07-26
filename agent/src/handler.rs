@@ -86,29 +86,6 @@ pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &U
             )
         }
 
-        Payload::AuthRequest { token } => {
-            let success = !cfg.auth.token.is_empty() && token == &cfg.auth.token;
-            let status_str = if success { "✅ 成功" } else { "❌ 失败" };
-            tracing::info!(
-                "认证请求: {} (expected: {}...)",
-                status_str,
-                &cfg.auth.token[..cfg.auth.token.len().min(8)]
-            );
-
-            Envelope::new(
-                envelope.request_id,
-                Payload::AuthResponse {
-                    success,
-                    error: if success {
-                        None
-                    } else {
-                        Some("Token 无效".into())
-                    },
-                    session_id: None,
-                },
-            )
-        }
-
         Payload::ReadDirRequest { path } => {
             tracing::info!("读取目录请求: {}", path);
 

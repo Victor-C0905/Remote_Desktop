@@ -30,8 +30,6 @@ pub struct ConnectionInfo {
 pub enum AuthMethod {
     Password,
     PubKey,
-    #[serde(rename = "keyboard-interactive")]
-    KeyboardInteractive,
 }
 
 /// 认证凭据结构体（与前端 AuthCredentials 接口对应）
@@ -67,8 +65,6 @@ pub enum Payload {
     Ping { timestamp: u64 },
     #[serde(rename = "pong")]
     Pong { timestamp: u64, server_time: u64 },
-    #[serde(rename = "auth_request")]
-    AuthRequest { token: String },
     /// 认证响应
     #[serde(rename = "auth_response")]
     AuthResponse {
@@ -506,13 +502,6 @@ pub async fn remote_connect(
                 // 客户端侧签名验证需要在 Task 3 实现
                 // 当前返回错误提示用户使用其他认证方式
                 return Err("公钥认证暂未实现，请使用密码认证".to_string());
-            }
-            AuthMethod::KeyboardInteractive => {
-                // 按规格：其他认证方式默认使用 token 认证
-                // 使用 password 字段作为 token（如果存在）
-                Payload::AuthRequest {
-                    token: creds.password.clone().unwrap_or_default()
-                }
             }
         };
         

@@ -14,8 +14,6 @@ export enum AuthMethod {
   PASSWORD = 'password',
   /** 公钥认证 - 使用SSH私钥 */
   PUBKEY = 'pubkey',
-  /** 键盘交互认证 - 交互式问答认证 */
-  KEYBOARD_INTERACTIVE = 'keyboard-interactive',
 }
 
 /**
