@@ -104,6 +104,7 @@ pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &U
                     } else {
                         Some("Token 无效".into())
                     },
+                    session_id: None,
                 },
             )
         }

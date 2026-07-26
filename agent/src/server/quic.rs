@@ -17,7 +17,7 @@ use crate::pty::PtyManager;
 use crate::subscription::SubscriptionManager;
 use crate::event_bus::EventBus;
 use crate::protocol::{Envelope, Payload};
-use crate::auth::{CompositeAuthenticator, UserSession};
+use crate::auth::{Authenticator, CompositeAuthenticator, UserSession};
 use crate::audit::AuditLogger;
 
 // 全局 Stream ID 计数器
@@ -282,6 +282,12 @@ async fn handle_connection(
     let auth_data = read_message(&mut auth_recv).await?;
     if auth_data.is_none() {
         tracing::warn!("认证流已关闭: remote={}", remote);
+
+        // 发送明确的错误响应
+        if let Err(e) = send_auth_response(&mut auth_send, 0, false, Some("认证流异常关闭"), None).await {
+            tracing::debug!("发送认证流关闭响应失败: {}", e);
+        }
+
         connection.close(0u32.into(), b"auth stream closed");
         return Ok(());
     }
@@ -291,8 +297,9 @@ async fn handle_connection(
 
     // 验证是否为认证请求
     let session = match &auth_envelope.payload {
+        // ========== 旧版 Token 认证（保持向后兼容）==========
         Payload::AuthRequest { token } => {
-            tracing::info!("收到认证请求: remote={}", remote);
+            tracing::info!("收到 Token 认证请求: remote={}", remote);
 
             // 简单Token认证（保持向后兼容）
             let token_valid = !cfg.auth.token.is_empty() && token == &cfg.auth.token;
@@ -312,22 +319,90 @@ async fn handle_connection(
                 audit_log.log_auth_success(&session.username, session.uid, "token");
 
                 // 发送认证成功响应
-                send_auth_response(&mut auth_send, auth_envelope.request_id, true, None).await?;
+                send_auth_response(&mut auth_send, auth_envelope.request_id, true, None, Some(&session.session_id)).await?;
 
-                tracing::info!("✅ 认证成功: remote={}, user={}", remote, session.username);
+                tracing::info!("✅ Token 认证成功: remote={}, user={}", remote, session.username);
                 session
             } else {
                 // 认证失败
                 audit_log.log_auth_failure("unknown", 0, "invalid_token");
 
                 // 发送认证失败响应
-                send_auth_response(&mut auth_send, auth_envelope.request_id, false, Some("Token 无效")).await?;
+                send_auth_response(&mut auth_send, auth_envelope.request_id, false, Some("Token 无效"), None).await?;
 
-                tracing::warn!("❌ 认证失败: remote={}", remote);
+                tracing::warn!("❌ Token 认证失败: remote={}", remote);
                 connection.close(0u32.into(), b"authentication failed");
                 return Ok(());
             }
         }
+
+        // ========== 密码认证（PAM）==========
+        Payload::AuthPasswordRequest { username, password } => {
+            tracing::info!("收到密码认证请求: remote={}, username={}", remote, username);
+
+            // 调用认证器进行密码认证
+            match authenticator.authenticate_password(username, password) {
+                Ok(crate::auth::AuthResult::Success(identity)) => {
+                    // 创建用户会话
+                    let session = UserSession::new(identity);
+
+                    // 记录审计日志
+                    audit_log.log_auth_success(&session.username, session.uid, "password");
+
+                    // 发送认证成功响应
+                    send_auth_response(&mut auth_send, auth_envelope.request_id, true, None, Some(&session.session_id)).await?;
+
+                    tracing::info!("✅ 密码认证成功: remote={}, user={}", remote, session.username);
+                    session
+                }
+                Ok(crate::auth::AuthResult::Failure) => {
+                    // 认证失败
+                    audit_log.log_auth_failure(username, 0, "invalid_password");
+
+                    // 发送认证失败响应
+                    send_auth_response(&mut auth_send, auth_envelope.request_id, false, Some("用户名或密码错误"), None).await?;
+
+                    tracing::warn!("❌ 密码认证失败: remote={}, username={}", remote, username);
+                    connection.close(0u32.into(), b"authentication failed");
+                    return Ok(());
+                }
+                Ok(crate::auth::AuthResult::Partial) => {
+                    // 需要更多认证
+                    audit_log.log_auth_failure(username, 0, "partial_auth");
+
+                    send_auth_response(&mut auth_send, auth_envelope.request_id, false, Some("需要更多认证因素"), None).await?;
+
+                    tracing::warn!("❌ 密码认证需要更多因素: remote={}, username={}", remote, username);
+                    connection.close(0u32.into(), b"authentication failed");
+                    return Ok(());
+                }
+                Err(e) => {
+                    // 记录详细日志
+                    tracing::error!("密码认证系统错误: remote={}, username={}, error={}", remote, username, e);
+                    audit_log.log_auth_failure(username, 0, "auth_error");
+
+                    // 返回通用错误（不暴露细节）
+                    send_auth_response(&mut auth_send, auth_envelope.request_id, false, Some("认证服务暂时不可用"), None).await?;
+                    connection.close(0u32.into(), b"authentication failed");
+                    return Ok(());
+                }
+            }
+        }
+
+        // ========== 公钥认证（SSH）==========
+        Payload::AuthPubKeyRequest { username, public_key, signature, challenge } => {
+            tracing::info!("收到公钥认证请求: remote={}, username={}", remote, username);
+
+            // 暂未实现：客户端侧签名验证复杂，需要额外的工作
+            audit_log.log_auth_failure(username, 0, "pubkey_not_implemented");
+
+            send_auth_response(&mut auth_send, auth_envelope.request_id, false, Some("公钥认证暂未实现"), None).await?;
+
+            tracing::warn!("❌ 公钥认证暂未实现: remote={}, username={}", remote, username);
+            connection.close(0u32.into(), b"authentication method not supported");
+            return Ok(());
+        }
+
         other => {
             tracing::warn!("期望认证请求,收到: {:?}", other);
             connection.close(0u32.into(), b"expected auth request");
@@ -766,12 +841,14 @@ async fn send_auth_response(
     request_id: u32,
     success: bool,
     error: Option<&str>,
+    session_id: Option<&str>,
 ) -> Result<()> {
     let response = Envelope::new(
         request_id,
         Payload::AuthResponse {
             success,
             error: error.map(|s| s.to_string()),
+            session_id: session_id.map(|s| s.to_string()),
         },
     );
 
