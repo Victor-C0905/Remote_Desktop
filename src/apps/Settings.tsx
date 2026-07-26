@@ -6,6 +6,7 @@ import { useSettingsStore } from "../stores/settingsStore";
 import { themes, accentColors } from "../config/themes";
 import { ThemeId } from "../config/themes";
 import { createLogger } from '../utils/logger';
+import { AuthMethod } from '../types/server';
 // import { useWindowState } from "../window-system/hooks/useWindowState"; // 未来集成时使用
 import "./Settings.css";
 
@@ -38,7 +39,7 @@ const SIDEBAR_ITEMS: SidebarItem[] = [
 interface AddServerModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onAdd: (name: string, host: string, port: number, token: string) => void;
+  onAdd: (name: string, host: string, port: number, token: string, auth: any) => void;
 }
 
 function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
@@ -47,17 +48,48 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
   const [port, setPort] = useState(8443);
   const [token, setToken] = useState("");
 
+  // 认证配置状态
+  const [authMethod, setAuthMethod] = useState<AuthMethod>(AuthMethod.PASSWORD);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [privateKeyFile, setPrivateKeyFile] = useState("");
+  const [passphrase, setPassphrase] = useState("");
+
   if (!isOpen) return null;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (name && host && token) {
-      onAdd(name, host, port, token);
+      // 构建认证配置对象
+      const auth = {
+        method: authMethod,
+        username,
+        ...(authMethod === AuthMethod.PASSWORD && { password }),
+        ...(authMethod === AuthMethod.PUBKEY && { privateKey: privateKeyFile, passphrase }),
+      };
+
+      onAdd(name, host, port, token, auth);
       setName("");
       setHost("");
       setPort(8443);
       setToken("");
+      // 重置认证配置
+      setAuthMethod(AuthMethod.PASSWORD);
+      setUsername("");
+      setPassword("");
+      setPrivateKeyFile("");
+      setPassphrase("");
       onClose();
+    }
+  };
+
+  // 处理私钥文件选择
+  const handlePrivateKeySelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      // Tauri 环境下 file.path 包含文件路径,浏览器环境下使用 file.name
+      const filePath = (file as any).path || file.name;
+      setPrivateKeyFile(filePath);
     }
   };
 
@@ -111,6 +143,75 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
             />
             <span className="st-form-hint">从 Agent 日志中获取</span>
           </div>
+
+          {/* 认证配置 */}
+          <div className="st-form-row">
+            <label className="st-form-label">认证方式</label>
+            <select
+              className="st-form-input"
+              value={authMethod}
+              onChange={(e) => setAuthMethod(e.target.value as AuthMethod)}
+            >
+              <option value={AuthMethod.PASSWORD}>密码认证</option>
+              <option value={AuthMethod.PUBKEY}>公钥认证</option>
+            </select>
+          </div>
+
+          <div className="st-form-row">
+            <label className="st-form-label">用户名</label>
+            <input
+              type="text"
+              className="st-form-input"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="SSH 登录用户名"
+            />
+          </div>
+
+          {/* 密码认证字段 */}
+          {authMethod === AuthMethod.PASSWORD && (
+            <div className="st-form-row">
+              <label className="st-form-label">密码</label>
+              <input
+                type="password"
+                className="st-form-input"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="SSH 登录密码"
+              />
+            </div>
+          )}
+
+          {/* 公钥认证字段 */}
+          {authMethod === AuthMethod.PUBKEY && (
+            <>
+              <div className="st-form-row">
+                <label className="st-form-label">私钥文件</label>
+                <input
+                  type="file"
+                  className="st-form-input"
+                  onChange={handlePrivateKeySelect}
+                  accept=".pem,.key,.pub"
+                />
+                <span className="st-form-hint">选择 SSH 私钥文件 (.pem, .key)</span>
+              </div>
+              {privateKeyFile && (
+                <div className="st-form-row">
+                  <span className="st-form-hint">已选择: {privateKeyFile}</span>
+                </div>
+              )}
+              <div className="st-form-row">
+                <label className="st-form-label">私钥密码 (可选)</label>
+                <input
+                  type="password"
+                  className="st-form-input"
+                  value={passphrase}
+                  onChange={(e) => setPassphrase(e.target.value)}
+                  placeholder="如果私钥有密码保护,请输入"
+                />
+              </div>
+            </>
+          )}
         </form>
         <div className="st-modal-footer">
           <button className="st-btn" onClick={onClose}>取消</button>
@@ -126,8 +227,8 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
 interface EditServerModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (id: string, name: string, host: string, port: number, token: string) => void;
-  server: { id: string; name: string; host: string; port: number; token?: string } | null;
+  onSave: (id: string, name: string, host: string, port: number, token: string, auth: any) => void;
+  server: { id: string; name: string; host: string; port: number; token?: string; auth?: any } | null;
 }
 
 function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalProps) {
@@ -136,6 +237,13 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
   const [port, setPort] = useState(8443);
   const [token, setToken] = useState("");
 
+  // 认证配置状态
+  const [authMethod, setAuthMethod] = useState<AuthMethod>(AuthMethod.PASSWORD);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [privateKeyFile, setPrivateKeyFile] = useState("");
+  const [passphrase, setPassphrase] = useState("");
+
   // 当 server 变化时，更新表单数据
   useEffect(() => {
     if (server) {
@@ -143,6 +251,14 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
       setHost(server.host);
       setPort(server.port);
       setToken(server.token || "");
+      // 加载认证配置
+      if (server.auth) {
+        setAuthMethod(server.auth.method || AuthMethod.PASSWORD);
+        setUsername(server.auth.username || "");
+        setPassword(server.auth.password || "");
+        setPrivateKeyFile(server.auth.privateKey || "");
+        setPassphrase(server.auth.passphrase || "");
+      }
     }
   }, [server]);
 
@@ -151,8 +267,26 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (name && host && token) {
-      onSave(server.id, name, host, port, token);
+      // 构建认证配置对象
+      const auth = {
+        method: authMethod,
+        username,
+        ...(authMethod === AuthMethod.PASSWORD && { password }),
+        ...(authMethod === AuthMethod.PUBKEY && { privateKey: privateKeyFile, passphrase }),
+      };
+
+      onSave(server.id, name, host, port, token, auth);
       onClose();
+    }
+  };
+
+  // 处理私钥文件选择
+  const handlePrivateKeySelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      // Tauri 环境下 file.path 包含文件路径,浏览器环境下使用 file.name
+      const filePath = (file as any).path || file.name;
+      setPrivateKeyFile(filePath);
     }
   };
 
@@ -206,6 +340,75 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
             />
             <span className="st-form-hint">从 Agent 日志中获取</span>
           </div>
+
+          {/* 认证配置 */}
+          <div className="st-form-row">
+            <label className="st-form-label">认证方式</label>
+            <select
+              className="st-form-input"
+              value={authMethod}
+              onChange={(e) => setAuthMethod(e.target.value as AuthMethod)}
+            >
+              <option value={AuthMethod.PASSWORD}>密码认证</option>
+              <option value={AuthMethod.PUBKEY}>公钥认证</option>
+            </select>
+          </div>
+
+          <div className="st-form-row">
+            <label className="st-form-label">用户名</label>
+            <input
+              type="text"
+              className="st-form-input"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="SSH 登录用户名"
+            />
+          </div>
+
+          {/* 密码认证字段 */}
+          {authMethod === AuthMethod.PASSWORD && (
+            <div className="st-form-row">
+              <label className="st-form-label">密码</label>
+              <input
+                type="password"
+                className="st-form-input"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="SSH 登录密码"
+              />
+            </div>
+          )}
+
+          {/* 公钥认证字段 */}
+          {authMethod === AuthMethod.PUBKEY && (
+            <>
+              <div className="st-form-row">
+                <label className="st-form-label">私钥文件</label>
+                <input
+                  type="file"
+                  className="st-form-input"
+                  onChange={handlePrivateKeySelect}
+                  accept=".pem,.key,.pub"
+                />
+                <span className="st-form-hint">选择 SSH 私钥文件 (.pem, .key)</span>
+              </div>
+              {privateKeyFile && (
+                <div className="st-form-row">
+                  <span className="st-form-hint">已选择: {privateKeyFile}</span>
+                </div>
+              )}
+              <div className="st-form-row">
+                <label className="st-form-label">私钥密码 (可选)</label>
+                <input
+                  type="password"
+                  className="st-form-input"
+                  value={passphrase}
+                  onChange={(e) => setPassphrase(e.target.value)}
+                  placeholder="如果私钥有密码保护,请输入"
+                />
+              </div>
+            </>
+          )}
         </form>
         <div className="st-modal-footer">
           <button className="st-btn" onClick={onClose}>取消</button>
@@ -224,7 +427,7 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
   const [activeSection, setActiveSection] = useState<SettingsSection>("connection");
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
-  const [editingServer, setEditingServer] = useState<{ id: string; name: string; host: string; port: number; token?: string } | null>(null);
+  const [editingServer, setEditingServer] = useState<{ id: string; name: string; host: string; port: number; token?: string; auth?: any } | null>(null);
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
 
   // 终端默认路径配置
@@ -271,15 +474,21 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
   // 主题已由 Desktop.tsx 全局应用，此处不再重复调用
   // useTheme(themeId, accentColorId);
 
-  const handleAddServer = (name: string, host: string, port: number, token: string) => {
-    addServer({ name, host, port, token });
+  const handleAddServer = (name: string, host: string, port: number, token: string, auth: any) => {
+    addServer({
+      name,
+      host,
+      port,
+      token,
+      auth,
+    });
   };
 
-  const handleEditServer = (id: string, name: string, host: string, port: number, token: string) => {
-    updateServer(id, { name, host, port, token });
+  const handleEditServer = (id: string, name: string, host: string, port: number, token: string, auth: any) => {
+    updateServer(id, { name, host, port, token, auth });
   };
 
-  const handleOpenEditModal = (server: { id: string; name: string; host: string; port: number; token?: string }) => {
+  const handleOpenEditModal = (server: { id: string; name: string; host: string; port: number; token?: string; auth?: any }) => {
     setEditingServer(server);
     setEditModalOpen(true);
   };
