@@ -40,6 +40,7 @@ lazy_static = "1.4"
 anyhow = "1"
 thiserror = "1"
 clap = { version = "4", features = ["derive"] }
+rand = "0.8"
 
 # 配置热重载（禁用 macOS 特性）
 notify = { version = "6", default-features = false, features = ["crossbeam-channel"] }
@@ -57,6 +58,9 @@ chrono = "0.4"
 # russh = "0.42"  # TODO: 签名验证时启用
 # russh-keys = "0.42"  # TODO: 签名验证时启用
 base64 = "0.22"
+ssh-key = { version = "0.6", features = ["ed25519", "rsa", "encryption"] }
+signature = "2.2"
+ed25519-dalek = "2.1"  # Ed25519 签名验证
 
 # Unix-only 依赖（仅在 Linux/macOS 上编译）
 [target.'cfg(unix)'.dependencies]

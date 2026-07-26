@@ -52,7 +52,7 @@ fn build_tls_config(
     Ok(config)
 }
 
-async fn handle_ws_socket(mut ws_stream: tokio_tungstenite::WebSocketStream<tokio_rustls::server::TlsStream<tokio::net::TcpStream>>, cfg: AgentConfig) {
+async fn handle_ws_socket(mut ws_stream: tokio_tungstenite::WebSocketStream<tokio_rustls::server::TlsStream<tokio::net::TcpStream>>, _cfg: AgentConfig) {
     tracing::info!("WebSocket 会话已建立");
 
     while let Some(msg) = ws_stream.next().await {

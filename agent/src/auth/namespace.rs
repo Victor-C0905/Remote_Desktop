@@ -11,13 +11,14 @@
 //! - UID/GID映射限制权限范围
 //! - 禁用setgroups防止权限提升攻击
 
-use anyhow::{Context, Result};
-use std::fs::File;
-use std::io::Write;
+#[cfg(target_os = "linux")]
+use anyhow::{Result, Context};
 
 /// User Namespace隔离器
 ///
 /// 封装User Namespace的创建和管理逻辑
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
 pub struct UserNamespace {
     /// 容器内的UID
     inner_uid: u32,
@@ -25,6 +26,7 @@ pub struct UserNamespace {
     inner_gid: u32,
 }
 
+#[cfg(target_os = "linux")]
 impl UserNamespace {
     /// 创建新的User Namespace实例
     ///
@@ -53,10 +55,11 @@ impl UserNamespace {
     /// # 错误
     /// - 如果unshare失败，返回错误
     /// - 如果写入映射文件失败，返回错误
-    #[cfg(target_os = "linux")]
     pub fn create_and_switch(&self) -> Result<()> {
         use nix::sched::CloneFlags;
         use nix::unistd::getuid;
+        use std::fs::File;
+        use std::io::Write;
 
         tracing::info!(
             "创建User Namespace: inner_uid={}, inner_gid={}",
@@ -102,15 +105,6 @@ impl UserNamespace {
         Ok(())
     }
 
-    /// 非Linux平台的stub实现
-    ///
-    /// 在Windows/macOS等非Linux平台上，User Namespace不可用
-    #[cfg(not(target_os = "linux"))]
-    pub fn create_and_switch(&self) -> Result<()> {
-        tracing::warn!("User Namespace仅支持Linux平台，当前平台跳过隔离");
-        Ok(())
-    }
-
     /// 写入UID映射到 /proc/self/uid_map
     ///
     /// # 格式
@@ -122,8 +116,10 @@ impl UserNamespace {
     ///
     /// # 参考
     /// man 7 user_namespaces
-    #[cfg(target_os = "linux")]
     fn write_uid_map(&self, outer_uid: u32) -> Result<()> {
+        use std::fs::File;
+        use std::io::Write;
+
         let mut file = File::create("/proc/self/uid_map")
             .context("Failed to open /proc/self/uid_map")?;
 
@@ -146,8 +142,10 @@ impl UserNamespace {
     ///
     /// # 参考
     /// man 7 user_namespaces
-    #[cfg(target_os = "linux")]
     fn write_gid_map(&self, outer_gid: u32) -> Result<()> {
+        use std::fs::File;
+        use std::io::Write;
+
         let mut file = File::create("/proc/self/gid_map")
             .context("Failed to open /proc/self/gid_map")?;
 
@@ -167,8 +165,10 @@ impl UserNamespace {
     ///
     /// # 参考
     /// man 7 user_namespaces - "The /proc/[pid]/setgroups file"
-    #[cfg(target_os = "linux")]
     fn write_setgroups_disable(&self) -> Result<()> {
+        use std::fs::File;
+        use std::io::Write;
+
         let mut file = File::create("/proc/self/setgroups")
             .context("Failed to open /proc/self/setgroups")?;
 
@@ -185,6 +185,7 @@ impl UserNamespace {
 // ============================================================================
 
 #[cfg(test)]
+#[cfg(target_os = "linux")]
 mod tests {
     use super::*;
 
@@ -193,13 +194,5 @@ mod tests {
         let ns = UserNamespace::new(1000, 1000);
         assert_eq!(ns.inner_uid, 1000);
         assert_eq!(ns.inner_gid, 1000);
-    }
-
-    #[test]
-    #[cfg(not(target_os = "linux"))]
-    fn test_stub_implementation() {
-        let ns = UserNamespace::new(1000, 1000);
-        // 非Linux平台应该返回Ok
-        assert!(ns.create_and_switch().is_ok());
     }
 }

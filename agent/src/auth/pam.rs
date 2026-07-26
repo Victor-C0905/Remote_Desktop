@@ -14,7 +14,7 @@ use super::{AuthResult, Authenticator};
 use anyhow::Result;
 
 #[cfg(unix)]
-use super::{get_user_info, UserIdentity};
+use super::get_user_info;
 #[cfg(unix)]
 use tracing::{debug, warn};
 

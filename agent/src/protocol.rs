@@ -104,17 +104,33 @@ pub enum Payload {
         password: String,
     },
 
-    /// 公钥认证请求（挑战-响应模式）
+    /// 公钥认证请求（第一步：发送公钥）
     #[serde(rename = "auth_pubkey_request")]
     AuthPubKeyRequest {
         /// 用户名
         username: String,
-        /// SSH公钥（DER格式，即原始二进制格式）
+        /// SSH公钥（DER格式）
         public_key: Vec<u8>,
-        /// 签名数据（客户端使用私钥对challenge进行签名）
-        signature: Vec<u8>,
-        /// 服务端生成的挑战数据（用于防止重放攻击）
+    },
+
+    /// 公钥认证挑战（Agent返回）
+    #[serde(rename = "auth_pubkey_challenge")]
+    AuthPubKeyChallenge {
+        /// 挑战数据（随机生成，用于防重放）
         challenge: Vec<u8>,
+        /// 挑战ID（用于后续验证）
+        challenge_id: String,
+    },
+
+    /// 公钥认证响应（客户端签名后）
+    #[serde(rename = "auth_pubkey_response")]
+    AuthPubKeyResponse {
+        /// 挑战ID
+        challenge_id: String,
+        /// 签名数据
+        signature: Vec<u8>,
+        /// 公钥（用于验证）
+        public_key: Vec<u8>,
     },
 
     /// 认证响应
@@ -386,6 +402,8 @@ impl Payload {
             Payload::Pong { .. } => "Pong",
             Payload::AuthPasswordRequest { .. } => "AuthPasswordRequest",
             Payload::AuthPubKeyRequest { .. } => "AuthPubKeyRequest",
+            Payload::AuthPubKeyChallenge { .. } => "AuthPubKeyChallenge",
+            Payload::AuthPubKeyResponse { .. } => "AuthPubKeyResponse",
             Payload::AuthResponse { .. } => "AuthResponse",
             Payload::MetricsSubscribeRequest {} => "MetricsSubscribeRequest",
             Payload::MetricsData(_) => "MetricsData",

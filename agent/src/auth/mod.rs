@@ -18,6 +18,13 @@ pub mod namespace;
 pub mod pam;
 pub mod session;
 pub mod ssh;
+pub mod challenge;
+
+pub use executor::UserExecutor;
+#[cfg(target_os = "linux")]
+pub use namespace::UserNamespace;
+pub use session::UserSession;
+pub use challenge::ChallengeManager;
 
 // ============================================================================
 // 公共类型定义
@@ -31,6 +38,7 @@ pub enum AuthResult {
     /// 认证失败
     Failure,
     /// 部分成功（需要更多认证）
+    #[allow(dead_code)]
     Partial,
 }
 
@@ -51,6 +59,7 @@ pub struct UserIdentity {
 
 impl UserIdentity {
     /// 创建新的用户身份
+    #[allow(dead_code)]
     pub fn new(username: String, uid: u32, gid: u32, home_dir: String, shell: String) -> Self {
         Self {
             username,
@@ -71,15 +80,6 @@ impl fmt::Display for UserIdentity {
         )
     }
 }
-
-// 重导出会话类型
-pub use session::UserSession;
-
-// 重导出Namespace类型
-pub use namespace::UserNamespace;
-
-// 重导出Executor类型
-pub use executor::UserExecutor;
 
 // ============================================================================
 // Authenticator Trait - 统一认证接口
@@ -151,7 +151,6 @@ pub trait Authenticator: Send + Sync {
 pub fn get_user_info(username: &str) -> Result<UserIdentity> {
     use std::fs::File;
     use std::io::{BufRead, BufReader};
-    use std::os::unix::fs::FileTypeExt;
     use std::os::unix::fs::MetadataExt;
     use std::path::Path;
 

@@ -10,14 +10,18 @@
 //! - 使用User Namespace隔离
 //! - 支持跨平台（Linux使用Namespace，其他平台降级）
 
-use anyhow::{Context, Result};
+use anyhow::{Result, Context};
 use std::path::PathBuf;
 
-use super::{UserNamespace, UserSession};
+use super::UserSession;
+
+#[cfg(target_os = "linux")]
+use super::UserNamespace;
 
 /// 用户上下文执行器
 ///
 /// 封装用户切换逻辑，支持在指定用户的上下文中执行操作。
+#[allow(dead_code)]
 pub struct UserExecutor {
     /// 用户ID (UID)
     uid: u32,
@@ -179,16 +183,19 @@ impl UserExecutor {
     }
 
     /// 获取用户UID
+    #[allow(dead_code)]
     pub fn uid(&self) -> u32 {
         self.uid
     }
 
     /// 获取用户GID
+    #[allow(dead_code)]
     pub fn gid(&self) -> u32 {
         self.gid
     }
 
     /// 获取用户家目录
+    #[allow(dead_code)]
     pub fn home_dir(&self) -> &PathBuf {
         &self.home_dir
     }
