@@ -22,6 +22,36 @@ pub struct ConnectionInfo {
     pub connected_at: u64,
 }
 
+// ── 认证凭据 ───────────────────────────────────────
+
+/// 认证方式（与前端 AuthMethod 枚举对应）
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AuthMethod {
+    Password,
+    PubKey,
+    #[serde(rename = "keyboard-interactive")]
+    KeyboardInteractive,
+}
+
+/// 认证凭据结构体（与前端 AuthCredentials 接口对应）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Credentials {
+    /// 认证方式
+    pub method: AuthMethod,
+    /// 用户名
+    pub username: String,
+    /// 密码（密码认证时使用）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    /// SSH私钥内容（公钥认证时使用）
+    #[serde(skip_serializing_if = "Option::is_none", rename = "private_key")]
+    pub private_key: Option<String>,
+    /// 私钥密码（可选）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub passphrase: Option<String>,
+}
+
 // ── 消息协议 ───────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,8 +69,34 @@ pub enum Payload {
     Pong { timestamp: u64, server_time: u64 },
     #[serde(rename = "auth_request")]
     AuthRequest { token: String },
+    /// 认证响应
     #[serde(rename = "auth_response")]
-    AuthResponse { success: bool, error: Option<String> },
+    AuthResponse {
+        /// 认证是否成功
+        success: bool,
+        /// 错误信息（失败时）
+        error: Option<String>,
+        /// 会话ID（成功时返回）
+        session_id: Option<String>,
+    },
+    /// 密码认证请求
+    #[serde(rename = "auth_password_request")]
+    AuthPasswordRequest {
+        username: String,
+        password: String,
+    },
+    /// 公钥认证请求（挑战-响应模式）
+    #[serde(rename = "auth_pubkey_request")]
+    AuthPubKeyRequest {
+        /// 用户名
+        username: String,
+        /// SSH公钥（DER格式，即原始二进制格式）
+        public_key: Vec<u8>,
+        /// 签名数据（客户端使用私钥对challenge进行签名）
+        signature: Vec<u8>,
+        /// 服务端生成的挑战数据（用于防止重放攻击）
+        challenge: Vec<u8>,
+    },
     #[serde(rename = "read_dir")]
     ReadDirRequest { path: String },
     #[serde(rename = "read_dir_resp")]
@@ -399,12 +455,12 @@ impl Default for ConnectionManager {
 // ── Tauri Commands ─────────────────────────────────
 
 #[tauri::command]
-#[tracing::instrument(skip(token, app), fields(server_id = %server_id, host = %host, port = port))]
+#[tracing::instrument(skip(credentials, app), fields(server_id = %server_id, host = %host, port = port))]
 pub async fn remote_connect(
     server_id: String,
     host: String,
     port: u16,
-    token: Option<String>,
+    credentials: Option<Credentials>,
     app: tauri::AppHandle,
 ) -> Result<ConnectionInfo, String> {
     let manager = app.state::<ConnectionManager>();
@@ -435,16 +491,50 @@ pub async fn remote_connect(
         };
 
         // 认证
-        if let Some(ref tk) = token {
-            let auth_result = send_and_receive_quic(&conn, manager.next_request_id(), Payload::AuthRequest { token: tk.clone() }).await;
-            if let Ok(resp) = auth_result {
-                if let Ok(envelope) = Envelope::decode(&resp) {
-                    if let Payload::AuthResponse { success, .. } = envelope.payload {
-                        if !success {
-                            return Err("认证失败: Token 无效".into());
-                        }
-                    }
+        let creds = credentials.ok_or_else(|| "缺少认证凭据".to_string())?;
+        
+        // 根据 method 构造不同的认证 Payload
+        let auth_payload = match creds.method {
+            AuthMethod::Password => {
+                let password = creds.password.ok_or_else(|| "密码认证需要提供密码".to_string())?;
+                Payload::AuthPasswordRequest {
+                    username: creds.username.clone(),
+                    password,
                 }
+            }
+            AuthMethod::PubKey => {
+                // 客户端侧签名验证需要在 Task 3 实现
+                // 当前返回错误提示用户使用其他认证方式
+                return Err("公钥认证暂未实现，请使用密码认证".to_string());
+            }
+            AuthMethod::KeyboardInteractive => {
+                // 按规格：其他认证方式默认使用 token 认证
+                // 使用 password 字段作为 token（如果存在）
+                Payload::AuthRequest {
+                    token: creds.password.clone().unwrap_or_default()
+                }
+            }
+        };
+        
+        // 发送认证请求（增加错误处理）
+        let resp = send_and_receive_quic(&conn, manager.next_request_id(), auth_payload).await
+            .map_err(|e| format!("认证请求失败: {}", e))?;
+
+        let envelope = Envelope::decode(&resp)
+            .map_err(|e| format!("解析认证响应失败: {}", e))?;
+
+        // 验证返回类型（增加类型检查）
+        match envelope.payload {
+            Payload::AuthResponse { success, error, session_id: _ } => {
+                if !success {
+                    // 关闭连接
+                    conn.close(0u32.into(), b"authentication failed");
+                    return Err(error.unwrap_or_else(|| "认证失败".to_string()));
+                }
+            }
+            other => {
+                conn.close(0u32.into(), b"unexpected response");
+                return Err(format!("期望 AuthResponse，收到: {:?}", other));
             }
         }
 
