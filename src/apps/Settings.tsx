@@ -39,14 +39,13 @@ const SIDEBAR_ITEMS: SidebarItem[] = [
 interface AddServerModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onAdd: (name: string, host: string, port: number, token: string, auth: any) => void;
+  onAdd: (name: string, host: string, port: number, auth: any) => void;
 }
 
 function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
   const [name, setName] = useState("");
   const [host, setHost] = useState("");
   const [port, setPort] = useState(8443);
-  const [token, setToken] = useState("");
 
   // 认证配置状态
   const [authMethod, setAuthMethod] = useState<AuthMethod>(AuthMethod.PASSWORD);
@@ -59,7 +58,7 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (name && host && token) {
+    if (name && host) {
       // 构建认证配置对象
       const auth = {
         method: authMethod,
@@ -68,11 +67,10 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
         ...(authMethod === AuthMethod.PUBKEY && { privateKey: privateKeyFile, passphrase }),
       };
 
-      onAdd(name, host, port, token, auth);
+      onAdd(name, host, port, auth);
       setName("");
       setHost("");
       setPort(8443);
-      setToken("");
       // 重置认证配置
       setAuthMethod(AuthMethod.PASSWORD);
       setUsername("");
@@ -131,17 +129,6 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
               onChange={(e) => setPort(parseInt(e.target.value) || 8443)}
               placeholder="8443"
             />
-          </div>
-          <div className="st-form-row">
-            <label className="st-form-label">认证 Token</label>
-            <input
-              type="text"
-              className="st-form-input"
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              placeholder="例如: gmr_xxxxxx-xxxx-xxxx-xxxx"
-            />
-            <span className="st-form-hint">从 Agent 日志中获取</span>
           </div>
 
           {/* 认证配置 */}
@@ -227,15 +214,14 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
 interface EditServerModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (id: string, name: string, host: string, port: number, token: string, auth: any) => void;
-  server: { id: string; name: string; host: string; port: number; token?: string; auth?: any } | null;
+  onSave: (id: string, name: string, host: string, port: number, auth: any) => void;
+  server: { id: string; name: string; host: string; port: number; auth?: any } | null;
 }
 
 function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalProps) {
   const [name, setName] = useState("");
   const [host, setHost] = useState("");
   const [port, setPort] = useState(8443);
-  const [token, setToken] = useState("");
 
   // 认证配置状态
   const [authMethod, setAuthMethod] = useState<AuthMethod>(AuthMethod.PASSWORD);
@@ -250,7 +236,6 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
       setName(server.name);
       setHost(server.host);
       setPort(server.port);
-      setToken(server.token || "");
       // 加载认证配置
       if (server.auth) {
         setAuthMethod(server.auth.method || AuthMethod.PASSWORD);
@@ -266,7 +251,7 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (name && host && token) {
+    if (name && host) {
       // 构建认证配置对象
       const auth = {
         method: authMethod,
@@ -275,7 +260,7 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
         ...(authMethod === AuthMethod.PUBKEY && { privateKey: privateKeyFile, passphrase }),
       };
 
-      onSave(server.id, name, host, port, token, auth);
+      onSave(server.id, name, host, port, auth);
       onClose();
     }
   };
@@ -328,17 +313,6 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
               onChange={(e) => setPort(parseInt(e.target.value) || 8443)}
               placeholder="8443"
             />
-          </div>
-          <div className="st-form-row">
-            <label className="st-form-label">认证 Token</label>
-            <input
-              type="text"
-              className="st-form-input"
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              placeholder="例如: gmr_xxxxxx-xxxx-xxxx-xxxx"
-            />
-            <span className="st-form-hint">从 Agent 日志中获取</span>
           </div>
 
           {/* 认证配置 */}
@@ -427,7 +401,7 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
   const [activeSection, setActiveSection] = useState<SettingsSection>("connection");
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
-  const [editingServer, setEditingServer] = useState<{ id: string; name: string; host: string; port: number; token?: string; auth?: any } | null>(null);
+  const [editingServer, setEditingServer] = useState<{ id: string; name: string; host: string; port: number; auth?: any } | null>(null);
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
 
   // 终端默认路径配置
@@ -474,21 +448,20 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
   // 主题已由 Desktop.tsx 全局应用，此处不再重复调用
   // useTheme(themeId, accentColorId);
 
-  const handleAddServer = (name: string, host: string, port: number, token: string, auth: any) => {
+  const handleAddServer = (name: string, host: string, port: number, auth: any) => {
     addServer({
       name,
       host,
       port,
-      token,
       auth,
     });
   };
 
-  const handleEditServer = (id: string, name: string, host: string, port: number, token: string, auth: any) => {
-    updateServer(id, { name, host, port, token, auth });
+  const handleEditServer = (id: string, name: string, host: string, port: number, auth: any) => {
+    updateServer(id, { name, host, port, auth });
   };
 
-  const handleOpenEditModal = (server: { id: string; name: string; host: string; port: number; token?: string; auth?: any }) => {
+  const handleOpenEditModal = (server: { id: string; name: string; host: string; port: number; auth?: any }) => {
     setEditingServer(server);
     setEditModalOpen(true);
   };

@@ -8,9 +8,6 @@ ws_port = 8444
 cert_path = "./cert.pem"
 key_path = "./key.pem"
 
-[auth]
-token = "gmr_1ecb954c-9a8c-4a5e-a3b4-f9a77af0d036"
-
 # SSH兼容认证配置
 [auth.ssh]
 enable_pubkey = true      # 启用公钥认证

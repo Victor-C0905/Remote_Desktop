@@ -27,12 +27,6 @@ pub struct ServerConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AuthConfig {
     #[serde(default)]
-    pub token: String,
-
-    #[serde(default)]
-    pub mode: String,
-
-    #[serde(default)]
     pub ssh: SshAuthConfig,
 }
 
@@ -126,22 +120,6 @@ pub fn load(path: &str) -> Result<AgentConfig, anyhow::Error> {
     let content = fs::read_to_string(p)?;
     let cfg: AgentConfig = toml::from_str(&content)?;
 
-    if cfg.auth.token.is_empty() {
-        let auto_token = format!("gmr_{}", uuid::Uuid::new_v4());
-        tracing::info!("🔑 自动生成 Token (请保存): {}", auto_token);
-
-        let mut cfg_with_token = cfg;
-        cfg_with_token.auth.token = auto_token.clone();
-
-        if let Ok(updated_toml) = toml::to_string_pretty(&cfg_with_token) {
-            let updated_toml = format!("# GNOME Remote Agent 配置\n# Token 已自动生成，请妥善保管\n\n{}", updated_toml);
-            let _ = fs::write(p, updated_toml);
-            tracing::info!("   Token 已写入 {}", path);
-        }
-
-        return Ok(cfg_with_token);
-    }
-
     Ok(cfg)
 }
 
@@ -155,8 +133,6 @@ fn default_config() -> AgentConfig {
             key_path: "./key.pem".into(),
         },
         auth: AuthConfig {
-            token: String::new(),
-            mode: String::new(),
             ssh: SshAuthConfig {
                 enable_pubkey: true,
                 enable_password: true,

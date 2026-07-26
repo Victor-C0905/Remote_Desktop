@@ -160,13 +160,6 @@ async fn main() -> Result<()> {
     tracing::info!("   QUIC  监听: udp://{}:{}", cfg.server.bind, cfg.server.quic_port);
     tracing::info!("   WS    监听: tcp://{}:{}", cfg.server.bind, cfg.server.ws_port);
 
-    if cfg.auth.token.is_empty() {
-        tracing::warn!("未设置认证 Token，首次启动将自动生成");
-    } else {
-        let masked: String = cfg.auth.token.chars().take(12).collect();
-        tracing::info!("认证 Token: {}...", masked);
-    }
-
     // 创建 EventBus 和 SubscriptionManager
     let event_bus = Arc::new(event_bus::EventBus::new());
     let subscription_manager = Arc::new(subscription::SubscriptionManager::new(cfg.clone(), event_bus.clone()));

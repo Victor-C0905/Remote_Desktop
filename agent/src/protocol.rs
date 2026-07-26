@@ -95,9 +95,6 @@ pub enum Payload {
     #[serde(rename = "pong")]
     Pong { timestamp: u64, server_time: u64 },
 
-    #[serde(rename = "auth_request")]
-    AuthRequest { token: String },
-
     /// 密码认证请求
     #[serde(rename = "auth_password_request")]
     AuthPasswordRequest {
@@ -387,7 +384,6 @@ impl Payload {
         match self {
             Payload::Ping { .. } => "Ping",
             Payload::Pong { .. } => "Pong",
-            Payload::AuthRequest { .. } => "AuthRequest",
             Payload::AuthPasswordRequest { .. } => "AuthPasswordRequest",
             Payload::AuthPubKeyRequest { .. } => "AuthPubKeyRequest",
             Payload::AuthResponse { .. } => "AuthResponse",
