@@ -134,11 +134,34 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
     setServerStatus(id, "connecting");
 
     try {
+      // 准备认证凭据（使用 snake_case 命名以匹配 Rust 后端）
+      // 兼容旧配置：如果 server.auth 不存在，使用默认值
+      const defaultAuth = {
+        method: "password" as const,
+        username: "",
+        password: undefined,
+        privateKey: undefined,
+        passphrase: undefined,
+      };
+
+      const auth = server.auth || defaultAuth;
+
+      const credentials = {
+        method: auth.method,
+        username: auth.username,
+        password: auth.password,
+        private_key: auth.privateKey,
+        passphrase: auth.passphrase,
+      };
+
+      // 注意：不记录 credentials 中的敏感信息
       log.info("调用 remote_connect:", {
         serverId: id,
         host: server.host,
         port: server.port,
         token: server.token || null,
+        authMethod: auth.method,
+        username: auth.username,
       });
 
       const info = await invoke<ConnectionInfo>("remote_connect", {
@@ -146,6 +169,7 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
         host: server.host,
         port: server.port,
         token: server.token || null,
+        credentials,
       });
 
       log.info("连接成功:", info);

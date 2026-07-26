@@ -17,7 +17,7 @@ use crate::pty::PtyManager;
 use crate::subscription::SubscriptionManager;
 use crate::event_bus::EventBus;
 use crate::protocol::{Envelope, Payload};
-use crate::auth::{Authenticator, CompositeAuthenticator, UserSession};
+use crate::auth::{CompositeAuthenticator, UserSession};
 use crate::audit::AuditLogger;
 
 // 全局 Stream ID 计数器

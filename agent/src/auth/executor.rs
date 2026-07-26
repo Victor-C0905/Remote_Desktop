@@ -145,13 +145,17 @@ impl UserExecutor {
         // 设置工作目录为用户家目录
         cmd.current_dir(&self.home_dir);
 
+        // 复制uid/gid到局部变量（避免闭包捕获self）
+        let uid = self.uid;
+        let gid = self.gid;
+
         // 在子进程执行前设置uid/gid
         unsafe {
             cmd.pre_exec(move || {
                 #[cfg(target_os = "linux")]
                 {
                     // 创建User Namespace
-                    let ns = UserNamespace::new(self.uid, self.gid);
+                    let ns = UserNamespace::new(uid, gid);
                     ns.create_and_switch()
                         .expect("Failed to switch to user namespace");
                 }

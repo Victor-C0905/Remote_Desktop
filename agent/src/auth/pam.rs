@@ -26,7 +26,7 @@ use tracing::warn;
 // ============================================================================
 
 #[cfg(unix)]
-use pam::{Authenticator as PamAuthLib, PasswordConv};
+use pam::Client;
 
 /// PAM 认证器
 ///
@@ -67,8 +67,8 @@ impl PamAuthenticator {
     fn do_pam_authenticate(&self, username: &str, password: &str) -> Result<AuthResult> {
         debug!("Attempting PAM authentication for service: {}", self.pam_service);
 
-        // 创建PAM认证会话
-        let mut auth = match PamAuthLib::with_password(&self.pam_service) {
+        // 创建PAM客户端（pam 0.8.0 使用 Client，而非 Authenticator）
+        let mut auth = match Client::with_password(&self.pam_service) {
             Ok(a) => a,
             Err(e) => {
                 warn!("Failed to create PAM authenticator: {}", e);
@@ -76,17 +76,8 @@ impl PamAuthenticator {
             }
         };
 
-        // 设置用户名
-        if let Err(e) = auth.get_username().map(|u| u.set_username(username)) {
-            warn!("Failed to set username in PAM: {}", e);
-            return Ok(AuthResult::Failure);
-        };
-
-        // 设置密码
-        if let Err(e) = auth.get_password().map(|p| p.set_password(password)) {
-            warn!("Failed to set password in PAM: {}", e);
-            return Ok(AuthResult::Failure);
-        };
+        // 设置凭据（pam 0.8.0 使用 conversation_mut()，而非 handler_mut()）
+        auth.conversation_mut().set_credentials(username, password);
 
         // 执行认证
         match auth.authenticate() {
@@ -103,9 +94,7 @@ impl PamAuthenticator {
                 }
             }
             Err(e) => {
-                // 认证失败（可能是密码错误、用户不存在等）
-                // 不记录具体错误信息，防止信息泄露
-                debug!("PAM authentication failed");
+                debug!("PAM authentication failed: {}", e);
                 Ok(AuthResult::Failure)
             }
         }
