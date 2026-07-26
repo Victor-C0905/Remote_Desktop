@@ -17,7 +17,7 @@ use crate::pty::PtyManager;
 use crate::subscription::SubscriptionManager;
 use crate::event_bus::EventBus;
 use crate::protocol::{Envelope, Payload};
-use crate::auth::{Authenticator, CompositeAuthenticator, UserSession};
+use crate::auth::{Authenticator, CompositeAuthenticator, UserSession, ChallengeManager};
 use crate::audit::AuditLogger;
 
 // 全局 Stream ID 计数器
@@ -45,6 +45,8 @@ pub struct ConnectionContext {
     stream_ids: Arc<Mutex<Vec<u64>>>,
     /// 关联的传输会话 ID 列表（连接关闭时自动清理传输会话）
     transfer_session_ids: Arc<Mutex<Vec<String>>>,
+    /// 已认证的用户会话信息
+    session: Arc<Mutex<Option<UserSession>>>,
 }
 
 impl ConnectionContext {
@@ -55,7 +57,21 @@ impl ConnectionContext {
             pty_session_ids: Arc::new(Mutex::new(Vec::new())),
             stream_ids: Arc::new(Mutex::new(Vec::new())),
             transfer_session_ids: Arc::new(Mutex::new(Vec::new())),
+            session: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// 设置用户会话信息
+    pub async fn set_session(&self, session: UserSession) {
+        let mut sess = self.session.lock().await;
+        *sess = Some(session);
+    }
+
+    /// 获取用户会话信息
+    #[allow(dead_code)]
+    pub async fn get_session(&self) -> Option<UserSession> {
+        let sess = self.session.lock().await;
+        sess.clone()
     }
 
     /// 订阅关闭信号（每个需要响应关闭的 Stream 调用一次）
@@ -270,6 +286,9 @@ async fn handle_connection(
     // 每个连接独立的活动时间追踪（Arc<AtomicU64> 存储最近活动的 Unix 时间戳秒数）
     let last_activity: Arc<AtomicU64> = Arc::new(AtomicU64::new(current_timestamp_secs()));
 
+    // 创建挑战管理器（用于公钥认证的挑战-响应机制）
+    let challenge_manager = Arc::new(ChallengeManager::new());
+
     // 用于通知超时检查任务退出的信号
     let (timeout_cancel_tx, mut timeout_cancel_rx) = tokio::sync::oneshot::channel::<()>();
 
@@ -306,6 +325,9 @@ async fn handle_connection(
                 Ok(crate::auth::AuthResult::Success(identity)) => {
                     // 创建用户会话
                     let session = UserSession::new(identity);
+
+                    // 保存会话到连接上下文
+                    ctx.set_session(session.clone()).await;
 
                     // 记录审计日志
                     audit_log.log_auth_success(&session.username, session.uid, "password");
@@ -350,18 +372,235 @@ async fn handle_connection(
             }
         }
 
-        // ========== 公钥认证（SSH）==========
-        Payload::AuthPubKeyRequest { username, public_key, signature, challenge } => {
-            tracing::info!("收到公钥认证请求: remote={}, username={}", remote, username);
+        // ========== 公钥认证（SSH）- 挑战-响应机制 ==========
+        Payload::AuthPubKeyRequest { username, public_key } => {
+            tracing::info!("收到公钥认证请求（第一步）: remote={}, username={}", remote, username);
 
-            // 暂未实现：客户端侧签名验证复杂，需要额外的工作
-            audit_log.log_auth_failure(username, 0, "pubkey_not_implemented");
+            // 第一步：生成挑战
+            let (challenge_id, challenge_data) = challenge_manager
+                .generate_challenge(username.clone(), public_key.clone())
+                .await?;
 
-            send_auth_response(&mut auth_send, auth_envelope.request_id, false, Some("公钥认证暂未实现"), None).await?;
+            tracing::debug!(
+                "生成公钥认证挑战: username={}, challenge_id={}, challenge_len={}",
+                username,
+                challenge_id,
+                challenge_data.len()
+            );
 
-            tracing::warn!("❌ 公钥认证暂未实现: remote={}, username={}", remote, username);
-            connection.close(0u32.into(), b"authentication method not supported");
-            return Ok(());
+            // 发送挑战给客户端
+            let challenge_payload = Envelope::new(
+                auth_envelope.request_id,
+                Payload::AuthPubKeyChallenge {
+                    challenge: challenge_data,
+                    challenge_id: challenge_id.clone(),
+                },
+            );
+
+            match challenge_payload.encode() {
+                Ok(challenge_bytes) => {
+                    if let Err(e) = write_message(&mut auth_send, &challenge_bytes).await {
+                        tracing::error!("发送公钥认证挑战失败: {}", e);
+                        connection.close(0u32.into(), b"challenge send failed");
+                        return Ok(());
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("编码公钥认证挑战失败: {}", e);
+                    connection.close(0u32.into(), b"challenge encode failed");
+                    return Ok(());
+                }
+            }
+
+            tracing::info!("✅ 公钥认证挑战已发送: username={}, challenge_id={}", username, challenge_id);
+
+            // 第二步：等待客户端的响应 Stream
+            let response_stream = connection.accept_bi().await;
+            match response_stream {
+                Ok((mut resp_send, mut resp_recv)) => {
+                    // 读取响应数据
+                    let resp_data = read_message(&mut resp_recv).await?;
+                    if resp_data.is_none() {
+                        tracing::warn!("公钥认证响应流已关闭: remote={}", remote);
+                        connection.close(0u32.into(), b"response stream closed");
+                        return Ok(());
+                    }
+
+                    let resp_data = resp_data.unwrap();
+                    let resp_envelope = Envelope::decode(&resp_data).map_err(|e| anyhow::anyhow!(e))?;
+
+                    // 处理公钥认证响应
+                    match resp_envelope.payload {
+                        Payload::AuthPubKeyResponse {
+                            challenge_id: resp_challenge_id,
+                            signature,
+                            public_key: resp_public_key,
+                        } => {
+                            tracing::debug!(
+                                "收到公钥认证响应: challenge_id={}, signature_len={}, pubkey_len={}",
+                                resp_challenge_id,
+                                signature.len(),
+                                resp_public_key.len()
+                            );
+
+                            // 验证挑战-响应并验证签名
+                            match challenge_manager
+                                .verify_response(&resp_challenge_id, &signature, &resp_public_key)
+                                .await
+                            {
+                                Ok((verified_username, challenge_data, expected_public_key)) => {
+                                    tracing::info!(
+                                        "公钥挑战验证成功: username={}, challenge_id={}",
+                                        verified_username,
+                                        resp_challenge_id
+                                    );
+
+                                    // 验证公钥匹配
+                                    if expected_public_key != resp_public_key {
+                                        tracing::warn!(
+                                            "公钥不匹配: remote={}, challenge_id={}",
+                                            remote, resp_challenge_id
+                                        );
+                                        audit_log.log_auth_failure(&verified_username, 0, "pubkey_mismatch");
+
+                                        send_auth_response(
+                                            &mut resp_send,
+                                            resp_envelope.request_id,
+                                            false,
+                                            Some("公钥验证失败"),
+                                            None,
+                                        ).await?;
+
+                                        connection.close(0u32.into(), b"authentication failed");
+                                        return Ok(());
+                                    }
+
+                                    // 使用SshAuthenticator验证签名
+                                    let ssh_auth = crate::auth::ssh::SshAuthenticator::new();
+                                    match ssh_auth.verify_signature(&resp_public_key, &signature, &challenge_data) {
+                                        Ok(true) => {
+                                            tracing::debug!("签名验证成功: challenge_id={}", resp_challenge_id);
+
+                                            // 获取真实的用户信息
+                                            let user_info = match crate::auth::get_user_info(&verified_username) {
+                                                Ok(info) => info,
+                                                Err(e) => {
+                                                    tracing::error!("获取用户信息失败: {}", e);
+                                                    audit_log.log_auth_failure(&verified_username, 0, "user_info_failed");
+
+                                                    send_auth_response(
+                                                        &mut resp_send,
+                                                        resp_envelope.request_id,
+                                                        false,
+                                                        Some("认证服务暂时不可用"),
+                                                        None,
+                                                    ).await?;
+
+                                                    connection.close(0u32.into(), b"authentication failed");
+                                                    return Ok(());
+                                                }
+                                            };
+
+                                            let session = UserSession::new(user_info);
+
+                                            // 保存会话到连接上下文
+                                            ctx.set_session(session.clone()).await;
+
+                                            // 记录审计日志
+                                            audit_log.log_auth_success(&session.username, session.uid, "pubkey");
+
+                                            // 发送认证成功响应
+                                            send_auth_response(
+                                                &mut resp_send,
+                                                resp_envelope.request_id,
+                                                true,
+                                                None,
+                                                Some(&session.session_id),
+                                            ).await?;
+
+                                            tracing::info!(
+                                                "✅ 公钥认证成功: remote={}, user={}",
+                                                remote,
+                                                session.username
+                                            );
+
+                                            session
+                                        }
+                                        Ok(false) => {
+                                            tracing::warn!(
+                                                "签名验证失败: remote={}, challenge_id={}",
+                                                remote, resp_challenge_id
+                                            );
+                                            audit_log.log_auth_failure(&verified_username, 0, "invalid_signature");
+
+                                            send_auth_response(
+                                                &mut resp_send,
+                                                resp_envelope.request_id,
+                                                false,
+                                                Some("签名验证失败"),
+                                                None,
+                                            ).await?;
+
+                                            connection.close(0u32.into(), b"authentication failed");
+                                            return Ok(());
+                                        }
+                                        Err(e) => {
+                                            tracing::error!(
+                                                "签名验证错误: remote={}, challenge_id={}, error={}",
+                                                remote, resp_challenge_id, e
+                                            );
+                                            audit_log.log_auth_failure(&verified_username, 0, "signature_error");
+
+                                            send_auth_response(
+                                                &mut resp_send,
+                                                resp_envelope.request_id,
+                                                false,
+                                                Some("签名验证失败"),
+                                                None,
+                                            ).await?;
+
+                                            connection.close(0u32.into(), b"authentication failed");
+                                            return Ok(());
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    // 验证失败
+                                    tracing::warn!(
+                                        "公钥挑战验证失败: remote={}, challenge_id={}, error={}",
+                                        remote,
+                                        resp_challenge_id,
+                                        e
+                                    );
+                                    audit_log.log_auth_failure(&username, 0, "pubkey_challenge_failed");
+
+                                    // 发送认证失败响应
+                                    send_auth_response(
+                                        &mut resp_send,
+                                        resp_envelope.request_id,
+                                        false,
+                                        Some("公钥验证失败"),
+                                        None,
+                                    ).await?;
+
+                                    connection.close(0u32.into(), b"authentication failed");
+                                    return Ok(());
+                                }
+                            }
+                        }
+                        other => {
+                            tracing::warn!("期望公钥认证响应，收到: {:?}", other);
+                            connection.close(0u32.into(), b"expected pubkey response");
+                            return Ok(());
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("接受公钥认证响应流失败: {}", e);
+                    connection.close(0u32.into(), b"response stream failed");
+                    return Ok(());
+                }
+            }
         }
 
         other => {

@@ -67,12 +67,14 @@ impl AuditLogger {
 
     /// 禁用审计日志
     ///
-    /// 用于测试环境或特殊场景下临时关闭日志
+    /// 禁用审计日志
+    #[allow(dead_code)]
     pub fn disable(&mut self) {
         self.enabled = false;
     }
 
     /// 启用审计日志
+    #[allow(dead_code)]
     pub fn enable(&mut self) {
         self.enabled = true;
     }
@@ -149,7 +151,8 @@ impl AuditLogger {
     /// ```rust
     /// logger.log_file_operation("alice", 1000, "read", "/etc/passwd", 1234);
     /// logger.log_file_operation("root", 0, "write", "/etc/nginx/nginx.conf", 5678);
-    /// ```
+    /// 记录文件操作
+    #[allow(dead_code)]
     pub fn log_file_operation(&self, user: &str, uid: u32, operation: &str, path: &str, size: u64) {
         self.log_operation(user, uid, &format!("file_{}", operation), &format!("path={} size={}", path, size));
     }
@@ -162,6 +165,7 @@ impl AuditLogger {
     /// - `uid`: 用户ID
     /// - `session_id`: 会话ID
     /// - `shell`: 启动的Shell（如 "/bin/bash"）
+    #[allow(dead_code)]
     pub fn log_pty_session(&self, user: &str, uid: u32, session_id: &str, shell: &str) {
         self.log_operation(user, uid, "pty_session_start", &format!("session_id={} shell={}", session_id, shell));
     }
@@ -173,7 +177,8 @@ impl AuditLogger {
     /// - `user`: 用户名
     /// - `uid`: 用户ID
     /// - `event`: 事件类型（如 "connect", "disconnect", "timeout"）
-    /// - `client_ip`: 客户端IP地址
+    /// - `client_ip`: 客户端IP地址/// 记录连接事件
+    #[allow(dead_code)]
     pub fn log_connection(&self, user: &str, uid: u32, event: &str, client_ip: &str) {
         self.log_operation(user, uid, &format!("connection_{}", event), &format!("client_ip={}", client_ip));
     }

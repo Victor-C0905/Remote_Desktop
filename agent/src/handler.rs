@@ -43,7 +43,7 @@ fn check_path_permission(path: &str, session: &UserSession) -> Result<bool, Stri
     // 规范化路径，防止路径遍历攻击
     let canonical_path = match path.canonicalize() {
         Ok(p) => p,
-        Err(e) => {
+        Err(_e) => {
             // 路径不存在时，使用绝对路径检查
             if !path.is_absolute() {
                 return Err(format!("路径必须是绝对路径: {}", path.display()));
@@ -1236,7 +1236,7 @@ pub async fn handle_file_transfer_request(
             let executor = UserExecutor::new(session);
             let path_str = path.to_string();
             let session_id_clone = session_id.clone();
-            let chunk_size_value = chunk_size.unwrap_or(64 * 1024);
+            let _chunk_size_value = chunk_size.unwrap_or(64 * 1024);
             let (file_size, mtime, reader) = executor.execute_as_user(move || {
                 // 获取文件元数据
                 let metadata = fs::metadata(&path_str)

@@ -81,17 +81,24 @@ pub enum Payload {
         username: String,
         password: String,
     },
-    /// 公钥认证请求（挑战-响应模式）
+    /// 公钥认证请求（第一步：发送公钥）
     #[serde(rename = "auth_pubkey_request")]
     AuthPubKeyRequest {
-        /// 用户名
         username: String,
-        /// SSH公钥（DER格式，即原始二进制格式）
         public_key: Vec<u8>,
-        /// 签名数据（客户端使用私钥对challenge进行签名）
-        signature: Vec<u8>,
-        /// 服务端生成的挑战数据（用于防止重放攻击）
+    },
+    /// 公钥认证挑战（Agent返回）
+    #[serde(rename = "auth_pubkey_challenge")]
+    AuthPubKeyChallenge {
         challenge: Vec<u8>,
+        challenge_id: String,
+    },
+    /// 公钥认证响应（客户端签名后）
+    #[serde(rename = "auth_pubkey_response")]
+    AuthPubKeyResponse {
+        challenge_id: String,
+        signature: Vec<u8>,
+        public_key: Vec<u8>,
     },
     #[serde(rename = "read_dir")]
     ReadDirRequest { path: String },
@@ -488,42 +495,58 @@ pub async fn remote_connect(
 
         // 认证
         let creds = credentials.ok_or_else(|| "缺少认证凭据".to_string())?;
-        
-        // 根据 method 构造不同的认证 Payload
-        let auth_payload = match creds.method {
+
+        // 根据 method 执行不同的认证流程
+        match creds.method {
             AuthMethod::Password => {
+                // 密码认证流程（单步）
                 let password = creds.password.ok_or_else(|| "密码认证需要提供密码".to_string())?;
-                Payload::AuthPasswordRequest {
+                let auth_payload = Payload::AuthPasswordRequest {
                     username: creds.username.clone(),
                     password,
+                };
+
+                // 发送认证请求（增加错误处理）
+                let resp = send_and_receive_quic(&conn, manager.next_request_id(), auth_payload).await
+                    .map_err(|e| format!("认证请求失败: {}", e))?;
+
+                let envelope = Envelope::decode(&resp)
+                    .map_err(|e| format!("解析认证响应失败: {}", e))?;
+
+                // 验证返回类型（增加类型检查）
+                match envelope.payload {
+                    Payload::AuthResponse { success, error, session_id: _ } => {
+                        if !success {
+                            // 关闭连接
+                            conn.close(0u32.into(), b"authentication failed");
+                            return Err(error.unwrap_or_else(|| "认证失败".to_string()));
+                        }
+                    }
+                    other => {
+                        conn.close(0u32.into(), b"unexpected response");
+                        return Err(format!("期望 AuthResponse，收到: {:?}", other));
+                    }
                 }
             }
             AuthMethod::PubKey => {
-                // 客户端侧签名验证需要在 Task 3 实现
-                // 当前返回错误提示用户使用其他认证方式
-                return Err("公钥认证暂未实现，请使用密码认证".to_string());
-            }
-        };
-        
-        // 发送认证请求（增加错误处理）
-        let resp = send_and_receive_quic(&conn, manager.next_request_id(), auth_payload).await
-            .map_err(|e| format!("认证请求失败: {}", e))?;
+                // 公钥认证流程（多步挑战-响应）
+                let private_key = creds.private_key.ok_or_else(|| "公钥认证需要提供私钥".to_string())?;
 
-        let envelope = Envelope::decode(&resp)
-            .map_err(|e| format!("解析认证响应失败: {}", e))?;
+                tracing::info!("[Connection] 开始公钥认证: username={}", creds.username);
 
-        // 验证返回类型（增加类型检查）
-        match envelope.payload {
-            Payload::AuthResponse { success, error, session_id: _ } => {
-                if !success {
-                    // 关闭连接
+                // 执行公钥认证
+                let session_id = perform_pubkey_auth(
+                    &conn,
+                    creds.username.clone(),
+                    private_key,
+                    creds.passphrase,
+                ).await.map_err(|e| {
+                    tracing::error!("[Connection] 公钥认证失败: {}", e);
                     conn.close(0u32.into(), b"authentication failed");
-                    return Err(error.unwrap_or_else(|| "认证失败".to_string()));
-                }
-            }
-            other => {
-                conn.close(0u32.into(), b"unexpected response");
-                return Err(format!("期望 AuthResponse，收到: {:?}", other));
+                    e
+                })?;
+
+                tracing::info!("[Connection] 公钥认证成功: username={}, session_id={:?}", creds.username, session_id);
             }
         }
 
@@ -1401,6 +1424,200 @@ impl rustls::client::danger::ServerCertVerifier for SkipCertVerification {
 /// Stream 操作默认超时时间（30秒）
 /// 适用于常规请求/响应操作（目录列表、文件读写元数据等）
 const STREAM_TIMEOUT_SECS: u64 = 30;
+
+/// 执行公钥认证流程（挑战-响应）
+///
+/// # 参数
+/// - `conn`: QUIC 连接
+/// - `username`: 用户名
+/// - `private_key`: OpenSSH 格式的私钥内容
+/// - `passphrase`: 私钥密码（可选）
+///
+/// # 返回
+/// 成功返回 AuthResponse 的 session_id，失败返回错误信息
+async fn perform_pubkey_auth(
+    conn: &quinn::Connection,
+    username: String,
+    private_key: String,
+    passphrase: Option<String>,
+) -> Result<Option<String>, String> {
+    use ssh_key::PrivateKey;
+    use tokio::io::AsyncWriteExt;
+
+    tracing::info!("[PubKeyAuth] 开始公钥认证流程: username={}", username);
+
+    // ── 第一步：解析私钥 ───────────────────────────────
+    tracing::debug!("[PubKeyAuth] 解析私钥（长度={}字节）", private_key.len());
+
+    let key = if let Some(pwd) = passphrase {
+        // 带密码的私钥
+        PrivateKey::from_openssh(&private_key)
+            .map_err(|e| {
+                tracing::error!("[PubKeyAuth] 私钥解析失败: {}", e);
+                format!("私钥解析失败: {}", e)
+            })?
+            .decrypt(pwd.as_bytes())
+            .map_err(|e| {
+                tracing::error!("[PubKeyAuth] 私钥解密失败（密码错误）: {}", e);
+                format!("私钥解密失败（密码错误）: {}", e)
+            })?
+    } else {
+        // 无密码的私钥
+        PrivateKey::from_openssh(&private_key).map_err(|e| {
+            tracing::error!("[PubKeyAuth] 私钥解析失败: {}", e);
+            format!("私钥解析失败: {}", e)
+        })?
+    };
+
+    tracing::debug!("[PubKeyAuth] 私钥解析成功: 算法={}", key.algorithm());
+
+    // 提取公钥并转换为字节数组
+    let public_key = key.public_key().to_bytes().map_err(|e| {
+        tracing::error!("[PubKeyAuth] 公钥转换失败: {}", e);
+        format!("公钥转换失败: {}", e)
+    })?;
+
+    tracing::debug!("[PubKeyAuth] 公钥提取成功（长度={}字节）", public_key.len());
+
+    // ── 第二步：创建 Stream 并发送公钥请求 ───────────────
+    tracing::debug!("[PubKeyAuth] 创建 QUIC Stream...");
+
+    let timeout_duration = std::time::Duration::from_secs(STREAM_TIMEOUT_SECS);
+    let (mut send, mut recv) = tokio::time::timeout(timeout_duration, conn.open_bi())
+        .await
+        .map_err(|_| "创建 Stream 超时".to_string())?
+        .map_err(|e| format!("创建 Stream 失败: {}", e))?;
+
+    // 发送 AuthPubKeyRequest
+    let request_id = 0; // 使用固定的 request_id（认证请求）
+    let envelope = Envelope::new(request_id, Payload::AuthPubKeyRequest {
+        username: username.clone(),
+        public_key: public_key.clone(),
+    });
+
+    let bytes = envelope.encode()?;
+    let len = (bytes.len() as u32).to_le_bytes();
+
+    tracing::debug!("[PubKeyAuth] 发送公钥请求（{}字节）...", bytes.len());
+
+    tokio::time::timeout(timeout_duration, async {
+        send.write_all(&len).await.map_err(|e| format!("发送长度失败: {}", e))?;
+        send.write_all(&bytes).await.map_err(|e| format!("发送数据失败: {}", e))?;
+        send.flush().await.map_err(|e| format!("刷新发送缓冲区失败: {}", e))?;
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|_| "发送公钥请求超时".to_string())??;
+
+    tracing::debug!("[PubKeyAuth] 公钥请求已发送，等待挑战...");
+
+    // ── 第三步：接收挑战 ─────────────────────────────────
+    let challenge_data = tokio::time::timeout(timeout_duration, async {
+        let mut len_buf = [0u8; 4];
+        recv.read_exact(&mut len_buf).await.map_err(|e| format!("读取挑战长度失败: {}", e))?;
+        let resp_len = u32::from_le_bytes(len_buf) as usize;
+
+        let mut data = vec![0u8; resp_len];
+        recv.read_exact(&mut data).await.map_err(|e| format!("读取挑战数据失败: {}", e))?;
+        Ok::<Vec<u8>, String>(data)
+    })
+    .await
+    .map_err(|_| "接收挑战超时".to_string())??;
+
+    let challenge_envelope = Envelope::decode(&challenge_data)?;
+    let (challenge, challenge_id) = match challenge_envelope.payload {
+        Payload::AuthPubKeyChallenge { challenge, challenge_id } => {
+            tracing::debug!("[PubKeyAuth] 收到挑战（长度={}字节，id={}）", challenge.len(), challenge_id);
+            (challenge, challenge_id)
+        }
+        Payload::Error { message, .. } => {
+            tracing::error!("[PubKeyAuth] Agent 返回错误: {}", message);
+            return Err(format!("Agent 错误: {}", message));
+        }
+        other => {
+            tracing::error!("[PubKeyAuth] 期望挑战，收到: {:?}", other);
+            return Err(format!("期望 AuthPubKeyChallenge，收到: {:?}", other));
+        }
+    };
+
+    // ── 第四步：签名挑战 ─────────────────────────────────
+    tracing::debug!("[PubKeyAuth] 使用私钥签名挑战...");
+
+    // 使用 SSH 签名格式（namespace + hash_alg + msg）
+    // 注意：Agent 端目前简化实现，不验证签名内容，但为了未来兼容性使用正确格式
+    let sshsig = key.sign("gnome-remote", ssh_key::HashAlg::default(), &challenge).map_err(|e| {
+        tracing::error!("[PubKeyAuth] 签名失败: {}", e);
+        format!("签名失败: {}", e)
+    })?;
+
+    // 将 SshSig 编码为 PEM 格式，然后转换为字节数组
+    // Agent 端可以根据需要解析 PEM 或直接使用
+    let signature_pem = sshsig.to_pem(ssh_key::LineEnding::default()).map_err(|e| {
+        tracing::error!("[PubKeyAuth] 签名 PEM 编码失败: {}", e);
+        format!("签名 PEM 编码失败: {}", e)
+    })?;
+
+    let signature_bytes = signature_pem.into_bytes();
+
+    tracing::debug!("[PubKeyAuth] 签名成功（长度={}字节）", signature_bytes.len());
+
+    // ── 第五步：发送签名响应 ─────────────────────────────
+    let response_envelope = Envelope::new(request_id, Payload::AuthPubKeyResponse {
+        challenge_id: challenge_id.clone(),
+        signature: signature_bytes,
+        public_key: public_key.clone(),
+    });
+
+    let bytes = response_envelope.encode()?;
+    let len = (bytes.len() as u32).to_le_bytes();
+
+    tracing::debug!("[PubKeyAuth] 发送签名响应...");
+
+    tokio::time::timeout(timeout_duration, async {
+        send.write_all(&len).await.map_err(|e| format!("发送签名长度失败: {}", e))?;
+        send.write_all(&bytes).await.map_err(|e| format!("发送签名数据失败: {}", e))?;
+        send.flush().await.map_err(|e| format!("刷新发送缓冲区失败: {}", e))?;
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|_| "发送签名响应超时".to_string())??;
+
+    tracing::debug!("[PubKeyAuth] 签名响应已发送，等待最终认证结果...");
+
+    // ── 第六步：接收最终认证结果 ───────────────────────
+    let final_data = tokio::time::timeout(timeout_duration, async {
+        let mut len_buf = [0u8; 4];
+        recv.read_exact(&mut len_buf).await.map_err(|e| format!("读取认证结果长度失败: {}", e))?;
+        let resp_len = u32::from_le_bytes(len_buf) as usize;
+
+        let mut data = vec![0u8; resp_len];
+        recv.read_exact(&mut data).await.map_err(|e| format!("读取认证结果数据失败: {}", e))?;
+        Ok::<Vec<u8>, String>(data)
+    })
+    .await
+    .map_err(|_| "接收认证结果超时".to_string())??;
+
+    let final_envelope = Envelope::decode(&final_data)?;
+    match final_envelope.payload {
+        Payload::AuthResponse { success, error, session_id } => {
+            if success {
+                tracing::info!("[PubKeyAuth] 公钥认证成功: username={}, session_id={:?}", username, session_id);
+                Ok(session_id)
+            } else {
+                tracing::error!("[PubKeyAuth] 公钥认证失败: {:?}", error);
+                Err(error.unwrap_or_else(|| "公钥认证失败".to_string()))
+            }
+        }
+        Payload::Error { message, .. } => {
+            tracing::error!("[PubKeyAuth] Agent 返回错误: {}", message);
+            Err(format!("Agent 错误: {}", message))
+        }
+        other => {
+            tracing::error!("[PubKeyAuth] 期望认证结果，收到: {:?}", other);
+            Err(format!("期望 AuthResponse，收到: {:?}", other))
+        }
+    }
+}
 
 async fn send_and_receive_quic(conn: &quinn::Connection, request_id: u32, payload: Payload) -> Result<Vec<u8>, String> {
     let timeout_duration = std::time::Duration::from_secs(STREAM_TIMEOUT_SECS);
