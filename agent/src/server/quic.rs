@@ -870,11 +870,12 @@ async fn handle_stream(
 
         #[cfg(unix)]
         Payload::TerminalSpawnRequest { shell, cols, rows, working_directory } => {
-            tracing::info!("终端创建请求: shell={}, cols={}, rows={}, cwd={:?}",
-                shell, cols, rows, working_directory);
+            tracing::info!("终端创建请求: shell={}, cols={}, rows={}, cwd={:?}, user={}",
+                shell, cols, rows, working_directory, session.username);
 
-            // 创建 PTY 会话
-            let session_id = pty_manager.spawn(&shell, *cols, *rows, working_directory.as_deref()).await?;
+            // 使用 spawn_as_user 创建 PTY 会话（切换到登录用户身份）
+            // 历史遗留问题：之前使用 spawn() 方法，不会切换用户，导致终端以Agent运行用户身份运行
+            let session_id = pty_manager.spawn_as_user(&shell, *cols, *rows, working_directory.as_deref(), session).await?;
 
             // 注册到连接上下文（连接关闭时自动清理 PTY 会话）
             ctx.register_pty_session(session_id.clone()).await;
