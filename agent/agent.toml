@@ -1,5 +1,4 @@
-# GNOME Remote Agent 配置
-# Token 已自动生成，请妥善保管
+# GNOME Remote Agent 配置文件
 
 [server]
 bind = "0.0.0.0"
@@ -8,37 +7,32 @@ ws_port = 8444
 cert_path = "./cert.pem"
 key_path = "./key.pem"
 
-# SSH兼容认证配置
 [auth.ssh]
-enable_pubkey = true      # 启用公钥认证
-enable_password = true    # 启用密码认证
-pam_service = "sshd"      # 使用系统已有的sshd PAM配置（无需额外配置）
+enable_pubkey = true
+enable_password = true
+pam_service = "sshd"
 
 [security]
-# allowed_paths 为空表示不限制，完全依赖 Linux 文件系统权限
-# 如果需要限制，可以添加路径白名单，例如：
-# allowed_paths = ["/home", "/var/log"]
-allowed_paths = []
-blocked_commands = [
-    "rm -rf /",
-    "dd if=",
-    "mkfs.",
-    ":(){ :|:& };:",
-    "shutdown",
-    "reboot",
-]
+allowed_paths = ["home", "/etc", "/var/log", "/opt"]
+blocked_commands = ["rm -rf /", "dd if=", "mkfs."]
 
 [limits]
 max_terminal_sessions = 10
 max_file_transfer_mb = 500
 metrics_interval_secs = 2
+connection_idle_timeout_secs = 300
 
 [collectors]
-# 系统监控采集间隔（秒）
-metrics_interval_secs = 1
-# 文件变化监听延迟（毫秒，避免频繁触发）
+metrics_interval_secs = 2
 file_changes_delay_ms = 100
-# 进程扫描间隔（秒）
 process_scan_interval_secs = 2
-# 服务状态检查间隔（秒）
 service_status_interval_secs = 5
+
+[audit]
+log_path = "/var/log/gnome-remote/audit.log"
+
+[log]
+# 日志级别: trace, debug, info, warn, error
+level = "info"
+# 日志输出目录
+dir = "logs"

@@ -41,12 +41,16 @@ struct Args {
 /// - **调试模式**：RUST_LOG 环境变量存在时，优先使用；stdout 使用 pretty 格式
 /// - **生产模式**：默认紧凑格式输出到 stdout + JSON 结构化写入日志文件（按天轮转）
 /// - **日志文件**：`{log_dir}/agent.YYYY-MM-DD.log`（JSON 格式，便于日志聚合分析）
-fn init_logging(args: &Args) {
+fn init_logging(_args: &Args, cfg: &config::AgentConfig) {
     use tracing_appender::rolling;
 
     // ── 环境判断 ──────────────────────────────────────────────
     // RUST_LOG 存在 → 调试模式（开发者手动设置了过滤规则）
     let is_debug = std::env::var("RUST_LOG").is_ok();
+
+    // 使用配置文件中的日志级别和目录
+    let log_level = &cfg.log.level;
+    let log_dir = &cfg.log.dir;
 
     // ── 过滤层 ────────────────────────────────────────────────
     let env_filter = if is_debug {
@@ -54,16 +58,16 @@ fn init_logging(args: &Args) {
         tracing_subscriber::EnvFilter::try_from_default_env()
             .unwrap_or_else(|_| "agent=debug".into())
     } else {
-        // 生产模式：使用命令行参数或默认 info
+        // 生产模式：使用配置文件中的日志级别
         tracing_subscriber::EnvFilter::new(format!(
             "agent={},agent::server={},agent::handler={},tokio=info",
-            args.log_level, args.log_level, args.log_level
+            log_level, log_level, log_level
         ))
     };
 
     // ── 日志文件层（JSON 结构化，按天轮转） ────────────────────
-    if args.log_dir != "off" {
-        let file_appender = rolling::daily(&args.log_dir, "agent.log");
+    if log_dir != "off" {
+        let file_appender = rolling::daily(log_dir, "agent.log");
         let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
         // 将 guard 泄漏到全局，防止日志文件句柄在 init() 后被关闭
@@ -141,9 +145,9 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
 
-    init_logging(&args);
-
     let cfg = config::load(&args.config)?;
+
+    init_logging(&args, &cfg);
 
     // 启动时清理过期的临时文件（上次运行中断遗留的 .tmp 文件）
     if !cfg.security.allowed_paths.is_empty() {
@@ -156,7 +160,8 @@ async fn main() -> Result<()> {
     let log_mode = if std::env::var("RUST_LOG").is_ok() { "debug (RUST_LOG)" } else { "production" };
     tracing::info!("GNOME Remote Agent 启动中...");
     tracing::info!("   日志模式: {}", log_mode);
-    tracing::info!("   日志目录: {}", if args.log_dir == "off" { "关闭".to_string() } else { args.log_dir.clone() });
+    tracing::info!("   日志级别: {}", cfg.log.level);
+    tracing::info!("   日志目录: {}", if cfg.log.dir == "off" { "关闭".to_string() } else { cfg.log.dir.clone() });
     tracing::info!("   QUIC  监听: udp://{}:{}", cfg.server.bind, cfg.server.quic_port);
     tracing::info!("   WS    监听: tcp://{}:{}", cfg.server.bind, cfg.server.ws_port);
 

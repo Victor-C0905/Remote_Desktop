@@ -11,6 +11,8 @@ pub struct AgentConfig {
     pub collectors: CollectorsConfig, // 新增
     #[serde(default)]
     pub audit: AuditConfig,
+    #[serde(default)]
+    pub log: LogConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -85,10 +87,29 @@ pub struct AuditConfig {
     pub log_path: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LogConfig {
+    /// 日志级别: trace, debug, info, warn, error
+    #[serde(default = "default_log_level")]
+    pub level: String,
+    /// 日志输出目录
+    #[serde(default = "default_log_dir")]
+    pub dir: String,
+}
+
 impl Default for AuditConfig {
     fn default() -> Self {
         Self {
             log_path: default_audit_log_path(),
+        }
+    }
+}
+
+impl Default for LogConfig {
+    fn default() -> Self {
+        Self {
+            level: default_log_level(),
+            dir: default_log_dir(),
         }
     }
 }
@@ -105,6 +126,8 @@ fn default_file_changes_delay() -> u64 { 100 }
 fn default_process_scan_interval() -> u64 { 2 }
 fn default_service_status_interval() -> u64 { 5 }
 fn default_audit_log_path() -> String { "/var/log/gnome-remote/audit.log".into() }
+fn default_log_level() -> String { "info".into() }
+fn default_log_dir() -> String { "logs".into() }
 
 // SSH 认证默认值
 fn default_enable_pubkey() -> bool { true }
@@ -156,5 +179,6 @@ fn default_config() -> AgentConfig {
             service_status_interval_secs: 5,
         },
         audit: AuditConfig::default(),
+        log: LogConfig::default(),
     }
 }

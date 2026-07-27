@@ -1,0 +1,50 @@
+# GNOME Remote Agent - 生产环境配置
+# 用于生产部署
+
+[server]
+bind = "0.0.0.0"  # 允许远程访问
+quic_port = 8443
+ws_port = 443
+cert_path = "/etc/gnome-remote/cert.pem"
+key_path = "/etc/gnome-remote/key.pem"
+
+[auth.ssh]
+enable_pubkey = true
+enable_password = true  # 生产环境可根据安全策略调整
+pam_service = "sshd"
+
+[security]
+# 生产环境：严格的路径限制
+allowed_paths = [
+    "/home",
+    "/var/log",
+    "/opt"
+]
+blocked_commands = [
+    "rm -rf /",
+    "rm -rf /*",
+    "dd if=",
+    "mkfs.",
+    ":(){ :|:& };:",  # Fork bomb
+    "chmod -R 777 /",
+    "chown -R"
+]
+
+[limits]
+max_terminal_sessions = 20
+max_file_transfer_mb = 500
+metrics_interval_secs = 2
+connection_idle_timeout_secs = 300  # 生产环境：5分钟超时
+
+[collectors]
+metrics_interval_secs = 2
+file_changes_delay_ms = 100
+process_scan_interval_secs = 2
+service_status_interval_secs = 5
+
+[audit]
+log_path = "/var/log/gnome-remote/audit.log"
+
+[log]
+level = "info"  # 生产环境：信息级别日志
+dir = "/var/log/gnome-remote"

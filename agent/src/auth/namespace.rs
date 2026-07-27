@@ -59,6 +59,7 @@ impl UserNamespace {
         use nix::sched::CloneFlags;
         use nix::unistd::getuid;
         use std::fs::File;
+        #[allow(unused_imports)]
         use std::io::Write;
 
         tracing::info!(
