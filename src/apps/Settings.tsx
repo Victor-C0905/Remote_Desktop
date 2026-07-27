@@ -89,19 +89,28 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
         // 读取文件内容
         const content = await file.text();
 
-        // 验证私钥格式（必须是 OpenSSH 或 PEM 格式）
-        const trimmedContent = content.trim();
-        if (!trimmedContent.startsWith('-----BEGIN')) {
-          alert('不支持的私钥格式！\n\n请选择 OpenSSH 格式的私钥文件（通常位于 ~/.ssh/id_ed25519 或 ~/.ssh/id_rsa）。\n\n支持的格式：\n- OpenSSH 私钥（以 -----BEGIN OPENSSH PRIVATE KEY----- 开头）\n- PEM 格式私钥（以 -----BEGIN RSA/ECDSA/DSA PRIVATE KEY----- 开头）\n\n不支持 PuTTY 的 .ppk 格式。');
+        // 基本格式验证
+        if (!content.includes('-----BEGIN')) {
+          alert('选择的文件不是有效的私钥文件。\n\n私钥文件应以 -----BEGIN 开头。\n\n支持的格式：\n• OpenSSH 格式（如 ~/.ssh/id_ed25519）\n• PEM 格式（云服务商提供的密钥）\n\n不支持：PuTTY 格式（.ppk）');
           return;
         }
 
-        // 显示文件名而非内容（安全考虑）
-        setPrivateKeyFile(trimmedContent);
-        log.info('私钥文件已加载:', file.name);
+        // 检查是否是 PuTTY 格式
+        if (content.includes('PuTTY')) {
+          alert('检测到 PuTTY 格式私钥（.ppk）。\n\n请使用 PuTTYgen 转换为 OpenSSH 格式：\n1. 打开 PuTTYgen\n2. 加载您的 .ppk 文件\n3. 点击 "Conversions" -> "Export OpenSSH key"\n4. 保存新的文件');
+          return;
+        }
+
+        // 检查是否加密
+        if (content.includes('ENCRYPTED') && !passphrase) {
+          console.log('检测到加密私钥，用户需要在密码字段输入密码');
+        }
+
+        setPrivateKeyFile(content);
+        log.info('已加载私钥文件:', file.name);
       } catch (error) {
         console.error("读取私钥文件失败:", error);
-        alert("读取私钥文件失败，请检查文件格式");
+        alert("读取私钥文件失败，请检查文件格式和权限");
       }
     }
   };
@@ -195,7 +204,11 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
                   onChange={handlePrivateKeySelect}
                   accept=".pem,.key,id_rsa,id_ed25519,id_ecdsa,id_dsa"
                 />
-                <span className="st-form-hint">选择 SSH 私钥文件（OpenSSH格式，如 ~/.ssh/id_ed25519）</span>
+                <span className="st-form-hint">
+                  选择 SSH 私钥文件（OpenSSH 或 PEM 格式）<br/>
+                  支持：id_ed25519、id_rsa、云服务商提供的密钥<br/>
+                  不支持：PuTTY 格式（.ppk）- 请先转换
+                </span>
               </div>
               {privateKeyFile && (
                 <div className="st-form-row">
@@ -288,19 +301,28 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
         // 读取文件内容
         const content = await file.text();
 
-        // 验证私钥格式（必须是 OpenSSH 或 PEM 格式）
-        const trimmedContent = content.trim();
-        if (!trimmedContent.startsWith('-----BEGIN')) {
-          alert('不支持的私钥格式！\n\n请选择 OpenSSH 格式的私钥文件（通常位于 ~/.ssh/id_ed25519 或 ~/.ssh/id_rsa）。\n\n支持的格式：\n- OpenSSH 私钥（以 -----BEGIN OPENSSH PRIVATE KEY----- 开头）\n- PEM 格式私钥（以 -----BEGIN RSA/ECDSA/DSA PRIVATE KEY----- 开头）\n\n不支持 PuTTY 的 .ppk 格式。');
+        // 基本格式验证
+        if (!content.includes('-----BEGIN')) {
+          alert('选择的文件不是有效的私钥文件。\n\n私钥文件应以 -----BEGIN 开头。\n\n支持的格式：\n• OpenSSH 格式（如 ~/.ssh/id_ed25519）\n• PEM 格式（云服务商提供的密钥）\n\n不支持：PuTTY 格式（.ppk）');
           return;
         }
 
-        // 显示文件名而非内容（安全考虑）
-        setPrivateKeyFile(trimmedContent);
-        log.info('私钥文件已加载:', file.name);
+        // 检查是否是 PuTTY 格式
+        if (content.includes('PuTTY')) {
+          alert('检测到 PuTTY 格式私钥（.ppk）。\n\n请使用 PuTTYgen 转换为 OpenSSH 格式：\n1. 打开 PuTTYgen\n2. 加载您的 .ppk 文件\n3. 点击 "Conversions" -> "Export OpenSSH key"\n4. 保存新的文件');
+          return;
+        }
+
+        // 检查是否加密
+        if (content.includes('ENCRYPTED') && !passphrase) {
+          console.log('检测到加密私钥，用户需要在密码字段输入密码');
+        }
+
+        setPrivateKeyFile(content);
+        log.info('已加载私钥文件:', file.name);
       } catch (error) {
         console.error("读取私钥文件失败:", error);
-        alert("读取私钥文件失败，请检查文件格式");
+        alert("读取私钥文件失败，请检查文件格式和权限");
       }
     }
   };
@@ -394,7 +416,11 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
                   onChange={handlePrivateKeySelect}
                   accept=".pem,.key,id_rsa,id_ed25519,id_ecdsa,id_dsa"
                 />
-                <span className="st-form-hint">选择 SSH 私钥文件（OpenSSH格式，如 ~/.ssh/id_ed25519）</span>
+                <span className="st-form-hint">
+                  选择 SSH 私钥文件（OpenSSH 或 PEM 格式）<br/>
+                  支持：id_ed25519、id_rsa、云服务商提供的密钥<br/>
+                  不支持：PuTTY 格式（.ppk）- 请先转换
+                </span>
               </div>
               {privateKeyFile && (
                 <div className="st-form-row">
