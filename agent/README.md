@@ -168,3 +168,47 @@ sudo systemctl start gnome-remote-agent
 - [PAM 配置说明](../pam.d/README.md)
 - [认证设计文档](../docs/superpowers/specs/2026-07-24-ssh-compatible-authentication-design.md)
 - [实现计划](../docs/superpowers/plans/2026-07-24-ssh-compatible-authentication-implementation.md)
+
+## 支持的密钥格式
+
+### 客户端支持
+
+- ✅ **OpenSSH 格式**（推荐）
+  - 现代Linux/Mac默认格式
+  - 通常位于 `~/.ssh/id_ed25519` 或 `~/.ssh/id_rsa`
+
+- ✅ **PEM 格式**
+  - PKCS#1 RSA：阿里云、AWS等云服务商提供的密钥
+  - PKCS#8：通用PEM格式
+
+### 不支持的格式
+
+- ❌ **PuTTY 格式（.ppk）**
+  - Windows用户常用格式
+  - 需要先转换为 OpenSSH 格式
+  - 转换方法：使用 PuTTYgen 导出为 OpenSSH 格式
+
+### 加密私钥处理
+
+如果您的私钥有密码保护：
+
+1. 在"私钥密码"字段输入密码
+2. 如果是PEM格式加密私钥，建议先解密：
+   ```bash
+   ssh-keygen -p -f <私钥文件>
+   ```
+
+### 常见问题
+
+**Q: 提示"无法解析私钥文件"？**
+A: 检查以下几点：
+- 私钥文件是否完整（包含 -----BEGIN 和 -----END）
+- 是否是PuTTY格式（.ppk）- 需要转换
+- 是否有密码保护 - 需要输入密码
+
+**Q: 如何转换PuTTY格式？**
+A: 使用PuTTYgen：
+1. 打开PuTTYgen
+2. 加载.ppk文件
+3. 点击"Conversions" -> "Export OpenSSH key"
+4. 保存新文件

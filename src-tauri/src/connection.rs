@@ -1441,7 +1441,6 @@ async fn perform_pubkey_auth(
     private_key: String,
     passphrase: Option<String>,
 ) -> Result<Option<String>, String> {
-    use ssh_key::PrivateKey;
     use tokio::io::AsyncWriteExt;
 
     tracing::info!("[PubKeyAuth] 开始公钥认证流程: username={}", username);
@@ -1488,31 +1487,15 @@ async fn perform_pubkey_auth(
         return Err("不支持的私钥格式。请使用OpenSSH格式的私钥文件（通常以 -----BEGIN OPENSSH PRIVATE KEY----- 开头）".to_string());
     }
 
-    // 判断私钥格式并尝试解析
-    let key = if let Some(pwd) = passphrase {
-        // 带密码的私钥
-        tracing::debug!("[PubKeyAuth] 尝试解密带密码的私钥");
-        PrivateKey::from_openssh(&private_key_cleaned)
-            .map_err(|e| {
-                tracing::error!("[PubKeyAuth] OpenSSH私钥解析失败: {}", e);
-                format!("私钥解析失败: {}（请检查私钥格式是否为OpenSSH）", e)
-            })?
-            .decrypt(pwd.as_bytes())
-            .map_err(|e| {
-                tracing::error!("[PubKeyAuth] 私钥解密失败（密码错误）: {}", e);
-                format!("私钥解密失败（密码错误）: {}", e)
-            })?
-    } else {
-        // 无密码的私钥
-        tracing::debug!("[PubKeyAuth] 尝试解析无密码私钥");
-        PrivateKey::from_openssh(&private_key_cleaned).map_err(|e| {
+    // ── 第二步：自动检测私钥格式并解析 ─────────────────────
+    // 自动检测私钥格式并解析
+    tracing::debug!("[PubKeyAuth] 解析私钥（长度={}字节）", private_key_cleaned.len());
+
+    let key = parse_private_key_auto(&private_key_cleaned, passphrase.as_deref())
+        .map_err(|e| {
             tracing::error!("[PubKeyAuth] 私钥解析失败: {}", e);
-            format!(
-                "私钥解析失败: {}（如果私钥有密码保护，请输入密码）",
-                e
-            )
-        })?
-    };
+            e
+        })?;
 
     tracing::debug!("[PubKeyAuth] 私钥解析成功: 算法={}", key.algorithm());
 
@@ -1712,4 +1695,156 @@ async fn send_and_receive_quic(conn: &quinn::Connection, request_id: u32, payloa
     })??;
 
     Ok(data)
+}
+
+// ── PEM 格式私钥解析辅助函数 ─────────────────────────────────
+
+/// 解析 PEM 格式的 RSA 私钥（阿里云等云服务商常用）
+fn parse_pem_rsa(pem: &str, passphrase: Option<&str>) -> Result<ssh_key::PrivateKey, String> {
+    use rsa::RsaPrivateKey;
+    use rsa::pkcs1::DecodeRsaPrivateKey;
+    use rsa::pkcs8::DecodePrivateKey;
+    use ssh_key::private::{RsaKeypair, KeypairData};
+
+    tracing::debug!("[PEM] 开始解析 PEM RSA 私钥");
+
+    // 简化实现：仅支持未加密的 PEM 格式
+    // 加密私钥建议用户先解密或转换为OpenSSH格式
+
+    if passphrase.is_some() {
+        return Err("加密的PEM私钥暂不支持。请使用ssh-keygen解密：\nssh-keygen -p -f <私钥文件>\n或转换为OpenSSH格式：\nssh-keygen -i -f <PEM私钥> > id_rsa".to_string());
+    }
+
+    // 尝试解析未加密的私钥（支持PKCS#1和PKCS#8）
+    let rsa_key = if pem.contains("-----BEGIN PRIVATE KEY-----") {
+        // PKCS#8 格式
+        tracing::debug!("[PEM] 检测到 PKCS#8 格式");
+        RsaPrivateKey::from_pkcs8_pem(pem)
+            .map_err(|e| {
+                tracing::error!("[PEM] PKCS#8 RSA 解析失败: {}", e);
+                format!("PKCS#8 RSA 解析失败: {}", e)
+            })?
+    } else {
+        // PKCS#1 格式
+        tracing::debug!("[PEM] 检测到 PKCS#1 格式");
+        RsaPrivateKey::from_pkcs1_pem(pem)
+            .map_err(|e| {
+                tracing::error!("[PEM] PKCS#1 RSA 解析失败: {}", e);
+                format!("PKCS#1 RSA 解析失败: {}", e)
+            })?
+    };
+
+    // 直接从 rsa::RsaPrivateKey 转换为 ssh_key 格式
+    let rsa_keypair = RsaKeypair::try_from(&rsa_key)
+        .map_err(|e| {
+            tracing::error!("[PEM] 转换为 SSH 密钥失败: {}", e);
+            format!("转换为 SSH 密钥失败: {}", e)
+        })?;
+
+    // 构造 ssh_key::PrivateKey
+    let private_key = ssh_key::PrivateKey::new(
+        KeypairData::Rsa(rsa_keypair),
+        ""  // comment
+    ).map_err(|e| {
+        tracing::error!("[PEM] 构造 SSH 私钥失败: {}", e);
+        format!("构造 SSH 私钥失败: {}", e)
+    })?;
+
+    Ok(private_key)
+}
+
+// ── 私钥自动格式检测 ─────────────────────────────────────
+
+/// 自动检测私钥格式并解析
+///
+/// 支持的格式（按优先级）：
+/// 1. OpenSSH 格式（现代标准）
+/// 2. PEM PKCS#8 格式（通用PEM）
+/// 3. PEM PKCS#1 RSA 格式（阿里云等云服务商）
+fn parse_private_key_auto(key_data: &str, passphrase: Option<&str>) -> Result<ssh_key::PrivateKey, String> {
+    tracing::debug!("[KeyParser] 开始自动检测私钥格式");
+
+    // 1. 尝试 OpenSSH 格式（优先级最高）
+    if key_data.contains("-----BEGIN OPENSSH PRIVATE KEY-----") {
+        tracing::debug!("[KeyParser] 尝试解析 OpenSSH 格式");
+        match parse_openssh_key(key_data, passphrase) {
+            Ok(key) => {
+                tracing::info!("[KeyParser] ✅ 成功解析 OpenSSH 格式密钥");
+                return Ok(key);
+            }
+            Err(e) => {
+                tracing::debug!("[KeyParser] ❌ OpenSSH 格式解析失败: {}", e);
+            }
+        }
+    }
+
+    // 2. 尝试 PEM 格式
+    if key_data.contains("-----BEGIN") {
+        tracing::debug!("[KeyParser] 尝试解析 PEM 格式");
+
+        // 检查是否加密
+        if key_data.contains("ENCRYPTED") {
+            tracing::warn!("[KeyParser] 检测到加密私钥");
+            if passphrase.is_none() {
+                return Err("私钥已加密，请在'私钥密码'字段输入密码。".to_string());
+            }
+        }
+
+        match parse_pem_rsa(key_data, passphrase) {
+            Ok(key) => {
+                tracing::info!("[KeyParser] ✅ 成功解析 PEM 格式密钥");
+                return Ok(key);
+            }
+            Err(e) => {
+                tracing::debug!("[KeyParser] ❌ PEM 格式解析失败: {}", e);
+            }
+        }
+    }
+
+    // 3. 所有格式都失败，返回友好的错误提示
+    Err(generate_key_parse_error(key_data))
+}
+
+/// 解析 OpenSSH 格式私钥
+fn parse_openssh_key(key_data: &str, passphrase: Option<&str>) -> Result<ssh_key::PrivateKey, String> {
+    if let Some(pwd) = passphrase {
+        ssh_key::PrivateKey::from_openssh(key_data)
+            .map_err(|e| format!("OpenSSH格式解析失败: {}", e))?
+            .decrypt(pwd.as_bytes())
+            .map_err(|e| format!("私钥解密失败（密码错误）: {}", e))
+    } else {
+        ssh_key::PrivateKey::from_openssh(key_data)
+            .map_err(|e| format!("OpenSSH格式解析失败: {}（如果私钥有密码保护，请输入密码）", e))
+    }
+}
+
+/// 生成友好的密钥解析错误提示
+fn generate_key_parse_error(key_data: &str) -> String {
+    let mut error_msg = String::from("无法解析私钥文件。\n\n");
+
+    // 分析可能的问题
+    if key_data.contains("PuTTY") {
+        error_msg.push_str("检测到 PuTTY 格式（.ppk）。请使用以下方法转换：\n");
+        error_msg.push_str("1. 打开 PuTTYgen\n");
+        error_msg.push_str("2. 加载您的 .ppk 文件\n");
+        error_msg.push_str("3. 点击 'Conversions' -> 'Export OpenSSH key'\n");
+        error_msg.push_str("4. 保存为新的 OpenSSH 格式文件\n\n");
+    } else if !key_data.contains("-----BEGIN") {
+        error_msg.push_str("未检测到有效的私钥格式。请检查：\n");
+        error_msg.push_str("1. 文件是否完整（包含 -----BEGIN 和 -----END 标记）\n");
+        error_msg.push_str("2. 是否是私钥文件（公钥文件无法用于认证）\n\n");
+    } else {
+        error_msg.push_str("支持的格式：\n");
+        error_msg.push_str("✅ OpenSSH 格式（推荐）\n");
+        error_msg.push_str("✅ PEM 格式 - PKCS#1 RSA（阿里云、AWS等云服务商）\n");
+        error_msg.push_str("✅ PEM 格式 - PKCS#8（通用PEM格式）\n\n");
+
+        error_msg.push_str("不支持的格式：\n");
+        error_msg.push_str("❌ PuTTY 格式（.ppk）- 需要先转换为 OpenSSH 格式\n");
+        error_msg.push_str("❌ SSH.com 格式 - 需要先转换\n\n");
+
+        error_msg.push_str("如果私钥有密码保护，请在'私钥密码'字段输入密码。");
+    }
+
+    error_msg
 }

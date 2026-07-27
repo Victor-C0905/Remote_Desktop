@@ -42,6 +42,12 @@ ctrlc = "3.4"
 ssh-key = { version = "0.6", features = ["ed25519", "rsa", "encryption"] }
 signature = "2.2"
 
+# PEM 格式私钥支持（包括加密私钥）
+rsa = { version = "0.9", features = ["pem"] }
+pkcs8 = { version = "0.10", features = ["pem", "encryption"] }
+pkcs1 = { version = "0.7", features = ["pem"] }
+pem = "3.0"
+
 [profile.release]
 opt-level = 3          # 最高优化等级
 lto = true             # 链接时优化(减少体积)

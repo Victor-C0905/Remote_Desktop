@@ -124,7 +124,6 @@ export function TransferPanel({ transfers, onRemoveTask, onClose, statusbarRef }
    * 计算任务统计（仅统计可见任务）
    */
   const activeCount = visibleTransfers.filter((t) => t.status === 'active').length;
-  const pendingCount = visibleTransfers.filter((t) => t.status === 'pending').length;
   const pausedCount = visibleTransfers.filter((t) => t.status === 'paused').length;
 
   /**
