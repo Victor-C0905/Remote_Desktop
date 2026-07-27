@@ -1446,6 +1446,9 @@ async fn perform_pubkey_auth(
     tracing::info!("[PubKeyAuth] 开始公钥认证流程: username={}", username);
 
     // ── 第一步：解析私钥 ───────────────────────────────
+    tracing::info!("[PubKeyAuth] 私钥原始长度={}字节", private_key.len());
+    tracing::info!("[PubKeyAuth] 私钥前150字符: {}", &private_key.chars().take(150).collect::<String>());
+
     tracing::debug!("[PubKeyAuth] 解析私钥（长度={}字节）", private_key.len());
 
     // 清理私钥内容：
@@ -1497,15 +1500,20 @@ async fn perform_pubkey_auth(
             e
         })?;
 
-    tracing::debug!("[PubKeyAuth] 私钥解析成功: 算法={}", key.algorithm());
+    tracing::info!("[PubKeyAuth] 私钥解析成功: 算法={}", key.algorithm());
 
-    // 提取公钥并转换为字节数组
-    let public_key = key.public_key().to_bytes().map_err(|e| {
-        tracing::error!("[PubKeyAuth] 公钥转换失败: {}", e);
-        format!("公钥转换失败: {}", e)
+    // 提取公钥并转换为 SSH 格式字符串（如 "ssh-rsa AAAA..."）
+    tracing::info!("[PubKeyAuth] 尝试提取公钥...");
+    let public_key_str = key.public_key().to_openssh().map_err(|e| {
+        tracing::error!("[PubKeyAuth] 公钥 SSH 格式转换失败: {}", e);
+        format!("公钥 SSH 格式转换失败: {}", e)
     })?;
 
-    tracing::debug!("[PubKeyAuth] 公钥提取成功（长度={}字节）", public_key.len());
+    tracing::info!("[PubKeyAuth] 公钥 SSH 格式: {}", &public_key_str[..std::cmp::min(50, public_key_str.len())]);
+
+    let public_key = public_key_str.into_bytes();
+
+    tracing::info!("[PubKeyAuth] 公钥提取成功（长度={}字节）", public_key.len());
 
     // ── 第二步：创建 Stream 并发送公钥请求 ───────────────
     tracing::debug!("[PubKeyAuth] 创建 QUIC Stream...");
@@ -1569,27 +1577,104 @@ async fn perform_pubkey_auth(
     };
 
     // ── 第四步：签名挑战 ─────────────────────────────────
-    tracing::debug!("[PubKeyAuth] 使用私钥签名挑战...");
+    tracing::info!("[PubKeyAuth] 使用私钥签名挑战...");
+    tracing::info!("[PubKeyAuth] 挑战长度: {} 字节", challenge.len());
 
-    // 使用 SSH 签名格式（namespace + hash_alg + msg）
-    // 注意：Agent 端目前简化实现，不验证签名内容，但为了未来兼容性使用正确格式
-    let sshsig = key.sign("gnome-remote", ssh_key::HashAlg::default(), &challenge).map_err(|e| {
-        tracing::error!("[PubKeyAuth] 签名失败: {}", e);
-        format!("签名失败: {}", e)
-    })?;
+    // 使用 SSH 标准签名格式
+    // 根据密钥类型选择合适的签名方式
+    let signature_bytes = match key.algorithm() {
+        ssh_key::Algorithm::Rsa { hash } => {
+            tracing::info!("[PubKeyAuth] 使用 RSA 签名，hash={:?}", hash);
 
-    // 将 SshSig 编码为 PEM 格式，然后转换为字节数组
-    // Agent 端可以根据需要解析 PEM 或直接使用
-    let signature_pem = sshsig.to_pem(ssh_key::LineEnding::default()).map_err(|e| {
-        tracing::error!("[PubKeyAuth] 签名 PEM 编码失败: {}", e);
-        format!("签名 PEM 编码失败: {}", e)
-    })?;
+            // 获取 RSA 私钥的原始数据
+            let rsa_keypair = match key.key_data() {
+                ssh_key::private::KeypairData::Rsa(rsa) => rsa,
+                _ => return Err("密钥数据不是 RSA 格式".to_string()),
+            };
 
-    let signature_bytes = signature_pem.into_bytes();
+            // 构造 RSA 私钥用于签名
+            use rsa::pkcs1v15::SigningKey;
+            use rsa::sha2::Sha256;
+            use rsa::signature::{Signer, SignatureEncoding};
 
-    tracing::debug!("[PubKeyAuth] 签名成功（长度={}字节）", signature_bytes.len());
+            // 从 ssh_key 的 RSA keypair 构造 rsa::RsaPrivateKey
+            let n = rsa_keypair.public.n.as_bytes();
+            let e = rsa_keypair.public.e.as_bytes();
+            let d = rsa_keypair.private.d.as_bytes();
+            let p = rsa_keypair.private.p.as_bytes();
+            let q = rsa_keypair.private.q.as_bytes();
+
+            tracing::info!("[PubKeyAuth] RSA 密钥参数: n={}字节, e={}字节, d={}字节", n.len(), e.len(), d.len());
+
+            // 构造 RSA 私钥
+            let rsa_priv = rsa::RsaPrivateKey::from_components(
+                rsa::BigUint::from_bytes_be(n),
+                rsa::BigUint::from_bytes_be(e),
+                rsa::BigUint::from_bytes_be(d),
+                vec![
+                    rsa::BigUint::from_bytes_be(p),
+                    rsa::BigUint::from_bytes_be(q),
+                ],
+            ).map_err(|e| {
+                tracing::error!("[PubKeyAuth] RSA 密钥构造失败: {}", e);
+                format!("RSA 密钥构造失败: {}", e)
+            })?;
+
+            // 使用 PKCS#1 v1.5 签名（SSH 标准使用的方式）
+            let signing_key = SigningKey::<Sha256>::new(rsa_priv);
+            let signature = signing_key.sign(&challenge);
+
+            tracing::info!("[PubKeyAuth] RSA 签名成功（长度={}字节）", signature.to_bytes().len());
+
+            // 包装成 SSH 协议格式：
+            // string  算法名（如 "rsa-sha2-256"）
+            // string  签名数据
+            let sig_bytes = signature.to_bytes();
+            let algo_name = b"rsa-sha2-256";
+            let mut ssh_signature = Vec::new();
+            // 算法名（4字节大端长度 + 数据）
+            ssh_signature.extend_from_slice(&(algo_name.len() as u32).to_be_bytes());
+            ssh_signature.extend_from_slice(algo_name);
+            // 签名数据（4字节大端长度 + 数据）
+            ssh_signature.extend_from_slice(&(sig_bytes.len() as u32).to_be_bytes());
+            ssh_signature.extend_from_slice(&sig_bytes);
+
+            tracing::info!("[PubKeyAuth] SSH格式签名（长度={}字节）", ssh_signature.len());
+            ssh_signature
+        }
+        ssh_key::Algorithm::Ed25519 => {
+            tracing::info!("[PubKeyAuth] 使用 Ed25519 签名");
+
+            // 使用 ssh_key 的标准签名
+            let sshsig = key.sign("gnome-remote", ssh_key::HashAlg::default(), &challenge).map_err(|e| {
+                tracing::error!("[PubKeyAuth] Ed25519 签名失败: {}", e);
+                format!("Ed25519 签名失败: {}", e)
+            })?;
+
+            let sig_pem = sshsig.to_pem(ssh_key::LineEnding::default()).map_err(|e| {
+                tracing::error!("[PubKeyAuth] 签名 PEM 编码失败: {}", e);
+                format!("签名 PEM 编码失败: {}", e)
+            })?;
+
+            sig_pem.into_bytes()
+        }
+        other => {
+            tracing::error!("[PubKeyAuth] 不支持的密钥算法: {:?}", other);
+            return Err(format!("不支持的密钥算法: {:?}", other));
+        }
+    };
+
+    tracing::info!("[PubKeyAuth] 签名成功（长度={}字节）", signature_bytes.len());
 
     // ── 第五步：发送签名响应 ─────────────────────────────
+    // 注意：服务器端期望在一个新的 Stream 上接收响应
+    tracing::info!("[PubKeyAuth] 创建新的 QUIC Stream 发送签名响应...");
+
+    let (mut resp_send, mut resp_recv) = tokio::time::timeout(timeout_duration, conn.open_bi())
+        .await
+        .map_err(|_| "创建响应 Stream 超时".to_string())?
+        .map_err(|e| format!("创建响应 Stream 失败: {}", e))?;
+
     let response_envelope = Envelope::new(request_id, Payload::AuthPubKeyResponse {
         challenge_id: challenge_id.clone(),
         signature: signature_bytes,
@@ -1599,27 +1684,27 @@ async fn perform_pubkey_auth(
     let bytes = response_envelope.encode()?;
     let len = (bytes.len() as u32).to_le_bytes();
 
-    tracing::debug!("[PubKeyAuth] 发送签名响应...");
+    tracing::info!("[PubKeyAuth] 发送签名响应...");
 
     tokio::time::timeout(timeout_duration, async {
-        send.write_all(&len).await.map_err(|e| format!("发送签名长度失败: {}", e))?;
-        send.write_all(&bytes).await.map_err(|e| format!("发送签名数据失败: {}", e))?;
-        send.flush().await.map_err(|e| format!("刷新发送缓冲区失败: {}", e))?;
+        resp_send.write_all(&len).await.map_err(|e| format!("发送签名长度失败: {}", e))?;
+        resp_send.write_all(&bytes).await.map_err(|e| format!("发送签名数据失败: {}", e))?;
+        resp_send.flush().await.map_err(|e| format!("刷新发送缓冲区失败: {}", e))?;
         Ok::<(), String>(())
     })
     .await
     .map_err(|_| "发送签名响应超时".to_string())??;
 
-    tracing::debug!("[PubKeyAuth] 签名响应已发送，等待最终认证结果...");
+    tracing::info!("[PubKeyAuth] 签名响应已发送，等待最终认证结果...");
 
     // ── 第六步：接收最终认证结果 ───────────────────────
     let final_data = tokio::time::timeout(timeout_duration, async {
         let mut len_buf = [0u8; 4];
-        recv.read_exact(&mut len_buf).await.map_err(|e| format!("读取认证结果长度失败: {}", e))?;
+        resp_recv.read_exact(&mut len_buf).await.map_err(|e| format!("读取认证结果长度失败: {}", e))?;
         let resp_len = u32::from_le_bytes(len_buf) as usize;
 
         let mut data = vec![0u8; resp_len];
-        recv.read_exact(&mut data).await.map_err(|e| format!("读取认证结果数据失败: {}", e))?;
+        resp_recv.read_exact(&mut data).await.map_err(|e| format!("读取认证结果数据失败: {}", e))?;
         Ok::<Vec<u8>, String>(data)
     })
     .await
@@ -1708,10 +1793,8 @@ fn parse_pem_rsa(pem: &str, passphrase: Option<&str>) -> Result<ssh_key::Private
 
     tracing::debug!("[PEM] 开始解析 PEM RSA 私钥");
 
-    // 简化实现：仅支持未加密的 PEM 格式
-    // 加密私钥建议用户先解密或转换为OpenSSH格式
-
-    if passphrase.is_some() {
+    // 检查是否有非空密码（空字符串视为无密码）
+    if passphrase.filter(|s| !s.is_empty()).is_some() {
         return Err("加密的PEM私钥暂不支持。请使用ssh-keygen解密：\nssh-keygen -p -f <私钥文件>\n或转换为OpenSSH格式：\nssh-keygen -i -f <PEM私钥> > id_rsa".to_string());
     }
 
@@ -1763,6 +1846,11 @@ fn parse_pem_rsa(pem: &str, passphrase: Option<&str>) -> Result<ssh_key::Private
 /// 3. PEM PKCS#1 RSA 格式（阿里云等云服务商）
 fn parse_private_key_auto(key_data: &str, passphrase: Option<&str>) -> Result<ssh_key::PrivateKey, String> {
     tracing::debug!("[KeyParser] 开始自动检测私钥格式");
+
+    // 关键调试信息（INFO级别，确保显示）
+    tracing::info!("[KeyParser] 私钥长度: {} 字节", key_data.len());
+    tracing::info!("[KeyParser] 私钥前100字符: {}", &key_data.chars().take(100).collect::<String>());
+    tracing::info!("[KeyParser] 密码字段: {:?}", passphrase);
 
     // 1. 尝试 OpenSSH 格式（优先级最高）
     if key_data.contains("-----BEGIN OPENSSH PRIVATE KEY-----") {

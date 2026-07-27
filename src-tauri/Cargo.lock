@@ -1683,6 +1683,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "sha2",
  "signature",
  "ssh-key",
  "tauri",
