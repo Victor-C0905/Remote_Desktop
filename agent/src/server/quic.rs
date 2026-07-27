@@ -17,7 +17,7 @@ use crate::pty::PtyManager;
 use crate::subscription::SubscriptionManager;
 use crate::event_bus::EventBus;
 use crate::protocol::{Envelope, Payload};
-use crate::auth::{Authenticator, CompositeAuthenticator, UserSession, ChallengeManager};
+use crate::auth::{Authenticator, CompositeAuthenticator, UserSession, ChallengeManager, AuthRateLimiter};
 use crate::audit::AuditLogger;
 
 // 全局 Stream ID 计数器
@@ -47,6 +47,8 @@ pub struct ConnectionContext {
     transfer_session_ids: Arc<Mutex<Vec<String>>>,
     /// 已认证的用户会话信息
     session: Arc<Mutex<Option<UserSession>>>,
+    /// 会话最后活动时间（用于会话超时检查）
+    session_last_activity: Arc<AtomicU64>,
 }
 
 impl ConnectionContext {
@@ -58,6 +60,7 @@ impl ConnectionContext {
             stream_ids: Arc::new(Mutex::new(Vec::new())),
             transfer_session_ids: Arc::new(Mutex::new(Vec::new())),
             session: Arc::new(Mutex::new(None)),
+            session_last_activity: Arc::new(AtomicU64::new(current_timestamp_secs())),
         }
     }
 
@@ -65,6 +68,8 @@ impl ConnectionContext {
     pub async fn set_session(&self, session: UserSession) {
         let mut sess = self.session.lock().await;
         *sess = Some(session);
+        // 初始化会话活动时间
+        self.session_last_activity.store(current_timestamp_secs(), Ordering::Relaxed);
     }
 
     /// 获取用户会话信息
@@ -72,6 +77,23 @@ impl ConnectionContext {
     pub async fn get_session(&self) -> Option<UserSession> {
         let sess = self.session.lock().await;
         sess.clone()
+    }
+
+    /// 更新会话活动时间（每次用户操作时调用）
+    pub fn touch_session(&self) {
+        self.session_last_activity.store(current_timestamp_secs(), Ordering::Relaxed);
+    }
+
+    /// 检查会话是否超时（24小时不活动）
+    pub fn is_session_timeout(&self) -> bool {
+        let now = current_timestamp_secs();
+        let last = self.session_last_activity.load(Ordering::Relaxed);
+        let idle_secs = now.saturating_sub(last);
+
+        // 24小时 = 86400秒
+        const SESSION_TIMEOUT_SECS: u64 = 24 * 60 * 60;
+
+        idle_secs >= SESSION_TIMEOUT_SECS
     }
 
     /// 订阅关闭信号（每个需要响应关闭的 Stream 调用一次）
@@ -213,6 +235,29 @@ pub async fn run(
     let server_config = build_server_config(certs, key)?;
     let endpoint = quinn::Endpoint::server(server_config, addr.parse()?)?;
 
+    // 创建全局认证速率限制器
+    let rate_limiter = Arc::new(AuthRateLimiter::new());
+    tracing::info!("🛡️  认证速率限制器已启用");
+
+    // 创建全局挑战管理器（用于公钥认证）
+    let challenge_manager = Arc::new(ChallengeManager::new());
+    tracing::info!("🔐 挑战管理器已启用");
+
+    // 启动定期清理任务（每5分钟清理过期记录）
+    let rate_limiter_clone = rate_limiter.clone();
+    let challenge_manager_clone = challenge_manager.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(300));
+        loop {
+            interval.tick().await;
+            // 清理速率限制器过期记录
+            rate_limiter_clone.cleanup_expired().await;
+            // 清理挑战管理器过期挑战
+            challenge_manager_clone.cleanup_expired().await;
+            tracing::debug!("认证速率限制器和挑战管理器清理完成");
+        }
+    });
+
     while let Some(incoming) = endpoint.accept().await {
         let cfg_clone = cfg.clone();
         let subscription_manager_clone = subscription_manager.clone();
@@ -220,6 +265,8 @@ pub async fn run(
         let pty_manager_clone = pty_manager.clone();
         let authenticator_clone = authenticator.clone();
         let audit_log_clone = audit_log.clone();
+        let rate_limiter_clone = rate_limiter.clone();
+        let challenge_manager_clone = challenge_manager.clone();
         let timeout_secs = idle_timeout_secs;
         tokio::spawn(async move {
             let conn = incoming.await;
@@ -233,6 +280,8 @@ pub async fn run(
                         pty_manager_clone,
                         authenticator_clone,
                         audit_log_clone,
+                        rate_limiter_clone,
+                        challenge_manager_clone,
                         timeout_secs,
                     ).await {
                         tracing::warn!("QUIC 连接错误: {}", e);
@@ -275,6 +324,8 @@ async fn handle_connection(
     pty_manager: Arc<PtyManager>,
     authenticator: Arc<CompositeAuthenticator>,
     audit_log: Arc<AuditLogger>,
+    rate_limiter: Arc<AuthRateLimiter>,
+    challenge_manager: Arc<ChallengeManager>,
     idle_timeout_secs: u64,
 ) -> Result<()> {
     let remote = connection.remote_address();
@@ -285,9 +336,6 @@ async fn handle_connection(
 
     // 每个连接独立的活动时间追踪（Arc<AtomicU64> 存储最近活动的 Unix 时间戳秒数）
     let last_activity: Arc<AtomicU64> = Arc::new(AtomicU64::new(current_timestamp_secs()));
-
-    // 创建挑战管理器（用于公钥认证的挑战-响应机制）
-    let challenge_manager = Arc::new(ChallengeManager::new());
 
     // 用于通知超时检查任务退出的信号
     let (timeout_cancel_tx, mut timeout_cancel_rx) = tokio::sync::oneshot::channel::<()>();
@@ -336,15 +384,63 @@ async fn handle_connection(
         auth_envelope.payload.type_name()
     );
 
+    // 获取客户端IP地址（用于速率限制）
+    let client_ip = connection.remote_address().ip().to_string();
+
     // 验证是否为认证请求
     let session = match &auth_envelope.payload {
         // ========== 密码认证（PAM）==========
         Payload::AuthPasswordRequest { username, password } => {
             tracing::info!("收到密码认证请求: remote={}, username={}", remote, username);
 
+            // 1. 检查IP速率限制
+            if !rate_limiter.is_ip_allowed(&client_ip).await? {
+                tracing::warn!(
+                    "IP速率限制触发: ip={}, username={}",
+                    client_ip,
+                    username
+                );
+                audit_log.log_auth_failure(username, 0, "ip_rate_limited");
+
+                send_auth_response(
+                    &mut auth_send,
+                    auth_envelope.request_id,
+                    false,
+                    Some("请求过于频繁，请稍后再试"),
+                    None,
+                ).await?;
+
+                connection.close(0u32.into(), b"rate limited");
+                return Ok(());
+            }
+
+            // 2. 检查用户名锁定状态
+            if !rate_limiter.is_username_allowed(username).await? {
+                tracing::warn!(
+                    "用户名被锁定: username={}, remote={}",
+                    username,
+                    remote
+                );
+                audit_log.log_auth_failure(username, 0, "account_locked");
+
+                send_auth_response(
+                    &mut auth_send,
+                    auth_envelope.request_id,
+                    false,
+                    Some("账户暂时锁定，请15分钟后再试"),
+                    None,
+                ).await?;
+
+                connection.close(0u32.into(), b"account locked");
+                return Ok(());
+            }
+
             // 调用认证器进行密码认证
             match authenticator.authenticate_password(username, password) {
                 Ok(crate::auth::AuthResult::Success(identity)) => {
+                    // 认证成功：清除失败记录
+                    rate_limiter.clear_failures(username).await;
+
                     // 创建用户会话
                     let session = UserSession::new(identity);
 
@@ -361,6 +457,9 @@ async fn handle_connection(
                     session
                 }
                 Ok(crate::auth::AuthResult::Failure) => {
+                    // 认证失败：记录失败
+                    rate_limiter.record_failure(username).await;
+
                     // 认证失败
                     audit_log.log_auth_failure(username, 0, "invalid_password");
 
@@ -372,6 +471,9 @@ async fn handle_connection(
                     return Ok(());
                 }
                 Err(e) => {
+                    // 记录失败（系统错误也算失败）
+                    rate_limiter.record_failure(username).await;
+
                     // 记录详细日志
                     tracing::error!("密码认证系统错误: remote={}, username={}, error={}", remote, username, e);
                     audit_log.log_auth_failure(username, 0, "auth_error");
@@ -392,6 +494,48 @@ async fn handle_connection(
                 username,
                 public_key.len()
             );
+
+            // 1. 检查IP速率限制
+            if !rate_limiter.is_ip_allowed(&client_ip).await? {
+                tracing::warn!(
+                    "IP速率限制触发: ip={}, username={}",
+                    client_ip,
+                    username
+                );
+                audit_log.log_auth_failure(username, 0, "ip_rate_limited");
+
+                send_auth_response(
+                    &mut auth_send,
+                    auth_envelope.request_id,
+                    false,
+                    Some("请求过于频繁，请稍后再试"),
+                    None,
+                ).await?;
+
+                connection.close(0u32.into(), b"rate limited");
+                return Ok(());
+            }
+
+            // 2. 检查用户名锁定状态
+            if !rate_limiter.is_username_allowed(username).await? {
+                tracing::warn!(
+                    "用户名被锁定: username={}, remote={}",
+                    username,
+                    remote
+                );
+                audit_log.log_auth_failure(username, 0, "account_locked");
+
+                send_auth_response(
+                    &mut auth_send,
+                    auth_envelope.request_id,
+                    false,
+                    Some("账户暂时锁定，请15分钟后再试"),
+                    None,
+                ).await?;
+
+                connection.close(0u32.into(), b"account locked");
+                return Ok(());
+            }
 
             // ⚠️ 安全检查：验证公钥是否在用户的 authorized_keys 中
             let ssh_auth = crate::auth::ssh::SshAuthenticator::new();
@@ -422,6 +566,9 @@ async fn handle_connection(
                     public_key.len()
                 );
                 audit_log.log_auth_failure(&username, 0, "pubkey_not_authorized");
+
+                // 记录失败（公钥未授权也算失败）
+                rate_limiter.record_failure(username).await;
 
                 send_auth_response(
                     &mut auth_send,
@@ -528,6 +675,9 @@ async fn handle_connection(
                                         );
                                         audit_log.log_auth_failure(&verified_username, 0, "pubkey_mismatch");
 
+                                        // 记录失败
+                                        rate_limiter.record_failure(&verified_username).await;
+
                                         send_auth_response(
                                             &mut resp_send,
                                             resp_envelope.request_id,
@@ -545,6 +695,9 @@ async fn handle_connection(
                                     match ssh_auth.verify_signature(&resp_public_key, &signature, &challenge_data) {
                                         Ok(true) => {
                                             tracing::debug!("签名验证成功: challenge_id={}", resp_challenge_id);
+
+                                            // 认证成功：清除失败记录
+                                            rate_limiter.clear_failures(&verified_username).await;
 
                                             // 获取真实的用户信息
                                             let user_info = match crate::auth::get_user_info(&verified_username) {
@@ -598,6 +751,9 @@ async fn handle_connection(
                                             );
                                             audit_log.log_auth_failure(&verified_username, 0, "invalid_signature");
 
+                                            // 记录失败
+                                            rate_limiter.record_failure(&verified_username).await;
+
                                             send_auth_response(
                                                 &mut resp_send,
                                                 resp_envelope.request_id,
@@ -615,6 +771,9 @@ async fn handle_connection(
                                                 remote, resp_challenge_id, e
                                             );
                                             audit_log.log_auth_failure(&verified_username, 0, "signature_error");
+
+                                            // 记录失败
+                                            rate_limiter.record_failure(&verified_username).await;
 
                                             send_auth_response(
                                                 &mut resp_send,
@@ -638,6 +797,9 @@ async fn handle_connection(
                                         e
                                     );
                                     audit_log.log_auth_failure(&username, 0, "pubkey_challenge_failed");
+
+                                    // 记录失败（挑战过期也算失败）
+                                    rate_limiter.record_failure(username).await;
 
                                     // 发送认证失败响应
                                     send_auth_response(
@@ -679,6 +841,7 @@ async fn handle_connection(
     // 每 30 秒检查一次自上次活动是否超过 idle_timeout_secs
     let connection_clone = connection.clone();
     let last_activity_clone = last_activity.clone();
+    let ctx_clone = ctx.clone();
     let timeout_check_handle = tokio::spawn(async move {
         let check_interval = Duration::from_secs(30);
 
@@ -693,6 +856,7 @@ async fn handle_connection(
                     let last = last_activity_clone.load(Ordering::Relaxed);
                     let idle_secs = now.saturating_sub(last);
 
+                    // 检查连接空闲超时
                     if idle_secs >= idle_timeout_secs {
                         tracing::warn!(
                             "[TimeoutChecker] 连接空闲超时: remote={}, idle={}s, threshold={}s，即将关闭连接",
@@ -707,6 +871,16 @@ async fn handle_connection(
                             "[TimeoutChecker] 连接活跃: remote={}, idle={}s/{}s",
                             remote, idle_secs, idle_timeout_secs
                         );
+                    }
+
+                    // 检查会话超时（24小时不活动）
+                    if ctx_clone.is_session_timeout() {
+                        tracing::warn!(
+                            "[TimeoutChecker] 会话超时（24小时不活动）: remote={}，即将关闭连接",
+                            remote
+                        );
+                        connection_clone.close(0x02_u32.into(), b"session timeout");
+                        break;
                     }
                 }
             }
@@ -767,6 +941,9 @@ async fn handle_stream(
     // 生成唯一的 Stream ID
     let stream_id = STREAM_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
     tracing::debug!("Stream ID: {}", stream_id);
+
+    // 更新会话活动时间（防止会话超时）
+    ctx.touch_session();
 
     // 读取第一条消息（订阅请求）
     let data = read_message(&mut recv).await?;
