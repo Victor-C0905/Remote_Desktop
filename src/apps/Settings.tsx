@@ -64,7 +64,10 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
         method: authMethod,
         username,
         ...(authMethod === AuthMethod.PASSWORD && { password }),
-        ...(authMethod === AuthMethod.PUBKEY && { privateKey: privateKeyFile, passphrase }),
+        ...(authMethod === AuthMethod.PUBKEY && {
+          privateKey: privateKeyFile,
+          ...(passphrase && { passphrase }), // 只在密码非空时才添加
+        }),
       };
 
       onAdd(name, host, port, auth);
@@ -285,7 +288,10 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
         method: authMethod,
         username,
         ...(authMethod === AuthMethod.PASSWORD && { password }),
-        ...(authMethod === AuthMethod.PUBKEY && { privateKey: privateKeyFile, passphrase }),
+        ...(authMethod === AuthMethod.PUBKEY && {
+          privateKey: privateKeyFile,
+          ...(passphrase && { passphrase }), // 只在密码非空时才添加
+        }),
       };
 
       onSave(server.id, name, host, port, auth);

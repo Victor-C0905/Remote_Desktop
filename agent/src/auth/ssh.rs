@@ -206,10 +206,20 @@ impl SshAuthenticator {
     fn parse_public_key(&self, pubkey: &[u8]) -> Result<ssh_key::PublicKey> {
         use ssh_key::PublicKey;
 
-        // 尝试直接解析为 SSH 公钥格式
-        // pubkey 可能是 base64 编码的字符串，先尝试转换为字符串
-        let pubkey_str = std::str::from_utf8(pubkey)
-            .map_err(|e| anyhow::anyhow!("公钥不是有效的 UTF-8: {}", e))?;
+        // 方法 0: 尝试直接从字节解析（SSH 二进制格式）
+        if let Ok(key) = PublicKey::from_bytes(pubkey) {
+            tracing::debug!("公钥解析成功（原始字节格式）");
+            return Ok(key);
+        }
+
+        // 尝试转换为 UTF-8 字符串
+        let pubkey_str = match std::str::from_utf8(pubkey) {
+            Ok(s) => s,
+            Err(_) => {
+                // UTF-8 转换失败，直接返回错误
+                return Err(anyhow::anyhow!("无法解析公钥（非UTF-8且非SSH字节格式）"));
+            }
+        };
 
         tracing::trace!("尝试解析公钥字符串: {} bytes", pubkey_str.len());
 
@@ -225,12 +235,6 @@ impl SshAuthenticator {
                 tracing::debug!("公钥解析成功（Base64 解码格式）");
                 return Ok(key);
             }
-        }
-
-        // 方法 3: 尝试直接从字节解析
-        if let Ok(key) = PublicKey::from_bytes(pubkey) {
-            tracing::debug!("公钥解析成功（原始字节格式）");
-            return Ok(key);
         }
 
         Err(anyhow::anyhow!("无法解析公钥格式"))
@@ -358,10 +362,56 @@ impl SshAuthenticator {
                 }
             }
             ssh_key::Algorithm::Rsa { .. } => {
-                // RSA 验证（复杂一些，需要处理不同哈希算法）
-                // 简化实现：暂时返回 false，后续可以完善
-                tracing::warn!("RSA 签名验证尚未完全实现");
-                Ok(false)
+                // RSA 验证（使用 rsa-sha2-256 算法）
+                tracing::debug!("开始 RSA 签名验证: sig_len={}", sig_data.len());
+
+                // 从 ssh_key 公钥提取 RSA 公钥的 n 和 e
+                let rsa_pub = match public_key.key_data().rsa() {
+                    Some(rsa) => rsa,
+                    None => {
+                        tracing::error!("无法提取 RSA 公钥");
+                        return Ok(false);
+                    }
+                };
+
+                let n = rsa_pub.n.as_bytes();
+                let e = rsa_pub.e.as_bytes();
+
+                tracing::debug!("RSA 公钥参数: n={}字节, e={}字节", n.len(), e.len());
+
+                // 构造 rsa::RsaPublicKey
+                let rsa_public_key = rsa::RsaPublicKey::new(
+                    rsa::BigUint::from_bytes_be(n),
+                    rsa::BigUint::from_bytes_be(e),
+                ).map_err(|e| {
+                    tracing::error!("RSA 公钥构造失败: {}", e);
+                    anyhow::anyhow!("RSA 公钥构造失败: {}", e)
+                })?;
+
+                // 使用 PKCS#1 v1.5 + SHA-256 验证签名
+                use rsa::pkcs1v15::VerifyingKey;
+                use rsa::sha2::Sha256;
+                use rsa::signature::Verifier;
+
+                let verifying_key = VerifyingKey::<Sha256>::new(rsa_public_key);
+
+                // sig_data 是原始的 PKCS#1 v1.5 签名
+                let signature = rsa::pkcs1v15::Signature::try_from(sig_data)
+                    .map_err(|e| {
+                        tracing::error!("签名格式转换失败: {}", e);
+                        anyhow::anyhow!("签名格式转换失败: {}", e)
+                    })?;
+
+                match verifying_key.verify(challenge, &signature) {
+                    Ok(()) => {
+                        tracing::info!("RSA 签名验证成功");
+                        Ok(true)
+                    }
+                    Err(e) => {
+                        tracing::warn!("RSA 签名验证失败: {}", e);
+                        Ok(false)
+                    }
+                }
             }
             _ => {
                 tracing::warn!("不支持的密钥类型");
