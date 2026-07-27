@@ -40,6 +40,73 @@ impl SshAuthenticator {
         Self {}
     }
 
+    /// 检查公钥是否在用户的 authorized_keys 中
+    ///
+    /// # 参数
+    /// - `username`: 用户名
+    /// - `pubkey`: 公钥数据（可能是 OpenSSH 格式字符串或原始字节）
+    ///
+    /// # 返回
+    /// - Ok(true): 公钥已授权
+    /// - Ok(false): 公钥未授权
+    /// - Err: 检查过程中发生错误
+    pub fn check_pubkey_in_authorized_keys(&self, username: &str, pubkey: &[u8]) -> Result<bool> {
+        // 第一步：加载用户的 authorized_keys
+        let content = self.load_authorized_keys(username)?;
+
+        // 如果文件为空，直接返回 false
+        if content.is_empty() {
+            tracing::warn!("用户的 authorized_keys 文件为空或不存在: username={}", username);
+            return Ok(false);
+        }
+
+        // 第二步：解析 authorized_keys
+        let authorized_keys = self.parse_authorized_keys(&content)?;
+
+        // 第三步：解析客户端提供的公钥
+        // 尝试提取公钥的 base64 部分
+        let client_pubkey_base64 = self.extract_pubkey_base64(pubkey)?;
+
+        // 第四步：查找匹配的公钥
+        let key_found = authorized_keys.iter().any(|key| {
+            // authorized_keys 中的每个 key 都是 base64 解码后的字节
+            // 我们需要比较 base64 编码是否匹配
+            let authorized_base64 = base64_encode(key);
+            authorized_base64 == client_pubkey_base64
+        });
+
+        if key_found {
+            tracing::info!("公钥匹配成功: username={}", username);
+        } else {
+            tracing::warn!("公钥未匹配: username={}", username);
+        }
+
+        Ok(key_found)
+    }
+
+    /// 从公钥数据中提取 base64 编码部分
+    ///
+    /// 支持格式：
+    /// 1. OpenSSH 格式字符串："ssh-rsa AAAA... user@host"
+    /// 2. 纯 base64 字节
+    fn extract_pubkey_base64(&self, pubkey: &[u8]) -> Result<String> {
+        // 尝试转换为 UTF-8 字符串
+        if let Ok(pubkey_str) = std::str::from_utf8(pubkey) {
+            // 如果是 OpenSSH 格式（包含空格），提取第二部分
+            let parts: Vec<&str> = pubkey_str.split_whitespace().collect();
+            if parts.len() >= 2 {
+                // 返回 base64 部分（第二部分）
+                return Ok(parts[1].to_string());
+            } else {
+                // 整个字符串就是 base64
+                return Ok(pubkey_str.trim().to_string());
+            }
+        }
+
+        // 如果不是 UTF-8，直接编码为 base64
+        Ok(base64_encode(pubkey))
+    }
+
     /// 获取用户的 authorized_keys 文件路径
     ///
     /// # 参数
@@ -543,6 +610,18 @@ fn base64_decode(input: &str) -> Result<Vec<u8>> {
     STANDARD
         .decode(input)
         .map_err(|e| anyhow::anyhow!("Base64 decode error: {}", e))
+}
+
+/// Base64编码辅助函数
+///
+/// # 参数
+/// - `input`: 原始字节
+///
+/// # 返回
+/// - 返回 base64 编码的字符串
+fn base64_encode(input: &[u8]) -> String {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    STANDARD.encode(input)
 }
 
 // ============================================================================
