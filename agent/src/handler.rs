@@ -22,7 +22,7 @@ lazy_static::lazy_static! {
 // 权限检查函数
 // ============================================================================
 
-/// 检查路径权限
+/// 检查路径权限（家目录范围）
 ///
 /// 验证用户是否有权访问指定路径，确保路径在用户的家目录范围内。
 ///
@@ -37,6 +37,7 @@ lazy_static::lazy_static! {
 /// # 安全性
 /// - 只允许访问用户家目录及其子目录
 /// - 防止路径遍历攻击（如 `../`）
+/// - root用户(uid=0)拥有整个文件系统的访问权限
 fn check_path_permission(path: &str, session: &UserSession) -> Result<bool, String> {
     let path = PathBuf::from(path);
 
@@ -73,6 +74,38 @@ fn check_path_permission(path: &str, session: &UserSession) -> Result<bool, Stri
     }
 
     Ok(true)
+}
+
+/// 检查路径权限（包括allowed_paths白名单检查）
+///
+/// # 参数
+/// - `path`: 要检查的路径
+/// - `cfg`: Agent配置
+/// - `session`: 用户会话信息
+///
+/// # 返回
+/// - `Ok(())`: 权限检查通过
+/// - `Err(String)`: 权限被拒绝，包含错误信息
+fn check_allowed_paths(path: &str, cfg: &AgentConfig, session: &UserSession) -> Result<(), String> {
+    // root用户(uid=0)跳过白名单检查
+    if session.uid == 0 {
+        tracing::trace!("root用户跳过白名单检查: {}", path);
+        return Ok(());
+    }
+
+    // 普通用户：如果allowed_paths不为空，则检查白名单
+    if !cfg.security.allowed_paths.is_empty() {
+        let allowed = cfg
+            .security
+            .allowed_paths
+            .iter()
+            .any(|prefix| path.starts_with(prefix));
+        if !allowed {
+            return Err(format!("访问被拒绝: 不在允许的路径列表中 ({})", path));
+        }
+    }
+
+    Ok(())
 }
 
 #[tracing::instrument(skip(envelope, cfg, session), fields(request_id = envelope.request_id, payload_type = envelope.payload.type_name()))]
@@ -442,7 +475,7 @@ pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &U
 
         Payload::GetCurrentUser => {
             tracing::info!("获取当前用户请求");
-            let username = handle_get_current_user();
+            let username = handle_get_current_user(session);
             tracing::info!("当前用户: {}", username);
             Envelope::new(
                 envelope.request_id,
@@ -573,8 +606,17 @@ pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &U
     }
 }
 
-fn handle_get_current_user() -> String {
-    whoami::username()
+/// 获取当前登录用户名
+///
+/// 返回SSH/PAM认证后的用户名，而不是Agent运行用户
+///
+/// # 参数
+/// - `session`: 用户会话信息
+///
+/// # 返回
+/// 登录用户名（如"vic"）
+fn handle_get_current_user(session: &UserSession) -> String {
+    session.username.clone()
 }
 
 fn handle_get_mounts() -> Vec<MountInfo> {
@@ -594,18 +636,8 @@ fn handle_get_mounts() -> Vec<MountInfo> {
 }
 
 fn handle_read_dir(path: &str, cfg: &AgentConfig, session: &UserSession) -> Result<Vec<FileEntry>, String> {
-    // 如果 allowed_paths 不为空，则检查白名单
-    // 如果 allowed_paths 为空，则不限制，依赖 Linux 文件系统权限
-    if !cfg.security.allowed_paths.is_empty() {
-        let allowed = cfg
-            .security
-            .allowed_paths
-            .iter()
-            .any(|prefix| path.starts_with(prefix));
-        if !allowed {
-            return Err(format!("访问被拒绝: 不在允许的路径列表中 ({})", path));
-        }
-    }
+    // 检查白名单权限（root用户自动跳过）
+    check_allowed_paths(path, cfg, session)?;
 
     // 使用 UserExecutor 在用户上下文中执行操作
     let executor = UserExecutor::new(session);
@@ -652,18 +684,8 @@ fn handle_read_dir(path: &str, cfg: &AgentConfig, session: &UserSession) -> Resu
 
 fn handle_read_file(path: &str, cfg: &AgentConfig, session: &UserSession) -> Result<(String, u64, u64), String> {
     tracing::debug!("[handle_read_file] path={}", path);
-    // 如果 allowed_paths 不为空，则检查白名单
-    // 如果 allowed_paths 为空，则不限制，依赖 Linux 文件系统权限
-    if !cfg.security.allowed_paths.is_empty() {
-        let allowed = cfg
-            .security
-            .allowed_paths
-            .iter()
-            .any(|prefix| path.starts_with(prefix));
-        if !allowed {
-            return Err(format!("访问被拒绝: 不在允许的路径列表中 ({})", path));
-        }
-    }
+    // 检查白名单权限（root用户自动跳过）
+    check_allowed_paths(path, cfg, session)?;
 
     // 使用 UserExecutor 在用户上下文中执行操作
     let executor = UserExecutor::new(session);
@@ -715,18 +737,8 @@ fn handle_read_file(path: &str, cfg: &AgentConfig, session: &UserSession) -> Res
 
 fn handle_write_file(path: &str, content: &str, cfg: &AgentConfig, session: &UserSession) -> Result<(u64, u64), String> {
     tracing::info!("[handle_write_file] path={}", path);
-    // 如果 allowed_paths 不为空，则检查白名单
-    // 如果 allowed_paths 为空，则不限制，依赖 Linux 文件系统权限
-    if !cfg.security.allowed_paths.is_empty() {
-        let allowed = cfg
-            .security
-            .allowed_paths
-            .iter()
-            .any(|prefix| path.starts_with(prefix));
-        if !allowed {
-            return Err(format!("访问被拒绝: 不在允许的路径列表中 ({})", path));
-        }
-    }
+    // 检查白名单权限（root用户自动跳过）
+    check_allowed_paths(path, cfg, session)?;
 
     // 使用 UserExecutor 在用户上下文中执行操作
     let executor = UserExecutor::new(session);
@@ -789,17 +801,8 @@ fn handle_apply_diff(
     tracing::debug!("[handle_apply_diff] 开始处理: path={}, base_mtime={}, diffs_count={}",
         path, base_mtime, diffs.len());
 
-    // 检查路径权限
-    if !cfg.security.allowed_paths.is_empty() {
-        let allowed = cfg
-            .security
-            .allowed_paths
-            .iter()
-            .any(|prefix| path.starts_with(prefix));
-        if !allowed {
-            return Err(format!("访问被拒绝: 不在允许的路径列表中 ({})", path));
-        }
-    }
+    // 检查白名单权限（root用户自动跳过）
+    check_allowed_paths(path, cfg, session)?;
 
     // 使用 UserExecutor 在用户上下文中执行操作
     let executor = UserExecutor::new(session);
@@ -865,18 +868,8 @@ fn handle_apply_diff(
 
 fn handle_delete(path: &str, cfg: &AgentConfig, session: &UserSession) -> Result<(), String> {
     tracing::info!("[handle_delete] path={}", path);
-    // 如果 allowed_paths 不为空，则检查白名单
-    // 如果 allowed_paths 为空，则不限制，依赖 Linux 文件系统权限
-    if !cfg.security.allowed_paths.is_empty() {
-        let allowed = cfg
-            .security
-            .allowed_paths
-            .iter()
-            .any(|prefix| path.starts_with(prefix));
-        if !allowed {
-            return Err(format!("访问被拒绝: 不在允许的路径列表中 ({})", path));
-        }
-    }
+    // 检查白名单权限（root用户自动跳过）
+    check_allowed_paths(path, cfg, session)?;
 
     // 检查是否在禁止删除的路径
     for blocked in &cfg.security.blocked_commands {
@@ -914,18 +907,8 @@ fn handle_delete(path: &str, cfg: &AgentConfig, session: &UserSession) -> Result
 }
 
 fn handle_mkdir(path: &str, cfg: &AgentConfig, session: &UserSession) -> Result<String, String> {
-    // 如果 allowed_paths 不为空，则检查白名单
-    // 如果 allowed_paths 为空，则不限制，依赖 Linux 文件系统权限
-    if !cfg.security.allowed_paths.is_empty() {
-        let allowed = cfg
-            .security
-            .allowed_paths
-            .iter()
-            .any(|prefix| path.starts_with(prefix));
-        if !allowed {
-            return Err(format!("访问被拒绝: 不在允许的路径列表中 ({})", path));
-        }
-    }
+    // 检查白名单权限（root用户自动跳过）
+    check_allowed_paths(path, cfg, session)?;
 
     // 使用 UserExecutor 在用户上下文中执行操作
     let executor = UserExecutor::new(session);
@@ -946,23 +929,9 @@ fn handle_mkdir(path: &str, cfg: &AgentConfig, session: &UserSession) -> Result<
 }
 
 fn handle_rename(old_path: &str, new_path: &str, cfg: &AgentConfig, session: &UserSession) -> Result<(String, String), String> {
-    // 如果 allowed_paths 不为空，则检查白名单
-    // 如果 allowed_paths 为空，则不限制，依赖 Linux 文件系统权限
-    if !cfg.security.allowed_paths.is_empty() {
-        let allowed_old = cfg
-            .security
-            .allowed_paths
-            .iter()
-            .any(|prefix| old_path.starts_with(prefix));
-        let allowed_new = cfg
-            .security
-            .allowed_paths
-            .iter()
-            .any(|prefix| new_path.starts_with(prefix));
-        if !allowed_old || !allowed_new {
-            return Err(format!("访问被拒绝: 不在允许的路径列表中"));
-        }
-    }
+    // 检查白名单权限（root用户自动跳过）
+    check_allowed_paths(old_path, cfg, session)?;
+    check_allowed_paths(new_path, cfg, session)?;
 
     // 使用 UserExecutor 在用户上下文中执行操作
     let executor = UserExecutor::new(session);
@@ -985,23 +954,9 @@ fn handle_rename(old_path: &str, new_path: &str, cfg: &AgentConfig, session: &Us
 
 fn handle_copy(src: &str, dst: &str, cfg: &AgentConfig, session: &UserSession) -> Result<(String, String), String> {
     tracing::info!("[handle_copy] src={}, dst={}", src, dst);
-    // 如果 allowed_paths 不为空，则检查白名单
-    // 如果 allowed_paths 为空，则不限制，依赖 Linux 文件系统权限
-    if !cfg.security.allowed_paths.is_empty() {
-        let allowed_src = cfg
-            .security
-            .allowed_paths
-            .iter()
-            .any(|prefix| src.starts_with(prefix));
-        let allowed_dst = cfg
-            .security
-            .allowed_paths
-            .iter()
-            .any(|prefix| dst.starts_with(prefix));
-        if !allowed_src || !allowed_dst {
-            return Err(format!("访问被拒绝: 不在允许的路径列表中"));
-        }
-    }
+    // 检查白名单权限（root用户自动跳过）
+    check_allowed_paths(src, cfg, session)?;
+    check_allowed_paths(dst, cfg, session)?;
 
     // 使用 UserExecutor 在用户上下文中执行操作
     let executor = UserExecutor::new(session);

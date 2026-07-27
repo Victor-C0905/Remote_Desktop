@@ -15,9 +15,6 @@ use std::path::PathBuf;
 
 use super::UserSession;
 
-#[cfg(target_os = "linux")]
-use super::UserNamespace;
-
 /// 用户上下文执行器
 ///
 /// 封装用户切换逻辑，支持在指定用户的上下文中执行操作。
@@ -56,8 +53,10 @@ impl UserExecutor {
     /// 在用户上下文中执行操作
     ///
     /// # 实现机制
-    /// - Linux平台: 使用User Namespace隔离
-    /// - 其他平台: 记录警告日志，直接执行
+    /// - Agent以root身份运行，直接执行文件操作
+    /// - 通过 check_path_permission 逻辑权限检查控制访问范围
+    /// - 不使用setuid（避免主进程永久降权）
+    /// - 不使用User Namespace（避免兼容性问题）
     ///
     /// # 参数
     /// - `f`: 要执行的闭包
@@ -66,8 +65,9 @@ impl UserExecutor {
     /// 返回闭包的执行结果
     ///
     /// # 安全性
-    /// - Linux平台通过User Namespace提供隔离
-    /// - 非Linux平台无隔离，仅用于开发/测试
+    /// - Agent必须以root运行
+    /// - 文件操作前必须调用 check_path_permission 进行权限检查
+    /// - 文件系统权限作为第二道防线
     ///
     /// # 示例
     /// ```rust,ignore
@@ -81,7 +81,7 @@ impl UserExecutor {
         F: FnOnce() -> Result<T> + Send + 'static,
         T: Send + 'static,
     {
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         {
             tracing::info!(
                 "在用户上下文中执行操作: uid={}, gid={}",
@@ -89,19 +89,37 @@ impl UserExecutor {
                 self.gid
             );
 
-            // 创建User Namespace并切换
-            let ns = UserNamespace::new(self.uid, self.gid);
-            ns.create_and_switch()
-                .context("Failed to create and switch user namespace")?;
+            // 获取当前用户ID
+            let current_uid = nix::unistd::getuid().as_raw();
 
-            // 执行用户操作
+            // 如果当前已经是目标用户，直接执行
+            if current_uid == self.uid {
+                tracing::debug!("当前用户已是目标用户，跳过切换: uid={}", self.uid);
+                return f();
+            }
+
+            // 如果当前是root用户，直接以root权限执行
+            // 权限控制通过 check_path_permission 函数实现
+            if current_uid == 0 {
+                tracing::debug!(
+                    "root用户执行操作（逻辑权限已检查）: target_uid={}",
+                    self.uid
+                );
+                return f();
+            }
+
+            // 非root用户：直接执行，依赖文件系统权限
+            tracing::debug!(
+                "当前用户(uid={})执行操作，依赖文件系统权限",
+                current_uid
+            );
             f()
         }
 
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(unix))]
         {
             tracing::warn!(
-                "User Namespace仅支持Linux平台，当前平台直接执行（无隔离）: uid={}, gid={}",
+                "当前平台直接执行（无用户隔离）: uid={}, gid={}",
                 self.uid,
                 self.gid
             );
@@ -112,8 +130,8 @@ impl UserExecutor {
     /// 在用户上下文中生成子进程（Unix平台，用于PTY）
     ///
     /// # 实现机制
-    /// - 使用fork创建子进程
-    /// - 子进程中切换到用户上下文
+    /// - 使用Command创建子进程
+    /// - 子进程中通过setuid/setgid切换到目标用户（root时）
     /// - 父进程返回子进程的PID
     ///
     /// # 参数
@@ -124,14 +142,14 @@ impl UserExecutor {
     /// 返回子进程的PID
     ///
     /// # 安全性
-    /// - 使用User Namespace隔离
+    /// - root用户通过setuid/setgid切换到目标用户
+    /// - 非root用户依赖文件系统权限
     /// - 子进程继承父进程的文件描述符
     ///
     /// # 平台
     /// 仅在Unix平台可用
     #[cfg(unix)]
     pub fn spawn_process(&self, program: &str, args: &[&str]) -> Result<i32> {
-        use nix::unistd::{fork, ForkResult};
         use std::os::unix::process::CommandExt;
         use std::process::Command;
 
@@ -156,19 +174,36 @@ impl UserExecutor {
         // 在子进程执行前设置uid/gid
         unsafe {
             cmd.pre_exec(move || {
-                #[cfg(target_os = "linux")]
-                {
-                    // 创建User Namespace
-                    let ns = UserNamespace::new(uid, gid);
-                    ns.create_and_switch()
-                        .expect("Failed to switch to user namespace");
+                // 获取当前用户ID
+                let current_uid = nix::unistd::getuid().as_raw();
+
+                // 如果当前已经是目标用户，无需切换
+                if current_uid == uid {
+                    return Ok(());
                 }
 
-                #[cfg(not(target_os = "linux"))]
-                {
-                    tracing::warn!("User Namespace not supported, skipping user switch");
+                // 如果当前是root用户，切换到目标用户
+                if current_uid == 0 {
+                    // 先切换GID，再切换UID（顺序重要：先降GID再降UID）
+                    nix::unistd::setgid(nix::unistd::Gid::from_raw(gid))
+                        .map_err(|e| std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            format!("Failed to setgid: {}", e)
+                        ))?;
+                    nix::unistd::setuid(nix::unistd::Uid::from_raw(uid))
+                        .map_err(|e| std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            format!("Failed to setuid: {}", e)
+                        ))?;
+                    return Ok(());
                 }
 
+                // 非root用户：无法切换用户，依赖文件系统权限
+                tracing::warn!(
+                    "非root用户(uid={})无法切换到目标用户(uid={})，依赖文件系统权限",
+                    current_uid,
+                    uid
+                );
                 Ok(())
             });
         }
