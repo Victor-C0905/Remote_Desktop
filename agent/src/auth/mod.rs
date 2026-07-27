@@ -8,6 +8,7 @@
 //! - `mod.rs`: 定义 Authenticator trait 和公共类型
 //! - `ssh.rs`: SSH公钥认证实现
 //! - `pam.rs`: PAM密码认证实现
+//! - `rate_limiter.rs`: 认证速率限制（防暴力破解）
 
 use anyhow::Result;
 use std::fmt;
@@ -19,12 +20,14 @@ pub mod pam;
 pub mod session;
 pub mod ssh;
 pub mod challenge;
+pub mod rate_limiter;
 
 pub use executor::UserExecutor;
 #[cfg(target_os = "linux")]
 pub use namespace::UserNamespace;
 pub use session::UserSession;
 pub use challenge::ChallengeManager;
+pub use rate_limiter::AuthRateLimiter;
 
 // ============================================================================
 // 公共类型定义
