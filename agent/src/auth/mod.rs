@@ -37,9 +37,6 @@ pub enum AuthResult {
     Success(UserIdentity),
     /// 认证失败
     Failure,
-    /// 部分成功（需要更多认证）
-    #[allow(dead_code)]
-    Partial,
 }
 
 /// 用户身份信息

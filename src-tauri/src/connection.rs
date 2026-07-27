@@ -1449,12 +1449,53 @@ async fn perform_pubkey_auth(
     // ── 第一步：解析私钥 ───────────────────────────────
     tracing::debug!("[PubKeyAuth] 解析私钥（长度={}字节）", private_key.len());
 
+    // 清理私钥内容：
+    // 1. 去除BOM标记（\u{FEFF}）
+    // 2. 统一换行符（将 \r\n 转为 \n）
+    // 3. 去除首尾空白
+    let private_key_cleaned = private_key
+        .strip_prefix('\u{FEFF}')
+        .unwrap_or(&private_key)
+        .replace("\r\n", "\n")
+        .trim()
+        .to_string();
+
+    tracing::debug!("[PubKeyAuth] 私钥清理后长度={}字节", private_key_cleaned.len());
+
+    // 调试：输出私钥的前150个字符
+    let preview_len = std::cmp::min(150, private_key_cleaned.len());
+    tracing::debug!("[PubKeyAuth] 私钥预览（前{}字符）: {:?}", preview_len, &private_key_cleaned[..preview_len]);
+
+    // 检查是否包含不可见字符
+    let has_null = private_key_cleaned.contains('\u{0000}');
+    let has_non_printable = private_key_cleaned.chars().any(|c| {
+        c.is_control() && c != '\n' && c != '\r' && c != '\t'
+    });
+
+    if has_null {
+        tracing::error!("[PubKeyAuth] 私钥包含 NUL 字节（\\0），这通常是二进制数据被错误读取导致的");
+    }
+    if has_non_printable {
+        tracing::error!("[PubKeyAuth] 私钥包含不可打印的控制字符");
+    }
+
+    // 检查私钥格式
+    if !private_key_cleaned.starts_with("-----BEGIN") {
+        tracing::error!(
+            "[PubKeyAuth] 不支持的私钥格式（应以 -----BEGIN 开头），当前开头: {}",
+            &private_key_cleaned[..std::cmp::min(50, private_key_cleaned.len())]
+        );
+        return Err("不支持的私钥格式。请使用OpenSSH格式的私钥文件（通常以 -----BEGIN OPENSSH PRIVATE KEY----- 开头）".to_string());
+    }
+
+    // 判断私钥格式并尝试解析
     let key = if let Some(pwd) = passphrase {
         // 带密码的私钥
-        PrivateKey::from_openssh(&private_key)
+        tracing::debug!("[PubKeyAuth] 尝试解密带密码的私钥");
+        PrivateKey::from_openssh(&private_key_cleaned)
             .map_err(|e| {
-                tracing::error!("[PubKeyAuth] 私钥解析失败: {}", e);
-                format!("私钥解析失败: {}", e)
+                tracing::error!("[PubKeyAuth] OpenSSH私钥解析失败: {}", e);
+                format!("私钥解析失败: {}（请检查私钥格式是否为OpenSSH）", e)
             })?
             .decrypt(pwd.as_bytes())
             .map_err(|e| {
@@ -1463,9 +1504,13 @@ async fn perform_pubkey_auth(
             })?
     } else {
         // 无密码的私钥
-        PrivateKey::from_openssh(&private_key).map_err(|e| {
+        tracing::debug!("[PubKeyAuth] 尝试解析无密码私钥");
+        PrivateKey::from_openssh(&private_key_cleaned).map_err(|e| {
             tracing::error!("[PubKeyAuth] 私钥解析失败: {}", e);
-            format!("私钥解析失败: {}", e)
+            format!(
+                "私钥解析失败: {}（如果私钥有密码保护，请输入密码）",
+                e
+            )
         })?
     };
 

@@ -312,7 +312,29 @@ async fn handle_connection(
     }
 
     let auth_data = auth_data.unwrap();
-    let auth_envelope = Envelope::decode(&auth_data).map_err(|e| anyhow::anyhow!(e))?;
+
+    // 解析认证请求
+    let auth_envelope = match Envelope::decode(&auth_data) {
+        Ok(envelope) => envelope,
+        Err(e) => {
+            tracing::error!(
+                "❌ 认证请求解析失败: remote={}, error={}, data_len={}",
+                remote,
+                e,
+                auth_data.len()
+            );
+            send_auth_response(&mut auth_send, 0, false, Some("协议格式错误"), None).await?;
+            connection.close(0u32.into(), b"invalid protocol");
+            return Ok(());
+        }
+    };
+
+    tracing::info!(
+        "📥 收到认证请求: remote={}, request_id={}, payload_type={}",
+        remote,
+        auth_envelope.request_id,
+        auth_envelope.payload.type_name()
+    );
 
     // 验证是否为认证请求
     let session = match &auth_envelope.payload {
@@ -349,16 +371,6 @@ async fn handle_connection(
                     connection.close(0u32.into(), b"authentication failed");
                     return Ok(());
                 }
-                Ok(crate::auth::AuthResult::Partial) => {
-                    // 需要更多认证
-                    audit_log.log_auth_failure(username, 0, "partial_auth");
-
-                    send_auth_response(&mut auth_send, auth_envelope.request_id, false, Some("需要更多认证因素"), None).await?;
-
-                    tracing::warn!("❌ 密码认证需要更多因素: remote={}, username={}", remote, username);
-                    connection.close(0u32.into(), b"authentication failed");
-                    return Ok(());
-                }
                 Err(e) => {
                     // 记录详细日志
                     tracing::error!("密码认证系统错误: remote={}, username={}, error={}", remote, username, e);
@@ -372,9 +384,14 @@ async fn handle_connection(
             }
         }
 
-        // ========== 公钥认证（SSH）- 挑战-响应机制 ==========
+        // ========== 公钥认证（SSH）==========
         Payload::AuthPubKeyRequest { username, public_key } => {
-            tracing::info!("收到公钥认证请求（第一步）: remote={}, username={}", remote, username);
+            tracing::info!(
+                "🔐 收到公钥认证请求: remote={}, username={}, pubkey_len={}",
+                remote,
+                username,
+                public_key.len()
+            );
 
             // 第一步：生成挑战
             let (challenge_id, challenge_data) = challenge_manager
@@ -412,7 +429,11 @@ async fn handle_connection(
                 }
             }
 
-            tracing::info!("✅ 公钥认证挑战已发送: username={}, challenge_id={}", username, challenge_id);
+            tracing::info!(
+                "✅ 公钥认证挑战已发送: username={}, challenge_id={}",
+                username,
+                challenge_id
+            );
 
             // 第二步：等待客户端的响应 Stream
             let response_stream = connection.accept_bi().await;
@@ -436,8 +457,8 @@ async fn handle_connection(
                             signature,
                             public_key: resp_public_key,
                         } => {
-                            tracing::debug!(
-                                "收到公钥认证响应: challenge_id={}, signature_len={}, pubkey_len={}",
+                            tracing::info!(
+                                "📥 收到公钥认证响应: challenge_id={}, signature_len={}, pubkey_len={}",
                                 resp_challenge_id,
                                 signature.len(),
                                 resp_public_key.len()

@@ -81,13 +81,28 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
     }
   };
 
-  // 处理私钥文件选择
-  const handlePrivateKeySelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // 处理私钥文件选择（AddServerModal）
+  const handlePrivateKeySelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      // Tauri 环境下 file.path 包含文件路径,浏览器环境下使用 file.name
-      const filePath = (file as any).path || file.name;
-      setPrivateKeyFile(filePath);
+      try {
+        // 读取文件内容
+        const content = await file.text();
+
+        // 验证私钥格式（必须是 OpenSSH 或 PEM 格式）
+        const trimmedContent = content.trim();
+        if (!trimmedContent.startsWith('-----BEGIN')) {
+          alert('不支持的私钥格式！\n\n请选择 OpenSSH 格式的私钥文件（通常位于 ~/.ssh/id_ed25519 或 ~/.ssh/id_rsa）。\n\n支持的格式：\n- OpenSSH 私钥（以 -----BEGIN OPENSSH PRIVATE KEY----- 开头）\n- PEM 格式私钥（以 -----BEGIN RSA/ECDSA/DSA PRIVATE KEY----- 开头）\n\n不支持 PuTTY 的 .ppk 格式。');
+          return;
+        }
+
+        // 显示文件名而非内容（安全考虑）
+        setPrivateKeyFile(trimmedContent);
+        log.info('私钥文件已加载:', file.name);
+      } catch (error) {
+        console.error("读取私钥文件失败:", error);
+        alert("读取私钥文件失败，请检查文件格式");
+      }
     }
   };
 
@@ -178,13 +193,13 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
                   type="file"
                   className="st-form-input"
                   onChange={handlePrivateKeySelect}
-                  accept=".pem,.key,.pub"
+                  accept=".pem,.key,id_rsa,id_ed25519,id_ecdsa,id_dsa"
                 />
-                <span className="st-form-hint">选择 SSH 私钥文件 (.pem, .key)</span>
+                <span className="st-form-hint">选择 SSH 私钥文件（OpenSSH格式，如 ~/.ssh/id_ed25519）</span>
               </div>
               {privateKeyFile && (
                 <div className="st-form-row">
-                  <span className="st-form-hint">已选择: {privateKeyFile}</span>
+                  <span className="st-form-hint">已选择: {privateKeyFile.split('\n')[0].substring(0, 50)}...</span>
                 </div>
               )}
               <div className="st-form-row">
@@ -265,13 +280,28 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
     }
   };
 
-  // 处理私钥文件选择
-  const handlePrivateKeySelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // 处理私钥文件选择（EditServerModal）
+  const handlePrivateKeySelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      // Tauri 环境下 file.path 包含文件路径,浏览器环境下使用 file.name
-      const filePath = (file as any).path || file.name;
-      setPrivateKeyFile(filePath);
+      try {
+        // 读取文件内容
+        const content = await file.text();
+
+        // 验证私钥格式（必须是 OpenSSH 或 PEM 格式）
+        const trimmedContent = content.trim();
+        if (!trimmedContent.startsWith('-----BEGIN')) {
+          alert('不支持的私钥格式！\n\n请选择 OpenSSH 格式的私钥文件（通常位于 ~/.ssh/id_ed25519 或 ~/.ssh/id_rsa）。\n\n支持的格式：\n- OpenSSH 私钥（以 -----BEGIN OPENSSH PRIVATE KEY----- 开头）\n- PEM 格式私钥（以 -----BEGIN RSA/ECDSA/DSA PRIVATE KEY----- 开头）\n\n不支持 PuTTY 的 .ppk 格式。');
+          return;
+        }
+
+        // 显示文件名而非内容（安全考虑）
+        setPrivateKeyFile(trimmedContent);
+        log.info('私钥文件已加载:', file.name);
+      } catch (error) {
+        console.error("读取私钥文件失败:", error);
+        alert("读取私钥文件失败，请检查文件格式");
+      }
     }
   };
 
@@ -362,13 +392,13 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
                   type="file"
                   className="st-form-input"
                   onChange={handlePrivateKeySelect}
-                  accept=".pem,.key,.pub"
+                  accept=".pem,.key,id_rsa,id_ed25519,id_ecdsa,id_dsa"
                 />
-                <span className="st-form-hint">选择 SSH 私钥文件 (.pem, .key)</span>
+                <span className="st-form-hint">选择 SSH 私钥文件（OpenSSH格式，如 ~/.ssh/id_ed25519）</span>
               </div>
               {privateKeyFile && (
                 <div className="st-form-row">
-                  <span className="st-form-hint">已选择: {privateKeyFile}</span>
+                  <span className="st-form-hint">已选择: {privateKeyFile.split('\n')[0].substring(0, 50)}...</span>
                 </div>
               )}
               <div className="st-form-row">
