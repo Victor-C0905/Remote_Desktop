@@ -1026,8 +1026,15 @@ async fn handle_stream(
 
         // 处理断开连接请求（客户端主动断开）
         Payload::DisconnectRequest {} => {
-            tracing::info!("收到客户端断开连接请求，清理传输会话...");
+            tracing::info!("收到客户端断开连接请求，清理所有资源...");
+
+            // 1. 触发关闭信号（通知所有订阅推送任务停止）
+            ctx.shutdown();
+
+            // 2. 清理传输会话
             ctx.cleanup_transfer_sessions().await;
+
+            // 3. 发送确认响应
             let response = Envelope::new(
                 envelope.request_id,
                 Payload::DisconnectResponse { success: true },
@@ -1042,6 +1049,8 @@ async fn handle_stream(
                     tracing::warn!("编码断开响应失败: {}", e);
                 }
             }
+
+            tracing::info!("客户端断开连接处理完成");
         }
 
         _ => {
