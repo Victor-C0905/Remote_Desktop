@@ -52,7 +52,16 @@ fn check_path_permission(path: &str, session: &UserSession) -> Result<bool, Stri
         }
     };
 
-    // 检查是否在用户家目录范围内
+    // root用户(uid=0)拥有整个文件系统的访问权限
+    if session.uid == 0 {
+        tracing::debug!(
+            "root用户访问: {:?}",
+            canonical_path
+        );
+        return Ok(true);
+    }
+
+    // 普通用户：检查是否在用户家目录范围内
     if !canonical_path.starts_with(&session.home_dir) {
         tracing::warn!(
             "权限拒绝: 用户 {} 尝试访问路径 {:?}，家目录为 {:?}",

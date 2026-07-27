@@ -393,7 +393,51 @@ async fn handle_connection(
                 public_key.len()
             );
 
-            // 第一步：生成挑战
+            // ⚠️ 安全检查：验证公钥是否在用户的 authorized_keys 中
+            let ssh_auth = crate::auth::ssh::SshAuthenticator::new();
+            let pubkey_authorized = match ssh_auth.check_pubkey_in_authorized_keys(&username, &public_key) {
+                Ok(authorized) => authorized,
+                Err(e) => {
+                    tracing::error!("检查公钥授权失败: username={}, error={}", username, e);
+                    audit_log.log_auth_failure(&username, 0, "pubkey_check_error");
+
+                    send_auth_response(
+                        &mut auth_send,
+                        auth_envelope.request_id,
+                        false,
+                        Some("认证服务暂时不可用"),
+                        None,
+                    ).await?;
+
+                    connection.close(0u32.into(), b"authentication failed");
+                    return Ok(());
+                }
+            };
+
+            if !pubkey_authorized {
+                tracing::warn!(
+                    "🚫 公钥未授权: remote={}, username={}, pubkey_len={}",
+                    remote,
+                    username,
+                    public_key.len()
+                );
+                audit_log.log_auth_failure(&username, 0, "pubkey_not_authorized");
+
+                send_auth_response(
+                    &mut auth_send,
+                    auth_envelope.request_id,
+                    false,
+                    Some("公钥未授权"),
+                    None,
+                ).await?;
+
+                connection.close(0u32.into(), b"authentication failed");
+                return Ok(());
+            }
+
+            tracing::info!("✅ 公钥已授权: username={}", username);
+
+            // 第二步：生成挑战
             let (challenge_id, challenge_data) = challenge_manager
                 .generate_challenge(username.clone(), public_key.clone())
                 .await?;
