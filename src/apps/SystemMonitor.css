@@ -478,3 +478,10 @@
   font-size: var(--font-body);
   color: var(--ovelis-text-secondary);
 }
+
+/* ── Stats Tab ─────────────────────────────────────────── */
+
+.sm-stats {
+  height: 100%;
+  overflow-y: auto;
+}

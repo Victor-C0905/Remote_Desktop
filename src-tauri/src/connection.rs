@@ -307,6 +307,20 @@ pub enum Payload {
     #[serde(rename = "disconnect_resp")]
     DisconnectResponse { success: bool },
 
+    /// 统计查询请求
+    #[serde(rename = "get_stats")]
+    GetStats {
+        stats_type: String,
+    },
+
+    /// 统计查询响应
+    #[serde(rename = "stats_response")]
+    StatsResponse {
+        auth: Option<AuthStatsSnapshot>,
+        connection: ConnectionStatsSnapshot,
+        performance: Option<PerformanceStatsSnapshot>,
+    },
+
     #[serde(rename = "error")]
     Error { code: i32, message: String },
 }
@@ -393,6 +407,58 @@ pub struct MountInfo {
     pub filesystem: String,
     pub total_bytes: u64,
     pub used_bytes: u64,
+}
+
+// ── 统计信息快照 ───────────────────────────────────────
+
+/// 认证统计快照
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthStatsSnapshot {
+    pub total_attempts: u64,
+    pub successful: u64,
+    pub failed: u64,
+    pub locked: u64,
+    pub rate_limited: u64,
+    pub session_timeout: u64,
+    pub password_attempts: u64,
+    pub pubkey_attempts: u64,
+}
+
+/// 连接统计快照
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectionStatsSnapshot {
+    pub active_connections: u64,
+    pub total_connections: u64,
+    pub normal_disconnects: u64,
+    pub timeout_disconnects: u64,
+    pub error_disconnects: u64,
+}
+
+/// 性能统计快照
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PerformanceStatsSnapshot {
+    pub response_times: ResponseTimePercentiles,
+    pub total_bytes_transferred: u64,
+    pub total_terminal_bytes: u64,
+}
+
+/// 响应时间百分位数
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResponseTimePercentiles {
+    pub p50: u64,
+    pub p95: u64,
+    pub p99: u64,
+    pub min: u64,
+    pub max: u64,
+    pub count: u64,
+}
+
+/// 统计响应（用于 get_stats 命令返回）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StatsResponse {
+    pub auth: Option<AuthStatsSnapshot>,
+    pub connection: ConnectionStatsSnapshot,
+    pub performance: Option<PerformanceStatsSnapshot>,
 }
 
 impl Envelope {
@@ -1039,6 +1105,25 @@ pub async fn remote_move(
 
     match resp.payload {
         Payload::MoveResponse { success, .. } => Ok(success),
+        Payload::Error { message, .. } => Err(message),
+        _ => Err("意外响应".into()),
+    }
+}
+
+#[tauri::command]
+pub async fn get_stats(server_id: String, stats_type: String, app: tauri::AppHandle) -> Result<StatsResponse, String> {
+    tracing::debug!("[Connection] get_stats: server_id={}, stats_type={}", server_id, stats_type);
+
+    let resp = remote_send(server_id, Payload::GetStats { stats_type }, app).await?;
+
+    match resp.payload {
+        Payload::StatsResponse { auth, connection, performance } => {
+            Ok(StatsResponse {
+                auth,
+                connection,
+                performance,
+            })
+        }
         Payload::Error { message, .. } => Err(message),
         _ => Err("意外响应".into()),
     }

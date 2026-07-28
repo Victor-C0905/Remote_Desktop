@@ -11,6 +11,7 @@ import {
 } from "../utils/offlineDefaults";
 import { MonitorSkeleton } from "../components/skeleton/MonitorSkeleton";
 import { createLogger } from '../utils/logger';
+import { StatsPanel } from "../components/StatsPanel";
 // import { useWindowState } from "../window-system/hooks/useWindowState"; // 未来集成时使用
 import "./SystemMonitor.css";
 
@@ -48,7 +49,7 @@ interface HistoryPoint {
   value: number;
 }
 
-type TabId = "processes" | "resources" | "filesystems";
+type TabId = "processes" | "resources" | "filesystems" | "stats";
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
@@ -137,7 +138,7 @@ function MiniChart({ data, color, height, max }: MiniChartProps) {
 export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
   // 窗口系统集成（未来可能需要使用 windowState）
   // const windowState = useWindowState(windowId);
-  const { activeServerId } = useServerManager();
+  const { activeServerId, activeServer } = useServerManager();
 
   const [activeTab, setActiveTab] = useState<TabId>("resources");
   // 永远不为 null：离线时 = OFFLINE_METRICS，在线时 = 真实数据
@@ -336,6 +337,12 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
                   onClick={() => setActiveTab("filesystems")}
                 >
                   文件系统
+                </button>
+                <button
+                  className={`sm-tab${activeTab === "stats" ? " active" : ""}`}
+                  onClick={() => setActiveTab("stats")}
+                >
+                  统计
                 </button>
               </div>
               <button className="sm-menu-btn" title="菜单">⋮</button>
@@ -546,6 +553,15 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
               </>
               )}
             </div>
+          </div>
+        )}
+
+        {activeTab === "stats" && (
+          <div className="sm-stats">
+            <StatsPanel
+              serverId={activeServerId || ''}
+              isRoot={activeServer?.auth?.username === 'root'}
+            />
           </div>
         )}
           </>
