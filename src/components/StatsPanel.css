@@ -3,9 +3,7 @@
    ============================================================ */
 
 .stats-panel {
-  padding: 20px;
-  max-width: 800px;
-  margin: 0 auto;
+  padding: 16px; /* 匹配 SystemMonitor 的内容区域 */
 }
 
 .stats-panel h2 {
@@ -107,7 +105,7 @@
 /* 响应式布局 */
 @media (max-width: 768px) {
   .stats-panel {
-    padding: 15px;
+    padding: 12px;
   }
 
   .stats-grid {

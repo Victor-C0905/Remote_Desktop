@@ -571,6 +571,7 @@ pub fn run() {
             connection::remote_rename,
             connection::remote_copy,
             connection::remote_move,
+            connection::get_stats,
             connection::subscribe,
             connection::unsubscribe,
             terminal::remote_spawn_terminal,
