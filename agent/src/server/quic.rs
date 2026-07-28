@@ -994,6 +994,45 @@ async fn handle_stream(
     let stream_id = STREAM_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
     tracing::debug!("Stream ID: {}", stream_id);
 
+    // 检查会话是否超时（在处理请求前检查）
+    if ctx.is_session_timeout() {
+        let idle_secs = current_timestamp_secs() - ctx.session_last_activity.load(Ordering::Relaxed);
+
+        tracing::warn!(
+            "会话已超时: username={}, idle_time={}s, stream_id={}",
+            session.username,
+            idle_secs,
+            stream_id
+        );
+
+        // 记录会话超时统计
+        stats_manager.record_session_timeout();
+
+        // 返回错误响应
+        let error_response = Envelope::new(
+            0,
+            Payload::Error {
+                code: 401,
+                message: "会话已过期，请重新登录".to_string(),
+            },
+        );
+
+        // 发送错误响应
+        match error_response.encode() {
+            Ok(error_bytes) => {
+                if let Err(e) = write_message(&mut send, &error_bytes).await {
+                    tracing::warn!("发送会话超时错误响应失败: {}", e);
+                }
+            }
+            Err(e) => {
+                tracing::warn!("编码会话超时错误响应失败: {}", e);
+            }
+        }
+
+        // 退出函数（会话已超时）
+        return Ok(());
+    }
+
     // 更新会话活动时间（防止会话超时）
     ctx.touch_session();
 
@@ -1121,6 +1160,7 @@ async fn handle_stream(
                 pty_manager,
                 envelope.request_id,  // 传递 request_id 用于发送响应
                 shutdown_rx,          // 传递关闭信号
+                stats_manager.clone(), // 传递统计管理器
             ).await?;
 
             tracing::info!("终端 Stream 结束: session_id={}", session_id);
@@ -1226,6 +1266,7 @@ async fn handle_stream(
                                 path.to_string(),
                                 file_size,
                                 chunk_size,
+                                stats_manager.clone(),
                             ).await?;
                         }
                     } else {
@@ -1283,84 +1324,9 @@ async fn handle_stream(
             tracing::info!("客户端断开连接处理完成");
         }
 
-        // 统计查询请求
-        Payload::GetStats { stats_type } => {
-            tracing::info!("统计查询请求: stats_type={}, user={}", stats_type, session.username);
-
-            // 检查权限
-            if !stats_manager.check_permission(session, &stats_type) {
-                tracing::warn!("权限不足: user={}, stats_type={}", session.username, stats_type);
-
-                let response = Envelope::new(
-                    envelope.request_id,
-                    Payload::StatsResponse {
-                        auth: None,
-                        connection: ConnectionStatsSnapshot::default(),
-                        performance: None,
-                    },
-                );
-
-                match response.encode() {
-                    Ok(resp_bytes) => {
-                        if let Err(e) = write_message(&mut send, &resp_bytes).await {
-                            tracing::warn!("发送响应失败: {}", e);
-                        }
-                    }
-                    Err(e) => tracing::warn!("编码响应失败: {}", e),
-                }
-                return Ok(());
-            }
-
-            // 获取统计数据
-            let auth_stats = if stats_type == "auth" || stats_type == "all" {
-                if session.uid == 0 {
-                    Some(stats_manager.get_auth_stats())
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
-            let connection_stats = if stats_type == "connection" || stats_type == "all" {
-                stats_manager.get_connection_stats_for_user(session)
-            } else {
-                ConnectionStatsSnapshot::default()
-            };
-
-            let performance_stats = if stats_type == "performance" || stats_type == "all" {
-                if session.uid == 0 {
-                    Some(stats_manager.get_performance_stats().await)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
-            // 发送响应
-            let response = Envelope::new(
-                envelope.request_id,
-                Payload::StatsResponse {
-                    auth: auth_stats,
-                    connection: connection_stats,
-                    performance: performance_stats,
-                },
-            );
-
-            match response.encode() {
-                Ok(resp_bytes) => {
-                    if let Err(e) = write_message(&mut send, &resp_bytes).await {
-                        tracing::warn!("发送响应失败: {}", e);
-                    }
-                }
-                Err(e) => tracing::warn!("编码响应失败: {}", e),
-            }
-        }
-
         _ => {
             // 其他请求使用异步 handler
-            let response = crate::handler::handle_envelope(&envelope, cfg, session).await;
+            let response = crate::handler::handle_envelope(&envelope, cfg, session, stats_manager.clone()).await;
             match response.encode() {
                 Ok(resp_bytes) => {
                     if let Err(e) = write_message(&mut send, &resp_bytes).await {
@@ -1446,6 +1412,7 @@ async fn handle_terminal_stream(
     pty_manager: Arc<PtyManager>,
     request_id: u32,  // 新增：用于发送响应
     shutdown_rx: broadcast::Receiver<()>,  // 连接关闭信号
+    stats_manager: Arc<StatsManager>,  // 新增：统计管理器
 ) -> Result<()> {
     tracing::info!("终端双向隧道启动: session_id={}", session_id);
 
@@ -1536,6 +1503,7 @@ async fn handle_terminal_stream(
 
     let session_id_clone = session_id.clone();
     let pty_manager_clone = pty_manager.clone();
+    let stats_manager_clone = stats_manager.clone();
     let pty_read_task = tokio::spawn(async move {
         let mut batch_buffer = Vec::with_capacity(BATCH_SIZE);
         let mut last_send_time = std::time::Instant::now();
@@ -1562,6 +1530,10 @@ async fn handle_terminal_stream(
                             tracing::warn!("发送终端数据失败: {}", e);
                             break;
                         }
+
+                        // 记录终端输出字节数
+                        stats_manager_clone.record_terminal_bytes(batch_buffer.len() as u64);
+
                         tracing::debug!(
                             "PTY 批量输出发送: batch_len={}, chunks=1",
                             batch_buffer.len()
@@ -1585,6 +1557,10 @@ async fn handle_terminal_stream(
                             tracing::warn!("发送终端数据失败(空闲刷新): {}", e);
                             break;
                         }
+
+                        // 记录终端输出字节数
+                        stats_manager_clone.record_terminal_bytes(batch_buffer.len() as u64);
+
                         tracing::debug!(
                             "PTY 空闲刷新: batch_len={}",
                             batch_buffer.len()
@@ -1608,6 +1584,9 @@ async fn handle_terminal_stream(
             let mut send_guard = send_clone.lock().await;
             let _ = send_guard.write_all(&len).await;
             let _ = send_guard.write_all(&batch_buffer).await;
+
+            // 记录终端输出字节数
+            stats_manager_clone.record_terminal_bytes(batch_buffer.len() as u64);
         }
 
         tracing::info!("PTY 读取任务结束: session_id={}", session_id_clone);
@@ -1651,6 +1630,7 @@ async fn handle_file_download_stream(
     path: String,
     file_size: u64,
     _chunk_size: u32,
+    stats_manager: Arc<StatsManager>,
 ) -> Result<()> {
     tracing::info!("开始发送文件: session_id={}, path={}, size={}", session_id, path, file_size);
 
@@ -1683,6 +1663,9 @@ async fn handle_file_download_stream(
             tracing::error!("发送文件块失败: {}", e);
             break;
         }
+
+        // 记录文件传输字节数
+        stats_manager.record_file_transfer_bytes(chunk.len() as u64);
 
         seq += 1;
         tracing::debug!("已发送块: seq={}, size={}", seq-1, chunk.len());

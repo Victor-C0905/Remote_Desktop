@@ -7,7 +7,7 @@ use crate::auth::{UserSession, UserExecutor, StatsManager}; // 新增：用户�
 use crate::auth::stats::{AuthStatsSnapshot, ConnectionStatsSnapshot, PerformanceStatsSnapshot}; // 新增：统计快照类型
 use std::fs;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH, Instant};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use std::collections::HashMap;
@@ -109,9 +109,13 @@ fn check_allowed_paths(path: &str, cfg: &AgentConfig, session: &UserSession) -> 
     Ok(())
 }
 
-#[tracing::instrument(skip(envelope, cfg, session), fields(request_id = envelope.request_id, payload_type = envelope.payload.type_name()))]
-pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &UserSession) -> Envelope {
-    match &envelope.payload {
+#[tracing::instrument(skip(envelope, cfg, session, stats_manager), fields(request_id = envelope.request_id, payload_type = envelope.payload.type_name()))]
+pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &UserSession, stats_manager: Arc<StatsManager>) -> Envelope {
+    // 记录请求开始时间
+    let start = Instant::now();
+
+    // 处理请求
+    let response = match &envelope.payload {
         Payload::Ping { timestamp } => {
             let server_time = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -541,7 +545,7 @@ pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &U
         // 文件数据块
         Payload::FileChunk { session_id, seq, data, size } => {
             tracing::debug!("文件数据块: session_id={}, seq={}, size={}", session_id, seq, size);
-            match handle_file_chunk(envelope.request_id, session_id, *seq, data, cfg).await {
+            match handle_file_chunk(envelope.request_id, session_id, *seq, data, cfg, stats_manager.clone()).await {
                 Ok(response) => response,
                 Err(e) => {
                     tracing::error!("处理数据块失败: {}", e);
@@ -600,11 +604,102 @@ pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &U
             }
         }
 
+        // 统计查询请求
+        Payload::GetStats { stats_type } => {
+            tracing::info!("统计查询请求: stats_type={}, uid={}", stats_type, session.uid);
+
+            // 权限检查：只有 root 用户可以查看全局统计
+            if session.uid != 0 && stats_type != "connection" {
+                tracing::warn!("权限拒绝: 用户 {} 尝试查询 {} 统计", session.username, stats_type);
+                return Envelope::new(
+                    envelope.request_id,
+                    Payload::Error {
+                        code: 403,
+                        message: "权限不足：只有root用户可以查看此统计".to_string(),
+                    },
+                );
+            }
+
+            // 获取统计数据
+            let stats = match stats_type.as_str() {
+                "auth" => {
+                    let snapshot = stats_manager.get_auth_stats();
+                    Payload::StatsResponse {
+                        auth: Some(snapshot),
+                        connection: ConnectionStatsSnapshot::default(),
+                        performance: None,
+                    }
+                },
+                "connection" => {
+                    let snapshot = if session.uid == 0 {
+                        stats_manager.get_connection_stats()
+                    } else {
+                        stats_manager.get_connection_stats_for_user(session)
+                    };
+                    Payload::StatsResponse {
+                        auth: None,
+                        connection: snapshot,
+                        performance: None,
+                    }
+                },
+                "performance" => {
+                    let snapshot = stats_manager.get_performance_stats().await;
+                    Payload::StatsResponse {
+                        auth: None,
+                        connection: ConnectionStatsSnapshot::default(),
+                        performance: Some(snapshot),
+                    }
+                },
+                "all" => {
+                    // 只有 root 用户可以查看所有统计
+                    if session.uid != 0 {
+                        tracing::warn!("权限拒绝: 用户 {} 尝试查询所有统计", session.username);
+                        return Envelope::new(
+                            envelope.request_id,
+                            Payload::Error {
+                                code: 403,
+                                message: "权限不足：只有root用户可以查看全局统计".to_string(),
+                            },
+                        );
+                    }
+
+                    let auth = stats_manager.get_auth_stats();
+                    let connection = stats_manager.get_connection_stats();
+                    let performance = stats_manager.get_performance_stats().await;
+                    Payload::StatsResponse {
+                        auth: Some(auth),
+                        connection,
+                        performance: Some(performance),
+                    }
+                },
+                _ => {
+                    tracing::warn!("未知的统计类型: {}", stats_type);
+                    return Envelope::new(
+                        envelope.request_id,
+                        Payload::Error {
+                            code: 400,
+                            message: format!("未知的统计类型: {}", stats_type),
+                        },
+                    );
+                }
+            };
+
+            tracing::info!("统计查询成功: stats_type={}", stats_type);
+            Envelope::new(envelope.request_id, stats)
+        }
+
         other => {
             tracing::warn!("未处理的消息类型: {:?}", std::mem::discriminant(other));
             error_response(envelope.request_id, "未知的消息类型")
         }
-    }
+    };
+
+    // 记录响应时间
+    let elapsed = start.elapsed();
+    let duration_ms = elapsed.as_millis() as u64;
+    stats_manager.record_api_response_time(duration_ms).await;
+
+    response
 }
 
 /// 获取当前登录用户名
@@ -1303,6 +1398,7 @@ pub async fn handle_file_transfer_request(
 /// - `seq`: 块序号（从 1 开始）
 /// - `data`: 数据块
 /// - `cfg`: Agent 配置
+/// - `stats_manager`: 统计管理器
 ///
 /// # 返回
 /// - `Ok(Envelope)`: FileChunk 响应（确认）
@@ -1313,6 +1409,7 @@ async fn handle_file_chunk(
     seq: u32,
     data: &[u8],
     _cfg: &AgentConfig,
+    stats_manager: Arc<StatsManager>,
 ) -> Result<Envelope, String> {
     // 1. 从 TRANSFER_SESSIONS 获取会话
     let mut sessions = TRANSFER_SESSIONS.lock().await;
@@ -1329,6 +1426,9 @@ async fn handle_file_chunk(
     // 3. 写入数据块到文件
     if let Some(writer) = session.writer.as_mut() {
         writer.write_chunk(data)?;
+
+        // 记录文件传输字节数
+        stats_manager.record_file_transfer_bytes(data.len() as u64);
 
         // 4. 更新 transferred 字段
         session.transferred = writer.transferred();
