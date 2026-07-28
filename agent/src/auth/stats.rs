@@ -48,6 +48,7 @@ pub struct ConnectionStats {
 
 /// 响应时间记录（滑动窗口）
 struct ResponseTimeRecord {
+    #[allow(dead_code)]
     timestamp: Instant,
     duration_ms: u64,
 }
@@ -226,6 +227,7 @@ impl StatsManager {
     }
 
     /// 记录终端输出字节数
+    #[allow(dead_code)]
     pub fn record_terminal_bytes(&self, bytes: u64) {
         self.performance.total_terminal_bytes.fetch_add(bytes, Ordering::Relaxed);
     }
@@ -241,6 +243,7 @@ impl StatsManager {
     /// # 返回
     /// - `true`: 有权限
     /// - `false`: 无权限
+    #[allow(dead_code)]
     pub fn check_permission(&self, session: &crate::auth::UserSession, stats_type: &str) -> bool {
         match stats_type {
             "auth" | "performance" => {
@@ -325,8 +328,10 @@ pub enum ConnectionCloseReason {
     /// 正常关闭（客户端主动断开）
     Normal,
     /// 超时关闭（空闲超时或会话超时）
+    #[allow(dead_code)]
     Timeout,
     /// 错误关闭（异常断开）
+    #[allow(dead_code)]
     Error,
 }
 

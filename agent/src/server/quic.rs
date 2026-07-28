@@ -18,7 +18,6 @@ use crate::subscription::SubscriptionManager;
 use crate::event_bus::EventBus;
 use crate::protocol::{Envelope, Payload};
 use crate::auth::{Authenticator, CompositeAuthenticator, UserSession, ChallengeManager, AuthRateLimiter, StatsManager, ConnectionCloseReason};
-use crate::auth::stats::ConnectionStatsSnapshot;  // 新增：连接统计快照
 use crate::audit::AuditLogger;
 
 // 全局 Stream ID 计数器

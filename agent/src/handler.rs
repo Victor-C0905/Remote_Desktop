@@ -4,7 +4,7 @@ use crate::diff::{apply_diff, FileDiff}; // 只导入 apply_diff
 use crate::transfer_session::{TransferSession, TransferStatus};
 use crate::file_stream::{FileStreamReader, FileStreamWriter};
 use crate::auth::{UserSession, UserExecutor, StatsManager}; // 新增：用户会话、执行器和统计管理器
-use crate::auth::stats::{AuthStatsSnapshot, ConnectionStatsSnapshot, PerformanceStatsSnapshot}; // 新增：统计快照类型
+use crate::auth::stats::ConnectionStatsSnapshot; // 新增：连接统计快照类型
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH, Instant};
