@@ -15,7 +15,6 @@ GNOME Remote Agent 安装工具
 选项:
     --dir DIR       安装目录 (默认: /usr/local/bin)
     --name NAME     服务名称 (默认: gnome-remote-agent)
-    --port PORT     监听端口 (默认: 8443)
     --help          显示此帮助信息
 
 示例:
@@ -23,11 +22,12 @@ GNOME Remote Agent 安装工具
     sudo $0
 
     # 自定义安装
-    sudo $0 --name my-remote --port 9443
+    sudo $0 --name my-remote
 
 安装后：
     - 程序路径: /usr/local/bin/gnome-remote-agent
-    - 配置路径: /etc/gnome-remote-agent/config.toml
+    - 配置路径: /etc/gnome-remote-agent/agent.toml (首次启动自动生成)
+    - 证书路径: /etc/gnome-remote-agent/cert.pem (首次启动自动生成)
     - 服务名称: gnome-remote-agent
     - 管理命令: systemctl status gnome-remote-agent
 
@@ -38,7 +38,6 @@ EOF
 # 解析命令行参数
 INSTALL_DIR="/usr/local/bin"
 SERVICE_NAME="gnome-remote-agent"
-QUIC_PORT="8443"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -48,10 +47,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         --name)
             SERVICE_NAME="$2"
-            shift 2
-            ;;
-        --port)
-            QUIC_PORT="$2"
             shift 2
             ;;
         --help)
@@ -72,17 +67,35 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
-# 检查二进制文件
+# 检查文件（支持打包部署和源码部署两种方式）
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-AGENT_DIR="$(dirname "$SCRIPT_DIR")"
-BINARY_FILE="$AGENT_DIR/target/release/agent"
 
-if [ ! -f "$BINARY_FILE" ]; then
-    echo "错误: 二进制文件不存在"
-    echo "请先在开发环境中编译: cargo build --release"
-    echo "文件位置: $BINARY_FILE"
+# 打包部署：agent 和 agent.toml 在同目录
+# 源码部署：agent 在 target/release/ 或 target/debug/，agent.toml 在上级目录
+if [ -f "$SCRIPT_DIR/agent" ] && [ -f "$SCRIPT_DIR/agent.toml" ]; then
+    BINARY_FILE="$SCRIPT_DIR/agent"
+    CONFIG_FILE="$SCRIPT_DIR/agent.toml"
+elif [ -f "$SCRIPT_DIR/target/release/agent" ]; then
+    BINARY_FILE="$SCRIPT_DIR/target/release/agent"
+    CONFIG_FILE="$SCRIPT_DIR/agent.prod.toml"
+elif [ -f "$SCRIPT_DIR/target/debug/agent" ]; then
+    BINARY_FILE="$SCRIPT_DIR/target/debug/agent"
+    CONFIG_FILE="$SCRIPT_DIR/agent.dev.toml"
+else
+    echo "错误: 未找到 agent 二进制文件"
+    echo "请先运行: bash build.sh release"
+    echo "或手动编译: cargo build --release"
     exit 1
 fi
+
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "错误: 配置文件不存在"
+    exit 1
+fi
+
+# 从配置文件读取端口信息
+QUIC_PORT=$(grep 'quic_port' "$CONFIG_FILE" | head -n1 | sed 's/[^0-9]//g')
+WS_PORT=$(grep 'ws_port' "$CONFIG_FILE" | head -n1 | sed 's/[^0-9]//g')
 
 # 显示安装信息
 echo ""
@@ -90,9 +103,10 @@ echo "================================"
 echo "  GNOME Remote Agent 安装配置"
 echo "================================"
 echo "  程序路径: $INSTALL_DIR/$SERVICE_NAME"
-echo "  配置路径: /etc/$SERVICE_NAME"
+echo "  配置路径: /etc/$SERVICE_NAME/agent.toml"
 echo "  服务名称: $SERVICE_NAME"
-echo "  监听端口: $QUIC_PORT/udp"
+echo "  QUIC 端口: ${QUIC_PORT:-未知}/udp"
+echo "  WebSocket 端口: ${WS_PORT:-未知}/tcp"
 echo "================================"
 echo ""
 
@@ -103,39 +117,23 @@ if [[ ! $REPLY =~ ^[Yy]$ ]]; then
     exit 0
 fi
 
-# 1/4 安装二进制文件
-echo ">>> [1/4] 安装程序..."
+# 1/3 安装程序和配置
+echo ">>> [1/3] 安装程序..."
 mkdir -p "$INSTALL_DIR"
+mkdir -p "/etc/$SERVICE_NAME"
+mkdir -p "/var/log/gnome-remote"
 cp "$BINARY_FILE" "$INSTALL_DIR/$SERVICE_NAME"
 chmod +x "$INSTALL_DIR/$SERVICE_NAME"
+# 安装配置（如果目标配置不存在）
+if [ ! -f "/etc/$SERVICE_NAME/agent.toml" ]; then
+    cp "$CONFIG_FILE" "/etc/$SERVICE_NAME/agent.toml"
+    echo "  配置已安装"
+else
+    echo "  配置已存在，跳过（如需更新请手动修改）"
+fi
 
-# 2/4 创建配置文件
-echo ">>> [2/4] 创建配置文件..."
-mkdir -p "/etc/$SERVICE_NAME"
-cat > "/etc/$SERVICE_NAME/config.toml" << EOF
-# GNOME Remote Agent 配置文件
-
-[server]
-bind = "0.0.0.0"
-quic_port = $QUIC_PORT
-
-[limits]
-max_file_transfer_mb = 100
-connection_idle_timeout_secs = 300
-
-[security]
-allowed_paths = ["/home", "/root", "/tmp", "/var"]
-blocked_commands = ["rm -rf /", "dd if=/dev/zero"]
-
-[logging]
-level = "info"
-file = "/var/log/$SERVICE_NAME/agent.log"
-EOF
-
-mkdir -p "/var/log/$SERVICE_NAME"
-
-# 3/4 配置 systemd 服务
-echo ">>> [3/4] 配置系统服务..."
+# 2/3 配置 systemd 服务
+echo ">>> [2/3] 配置系统服务..."
 cat > /etc/systemd/system/$SERVICE_NAME.service << EOF
 [Unit]
 Description=GNOME Remote Agent
@@ -144,18 +142,18 @@ After=network.target
 [Service]
 Type=simple
 User=root
-ExecStart=$INSTALL_DIR/$SERVICE_NAME
+WorkingDirectory=/etc/$SERVICE_NAME
+ExecStart=$INSTALL_DIR/$SERVICE_NAME --config /etc/$SERVICE_NAME/agent.toml
 Restart=on-failure
 RestartSec=5s
 Environment="RUST_LOG=info"
-Environment="AGENT_CONFIG=/etc/$SERVICE_NAME/config.toml"
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-# 4/4 启动服务
-echo ">>> [4/4] 启动服务..."
+# 3/3 启动服务
+echo ">>> [3/3] 启动服务..."
 systemctl daemon-reload
 systemctl enable $SERVICE_NAME
 systemctl start $SERVICE_NAME
@@ -164,22 +162,21 @@ systemctl start $SERVICE_NAME
 sleep 2
 if systemctl is-active --quiet $SERVICE_NAME; then
     echo ""
-    echo "✓ 安装成功！"
-    echo ""
-    echo "服务管理:"
-    echo "  systemctl status $SERVICE_NAME"
-    echo "  systemctl start $SERVICE_NAME"
-    echo "  systemctl stop $SERVICE_NAME"
-    echo "  systemctl restart $SERVICE_NAME"
-    echo ""
-    echo "查看日志:"
-    echo "  journalctl -u $SERVICE_NAME -f"
-    echo ""
-    echo "客户端连接:"
-    echo "  地址: <服务器IP>:$QUIC_PORT"
-    echo "  用户: root"
-    echo "  密码: 系统密码"
-    echo ""
+echo "✓ 安装成功！"
+echo ""
+echo "服务管理:"
+echo "  systemctl status $SERVICE_NAME"
+echo "  systemctl start $SERVICE_NAME"
+echo "  systemctl stop $SERVICE_NAME"
+echo "  systemctl restart $SERVICE_NAME"
+echo ""
+echo "查看日志:"
+echo "  journalctl -u $SERVICE_NAME -f"
+echo ""
+echo "修改配置（首次启动后生成）:"
+echo "  vim /etc/$SERVICE_NAME/agent.toml"
+echo "  systemctl restart $SERVICE_NAME"
+echo ""
 else
     echo ""
     echo "✗ 服务启动失败"

@@ -137,8 +137,17 @@ fn default_pam_service() -> String { "sshd".into() }
 pub fn load(path: &str) -> Result<AgentConfig, anyhow::Error> {
     let p = Path::new(path);
     if !p.exists() {
-        tracing::info!("配置文件 {} 不存在，使用默认配置", path);
-        return Ok(default_config());
+        tracing::info!("配置文件 {} 不存在，生成默认配置", path);
+        let cfg = default_config();
+        // 写入默认配置文件，方便用户查看和修改
+        if let Ok(content) = toml::to_string_pretty(&cfg) {
+            if let Err(e) = fs::write(p, &content) {
+                tracing::warn!("写入默认配置文件失败: {}", e);
+            } else {
+                tracing::info!("默认配置已写入: {}", path);
+            }
+        }
+        return Ok(cfg);
     }
     let content = fs::read_to_string(p)?;
     let cfg: AgentConfig = toml::from_str(&content)?;
