@@ -17,7 +17,8 @@ use crate::pty::PtyManager;
 use crate::subscription::SubscriptionManager;
 use crate::event_bus::EventBus;
 use crate::protocol::{Envelope, Payload};
-use crate::auth::{Authenticator, CompositeAuthenticator, UserSession, ChallengeManager, AuthRateLimiter};
+use crate::auth::{Authenticator, CompositeAuthenticator, UserSession, ChallengeManager, AuthRateLimiter, StatsManager, ConnectionCloseReason};
+use crate::auth::stats::ConnectionStatsSnapshot;  // 新增：连接统计快照
 use crate::audit::AuditLogger;
 
 // 全局 Stream ID 计数器
@@ -243,6 +244,10 @@ pub async fn run(
     let challenge_manager = Arc::new(ChallengeManager::new());
     tracing::info!("🔐 挑战管理器已启用");
 
+    // 创建全局统计管理器
+    let stats_manager = Arc::new(StatsManager::new());
+    tracing::info!("📊 统计管理器已启用");
+
     // 启动定期清理任务（每5分钟清理过期记录）
     let rate_limiter_clone = rate_limiter.clone();
     let challenge_manager_clone = challenge_manager.clone();
@@ -267,6 +272,7 @@ pub async fn run(
         let audit_log_clone = audit_log.clone();
         let rate_limiter_clone = rate_limiter.clone();
         let challenge_manager_clone = challenge_manager.clone();
+        let stats_manager_clone = stats_manager.clone();
         let timeout_secs = idle_timeout_secs;
         tokio::spawn(async move {
             let conn = incoming.await;
@@ -282,6 +288,7 @@ pub async fn run(
                         audit_log_clone,
                         rate_limiter_clone,
                         challenge_manager_clone,
+                        stats_manager_clone,
                         timeout_secs,
                     ).await {
                         tracing::warn!("QUIC 连接错误: {}", e);
@@ -326,10 +333,14 @@ async fn handle_connection(
     audit_log: Arc<AuditLogger>,
     rate_limiter: Arc<AuthRateLimiter>,
     challenge_manager: Arc<ChallengeManager>,
+    stats_manager: Arc<StatsManager>,
     idle_timeout_secs: u64,
 ) -> Result<()> {
     let remote = connection.remote_address();
     tracing::info!("✅ 新的 QUIC 连接来自: {}", remote);
+
+    // 记录连接打开
+    stats_manager.record_connection_opened();
 
     // 创建连接上下文，跟踪该连接的所有关联资源
     let ctx = Arc::new(ConnectionContext::new());
@@ -401,6 +412,7 @@ async fn handle_connection(
                     username
                 );
                 audit_log.log_auth_failure(username, 0, "ip_rate_limited");
+                stats_manager.record_rate_limited();
 
                 send_auth_response(
                     &mut auth_send,
@@ -422,6 +434,7 @@ async fn handle_connection(
                     remote
                 );
                 audit_log.log_auth_failure(username, 0, "account_locked");
+                stats_manager.record_account_locked();
 
                 send_auth_response(
                     &mut auth_send,
@@ -450,6 +463,9 @@ async fn handle_connection(
                     // 记录审计日志
                     audit_log.log_auth_success(&session.username, session.uid, "password");
 
+                    // 记录认证统计
+                    stats_manager.record_auth_success("password");
+
                     // 发送认证成功响应
                     send_auth_response(&mut auth_send, auth_envelope.request_id, true, None, Some(&session.session_id)).await?;
 
@@ -462,6 +478,9 @@ async fn handle_connection(
 
                     // 认证失败
                     audit_log.log_auth_failure(username, 0, "invalid_password");
+
+                    // 记录认证统计
+                    stats_manager.record_auth_failure("password");
 
                     // 发送认证失败响应
                     send_auth_response(&mut auth_send, auth_envelope.request_id, false, Some("用户名或密码错误"), None).await?;
@@ -477,6 +496,9 @@ async fn handle_connection(
                     // 记录详细日志
                     tracing::error!("密码认证系统错误: remote={}, username={}, error={}", remote, username, e);
                     audit_log.log_auth_failure(username, 0, "auth_error");
+
+                    // 记录认证统计
+                    stats_manager.record_auth_failure("password");
 
                     // 返回通用错误（不暴露细节）
                     send_auth_response(&mut auth_send, auth_envelope.request_id, false, Some("认证服务暂时不可用"), None).await?;
@@ -503,6 +525,7 @@ async fn handle_connection(
                     username
                 );
                 audit_log.log_auth_failure(username, 0, "ip_rate_limited");
+                stats_manager.record_rate_limited();
 
                 send_auth_response(
                     &mut auth_send,
@@ -524,6 +547,7 @@ async fn handle_connection(
                     remote
                 );
                 audit_log.log_auth_failure(username, 0, "account_locked");
+                stats_manager.record_account_locked();
 
                 send_auth_response(
                     &mut auth_send,
@@ -569,6 +593,9 @@ async fn handle_connection(
 
                 // 记录失败（公钥未授权也算失败）
                 rate_limiter.record_failure(username).await;
+
+                // 记录认证统计
+                stats_manager.record_auth_failure("pubkey");
 
                 send_auth_response(
                     &mut auth_send,
@@ -678,6 +705,9 @@ async fn handle_connection(
                                         // 记录失败
                                         rate_limiter.record_failure(&verified_username).await;
 
+                                        // 记录认证统计
+                                        stats_manager.record_auth_failure("pubkey");
+
                                         send_auth_response(
                                             &mut resp_send,
                                             resp_envelope.request_id,
@@ -727,6 +757,9 @@ async fn handle_connection(
                                             // 记录审计日志
                                             audit_log.log_auth_success(&session.username, session.uid, "pubkey");
 
+                                            // 记录认证统计
+                                            stats_manager.record_auth_success("pubkey");
+
                                             // 发送认证成功响应
                                             send_auth_response(
                                                 &mut resp_send,
@@ -754,6 +787,9 @@ async fn handle_connection(
                                             // 记录失败
                                             rate_limiter.record_failure(&verified_username).await;
 
+                                            // 记录认证统计
+                                            stats_manager.record_auth_failure("pubkey");
+
                                             send_auth_response(
                                                 &mut resp_send,
                                                 resp_envelope.request_id,
@@ -774,6 +810,9 @@ async fn handle_connection(
 
                                             // 记录失败
                                             rate_limiter.record_failure(&verified_username).await;
+
+                                            // 记录认证统计
+                                            stats_manager.record_auth_failure("pubkey");
 
                                             send_auth_response(
                                                 &mut resp_send,
@@ -800,6 +839,9 @@ async fn handle_connection(
 
                                     // 记录失败（挑战过期也算失败）
                                     rate_limiter.record_failure(username).await;
+
+                                    // 记录认证统计
+                                    stats_manager.record_auth_failure("pubkey");
 
                                     // 发送认证失败响应
                                     send_auth_response(
@@ -842,6 +884,7 @@ async fn handle_connection(
     let connection_clone = connection.clone();
     let last_activity_clone = last_activity.clone();
     let ctx_clone = ctx.clone();
+    let stats_manager_clone = stats_manager.clone();
     let timeout_check_handle = tokio::spawn(async move {
         let check_interval = Duration::from_secs(30);
 
@@ -879,6 +922,8 @@ async fn handle_connection(
                             "[TimeoutChecker] 会话超时（24小时不活动）: remote={}，即将关闭连接",
                             remote
                         );
+                        // 记录会话超时统计
+                        stats_manager_clone.record_session_timeout();
                         connection_clone.close(0x02_u32.into(), b"session timeout");
                         break;
                     }
@@ -898,6 +943,7 @@ async fn handle_connection(
         let pty_manager_inner = pty_manager.clone();
         let ctx_inner = ctx.clone();
         let session_inner = session.clone();
+        let stats_manager_inner = stats_manager.clone();  // 克隆 stats_manager
         tokio::spawn(async move {
             if let Err(e) = handle_stream(
                 stream,
@@ -907,6 +953,7 @@ async fn handle_connection(
                 pty_manager_inner,
                 ctx_inner,
                 &session_inner,
+                stats_manager_inner,  // 传递 stats_manager 参数
             ).await {
                 tracing::warn!("QUIC Stream 处理错误: {}", e);
             }
@@ -920,6 +967,10 @@ async fn handle_connection(
     // 确保资源被清理（无论正常关闭还是超时）
     ctx.shutdown();
     ctx.cleanup(&pty_manager, &subscription_manager).await;
+
+    // 记录连接关闭统计（暂时记录为正常关闭）
+    // TODO: 将来可以根据超时检查任务的状态来判断关闭原因
+    stats_manager.record_connection_closed(ConnectionCloseReason::Normal);
 
     tracing::info!("QUIC 连接关闭，资源已清理: {}", remote);
 
@@ -935,6 +986,7 @@ async fn handle_stream(
     #[cfg(not(unix))] _pty_manager: Arc<PtyManager>,
     ctx: Arc<ConnectionContext>,
     session: &UserSession,
+    stats_manager: Arc<StatsManager>,  // 新增参数：统计管理器
 ) -> Result<()> {
     let (mut send, mut recv) = stream;
 
@@ -1229,6 +1281,81 @@ async fn handle_stream(
             }
 
             tracing::info!("客户端断开连接处理完成");
+        }
+
+        // 统计查询请求
+        Payload::GetStats { stats_type } => {
+            tracing::info!("统计查询请求: stats_type={}, user={}", stats_type, session.username);
+
+            // 检查权限
+            if !stats_manager.check_permission(session, &stats_type) {
+                tracing::warn!("权限不足: user={}, stats_type={}", session.username, stats_type);
+
+                let response = Envelope::new(
+                    envelope.request_id,
+                    Payload::StatsResponse {
+                        auth: None,
+                        connection: ConnectionStatsSnapshot::default(),
+                        performance: None,
+                    },
+                );
+
+                match response.encode() {
+                    Ok(resp_bytes) => {
+                        if let Err(e) = write_message(&mut send, &resp_bytes).await {
+                            tracing::warn!("发送响应失败: {}", e);
+                        }
+                    }
+                    Err(e) => tracing::warn!("编码响应失败: {}", e),
+                }
+                return Ok(());
+            }
+
+            // 获取统计数据
+            let auth_stats = if stats_type == "auth" || stats_type == "all" {
+                if session.uid == 0 {
+                    Some(stats_manager.get_auth_stats())
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let connection_stats = if stats_type == "connection" || stats_type == "all" {
+                stats_manager.get_connection_stats_for_user(session)
+            } else {
+                ConnectionStatsSnapshot::default()
+            };
+
+            let performance_stats = if stats_type == "performance" || stats_type == "all" {
+                if session.uid == 0 {
+                    Some(stats_manager.get_performance_stats().await)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            // 发送响应
+            let response = Envelope::new(
+                envelope.request_id,
+                Payload::StatsResponse {
+                    auth: auth_stats,
+                    connection: connection_stats,
+                    performance: performance_stats,
+                },
+            );
+
+            match response.encode() {
+                Ok(resp_bytes) => {
+                    if let Err(e) = write_message(&mut send, &resp_bytes).await {
+                        tracing::warn!("发送响应失败: {}", e);
+                    }
+                }
+                Err(e) => tracing::warn!("编码响应失败: {}", e),
+            }
         }
 
         _ => {

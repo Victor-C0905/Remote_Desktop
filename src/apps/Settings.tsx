@@ -7,6 +7,7 @@ import { themes, accentColors } from "../config/themes";
 import { ThemeId } from "../config/themes";
 import { createLogger } from '../utils/logger';
 import { AuthMethod } from '../types/server';
+import { StatsPanel } from '../components/StatsPanel';
 // import { useWindowState } from "../window-system/hooks/useWindowState"; // 未来集成时使用
 import "./Settings.css";
 
@@ -14,7 +15,7 @@ const log = createLogger('Settings');
 
 /* ── Types ─────────────────────────────────────────────── */
 
-type SettingsSection = "connection" | "appearance" | "keyboard" | "files" | "terminal" | "notifications" | "about";
+type SettingsSection = "connection" | "appearance" | "keyboard" | "files" | "terminal" | "notifications" | "stats" | "about";
 
 /* ── Sidebar Items ──────────────────────────────────── */
 
@@ -31,6 +32,7 @@ const SIDEBAR_ITEMS: SidebarItem[] = [
   { id: "files", icon: "📁", label: "文件" },
   { id: "terminal", icon: "🖥️", label: "终端" },
   { id: "notifications", icon: "🔔", label: "通知" },
+  { id: "stats", icon: "📊", label: "系统监控" },
   { id: "about", icon: "ℹ️", label: "关于" },
 ];
 
@@ -1036,6 +1038,19 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                   <span className="st-tech-value">GNOME Adwaita</span>
                 </div>
               </div>
+            </div>
+          </div>
+        );
+
+      case "stats":
+        return (
+          <div className="st-section">
+            <div className="st-section-title text-heading">系统监控</div>
+            <div className="st-card">
+              <StatsPanel
+                serverId={activeServerId || ''}
+                isRoot={activeServer?.auth?.username === 'root'}
+              />
             </div>
           </div>
         );

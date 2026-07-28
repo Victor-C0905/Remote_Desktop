@@ -21,6 +21,7 @@ pub mod session;
 pub mod ssh;
 pub mod challenge;
 pub mod rate_limiter;
+pub mod stats;
 
 pub use executor::UserExecutor;
 #[cfg(target_os = "linux")]
@@ -28,6 +29,7 @@ pub use namespace::UserNamespace;
 pub use session::UserSession;
 pub use challenge::ChallengeManager;
 pub use rate_limiter::AuthRateLimiter;
+pub use stats::{StatsManager, ConnectionCloseReason};
 
 // ============================================================================
 // 公共类型定义

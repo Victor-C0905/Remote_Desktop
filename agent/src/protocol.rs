@@ -1,6 +1,7 @@
 // agent/src/protocol.rs
 use serde::{Deserialize, Serialize};
 use crate::diff::FileDiff; // 导入差异类型
+use crate::auth::stats::{AuthStatsSnapshot, ConnectionStatsSnapshot, PerformanceStatsSnapshot}; // 导入统计快照类型
 
 /// 文件传输方向
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -142,6 +143,24 @@ pub enum Payload {
         error: Option<String>,
         /// 会话ID（成功时返回）
         session_id: Option<String>,
+    },
+
+    /// 统计查询请求
+    #[serde(rename = "get_stats")]
+    GetStats {
+        /// 统计类型: "auth" | "connection" | "performance" | "all"
+        stats_type: String,
+    },
+
+    /// 统计查询响应
+    #[serde(rename = "stats_response")]
+    StatsResponse {
+        /// 认证统计（仅root可见）
+        auth: Option<AuthStatsSnapshot>,
+        /// 连接统计（root看全局，普通用户看个人）
+        connection: ConnectionStatsSnapshot,
+        /// 性能指标（仅root可见）
+        performance: Option<PerformanceStatsSnapshot>,
     },
 
     #[serde(rename = "metrics_subscribe")]
@@ -405,6 +424,8 @@ impl Payload {
             Payload::AuthPubKeyChallenge { .. } => "AuthPubKeyChallenge",
             Payload::AuthPubKeyResponse { .. } => "AuthPubKeyResponse",
             Payload::AuthResponse { .. } => "AuthResponse",
+            Payload::GetStats { .. } => "GetStats",
+            Payload::StatsResponse { .. } => "StatsResponse",
             Payload::MetricsSubscribeRequest {} => "MetricsSubscribeRequest",
             Payload::MetricsData(_) => "MetricsData",
             Payload::ReadDirRequest { .. } => "ReadDirRequest",
