@@ -73,6 +73,7 @@ impl AuthRateLimiter {
     }
 
     /// 创建自定义配置的速率限制器
+    #[allow(dead_code)]
     pub fn with_config(
         max_failed_attempts: u32,
         lockout_duration_secs: u64,
@@ -257,7 +258,7 @@ impl AuthRateLimiter {
             let now = Instant::now();
 
             // 只保留最近10分钟有活动的IP
-            ip_reqs.retain(|ip, record| {
+            ip_reqs.retain(|_ip, record| {
                 record.request_times.iter().any(|&time| {
                     now.duration_since(time) < Duration::from_secs(600)
                 })
@@ -268,6 +269,7 @@ impl AuthRateLimiter {
     }
 
     /// 获取当前统计信息（用于监控）
+    #[allow(dead_code)]
     pub async fn get_stats(&self) -> AuthRateLimiterStats {
         let attempts = self.failed_attempts.lock().await;
         let ip_reqs = self.ip_requests.lock().await;
@@ -292,6 +294,7 @@ impl Default for AuthRateLimiter {
 }
 
 /// 统计信息
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct AuthRateLimiterStats {
     /// 总失败尝试数

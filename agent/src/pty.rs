@@ -32,6 +32,10 @@ pub struct PtySession {
 #[cfg(unix)]
 impl PtySession {
     /// 创建新的 PTY 会话
+    ///
+    /// # 状态
+    /// 预留功能 - 已实现但当前未使用，spawn_as_user 是实际使用的方法
+    #[allow(dead_code)]
     pub fn spawn(shell: &str, cols: u16, rows: u16, working_directory: Option<&str>) -> Result<Self> {
         use nix::pty::{forkpty, Winsize};
         use std::os::fd::IntoRawFd;
@@ -348,6 +352,10 @@ impl PtyManager {
     }
 
     /// 创建新的 PTY 会话
+    ///
+    /// # 状态
+    /// 预留功能 - 已实现但当前未使用，spawn_as_user 是实际使用的方法
+    #[allow(dead_code)]
     pub async fn spawn(&self, shell: &str, cols: u16, rows: u16, working_directory: Option<&str>) -> Result<String> {
         let session = PtySession::spawn(shell, cols, rows, working_directory)?;
         let session_id = format!("pty-{}", uuid::Uuid::new_v4());

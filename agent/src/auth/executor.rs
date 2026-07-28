@@ -10,7 +10,9 @@
 //! - 使用User Namespace隔离
 //! - 支持跨平台（Linux使用Namespace，其他平台降级）
 
-use anyhow::{Result, Context};
+use anyhow::Result;
+#[cfg(unix)]
+use anyhow::Context;
 use std::path::PathBuf;
 
 use super::UserSession;
@@ -130,8 +132,8 @@ impl UserExecutor {
     /// 在用户上下文中生成子进程（Unix平台，用于PTY）
     ///
     /// # 实现机制
-    /// - 使用Command创建子进程
-    /// - 子进程中通过setuid/setgid切换到目标用户（root时）
+    /// - 使用User Namespace隔离（如果可用）
+    /// - 通过setuid/setgid切换到目标用户（root时）
     /// - 父进程返回子进程的PID
     ///
     /// # 参数
@@ -142,16 +144,22 @@ impl UserExecutor {
     /// 返回子进程的PID
     ///
     /// # 安全性
-    /// - root用户通过setuid/setgid切换到目标用户
+    /// - root用户通过User Namespace + setuid/setgid切换到目标用户
     /// - 非root用户依赖文件系统权限
     /// - 子进程继承父进程的文件描述符
     ///
     /// # 平台
     /// 仅在Unix平台可用
+    ///
+    /// # 状态
+    /// 预留功能 - 已实现但当前未使用，可用于未来的进程执行场景
     #[cfg(unix)]
+    #[allow(dead_code)]
     pub fn spawn_process(&self, program: &str, args: &[&str]) -> Result<i32> {
         use std::os::unix::process::CommandExt;
         use std::process::Command;
+        #[cfg(target_os = "linux")]
+        use super::namespace::UserNamespace;
 
         tracing::info!(
             "生成子进程: program={}, uid={}, gid={}",
@@ -184,6 +192,22 @@ impl UserExecutor {
 
                 // 如果当前是root用户，切换到目标用户
                 if current_uid == 0 {
+                    #[cfg(target_os = "linux")]
+                    {
+                        // Linux平台：使用User Namespace隔离（可选）
+                        // 注意：User Namespace需要CAP_SYS_ADMIN权限
+                        // 如果不需要严格隔离，可以直接使用setuid/setgid
+                        if std::env::var("USE_USER_NAMESPACE").is_ok() {
+                            let ns = UserNamespace::new(uid, gid);
+                            if let Err(e) = ns.create_and_switch() {
+                                tracing::warn!("User Namespace创建失败，降级到setuid/setgid: {}", e);
+                            } else {
+                                tracing::info!("User Namespace创建成功");
+                                return Ok(());
+                            }
+                        }
+                    }
+
                     // 先切换GID，再切换UID（顺序重要：先降GID再降UID）
                     nix::unistd::setgid(nix::unistd::Gid::from_raw(gid))
                         .map_err(|e| std::io::Error::new(
