@@ -60,15 +60,26 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
-# 检查二进制文件
+# 检查文件（支持打包部署和源码部署两种方式）
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-AGENT_DIR="$(dirname "$SCRIPT_DIR")"
-NEW_BINARY="$AGENT_DIR/target/release/agent"
+
+if [ -f "$SCRIPT_DIR/agent" ] && [ -f "$SCRIPT_DIR/agent.toml" ]; then
+    NEW_BINARY="$SCRIPT_DIR/agent"
+    NEW_CONFIG="$SCRIPT_DIR/agent.toml"
+elif [ -f "$SCRIPT_DIR/target/release/agent" ]; then
+    NEW_BINARY="$SCRIPT_DIR/target/release/agent"
+    NEW_CONFIG="$SCRIPT_DIR/agent.prod.toml"
+elif [ -f "$SCRIPT_DIR/target/debug/agent" ]; then
+    NEW_BINARY="$SCRIPT_DIR/target/debug/agent"
+    NEW_CONFIG="$SCRIPT_DIR/agent.dev.toml"
+else
+    echo "错误: 未找到新版本二进制文件"
+    echo "请先运行: bash build.sh release"
+    exit 1
+fi
 
 if [ ! -f "$NEW_BINARY" ]; then
     echo "错误: 新版本二进制文件不存在"
-    echo "请先在开发环境中编译: cargo build --release"
-    echo "文件位置: $NEW_BINARY"
     exit 1
 fi
 
@@ -122,6 +133,15 @@ fi
 echo ">>> [3/5] 更新程序..."
 cp "$NEW_BINARY" "$OLD_BINARY"
 chmod +x "$OLD_BINARY"
+# 更新生产配置（备份旧配置，但不覆盖用户修改）
+if [ -f "$NEW_CONFIG" ]; then
+    CONFIG_PATH="/etc/$SERVICE_NAME/agent.toml"
+    if [ -f "$CONFIG_PATH" ]; then
+        cp "$CONFIG_PATH" "$CONFIG_PATH.bak"
+    fi
+    cp "$NEW_CONFIG" "$CONFIG_PATH"
+    echo "  配置已更新（旧配置备份为 agent.toml.bak）"
+fi
 echo "程序已更新"
 
 # 4/5 启动服务
@@ -156,7 +176,7 @@ else
     exit 1
 fi
 
-# 清理旧备份（保留最近5个）
+# 清理旧备份（保留最近3个）
 echo "清理旧备份..."
-ls -t "$BACKUP_DIR" | tail -n +6 | xargs -I {} rm -f "$BACKUP_DIR/{}" 2>/dev/null || true
+ls -t "$BACKUP_DIR" | tail -n +4 | xargs -I {} rm -f "$BACKUP_DIR/{}" 2>/dev/null || true
 echo ""

@@ -3,10 +3,10 @@
 
 [server]
 bind = "0.0.0.0"  # 允许远程访问
-quic_port = 8443
-ws_port = 443
-cert_path = "/etc/gnome-remote/cert.pem"
-key_path = "/etc/gnome-remote/key.pem"
+quic_port = 9443
+ws_port = 9444
+cert_path = "./cert.pem"
+key_path = "./key.pem"
 
 [auth.ssh]
 enable_pubkey = true
