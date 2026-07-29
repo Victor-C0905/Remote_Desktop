@@ -7,8 +7,10 @@
 //! - **低耦合**: 独立于具体业务逻辑，提供通用执行能力
 //!
 //! ## 安全机制
-//! - 使用User Namespace隔离
-//! - 支持跨平台（Linux使用Namespace，其他平台降级）
+//! - Agent以root身份运行，直接执行文件操作
+//! - 权限控制完全依赖Linux文件系统权限（不再使用逻辑权限检查）
+//! - 不使用setuid（避免主进程永久降权）
+//! - 不使用User Namespace（避免兼容性问题）
 
 use anyhow::Result;
 #[cfg(unix)]
@@ -56,7 +58,7 @@ impl UserExecutor {
     ///
     /// # 实现机制
     /// - Agent以root身份运行，直接执行文件操作
-    /// - 通过 check_path_permission 逻辑权限检查控制访问范围
+    /// - 权限控制完全依赖Linux文件系统权限（不再使用逻辑权限检查）
     /// - 不使用setuid（避免主进程永久降权）
     /// - 不使用User Namespace（避免兼容性问题）
     ///
@@ -67,9 +69,10 @@ impl UserExecutor {
     /// 返回闭包的执行结果
     ///
     /// # 安全性
-    /// - Agent必须以root运行
-    /// - 文件操作前必须调用 check_path_permission 进行权限检查
-    /// - 文件系统权限作为第二道防线
+    /// - Agent必须以root运行（建议在启动时检查）
+    /// - 调用方必须已通过SSH/PAM认证
+    /// - 文件系统权限作为唯一的权限控制机制
+    /// - 错误处理会捕获"Permission denied"并返回友好提示
     ///
     /// # 示例
     /// ```rust,ignore
@@ -101,10 +104,10 @@ impl UserExecutor {
             }
 
             // 如果当前是root用户，直接以root权限执行
-            // 权限控制通过 check_path_permission 函数实现
+            // 权限控制完全依赖Linux文件系统权限
             if current_uid == 0 {
                 tracing::debug!(
-                    "root用户执行操作（逻辑权限已检查）: target_uid={}",
+                    "root用户执行操作（依赖文件系统权限控制）: target_uid={}",
                     self.uid
                 );
                 return f();

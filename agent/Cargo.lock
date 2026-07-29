@@ -746,7 +746,6 @@ dependencies = [
  "chrono",
  "clap",
  "ed25519-dalek",
- "filetime",
  "futures-util",
  "lazy_static",
  "libc",

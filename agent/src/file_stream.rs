@@ -70,7 +70,7 @@ impl FileStreamReader {
     /// # 安全性说明
     ///
     /// 此方法不验证路径安全性，调用方应确保：
-    /// - 路径在 Agent 配置的 `allowed_paths` 白名单内
+    /// - 路径在操作权限范围内
     /// - 路径不包含路径遍历字符（如 `../`）
     /// - 调用方有足够的文件系统权限
     ///
@@ -642,122 +642,6 @@ impl Drop for FileStreamWriter {
     }
 }
 
-// ===== 启动时临时文件清理 =====
-
-/// 默认临时文件过期时间（1 小时）
-const TEMP_FILE_MAX_AGE_SECS: u64 = 3600;
-
-/// 清理过期的临时文件（`.tmp` 后缀）
-///
-/// 在 Agent 启动时调用，扫描指定目录中超过 `max_age_secs` 的 `.tmp` 文件并删除。
-/// 这些文件通常是上次运行中上传中断遗留的。
-///
-/// # 参数
-/// - `scan_dirs`: 需要扫描的目录列表（通常来自 Agent 配置的 `allowed_paths`）
-/// - `max_age_secs`: 临时文件最大存活时间（秒），超过此时间的 `.tmp` 文件将被删除
-///
-/// # 行为
-/// - 递归扫描目录（最大深度 3 层，避免扫描过深）
-/// - 仅删除 `.tmp` 后缀的文件
-/// - 删除失败仅打印警告，不影响 Agent 启动
-/// - 扫描目录不存在时静默跳过
-pub fn cleanup_stale_temp_files(scan_dirs: &[String], max_age_secs: Option<u64>) {
-    let max_age = max_age_secs.unwrap_or(TEMP_FILE_MAX_AGE_SECS);
-    let now = std::time::SystemTime::now();
-    let mut cleaned_count = 0u32;
-    let mut failed_count = 0u32;
-
-    for dir in scan_dirs {
-        let dir_path = Path::new(dir);
-        if !dir_path.exists() || !dir_path.is_dir() {
-            continue;
-        }
-
-        // 递归扫描（最大深度 3 层）
-        cleanup_stale_temp_files_recursive(dir_path, max_age, now, 0, 3, &mut cleaned_count, &mut failed_count);
-    }
-
-    if cleaned_count > 0 || failed_count > 0 {
-        tracing::info!(
-            "[启动清理] 临时文件清理完成: 删除 {} 个, 失败 {} 个",
-            cleaned_count,
-            failed_count
-        );
-    } else {
-        tracing::info!("[启动清理] 未发现过期的临时文件");
-    }
-}
-
-/// 递归扫描并清理过期临时文件
-fn cleanup_stale_temp_files_recursive(
-    dir: &Path,
-    max_age_secs: u64,
-    now: std::time::SystemTime,
-    current_depth: u32,
-    max_depth: u32,
-    cleaned_count: &mut u32,
-    failed_count: &mut u32,
-) {
-    if current_depth >= max_depth {
-        return;
-    }
-
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(_) => return, // 权限不足等，静默跳过
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-
-        if path.is_dir() {
-            // 递归扫描子目录
-            cleanup_stale_temp_files_recursive(
-                &path, max_age_secs, now, current_depth + 1, max_depth, cleaned_count, failed_count,
-            );
-            continue;
-        }
-
-        // 检查是否为 .tmp 文件
-        let file_name = path.file_name().unwrap_or_default().to_string_lossy();
-        if !file_name.ends_with(".tmp") {
-            continue;
-        }
-
-        // 检查文件年龄
-        match entry.metadata() {
-            Ok(metadata) => {
-                let age = now
-                    .duration_since(metadata.modified().unwrap_or(std::time::UNIX_EPOCH))
-                    .unwrap_or_default()
-                    .as_secs();
-
-                if age > max_age_secs {
-                    match fs::remove_file(&path) {
-                        Ok(_) => {
-                            tracing::info!(
-                                "[启动清理] 已删除过期临时文件: {} (年龄: {}秒)",
-                                path.display(),
-                                age
-                            );
-                            *cleaned_count += 1;
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                "[启动清理] 删除临时文件失败: {}: {}",
-                                path.display(),
-                                e
-                            );
-                            *failed_count += 1;
-                        }
-                    }
-                }
-            }
-            Err(_) => continue, // 无法获取元数据，跳过
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -894,34 +778,5 @@ mod tests {
 
         // 验证临时文件已被删除
         assert!(!Path::new(&temp_path).exists());
-    }
-
-    #[test]
-    fn test_cleanup_stale_temp_files() {
-        // 测试启动时清理过期临时文件
-        let temp_dir = TempDir::new().unwrap();
-        let dir_path = temp_dir.path().to_str().unwrap().to_string();
-
-        // 创建一个 .tmp 文件
-        let tmp_file = temp_dir.path().join("stale_file.tmp");
-        fs::write(&tmp_file, b"stale data").unwrap();
-
-        // 设置文件修改时间为 2 小时前
-        let two_hours_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
-        filetime::set_file_mtime(
-            tmp_file.to_str().unwrap(),
-            filetime::FileTime::from_system_time(two_hours_ago),
-        ).unwrap();
-
-        // 创建一个非 .tmp 文件（不应被删除）
-        let normal_file = temp_dir.path().join("normal_file.txt");
-        fs::write(&normal_file, b"normal data").unwrap();
-
-        // 清理过期临时文件
-        cleanup_stale_temp_files(&[dir_path], Some(3600));
-
-        // 验证 .tmp 文件被删除，普通文件保留
-        assert!(!tmp_file.exists(), "过期的 .tmp 文件应被删除");
-        assert!(normal_file.exists(), "普通文件不应被删除");
     }
 }

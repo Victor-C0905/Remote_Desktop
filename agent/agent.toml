@@ -13,7 +13,7 @@ enable_password = true
 pam_service = "sshd"
 
 [security]
-allowed_paths = ["home", "/etc", "/var/log", "/opt"]
+# 移除：allowed_paths = ["home", "/etc", "/var/log", "/opt"]
 blocked_commands = ["rm -rf /", "dd if=", "mkfs."]
 
 [limits]

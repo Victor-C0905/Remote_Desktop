@@ -46,8 +46,7 @@ pub struct SshAuthConfig {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SecurityConfig {
-    #[serde(default = "default_allowed_paths")]
-    pub allowed_paths: Vec<String>,
+    // 移除：pub allowed_paths: Vec<String>,
     #[serde(default = "default_blocked_commands")]
     pub blocked_commands: Vec<String>,
 }
@@ -116,7 +115,7 @@ impl Default for LogConfig {
 
 fn default_quic_port() -> u16 { 8443 }
 fn default_ws_port() -> u16 { 443 }
-fn default_allowed_paths() -> Vec<String> { vec!["/home".into(), "/etc".into(), "/var/log".into(), "/opt".into()] }
+// 移除：fn default_allowed_paths() -> Vec<String> { vec!["/home".into(), "/etc".into(), "/var/log".into(), "/opt".into()] }
 fn default_blocked_commands() -> Vec<String> { vec!["rm -rf /".into(), "dd if=".into(), "mkfs.".into()] }
 fn default_max_sessions() -> usize { 10 }
 fn default_max_file_mb() -> u64 { 500 }
@@ -172,7 +171,7 @@ fn default_config() -> AgentConfig {
             },
         },
         security: SecurityConfig {
-            allowed_paths: default_allowed_paths(),
+            // 移除：allowed_paths: default_allowed_paths(),
             blocked_commands: default_blocked_commands(),
         },
         limits: LimitsConfig {

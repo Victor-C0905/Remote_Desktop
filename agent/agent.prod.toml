@@ -14,12 +14,12 @@ enable_password = true  # 生产环境可根据安全策略调整
 pam_service = "sshd"
 
 [security]
-# 生产环境：严格的路径限制
-allowed_paths = [
-    "/home",
-    "/var/log",
-    "/opt"
-]
+# 生产环境：移除路径限制（已重构权限系统）
+# allowed_paths = [
+#     "/home",
+#     "/var/log",
+#     "/opt"
+# ]
 blocked_commands = [
     "rm -rf /",
     "rm -rf /*",
