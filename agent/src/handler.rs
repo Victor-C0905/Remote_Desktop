@@ -19,96 +19,6 @@ lazy_static::lazy_static! {
         Arc::new(Mutex::new(HashMap::new()));
 }
 
-// ============================================================================
-// 权限检查函数
-// ============================================================================
-
-/// 检查路径权限（家目录范围）
-///
-/// 验证用户是否有权访问指定路径，确保路径在用户的家目录范围内。
-///
-/// # 参数
-/// - `path`: 要检查的路径
-/// - `session`: 用户会话信息
-///
-/// # 返回
-/// - `Ok(true)`: 有权限访问
-/// - `Ok(false)`: 无权限访问
-///
-/// # 安全性
-/// - 只允许访问用户家目录及其子目录
-/// - 防止路径遍历攻击（如 `../`）
-/// - root用户(uid=0)拥有整个文件系统的访问权限
-fn check_path_permission(path: &str, session: &UserSession) -> Result<bool, String> {
-    let path = PathBuf::from(path);
-
-    // 规范化路径，防止路径遍历攻击
-    let canonical_path = match path.canonicalize() {
-        Ok(p) => p,
-        Err(_e) => {
-            // 路径不存在时，使用绝对路径检查
-            if !path.is_absolute() {
-                return Err(format!("路径必须是绝对路径: {}", path.display()));
-            }
-            path
-        }
-    };
-
-    // root用户(uid=0)拥有整个文件系统的访问权限
-    if session.uid == 0 {
-        tracing::debug!(
-            "root用户访问: {:?}",
-            canonical_path
-        );
-        return Ok(true);
-    }
-
-    // 普通用户：检查是否在用户家目录范围内
-    if !canonical_path.starts_with(&session.home_dir) {
-        tracing::warn!(
-            "权限拒绝: 用户 {} 尝试访问路径 {:?}，家目录为 {:?}",
-            session.username,
-            canonical_path,
-            session.home_dir
-        );
-        return Ok(false);
-    }
-
-    Ok(true)
-}
-
-/// 检查路径权限（包括allowed_paths白名单检查）
-///
-/// # 参数
-/// - `path`: 要检查的路径
-/// - `cfg`: Agent配置
-/// - `session`: 用户会话信息
-///
-/// # 返回
-/// - `Ok(())`: 权限检查通过
-/// - `Err(String)`: 权限被拒绝，包含错误信息
-fn check_allowed_paths(path: &str, cfg: &AgentConfig, session: &UserSession) -> Result<(), String> {
-    // root用户(uid=0)跳过白名单检查
-    if session.uid == 0 {
-        tracing::trace!("root用户跳过白名单检查: {}", path);
-        return Ok(());
-    }
-
-    // 普通用户：如果allowed_paths不为空，则检查白名单
-    if !cfg.security.allowed_paths.is_empty() {
-        let allowed = cfg
-            .security
-            .allowed_paths
-            .iter()
-            .any(|prefix| path.starts_with(prefix));
-        if !allowed {
-            return Err(format!("访问被拒绝: 不在允许的路径列表中 ({})", path));
-        }
-    }
-
-    Ok(())
-}
-
 #[tracing::instrument(skip(envelope, cfg, session, stats_manager), fields(request_id = envelope.request_id, payload_type = envelope.payload.type_name()))]
 pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &UserSession, stats_manager: Arc<StatsManager>) -> Envelope {
     // 记录请求开始时间
@@ -136,32 +46,19 @@ pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &U
         Payload::ReadDirRequest { path } => {
             tracing::info!("读取目录请求: {}", path);
 
-            // 权限检查：验证用户是否有权访问该路径
-            match check_path_permission(path, session) {
-                Ok(true) => {
-                    match handle_read_dir(path, cfg, session) {
-                        Ok(entries) => {
-                            tracing::info!("读取目录成功: {} ({} 个文件)", path, entries.len());
-                            Envelope::new(
-                                envelope.request_id,
-                                Payload::ReadDirResponse {
-                                    path: path.clone(),
-                                    entries,
-                                },
-                            )
-                        }
-                        Err(e) => {
-                            tracing::error!("读取目录失败: {} - {}", path, e);
-                            error_response(envelope.request_id, &e)
-                        }
-                    }
-                }
-                Ok(false) => {
-                    tracing::warn!("权限拒绝: 用户 {} 无权访问路径 {}", session.username, path);
-                    error_response(envelope.request_id, &format!("权限不足: 无法访问路径 '{}'", path))
+            match handle_read_dir(path, cfg, session) {
+                Ok(entries) => {
+                    tracing::info!("读取目录成功: {} ({} 个文件)", path, entries.len());
+                    Envelope::new(
+                        envelope.request_id,
+                        Payload::ReadDirResponse {
+                            path: path.clone(),
+                            entries,
+                        },
+                    )
                 }
                 Err(e) => {
-                    tracing::error!("权限检查失败: {}", e);
+                    tracing::error!("读取目录失败: {} - {}", path, e);
                     error_response(envelope.request_id, &e)
                 }
             }
@@ -170,116 +67,64 @@ pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &U
         Payload::ReadFileRequest { path } => {
             tracing::info!("读取文件请求: {}", path);
 
-            // 权限检查：验证用户是否有权访问该路径
-            match check_path_permission(path, session) {
-                Ok(true) => {
-                    match handle_read_file(path, cfg, session) {
-                        Ok((content, mtime, size)) => Envelope::new(
-                            envelope.request_id,
-                            Payload::ReadFileResponse {
-                                path: path.clone(),
-                                content,
-                                mtime,
-                                size,
-                            },
-                        ),
-                        Err(e) => error_response(envelope.request_id, &e),
-                    }
-                }
-                Ok(false) => {
-                    tracing::warn!("权限拒绝: 用户 {} 无权访问路径 {}", session.username, path);
-                    error_response(envelope.request_id, &format!("权限不足: 无法访问路径 '{}'", path))
-                }
-                Err(e) => {
-                    tracing::error!("权限检查失败: {}", e);
-                    error_response(envelope.request_id, &e)
-                }
+            match handle_read_file(path, cfg, session) {
+                Ok((content, mtime, size)) => Envelope::new(
+                    envelope.request_id,
+                    Payload::ReadFileResponse {
+                        path: path.clone(),
+                        content,
+                        mtime,
+                        size,
+                    },
+                ),
+                Err(e) => error_response(envelope.request_id, &e),
             }
         }
 
         Payload::WriteFileRequest { path, content } => {
             tracing::info!("写入文件请求: {}", path);
 
-            // 权限检查：验证用户是否有权访问该路径
-            match check_path_permission(path, session) {
-                Ok(true) => {
-                    match handle_write_file(path, content, cfg, session) {
-                        Ok((mtime, size)) => Envelope::new(
-                            envelope.request_id,
-                            Payload::WriteFileResponse {
-                                path: path.clone(),
-                                mtime,
-                                size,
-                            },
-                        ),
-                        Err(e) => error_response(envelope.request_id, &e),
-                    }
-                }
-                Ok(false) => {
-                    tracing::warn!("权限拒绝: 用户 {} 无权访问路径 {}", session.username, path);
-                    error_response(envelope.request_id, &format!("权限不足: 无法访问路径 '{}'", path))
-                }
-                Err(e) => {
-                    tracing::error!("权限检查失败: {}", e);
-                    error_response(envelope.request_id, &e)
-                }
+            match handle_write_file(path, content, cfg, session) {
+                Ok((mtime, size)) => Envelope::new(
+                    envelope.request_id,
+                    Payload::WriteFileResponse {
+                        path: path.clone(),
+                        mtime,
+                        size,
+                    },
+                ),
+                Err(e) => error_response(envelope.request_id, &e),
             }
         }
 
         Payload::DeleteRequest { path } => {
             tracing::info!("删除请求: {}", path);
 
-            // 权限检查：验证用户是否有权访问该路径
-            match check_path_permission(path, session) {
-                Ok(true) => {
-                    match handle_delete(path, cfg, session) {
-                        Ok(_) => Envelope::new(
-                            envelope.request_id,
-                            Payload::DeleteResponse { success: true },
-                        ),
-                        Err(e) => error_response(envelope.request_id, &e),
-                    }
-                }
-                Ok(false) => {
-                    tracing::warn!("权限拒绝: 用户 {} 无权访问路径 {}", session.username, path);
-                    error_response(envelope.request_id, &format!("权限不足: 无法访问路径 '{}'", path))
-                }
-                Err(e) => {
-                    tracing::error!("权限检查失败: {}", e);
-                    error_response(envelope.request_id, &e)
-                }
+            match handle_delete(path, cfg, session) {
+                Ok(_) => Envelope::new(
+                    envelope.request_id,
+                    Payload::DeleteResponse { success: true },
+                ),
+                Err(e) => error_response(envelope.request_id, &e),
             }
         }
 
         Payload::MkdirRequest { path } => {
             tracing::info!("创建目录请求: {}", path);
 
-            // 权限检查：验证用户是否有权访问该路径
-            match check_path_permission(path, session) {
-                Ok(true) => {
-                    match handle_mkdir(path, cfg, session) {
-                        Ok(created_path) => {
-                            tracing::info!("创建目录成功: {}", created_path);
-                            Envelope::new(
-                                envelope.request_id,
-                                Payload::MkdirResponse {
-                                    success: true,
-                                    path: created_path,
-                                },
-                            )
-                        }
-                        Err(e) => {
-                            tracing::error!("创建目录失败: {} - {}", path, e);
-                            error_response(envelope.request_id, &e)
-                        }
-                    }
-                }
-                Ok(false) => {
-                    tracing::warn!("权限拒绝: 用户 {} 无权访问路径 {}", session.username, path);
-                    error_response(envelope.request_id, &format!("权限不足: 无法访问路径 '{}'", path))
+            match handle_mkdir(path, cfg, session) {
+                Ok(created_path) => {
+                    tracing::info!("创建目录成功: {}", created_path);
+                    Envelope::new(
+                        envelope.request_id,
+                        Payload::MkdirResponse {
+                            success: true,
+                            path: created_path,
+                        },
+                    )
                 }
                 Err(e) => {
-                    tracing::error!("权限检查失败: {}", e);
+                    tracing::error!("创建目录失败: {} - {}", path, e);
                     error_response(envelope.request_id, &e)
                 }
             }
@@ -288,40 +133,20 @@ pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &U
         Payload::RenameRequest { old_path, new_path } => {
             tracing::info!("重命名请求: {} -> {}", old_path, new_path);
 
-            // 权限检查：验证用户是否有权访问源路径和目标路径
-            let old_permitted = check_path_permission(old_path, session);
-            let new_permitted = check_path_permission(new_path, session);
-
-            match (old_permitted, new_permitted) {
-                (Ok(true), Ok(true)) => {
-                    match handle_rename(old_path, new_path, cfg, session) {
-                        Ok((old, new)) => {
-                            tracing::info!("重命名成功: {} -> {}", old, new);
-                            Envelope::new(
-                                envelope.request_id,
-                                Payload::RenameResponse {
-                                    success: true,
-                                    old_path: old,
-                                    new_path: new,
-                                },
-                            )
-                        }
-                        Err(e) => {
-                            tracing::error!("重命名失败: {} - {}", old_path, e);
-                            error_response(envelope.request_id, &e)
-                        }
-                    }
+            match handle_rename(old_path, new_path, cfg, session) {
+                Ok((old, new)) => {
+                    tracing::info!("重命名成功: {} -> {}", old, new);
+                    Envelope::new(
+                        envelope.request_id,
+                        Payload::RenameResponse {
+                            success: true,
+                            old_path: old,
+                            new_path: new,
+                        },
+                    )
                 }
-                (Ok(false), _) => {
-                    tracing::warn!("权限拒绝: 用户 {} 无权访问路径 {}", session.username, old_path);
-                    error_response(envelope.request_id, &format!("权限不足: 无法访问路径 '{}'", old_path))
-                }
-                (_, Ok(false)) => {
-                    tracing::warn!("权限拒绝: 用户 {} 无权访问路径 {}", session.username, new_path);
-                    error_response(envelope.request_id, &format!("权限不足: 无法访问路径 '{}'", new_path))
-                }
-                (Err(e), _) | (_, Err(e)) => {
-                    tracing::error!("权限检查失败: {}", e);
+                Err(e) => {
+                    tracing::error!("重命名失败: {} - {}", old_path, e);
                     error_response(envelope.request_id, &e)
                 }
             }
@@ -330,40 +155,20 @@ pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &U
         Payload::CopyRequest { src, dst } => {
             tracing::info!("复制请求: {} -> {}", src, dst);
 
-            // 权限检查：验证用户是否有权访问源路径和目标路径
-            let src_permitted = check_path_permission(src, session);
-            let dst_permitted = check_path_permission(dst, session);
-
-            match (src_permitted, dst_permitted) {
-                (Ok(true), Ok(true)) => {
-                    match handle_copy(src, dst, cfg, session) {
-                        Ok((s, d)) => {
-                            tracing::info!("复制成功: {} -> {}", s, d);
-                            Envelope::new(
-                                envelope.request_id,
-                                Payload::CopyResponse {
-                                    success: true,
-                                    src: s,
-                                    dst: d,
-                                },
-                            )
-                        }
-                        Err(e) => {
-                            tracing::error!("复制失败: {} - {}", src, e);
-                            error_response(envelope.request_id, &e)
-                        }
-                    }
+            match handle_copy(src, dst, cfg, session) {
+                Ok((s, d)) => {
+                    tracing::info!("复制成功: {} -> {}", s, d);
+                    Envelope::new(
+                        envelope.request_id,
+                        Payload::CopyResponse {
+                            success: true,
+                            src: s,
+                            dst: d,
+                        },
+                    )
                 }
-                (Ok(false), _) => {
-                    tracing::warn!("权限拒绝: 用户 {} 无权访问路径 {}", session.username, src);
-                    error_response(envelope.request_id, &format!("权限不足: 无法访问路径 '{}'", src))
-                }
-                (_, Ok(false)) => {
-                    tracing::warn!("权限拒绝: 用户 {} 无权访问路径 {}", session.username, dst);
-                    error_response(envelope.request_id, &format!("权限不足: 无法访问路径 '{}'", dst))
-                }
-                (Err(e), _) | (_, Err(e)) => {
-                    tracing::error!("权限检查失败: {}", e);
+                Err(e) => {
+                    tracing::error!("复制失败: {} - {}", src, e);
                     error_response(envelope.request_id, &e)
                 }
             }
@@ -372,40 +177,20 @@ pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &U
         Payload::MoveRequest { src, dst } => {
             tracing::info!("移动请求: {} -> {}", src, dst);
 
-            // 权限检查：验证用户是否有权访问源路径和目标路径
-            let src_permitted = check_path_permission(src, session);
-            let dst_permitted = check_path_permission(dst, session);
-
-            match (src_permitted, dst_permitted) {
-                (Ok(true), Ok(true)) => {
-                    match handle_move(src, dst, cfg, session) {
-                        Ok((s, d)) => {
-                            tracing::info!("移动成功: {} -> {}", s, d);
-                            Envelope::new(
-                                envelope.request_id,
-                                Payload::MoveResponse {
-                                    success: true,
-                                    src: s,
-                                    dst: d,
-                                },
-                            )
-                        }
-                        Err(e) => {
-                            tracing::error!("移动失败: {} - {}", src, e);
-                            error_response(envelope.request_id, &e)
-                        }
-                    }
+            match handle_move(src, dst, cfg, session) {
+                Ok((s, d)) => {
+                    tracing::info!("移动成功: {} -> {}", s, d);
+                    Envelope::new(
+                        envelope.request_id,
+                        Payload::MoveResponse {
+                            success: true,
+                            src: s,
+                            dst: d,
+                        },
+                    )
                 }
-                (Ok(false), _) => {
-                    tracing::warn!("权限拒绝: 用户 {} 无权访问路径 {}", session.username, src);
-                    error_response(envelope.request_id, &format!("权限不足: 无法访问路径 '{}'", src))
-                }
-                (_, Ok(false)) => {
-                    tracing::warn!("权限拒绝: 用户 {} 无权访问路径 {}", session.username, dst);
-                    error_response(envelope.request_id, &format!("权限不足: 无法访问路径 '{}'", dst))
-                }
-                (Err(e), _) | (_, Err(e)) => {
-                    tracing::error!("权限检查失败: {}", e);
+                Err(e) => {
+                    tracing::error!("移动失败: {} - {}", src, e);
                     error_response(envelope.request_id, &e)
                 }
             }
@@ -437,43 +222,30 @@ pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &U
         Payload::ApplyDiffRequest { path, base_mtime, diffs } => {
             tracing::info!("应用差异请求: {} (base_mtime={})", path, base_mtime);
 
-            // 权限检查：验证用户是否有权访问该路径
-            match check_path_permission(path, session) {
-                Ok(true) => {
-                    match handle_apply_diff(path, *base_mtime, diffs, cfg, session) {
-                        Ok(new_mtime) => {
-                            tracing::info!("应用差异成功: {} (new_mtime={})", path, new_mtime);
-                            Envelope::new(
-                                envelope.request_id,
-                                Payload::ApplyDiffResponse {
-                                    path: path.clone(),
-                                    success: true,
-                                    new_mtime,
-                                    error: None,
-                                },
-                            )
-                        }
-                        Err(e) => {
-                            tracing::error!("应用差异失败: {} - {}", path, e);
-                            Envelope::new(
-                                envelope.request_id,
-                                Payload::ApplyDiffResponse {
-                                    path: path.clone(),
-                                    success: false,
-                                    new_mtime: 0,
-                                    error: Some(e),
-                                },
-                            )
-                        }
-                    }
-                }
-                Ok(false) => {
-                    tracing::warn!("权限拒绝: 用户 {} 无权访问路径 {}", session.username, path);
-                    error_response(envelope.request_id, &format!("权限不足: 无法访问路径 '{}'", path))
+            match handle_apply_diff(path, *base_mtime, diffs, cfg, session) {
+                Ok(new_mtime) => {
+                    tracing::info!("应用差异成功: {} (new_mtime={})", path, new_mtime);
+                    Envelope::new(
+                        envelope.request_id,
+                        Payload::ApplyDiffResponse {
+                            path: path.clone(),
+                            success: true,
+                            new_mtime,
+                            error: None,
+                        },
+                    )
                 }
                 Err(e) => {
-                    tracing::error!("权限检查失败: {}", e);
-                    error_response(envelope.request_id, &e)
+                    tracing::error!("应用差异失败: {} - {}", path, e);
+                    Envelope::new(
+                        envelope.request_id,
+                        Payload::ApplyDiffResponse {
+                            path: path.clone(),
+                            success: false,
+                            new_mtime: 0,
+                            error: Some(e),
+                        },
+                    )
                 }
             }
         }
@@ -520,23 +292,10 @@ pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &U
         Payload::FileTransferRequest { direction, path, file_size, chunk_size, resume_from } => {
             tracing::info!("文件传输请求: direction={:?}, path={}, resume_from={:?}", direction, path, resume_from);
 
-            // 权限检查：验证用户是否有权访问该路径
-            match check_path_permission(path, session) {
-                Ok(true) => {
-                    match handle_file_transfer_request(envelope.request_id, direction, path, *file_size, *chunk_size, *resume_from, cfg, session).await {
-                        Ok(response) => response,
-                        Err(e) => {
-                            tracing::error!("文件传输请求失败: {}", e);
-                            error_response(envelope.request_id, &e)
-                        }
-                    }
-                }
-                Ok(false) => {
-                    tracing::warn!("权限拒绝: 用户 {} 无权访问路径 {}", session.username, path);
-                    error_response(envelope.request_id, &format!("权限不足: 无法访问路径 '{}'", path))
-                }
+            match handle_file_transfer_request(envelope.request_id, direction, path, *file_size, *chunk_size, *resume_from, cfg, session).await {
+                Ok(response) => response,
                 Err(e) => {
-                    tracing::error!("权限检查失败: {}", e);
+                    tracing::error!("文件传输请求失败: {}", e);
                     error_response(envelope.request_id, &e)
                 }
             }
@@ -570,23 +329,10 @@ pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &U
         Payload::FileExistsRequest { path } => {
             tracing::info!("检查文件是否存在: {}", path);
 
-            // 权限检查：验证用户是否有权访问该路径
-            match check_path_permission(path, session) {
-                Ok(true) => {
-                    match handle_file_exists(path, cfg, session) {
-                        Ok(response) => response,
-                        Err(e) => {
-                            tracing::error!("检查文件失败: {}", e);
-                            error_response(envelope.request_id, &e)
-                        }
-                    }
-                }
-                Ok(false) => {
-                    tracing::warn!("权限拒绝: 用户 {} 无权访问路径 {}", session.username, path);
-                    error_response(envelope.request_id, &format!("权限不足: 无法访问路径 '{}'", path))
-                }
+            match handle_file_exists(path, cfg, session) {
+                Ok(response) => response,
                 Err(e) => {
-                    tracing::error!("权限检查失败: {}", e);
+                    tracing::error!("检查文件失败: {}", e);
                     error_response(envelope.request_id, &e)
                 }
             }
@@ -731,11 +477,9 @@ fn handle_get_mounts() -> Vec<MountInfo> {
         .collect()
 }
 
-fn handle_read_dir(path: &str, cfg: &AgentConfig, session: &UserSession) -> Result<Vec<FileEntry>, String> {
-    // 检查白名单权限（root用户自动跳过）
-    check_allowed_paths(path, cfg, session)?;
-
+fn handle_read_dir(path: &str, _cfg: &AgentConfig, session: &UserSession) -> Result<Vec<FileEntry>, String> {
     // 使用 UserExecutor 在用户上下文中执行操作
+    // Linux 文件系统权限自动生效
     let executor = UserExecutor::new(session);
     let path = path.to_string(); // 克隆为 String,以便移动到闭包
     executor.execute_as_user(move || {
@@ -778,12 +522,10 @@ fn handle_read_dir(path: &str, cfg: &AgentConfig, session: &UserSession) -> Resu
     }).map_err(|e| e.to_string())
 }
 
-fn handle_read_file(path: &str, cfg: &AgentConfig, session: &UserSession) -> Result<(String, u64, u64), String> {
+fn handle_read_file(path: &str, _cfg: &AgentConfig, session: &UserSession) -> Result<(String, u64, u64), String> {
     tracing::debug!("[handle_read_file] path={}", path);
-    // 检查白名单权限（root用户自动跳过）
-    check_allowed_paths(path, cfg, session)?;
-
     // 使用 UserExecutor 在用户上下文中执行操作
+    // Linux 文件系统权限自动生效
     let executor = UserExecutor::new(session);
     let path = path.to_string(); // 克隆为 String,以便移动到闭包
     executor.execute_as_user(move || {
@@ -831,12 +573,10 @@ fn handle_read_file(path: &str, cfg: &AgentConfig, session: &UserSession) -> Res
     }).map_err(|e| e.to_string())
 }
 
-fn handle_write_file(path: &str, content: &str, cfg: &AgentConfig, session: &UserSession) -> Result<(u64, u64), String> {
+fn handle_write_file(path: &str, content: &str, _cfg: &AgentConfig, session: &UserSession) -> Result<(u64, u64), String> {
     tracing::info!("[handle_write_file] path={}", path);
-    // 检查白名单权限（root用户自动跳过）
-    check_allowed_paths(path, cfg, session)?;
-
     // 使用 UserExecutor 在用户上下文中执行操作
+    // Linux 文件系统权限自动生效
     let executor = UserExecutor::new(session);
     let path = path.to_string(); // 克隆为 String,以便移动到闭包
     let content = content.to_string(); // 移动到闭包外部
@@ -886,21 +626,19 @@ fn handle_write_file(path: &str, content: &str, cfg: &AgentConfig, session: &Use
 ///
 /// # 返回
 /// - `new_mtime`: 新的 mtime（写入后）
-#[tracing::instrument(skip(diffs, cfg, session), fields(path = %path, base_mtime = base_mtime, diffs_count = diffs.len()))]
+#[tracing::instrument(skip(diffs, _cfg, session), fields(path = %path, base_mtime = base_mtime, diffs_count = diffs.len()))]
 fn handle_apply_diff(
     path: &str,
     base_mtime: u64,
     diffs: &[FileDiff],
-    cfg: &AgentConfig,
+    _cfg: &AgentConfig,
     session: &UserSession,
 ) -> Result<u64, String> {
     tracing::debug!("[handle_apply_diff] 开始处理: path={}, base_mtime={}, diffs_count={}",
         path, base_mtime, diffs.len());
 
-    // 检查白名单权限（root用户自动跳过）
-    check_allowed_paths(path, cfg, session)?;
-
     // 使用 UserExecutor 在用户上下文中执行操作
+    // Linux 文件系统权限自动生效
     let executor = UserExecutor::new(session);
     let path = path.to_string(); // 克隆为 String,以便移动到闭包
     let diffs = diffs.to_vec(); // 移动到闭包外部
@@ -962,19 +700,10 @@ fn handle_apply_diff(
     }).map_err(|e| e.to_string())
 }
 
-fn handle_delete(path: &str, cfg: &AgentConfig, session: &UserSession) -> Result<(), String> {
+fn handle_delete(path: &str, _cfg: &AgentConfig, session: &UserSession) -> Result<(), String> {
     tracing::info!("[handle_delete] path={}", path);
-    // 检查白名单权限（root用户自动跳过）
-    check_allowed_paths(path, cfg, session)?;
-
-    // 检查是否在禁止删除的路径
-    for blocked in &cfg.security.blocked_commands {
-        if path.contains(blocked) {
-            return Err(format!("禁止删除: 路径包含敏感内容 ({})", path));
-        }
-    }
-
     // 使用 UserExecutor 在用户上下文中执行操作
+    // Linux 文件系统权限自动生效
     let executor = UserExecutor::new(session);
     let path = path.to_string(); // 克隆为 String,以便移动到闭包
     executor.execute_as_user(move || {
@@ -1002,11 +731,9 @@ fn handle_delete(path: &str, cfg: &AgentConfig, session: &UserSession) -> Result
     }).map_err(|e| e.to_string())
 }
 
-fn handle_mkdir(path: &str, cfg: &AgentConfig, session: &UserSession) -> Result<String, String> {
-    // 检查白名单权限（root用户自动跳过）
-    check_allowed_paths(path, cfg, session)?;
-
+fn handle_mkdir(path: &str, _cfg: &AgentConfig, session: &UserSession) -> Result<String, String> {
     // 使用 UserExecutor 在用户上下文中执行操作
+    // Linux 文件系统权限自动生效
     let executor = UserExecutor::new(session);
     let path = path.to_string(); // 克隆为 String,以便移动到闭包
     executor.execute_as_user(move || {
@@ -1024,12 +751,9 @@ fn handle_mkdir(path: &str, cfg: &AgentConfig, session: &UserSession) -> Result<
     }).map_err(|e| e.to_string())
 }
 
-fn handle_rename(old_path: &str, new_path: &str, cfg: &AgentConfig, session: &UserSession) -> Result<(String, String), String> {
-    // 检查白名单权限（root用户自动跳过）
-    check_allowed_paths(old_path, cfg, session)?;
-    check_allowed_paths(new_path, cfg, session)?;
-
+fn handle_rename(old_path: &str, new_path: &str, _cfg: &AgentConfig, session: &UserSession) -> Result<(String, String), String> {
     // 使用 UserExecutor 在用户上下文中执行操作
+    // Linux 文件系统权限自动生效
     let executor = UserExecutor::new(session);
     let old_path = old_path.to_string(); // 克隆为 String,以便移动到闭包
     let new_path = new_path.to_string(); // 克隆为 String,以便移动到闭包
@@ -1048,13 +772,10 @@ fn handle_rename(old_path: &str, new_path: &str, cfg: &AgentConfig, session: &Us
     }).map_err(|e| e.to_string())
 }
 
-fn handle_copy(src: &str, dst: &str, cfg: &AgentConfig, session: &UserSession) -> Result<(String, String), String> {
+fn handle_copy(src: &str, dst: &str, _cfg: &AgentConfig, session: &UserSession) -> Result<(String, String), String> {
     tracing::info!("[handle_copy] src={}, dst={}", src, dst);
-    // 检查白名单权限（root用户自动跳过）
-    check_allowed_paths(src, cfg, session)?;
-    check_allowed_paths(dst, cfg, session)?;
-
     // 使用 UserExecutor 在用户上下文中执行操作
+    // Linux 文件系统权限自动生效
     let executor = UserExecutor::new(session);
     let src = src.to_string(); // 克隆为 String,以便移动到闭包
     let dst = dst.to_string(); // 克隆为 String,以便移动到闭包
@@ -1093,9 +814,9 @@ fn handle_copy(src: &str, dst: &str, cfg: &AgentConfig, session: &UserSession) -
     }).map_err(|e| e.to_string())
 }
 
-fn handle_move(src: &str, dst: &str, cfg: &AgentConfig, session: &UserSession) -> Result<(String, String), String> {
+fn handle_move(src: &str, dst: &str, _cfg: &AgentConfig, session: &UserSession) -> Result<(String, String), String> {
     // move 本质上是 rename
-    handle_rename(src, dst, cfg, session)
+    handle_rename(src, dst, _cfg, session)
 }
 
 #[cfg(unix)]
@@ -1193,22 +914,10 @@ pub async fn handle_file_transfer_request(
     cfg: &AgentConfig,
     session: &UserSession,
 ) -> Result<Envelope, String> {
-    // 1. 检查路径权限（allowed_paths）
-    if !cfg.security.allowed_paths.is_empty() {
-        let allowed = cfg
-            .security
-            .allowed_paths
-            .iter()
-            .any(|prefix| path.starts_with(prefix));
-        if !allowed {
-            return Err(format!("访问被拒绝: 不在允许的路径列表中 ({})", path));
-        }
-    }
-
-    // 2. 生成 session_id
+    // 1. 生成 session_id
     let session_id = format!("transfer-{}", Uuid::new_v4());
 
-    // 3. 根据方向处理
+    // 2. 根据方向处理
     match direction {
         "upload" => {
             // 上传：客户端上传文件到 Agent
@@ -1580,19 +1289,10 @@ async fn handle_cancel_file_transfer(
 }
 
 /// 检查文件是否存在
-fn handle_file_exists(path: &str, cfg: &AgentConfig, session: &UserSession) -> Result<Envelope, String> {
+fn handle_file_exists(path: &str, _cfg: &AgentConfig, session: &UserSession) -> Result<Envelope, String> {
     tracing::debug!("[handle_file_exists] path={}", path);
-    // 检查路径权限
-    if !cfg.security.allowed_paths.is_empty() {
-        let allowed = cfg.security.allowed_paths
-            .iter()
-            .any(|prefix| path.starts_with(prefix));
-        if !allowed {
-            return Err(format!("访问被拒绝: {}", path));
-        }
-    }
-
     // 使用 UserExecutor 在用户上下文中执行操作
+    // Linux 文件系统权限自动生效
     let executor = UserExecutor::new(session);
     let path = path.to_string(); // 克隆为 String,以便移动到闭包
     executor.execute_as_user(move || {

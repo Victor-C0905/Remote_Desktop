@@ -14,14 +14,14 @@ enable_password = true
 pam_service = "sshd"
 
 [security]
-# 测试环境：宽松的路径限制
-allowed_paths = [
-    "/home",
-    "/tmp",
-    "/var/log",
-    "/etc",
-    "/opt"
-]
+# 测试环境：移除路径限制（已重构权限系统）
+# allowed_paths = [
+#     "/home",
+#     "/tmp",
+#     "/var/log",
+#     "/etc",
+#     "/opt"
+# ]
 blocked_commands = []  # 测试环境不阻止危险命令（仅用于测试！）
 
 [limits]

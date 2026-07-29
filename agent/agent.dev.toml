@@ -14,14 +14,14 @@ enable_password = true
 pam_service = "sshd"
 
 [security]
-# 开发环境：中等严格的限制
-allowed_paths = [
-    "/home",
-    "/var/log",
-    "/etc",
-    "/opt",
-    "/usr/local"
-]
+# 开发环境：移除路径限制（已重构权限系统）
+# allowed_paths = [
+#     "/home",
+#     "/var/log",
+#     "/etc",
+#     "/opt",
+#     "/usr/local"
+# ]
 blocked_commands = [
     "rm -rf /",
     "dd if=",

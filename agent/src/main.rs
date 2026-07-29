@@ -149,11 +149,6 @@ async fn main() -> Result<()> {
 
     init_logging(&args, &cfg);
 
-    // 启动时清理过期的临时文件（上次运行中断遗留的 .tmp 文件）
-    if !cfg.security.allowed_paths.is_empty() {
-        file_stream::cleanup_stale_temp_files(&cfg.security.allowed_paths, None);
-    }
-
     let (cert, key) = cert::ensure_certificate(&cfg)?;
 
     // 日志模式标识
