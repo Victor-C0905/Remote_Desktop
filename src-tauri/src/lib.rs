@@ -17,8 +17,23 @@ mod transfer;
 /// - **调试模式**（`RUST_LOG` 环境变量存在）：pretty 格式输出到 stdout
 /// - **生产模式**：紧凑格式 stdout + JSON 结构化写入日志文件（按天轮转）
 /// - 日志文件路径：`{app_data_dir}/logs/client.YYYY-MM-DD.log`
+/// - **时间格式**：北京时间（UTC+8），格式：YYYY-MM-DD HH:MM:SS.mmm
 fn init_logging(app: &tauri::App) {
     use tracing_appender::rolling;
+    use tracing_subscriber::fmt::time::FormatTime;
+    use tracing_subscriber::fmt::format::Writer;
+
+    // ── 北京时间格式化器 ──────────────────────────────────────
+    /// 北京时间格式化器（UTC+8）
+    struct BeijingTime;
+
+    impl FormatTime for BeijingTime {
+        fn format_time(&self, w: &mut Writer<'_>) -> std::fmt::Result {
+            // 获取当前 UTC 时间，转换为北京时间
+            let now = chrono::Utc::now().with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap());
+            write!(w, "{}", now.format("%Y-%m-%d %H:%M:%S%.3f"))
+        }
+    }
 
     let is_debug = std::env::var("RUST_LOG").is_ok();
 
@@ -53,6 +68,7 @@ fn init_logging(app: &tauri::App) {
             .with(
                 tracing_subscriber::fmt::layer()
                     .pretty()
+                    .with_timer(BeijingTime)
                     .with_filter(env_filter),
             )
             .with(
@@ -69,7 +85,11 @@ fn init_logging(app: &tauri::App) {
         tracing_subscriber::registry()
             .with(
                 tracing_subscriber::fmt::layer()
-                    .compact()
+                    .with_timer(BeijingTime)
+                    .with_target(true)
+                    .with_thread_ids(false)
+                    .with_thread_names(false)
+                    .with_ansi(true)
                     .with_filter(env_filter),
             )
             .with(

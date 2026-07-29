@@ -25,10 +25,19 @@ export enum LogLevel {
 /** 生产环境最低输出级别：只输出 warn 和 error */
 const MIN_LEVEL: LogLevel = import.meta.env.PROD ? LogLevel.Warn : LogLevel.Debug;
 
-/** 格式化时间戳 HH:MM:SS.mmm */
+/** 格式化时间戳 YYYY-MM-DD HH:MM:SS.mmm（北京时间） */
 function timestamp(): string {
   const now = new Date();
-  return `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}.${now.getMilliseconds().toString().padStart(3, '0')}`;
+  // 获取北京时间（UTC+8）
+  const beijingTime = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  const year = beijingTime.getUTCFullYear();
+  const month = (beijingTime.getUTCMonth() + 1).toString().padStart(2, '0');
+  const day = beijingTime.getUTCDate().toString().padStart(2, '0');
+  const hours = beijingTime.getUTCHours().toString().padStart(2, '0');
+  const minutes = beijingTime.getUTCMinutes().toString().padStart(2, '0');
+  const seconds = beijingTime.getUTCSeconds().toString().padStart(2, '0');
+  const ms = beijingTime.getUTCMilliseconds().toString().padStart(3, '0');
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.${ms}`;
 }
 
 export interface Logger {
