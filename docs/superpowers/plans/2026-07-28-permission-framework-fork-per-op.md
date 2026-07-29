@@ -1,4 +1,82 @@
-// agent/src/auth/executor.rs
+# 文件管理器权限框架实现计划（极简版）
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** 让文件管理器完全遵循 Linux 权限原则，和桌面系统体验一致
+
+**Architecture:** 改写 `UserExecutor::execute_as_user`，每次文件操作 fork 子进程 + setuid/setgid 降权执行，结果通过管道返回。子进程以目标用户身份运行，Linux 权限自动生效。与 SSH Server 的 sftp-server 模式一致。
+
+**Tech Stack:** Rust, libc (fork/setuid/setgid/pipe), serde_json (管道序列化)
+
+---
+
+## 方案对比
+
+| 方案 | fork 次数 | IPC | 复杂度 | 性能 |
+|------|-----------|-----|--------|------|
+| ~~Worker 进程池~~ | 1次/用户 | 需要 | 高 | 10μs/操作 |
+| ~~每连接 fork~~ | 1次/连接 | 不需要 | 中 | 0 |
+| **每操作 fork（本方案）** | **N次/操作** | **不需要** | **低** | **10-50ms/操作** |
+
+**为什么选择每操作 fork**：
+- 和桌面系统体验完全一致
+- 实现极简，不需要任何新模块
+- 文件操作是用户触发的低频操作，10-50ms 开销可接受
+- 后续可优化为 Worker 进程池
+
+---
+
+## 当前问题
+
+```rust
+// executor.rs:108-113 — 权限控制完全失效
+if current_uid == 0 {
+    return f();  // ❌ 以 root 权限执行，Linux 权限检查全部通过
+}
+```
+
+---
+
+## 文件结构
+
+### 修改文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| `src/auth/executor.rs` | 重写 `execute_as_user`：fork + setuid + pipe 返回结果 |
+| `src/handler.rs` | 无需修改（已经使用 `executor.execute_as_user`） |
+
+### 不需要新建的文件
+
+- ❌ 不需要 worker 模块
+- ❌ 不需要 IPC 协议
+- ❌ 不需要 bincode 依赖
+- ❌ 不需要 Unix Socket
+
+---
+
+## Task 1: 重写 `execute_as_user` — fork + setuid + pipe
+
+**Files:**
+- Modify: `src/auth/executor.rs`
+
+**核心原理**：
+
+```
+父进程 (root)                     子进程 (目标用户)
+┌──────────────┐   fork    ┌──────────────┐
+│ execute_as_user│────────→│ setuid/setgid │
+│              │           │ 执行闭包 f()  │
+│              │←─pipe────│ 写入结果      │
+│ 读取结果     │           │ _exit(0)     │
+│ waitpid      │           └──────────────┘
+└──────────────┘
+```
+
+- [ ] **Step 1: 重写 executor.rs**
+
+```rust
+// src/auth/executor.rs
 //! 用户上下文执行器
 //!
 //! 通过 fork + setuid/setgid 在目标用户上下文中执行文件操作。
@@ -146,16 +224,14 @@ impl UserExecutor {
                     // 执行闭包
                     let result = f();
 
-                    // 将 anyhow::Error 转换为 String 以便序列化
-                    let serializable_result = result.map_err(|e| e.to_string());
-
                     // 序列化结果并写入管道
-                    match serde_json::to_vec(&serializable_result) {
+                    match serde_json::to_vec(&result) {
                         Ok(data) => {
                             // 先写入长度（4 字节小端）
                             let len = (data.len() as u32).to_le_bytes();
-                            if write_all_to_pipe(write_fd, &len).is_err() || write_all_to_pipe(write_fd, &data).is_err() {
-                                let _ = write_error_to_pipe(write_fd, "写入结果失败");
+                            unsafe {
+                                libc::write(write_fd, len.as_ptr() as *const _, 4);
+                                libc::write(write_fd, data.as_ptr() as *const _, data.len());
                             }
                         }
                         Err(e) => {
@@ -190,79 +266,11 @@ impl UserExecutor {
                     if libc::WIFSIGNALED(status) {
                         tracing::warn!("子进程被信号终止: pid={}, signal={}",
                             child_pid, libc::WTERMSIG(status));
-                        return Err(anyhow::anyhow!(
-                            "子进程被信号终止: signal={}",
-                            libc::WTERMSIG(status)
-                        ));
-                    }
-
-                    if libc::WIFEXITED(status) && libc::WEXITSTATUS(status) != 0 {
-                        tracing::warn!("子进程异常退出: pid={}, status={}",
-                            child_pid, libc::WEXITSTATUS(status));
-                        return Err(anyhow::anyhow!(
-                            "子进程异常退出: status={}",
-                            libc::WEXITSTATUS(status)
-                        ));
                     }
 
                     result
                 }
             }
-        }
-
-        #[cfg(not(unix))]
-        {
-            tracing::warn!(
-                "当前平台直接执行（无用户隔离）: uid={}, gid={}",
-                self.uid,
-                self.gid
-            );
-            f()
-        }
-    }
-
-    /// 在用户上下文中执行操作(不要求序列化)
-    ///
-    /// # 重要说明
-    /// - 此方法**不会** fork 子进程或降权(因为无法通过管道传递不可序列化的结果)
-    /// - 操作以当前进程权限执行,依赖 Linux 文件系统权限检查
-    /// - 如需严格的用户隔离,请使用 `execute_as_user` 并确保返回值可序列化
-    ///
-    /// # 使用场景
-    /// - 返回不可序列化类型的操作(如 `FileStreamWriter`)
-    /// - 需要在用户上下文中创建复杂对象的场景
-    ///
-    /// # 安全性
-    /// - 仅用于信任用户或已在其他方式中验证的场景
-    /// - 不提供进程级的权限隔离
-    pub fn execute_as_user_unchecked<F, T>(&self, f: F) -> Result<T>
-    where
-        F: FnOnce() -> Result<T> + Send + 'static,
-        T: Send + 'static,
-    {
-        #[cfg(unix)]
-        {
-            // 如果当前已经是目标用户，直接执行
-            let current_uid = nix::unistd::getuid().as_raw();
-            if current_uid == self.uid {
-                tracing::debug!("当前用户已是目标用户，跳过切换: uid={}", self.uid);
-                return f();
-            }
-
-            // 如果目标用户是 root，直接执行
-            if self.uid == 0 {
-                tracing::debug!("目标用户是 root，直接执行");
-                return f();
-            }
-
-            // 非 root 目标用户，但返回值不可序列化
-            // 这里需要降权执行，但无法通过管道传递结果
-            // 最佳实践：在父进程中以 root 执行，依赖 Linux 文件系统权限
-            tracing::debug!(
-                "不可序列化的返回类型，依赖文件系统权限: uid={}, gid={}",
-                self.uid, self.gid
-            );
-            f()
         }
 
         #[cfg(not(unix))]
@@ -337,45 +345,28 @@ impl UserExecutor {
     }
 }
 
-/// 向管道写入所有数据(循环写入,处理部分写入)
-///
-/// # 返回
-/// - Ok(()): 所有数据写入成功
-/// - Err(e): 写入失败
-#[cfg(unix)]
-fn write_all_to_pipe(fd: i32, data: &[u8]) -> std::io::Result<()> {
-    let mut offset = 0;
-    while offset < data.len() {
-        let n = unsafe {
-            libc::write(fd, data[offset..].as_ptr() as *const _, data.len() - offset)
-        };
-        if n < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        offset += n as usize;
-    }
-    Ok(())
-}
-
 /// 向管道写入错误信息
 ///
 /// 格式: [0x00][4字节长度][JSON 错误数据]
 /// 正常结果的格式: [4字节长度][JSON 数据]
 /// 用 0x00 标记区分错误和正常结果
-#[cfg(unix)]
 fn write_error_to_pipe(fd: i32, message: &str) -> std::io::Result<()> {
     // 写入错误标记
     let marker: u8 = 0x00;
-    write_all_to_pipe(fd, &[marker])?;
+    unsafe {
+        libc::write(fd, &marker as *const _ as *const _, 1);
+    }
 
     // 序列化错误消息
     let error_data = serde_json::to_vec(&message)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
-    // 写入长度和数据
+    // 写入长度
     let len = (error_data.len() as u32).to_le_bytes();
-    write_all_to_pipe(fd, &len)?;
-    write_all_to_pipe(fd, &error_data)?;
+    unsafe {
+        libc::write(fd, len.as_ptr() as *const _, 4);
+        libc::write(fd, error_data.as_ptr() as *const _, error_data.len());
+    }
 
     Ok(())
 }
@@ -385,7 +376,6 @@ fn write_error_to_pipe(fd: i32, message: &str) -> std::io::Result<()> {
 /// 格式:
 /// - 正常结果: [4字节长度][JSON 数据]  → 解析为 Ok(T)
 /// - 错误结果: [0x00][4字节长度][JSON 错误消息] → 解析为 Err
-#[cfg(unix)]
 fn read_result_from_pipe<T>(fd: i32) -> Result<T>
 where
     T: serde::Serialize + for<'de> serde::Deserialize<'de>,

@@ -6,7 +6,7 @@ use crate::file_stream::{FileStreamReader, FileStreamWriter};
 use crate::auth::{UserSession, UserExecutor, StatsManager}; // 新增：用户会话、执行器和统计管理器
 use crate::auth::stats::ConnectionStatsSnapshot; // 新增：连接统计快照类型
 use std::fs;
-use std::path::PathBuf;
+
 use std::time::{SystemTime, UNIX_EPOCH, Instant};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -941,7 +941,7 @@ pub async fn handle_file_transfer_request(
             let executor = UserExecutor::new(session);
             let path_str = path.to_string();
             let session_id_clone = session_id.clone();
-            let writer = executor.execute_as_user(move || {
+            let writer = executor.execute_as_user_unchecked(move || {
                 // 尝试断点续传
                 let writer = if let Some(resume_from) = resume_from {
                     // 尝试从断点续传
@@ -1006,7 +1006,7 @@ pub async fn handle_file_transfer_request(
             let path_str = path.to_string();
             let session_id_clone = session_id.clone();
             let _chunk_size_value = chunk_size.unwrap_or(64 * 1024);
-            let (file_size, mtime, reader) = executor.execute_as_user(move || {
+            let (file_size, mtime, reader) = executor.execute_as_user_unchecked(move || {
                 // 获取文件元数据
                 let metadata = fs::metadata(&path_str)
                     .map_err(|e| {
