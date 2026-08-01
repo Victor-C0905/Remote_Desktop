@@ -10,7 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 # 异步运行时（精确特性，避免拉入 fs/process/signal 等不需要的模块）
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }
+tokio = { version = "1.52", features = ["rt", "rt-multi-thread", "macros", "net", "io-util", "sync", "time", "process", "signal"] }
 
 # QUIC 协议栈（禁用 platform-verifier，项目使用自签证书）
 quinn = { version = "0.11", default-features = false, features = ["rustls-ring", "runtime-tokio"] }
@@ -54,6 +54,10 @@ whoami = "1.4"
 # 时间格式化
 chrono = "0.4"
 
+# Protobuf 支持
+prost = "0.12"
+prost-types = "0.12"
+
 # SSH协议栈（后续迭代使用）
 # russh = "0.42"  # TODO: 签名验证时启用
 # russh-keys = "0.42"  # TODO: 签名验证时启用
@@ -66,9 +70,12 @@ sha2 = "0.10"
 
 # Unix-only 依赖（仅在 Linux/macOS 上编译）
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.29", features = ["term", "process", "ioctl", "fs", "sched", "user"] }
+nix = { version = "0.29", features = ["term", "process", "ioctl", "fs", "sched", "user", "socket", "uio"] }
 libc = "0.2"
 pam = "0.8"
+
+[build-dependencies]
+prost-build = "0.12"
 
 [dev-dependencies]
 tempfile = "3"

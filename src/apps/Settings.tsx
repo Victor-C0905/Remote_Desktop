@@ -7,6 +7,7 @@ import { themes, accentColors } from "../config/themes";
 import { ThemeId } from "../config/themes";
 import { createLogger } from '../utils/logger';
 import { AuthMethod } from '../types/server';
+import { StatsPanel } from '../components/StatsPanel';
 // import { useWindowState } from "../window-system/hooks/useWindowState"; // 未来集成时使用
 import "./Settings.css";
 
@@ -14,7 +15,7 @@ const log = createLogger('Settings');
 
 /* ── Types ─────────────────────────────────────────────── */
 
-type SettingsSection = "connection" | "appearance" | "keyboard" | "files" | "terminal" | "notifications" | "about";
+type SettingsSection = "connection" | "appearance" | "keyboard" | "files" | "terminal" | "notifications" | "stats" | "about";
 
 /* ── Sidebar Items ──────────────────────────────────── */
 
@@ -31,6 +32,7 @@ const SIDEBAR_ITEMS: SidebarItem[] = [
   { id: "files", icon: "📁", label: "文件" },
   { id: "terminal", icon: "🖥️", label: "终端" },
   { id: "notifications", icon: "🔔", label: "通知" },
+  { id: "stats", icon: "📊", label: "系统监控" },
   { id: "about", icon: "ℹ️", label: "关于" },
 ];
 
@@ -998,6 +1000,27 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
             </div>
           </div>
         );
+
+      case "stats": {
+        // 前端根据用户名判断是否为 root（后端会做真正的权限校验）
+        const isRoot = activeServer?.auth.username === 'root';
+        const serverId = activeServer?.id || '';
+        return (
+          <div className="st-section">
+            <div className="st-section-title text-heading">系统监控</div>
+            {serverId ? (
+              <StatsPanel serverId={serverId} isRoot={isRoot} />
+            ) : (
+              <div className="st-card">
+                <div className="st-card-header text-title">未连接服务器</div>
+                <div className="text-body" style={{ padding: '12px 0' }}>
+                  请先在"连接"页面连接到服务器，然后才能查看统计数据。
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      }
 
       case "about":
         return (
