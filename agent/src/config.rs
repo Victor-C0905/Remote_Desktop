@@ -13,6 +13,8 @@ pub struct AgentConfig {
     pub audit: AuditConfig,
     #[serde(default)]
     pub log: LogConfig,
+    #[serde(default)]
+    pub worker: WorkerConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -96,6 +98,21 @@ pub struct LogConfig {
     pub dir: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct WorkerConfig {
+    /// Agent 二进制路径
+    #[serde(default = "default_agent_binary")]
+    pub agent_binary: String,
+
+    /// IPC Socket 路径
+    #[serde(default = "default_ipc_socket_path")]
+    pub ipc_socket_path: String,
+
+    /// 最大重启次数
+    #[serde(default = "default_max_restarts")]
+    pub max_restarts: u32,
+}
+
 impl Default for AuditConfig {
     fn default() -> Self {
         Self {
@@ -109,6 +126,16 @@ impl Default for LogConfig {
         Self {
             level: default_log_level(),
             dir: default_log_dir(),
+        }
+    }
+}
+
+impl Default for WorkerConfig {
+    fn default() -> Self {
+        Self {
+            agent_binary: default_agent_binary(),
+            ipc_socket_path: default_ipc_socket_path(),
+            max_restarts: default_max_restarts(),
         }
     }
 }
@@ -132,6 +159,11 @@ fn default_log_dir() -> String { "logs".into() }
 fn default_enable_pubkey() -> bool { true }
 fn default_enable_password() -> bool { true }
 fn default_pam_service() -> String { "sshd".into() }
+
+// Worker 默认值
+fn default_agent_binary() -> String { "./agent".into() }
+fn default_ipc_socket_path() -> String { "/tmp/gnome-remote-worker.sock".into() }
+fn default_max_restarts() -> u32 { 3 }
 
 pub fn load(path: &str) -> Result<AgentConfig, anyhow::Error> {
     let p = Path::new(path);
@@ -188,5 +220,6 @@ fn default_config() -> AgentConfig {
         },
         audit: AuditConfig::default(),
         log: LogConfig::default(),
+        worker: WorkerConfig::default(),
     }
 }

@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 description = "GNOME Remote Control — 远程 Agent 服务端"
 
+[lib]
+name = "gnome_remote_agent"
+path = "src/lib.rs"
+
 [[bin]]
 name = "agent"
 path = "src/main.rs"
