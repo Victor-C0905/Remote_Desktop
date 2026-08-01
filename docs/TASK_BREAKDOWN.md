@@ -21,18 +21,18 @@
 
 ## 📊 总体进度
 
-**当前阶段**: Phase 2 - Manager 实现（进行中）
-**当前任务**: TASK-013
+**当前阶段**: Phase 2 - Manager 实现（已完成）
+**当前任务**: Phase 3 待规划
 **总任务数**: 40+
-**已完成**: 12
-**进行中**: 1
+**已完成**: 15
+**进行中**: 0
 
 **完成进度**:
 - ✅ Phase 0: 准备阶段（TASK-000 ~ TASK-002）- 100% 完成
 - ✅ Phase 1: IPC 协议定义（TASK-003 ~ TASK-009）- 100% 完成
-- 🔨 Phase 2: Manager 实现（TASK-010 ~ TASK-015）- 进行中
+- ✅ Phase 2: Manager 实现（TASK-010 ~ TASK-015）- 100% 完成
 
-**当前任务**: TASK-013 - 集成 IpcServer 与 WorkerManager
+**下一阶段**: Phase 3 - Worker 实现（待规划）
 
 ---
 
@@ -846,9 +846,9 @@ impl PtyRegistry {
 
 ### TASK-013: 实现 IpcServer 基础结构
 
-**状态**: 🔨 需要改造
+**状态**: ✅ 已完成
 **预计时间**: 30分钟
-**实际时间**: 待定
+**实际时间**: 2小时
 **依赖**: TASK-012
 
 **任务描述**:
@@ -859,19 +859,17 @@ impl PtyRegistry {
 - 架构设计文档中的 IPC 通信设计
 - 现有代码：`src/manager/ipc_server.rs`
 
-**现有代码问题**:
-- ❌ 独立实现，未与 WorkerManager 集成
-- ❌ 未处理与 Worker 进程的连接生命周期
-
 **输出**:
-- 重构后的 `src/manager/ipc_server.rs`
+- 重构后的 `src/manager/ipc_server.rs`（完整集成实现）
+- Manager 集成实现（`manager/mod.rs`）
+- WorkerConfig 配置支持（`config.rs`）
 
 **执行步骤**:
-1. 确认 FD Passing 实现正确
-2. 与 WorkerManager 集成
-3. 处理 Worker 进程启动时的连接建立
-4. 处理 Worker 进程崩溃时的连接清理
-5. 添加集成测试
+1. ✅ 确认 FD Passing 实现正确
+2. ✅ 与 WorkerManager 集成（事件通知机制）
+3. ✅ 处理 Worker 进程启动时的连接建立（自动 accept）
+4. ✅ 处理 Worker 进程崩溃时的连接清理（事件驱动）
+5. ✅ 添加集成测试（7个测试用例）
 
 **验证标准**:
 - ✅ 能够接收 Worker 发送的 FD
@@ -880,17 +878,17 @@ impl PtyRegistry {
 - ✅ 包含集成测试
 
 **完成记录**:
-- 完成时间：
-- AI模型：
-- 备注：需要与 WorkerManager 集成
+- 完成时间：2026-08-01
+- AI模型：AI-2（Subagent-Driven Development）
+- 备注：完成 WorkerManager 事件通知、IpcServer 自动连接管理、修复 FD 泄漏问题
 
 ---
 
 ### TASK-014: 实现连接处理逻辑
 
-**状态**: ⬜ 未开始
+**状态**: ✅ 已完成
 **预计时间**: 40分钟
-**实际时间**: 待定
+**实际时间**: 1.5小时
 **依赖**: TASK-012, TASK-013
 
 **任务描述**:
@@ -901,14 +899,14 @@ impl PtyRegistry {
 - 架构设计文档中的连接管理设计
 
 **输出**:
-- `src/manager/connection.rs`（完整实现）
+- `src/manager/connection.rs`（完整实现，505行）
 
 **执行步骤**:
-1. 实现 ConnectionManager 结构体
-2. 管理 QUIC Stream 与 PTY session 的映射
-3. 处理连接建立/断开事件
-4. 与 PtyRegistry 集成
-5. 添加单元测试
+1. ✅ 实现 ConnectionManager 结构体（双向映射设计）
+2. ✅ 管理 QUIC Stream 与 PTY session 的映射
+3. ✅ 处理连接建立/断开事件
+4. ✅ 与 PtyRegistry 集成（自动注销会话）
+5. ✅ 添加单元测试（11个测试用例）
 
 **验证标准**:
 - ✅ ConnectionManager 实现完成
@@ -917,17 +915,17 @@ impl PtyRegistry {
 - ✅ 包含单元测试
 
 **完成记录**:
-- 完成时间：
-- AI模型：
-- 备注：
+- 完成时间：2026-08-01
+- AI模型：AI-2（Subagent-Driven Development）
+- 备注：实现双向映射、修复重复注册问题、改进错误处理、添加一致性验证方法
 
 ---
 
 ### TASK-015: 实现 PTY 输出推送
 
-**状态**: 🔨 需要验证
+**状态**: ✅ 已完成
 **预计时间**: 40分钟
-**实际时间**: 待定
+**实际时间**: 1小时
 **依赖**: TASK-011, TASK-014
 
 **任务描述**:
@@ -938,19 +936,17 @@ impl PtyRegistry {
 - 架构设计文档中的 PTY I/O 设计
 - 现有实现：`src/server/quic.rs` 中的 PTY 输出逻辑
 
-**现有实现位置**:
-- `src/server/quic.rs:1498+` - PTY 输出读取任务
-
-**需要验证**:
-- ✅ PTY 输出推送到客户端是否正常
-- ❓ 是否符合 Manager -> Worker -> Session 的架构
-- ❓ 是否需要将逻辑从 quic.rs 迁移到 manager 模块
+**输出**:
+- 新增 `src/manager/pty_output.rs`（260行）
+- 重构后的 `src/server/quic.rs`（删除旧逻辑）
+- `src/manager/pty_registry.rs`（添加 PTY 读写功能）
 
 **执行步骤**:
-1. 阅读现有 PTY 输出推送实现
-2. 对比架构设计，检查是否符合
-3. 如不符合，重构到 manager 模块
-4. 添加测试验证
+1. ✅ 阅读现有 PTY 输出推送实现
+2. ✅ 对比架构设计，检查是否符合
+3. ✅ 重构到 manager 模块（删除 quic.rs 中约80行旧逻辑）
+4. ✅ 提供向后兼容接口（spawn_pty_output_task_legacy）
+5. ✅ 添加迁移文档和测试
 
 **验证标准**:
 - ✅ PTY 输出符合新架构设计
@@ -959,9 +955,9 @@ impl PtyRegistry {
 - ✅ 功能测试通过
 
 **完成记录**:
-- 完成时间：
-- AI模型：
-- 备注：需要验证是否符合新架构
+- 完成时间：2026-08-01
+- AI模型：AI-2（Subagent-Driven Development）
+- 备注：成功重构到 manager 模块，提供向后兼容接口，代码更模块化、可测试、易维护
 
 ---
 
@@ -986,6 +982,9 @@ impl PtyRegistry {
 | TASK-010 | 创建 Manager 模块基础结构 | 2026-07-31 | AI-1 | 已完成，Manager 结构定义 |
 | TASK-011 | 实现 PtyRegistry 基础结构 | 2026-07-31 | AI-1 | 已完成，PTY 注册表实现 |
 | TASK-012 | 实现 WorkerManager 基础结构 | 2026-08-01 | AI-2 | 已完成，符合新架构设计 |
+| TASK-013 | 实现 IpcServer 基础结构 | 2026-08-01 | AI-2 | 已完成，集成 WorkerManager，7个集成测试 |
+| TASK-014 | 实现连接处理逻辑 | 2026-08-01 | AI-2 | 已完成，双向映射设计，11个单元测试 |
+| TASK-015 | 实现 PTY 输出推送 | 2026-08-01 | AI-2 | 已完成，重构到 manager 模块，向后兼容接口 |
 
 ---
 
