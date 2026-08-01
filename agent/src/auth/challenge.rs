@@ -164,6 +164,7 @@ mod tests {
         // 生成挑战
         let (challenge_id, challenge) = manager
             .generate_challenge("testuser".to_string(), vec![1, 2, 3])
+            .await
             .unwrap();
 
         assert!(!challenge_id.is_empty());
@@ -177,11 +178,13 @@ mod tests {
         // 生成挑战
         let (challenge_id, challenge) = manager
             .generate_challenge("testuser".to_string(), vec![1, 2, 3])
+            .await
             .unwrap();
 
         // 验证响应
         let result = manager
             .verify_response(&challenge_id, &[], &[1, 2, 3])
+            .await
             .unwrap();
 
         assert_eq!(result.0, "testuser");
@@ -193,7 +196,7 @@ mod tests {
         let manager = ChallengeManager::new();
 
         // 尝试验证不存在的挑战
-        let result = manager.verify_response("nonexistent", &[], &[1, 2, 3]);
+        let result = manager.verify_response("nonexistent", &[], &[1, 2, 3]).await;
         assert!(result.is_err());
     }
 
@@ -204,10 +207,11 @@ mod tests {
         // 生成挑战
         let (challenge_id, _) = manager
             .generate_challenge("testuser".to_string(), vec![1, 2, 3])
+            .await
             .unwrap();
 
         // 使用不同的公钥验证
-        let result = manager.verify_response(&challenge_id, &[], &[4, 5, 6]);
+        let result = manager.verify_response(&challenge_id, &[], &[4, 5, 6]).await;
         assert!(result.is_err());
     }
 }
