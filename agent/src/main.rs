@@ -5,7 +5,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 use gnome_remote_agent::auth::CompositeAuthenticator;
 
 // 使用库中的模块
-use gnome_remote_agent::{config, cert, event_bus, subscription, pty, audit, auth, server};
+use gnome_remote_agent::{config, cert, event_bus, subscription, pty, audit, server};
 
 #[derive(Parser, Debug)]
 #[command(name = "gnome-remote-agent")]
@@ -22,6 +22,14 @@ struct Args {
     /// 日志级别（trace/debug/info/warn/error），优先级低于 RUST_LOG 环境变量
     #[arg(long, default_value = "info")]
     log_level: String,
+
+    /// Worker 模式标志（由 Manager 自动启动，不应手动指定）
+    #[arg(long, hide = true)]
+    worker: bool,
+
+    /// IPC Socket 路径（Worker 模式必须指定）
+    #[arg(long, hide = true)]
+    ipc_socket: Option<String>,
 }
 
 /// 初始化日志系统
@@ -155,6 +163,41 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
 
+    // 判断运行模式
+    if args.worker {
+        // Worker 模式
+        run_worker_mode(&args).await?;
+    } else {
+        // Manager 模式（默认）
+        run_manager_mode(&args).await?;
+    }
+
+    Ok(())
+}
+
+/// Worker 模式入口
+async fn run_worker_mode(args: &Args) -> Result<()> {
+    let ipc_socket_path = args.ipc_socket.clone()
+        .ok_or_else(|| anyhow::anyhow!("Worker 模式必须指定 --ipc-socket 参数"))?;
+
+    // 初始化简单的日志（Worker 模式使用简化日志）
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .init();
+
+    tracing::info!("Worker 模式启动，连接到: {}", ipc_socket_path);
+
+    // TODO: TASK-017 将实现 IpcClient 连接和消息处理
+    // let ipc_client = gnome_remote_agent::worker::IpcClient::connect(&ipc_socket_path).await?;
+    // gnome_remote_agent::worker::run(ipc_client).await?;
+
+    tracing::info!("Worker 进程已退出");
+
+    Ok(())
+}
+
+/// Manager 模式入口（原有的主逻辑）
+async fn run_manager_mode(args: &Args) -> Result<()> {
     let cfg = config::load(&args.config)?;
 
     init_logging(&args, &cfg);
