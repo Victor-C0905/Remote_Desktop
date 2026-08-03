@@ -27,7 +27,9 @@ pub use ipc_client::IpcClient;
 pub use pty_factory::PtyFactory;
 pub use session_manager::{SessionManager, SessionInfo};
 
+use std::sync::Arc;
 use anyhow::Result;
+use tokio::sync::Notify;
 use crate::protocol::generated::{ManagerRequest, WorkerResponse, worker_response, Error};
 
 /// Worker 主逻辑
@@ -46,11 +48,11 @@ use crate::protocol::generated::{ManagerRequest, WorkerResponse, worker_response
 /// let ipc_client = IpcClient::connect("/tmp/agent-worker.sock").await?;
 /// worker::run(ipc_client).await?;
 /// ```
-pub async fn run(ipc_client: IpcClient) -> Result<()> {
+pub async fn run(mut ipc_client: IpcClient) -> Result<()> {
     tracing::info!("Worker 消息处理循环启动");
 
-    // 创建 PtyFactory
-    let pty_factory = PtyFactory::new(std::sync::Arc::new(ipc_client.clone()));
+    // 创建 PtyFactory（不持有 IpcClient，在 create 时借用）
+    let pty_factory = PtyFactory::new();
 
     // 创建会话管理器
     let session_manager = SessionManager::new();
@@ -63,24 +65,48 @@ pub async fn run(ipc_client: IpcClient) -> Result<()> {
         }
     });
 
+    // 创建 shutdown 信号通道（GracefulShutdown 处理器通过此通道通知主循环退出）
+    // 使用 Notify 而非 oneshot：oneshot::Sender 只能 send 一次，
+    // 而 Notify 可在 select! 循环中反复创建 notified() future
+    let shutdown_notify = Arc::new(Notify::new());
+
     loop {
-        // 接收 Manager 的请求
-        match ipc_client.receive_request().await {
-            Ok(request) => {
-                tracing::debug!("收到 Manager 请求: request_id={}", request.request_id);
-
-                // 处理请求
-                let response = handle_request(request, &pty_factory, &session_manager).await;
-
-                // 发送响应
-                if let Err(e) = ipc_client.send_response(&response).await {
-                    tracing::error!("发送响应失败: {}", e);
-                    break;
-                }
-            }
-            Err(e) => {
-                tracing::error!("接收消息失败: {}", e);
+        // 使用 select! 同时监听 shutdown 信号和 IPC 请求
+        // 注意：receive_request 和 send_response 需要 &mut ipc_client
+        tokio::select! {
+            // 接收到 shutdown 信号，退出主循环
+            _ = shutdown_notify.notified() => {
+                tracing::info!("收到 shutdown 信号，Worker 主循环退出");
                 break;
+            }
+            // 接收 Manager 的请求
+            request_result = ipc_client.receive_request() => {
+                match request_result {
+                    Ok(request) => {
+                        tracing::debug!("收到 Manager 请求: request_id={}", request.request_id);
+
+                        // 处理请求
+                        // 如果是 GracefulShutdown，handle_request 会调用
+                        // shutdown_notify.notify_one()，下一轮 select! 将退出
+                        let response = handle_request(
+                            request,
+                            &pty_factory,
+                            &session_manager,
+                            &shutdown_notify,
+                            &ipc_client,
+                        ).await;
+
+                        // 发送响应
+                        if let Err(e) = ipc_client.send_response(&response).await {
+                            tracing::error!("发送响应失败: {}", e);
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("接收消息失败: {}", e);
+                        break;
+                    }
+                }
             }
         }
     }
@@ -97,6 +123,8 @@ pub async fn run(ipc_client: IpcClient) -> Result<()> {
 /// - `request`: Manager 发送的请求
 /// - `pty_factory`: PTY 工厂实例
 /// - `session_manager`: 会话管理器实例
+/// - `shutdown_notify`: 通知主循环退出的 Notify 实例（仅 GracefulShutdown 使用）
+/// - `ipc_client`: IPC 客户端引用，用于 PtyFactory.create 时发送 master_fd
 ///
 /// # 返回
 ///
@@ -106,12 +134,14 @@ pub async fn run(ipc_client: IpcClient) -> Result<()> {
 ///
 /// ```rust,ignore
 /// let request = ManagerRequest { request_id: 1, payload: Some(...) };
-/// let response = handle_request(request, &pty_factory, &session_manager).await;
+/// let response = handle_request(request, &pty_factory, &session_manager, &shutdown_notify, &ipc_client).await;
 /// ```
 async fn handle_request(
     request: ManagerRequest,
     pty_factory: &PtyFactory,
     session_manager: &SessionManager,
+    shutdown_notify: &Arc<Notify>,
+    ipc_client: &IpcClient,
 ) -> WorkerResponse {
     // 提取 request_id
     let request_id = request.request_id;
@@ -119,7 +149,7 @@ async fn handle_request(
     // 处理请求
     let mut response = match request.payload {
         Some(crate::protocol::generated::manager_request::Payload::CreateSession(req)) => {
-            handlers::session::handle_create_session(pty_factory, session_manager, req).await
+            handlers::session::handle_create_session(pty_factory, ipc_client, session_manager, req).await
         }
         Some(crate::protocol::generated::manager_request::Payload::KillSession(req)) => {
             handlers::session::handle_kill_session(req).await
@@ -138,6 +168,9 @@ async fn handle_request(
         }
         Some(crate::protocol::generated::manager_request::Payload::GetSystemInfo(req)) => {
             handlers::system::handle_get_system_info(req).await
+        }
+        Some(crate::protocol::generated::manager_request::Payload::GracefulShutdown(req)) => {
+            handlers::shutdown::handle_graceful_shutdown(req, session_manager, shutdown_notify).await
         }
         None => {
             tracing::warn!("收到空请求 payload");

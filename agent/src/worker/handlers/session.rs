@@ -6,14 +6,11 @@
 //!
 //! 注意：ResizeWindow 已从 Worker 移除，由 Manager 直接处理。
 
-use anyhow::Result;
-use std::sync::Arc;
-
 use crate::protocol::generated::{
     CreateSession, SessionCreated, KillSession,
     WorkerResponse, worker_response, Error,
 };
-use super::super::{PtyFactory, SessionManager};
+use super::super::{PtyFactory, SessionManager, IpcClient};
 use nix::unistd::Pid;
 
 /// 处理 CreateSession 请求
@@ -21,6 +18,7 @@ use nix::unistd::Pid;
 /// # 参数
 ///
 /// - `pty_factory`: PTY 工厂实例
+/// - `ipc_client`: IPC 客户端引用，用于 PtyFactory.create 时发送 master_fd
 /// - `session_manager`: 会话管理器实例
 /// - `req`: CreateSession 请求参数
 ///
@@ -38,12 +36,13 @@ use nix::unistd::Pid;
 /// # 示例
 ///
 /// ```rust,ignore
-/// let factory = PtyFactory::new(ipc_client);
-/// let response = handle_create_session(&factory, &session_manager, req).await;
+/// let factory = PtyFactory::new();
+/// let response = handle_create_session(&factory, &ipc_client, &session_manager, req).await;
 /// ```
-#[tracing::instrument(skip(pty_factory, session_manager), fields(shell = %req.shell, cols = req.cols, rows = req.rows))]
+#[tracing::instrument(skip(pty_factory, ipc_client, session_manager), fields(shell = %req.shell, cols = req.cols, rows = req.rows))]
 pub async fn handle_create_session(
     pty_factory: &PtyFactory,
+    ipc_client: &IpcClient,
     session_manager: &SessionManager,
     req: CreateSession,
 ) -> WorkerResponse {
@@ -61,7 +60,7 @@ pub async fn handle_create_session(
 
     // 调用 PtyFactory 创建 PTY
     // 注意：master_fd 会自动通过 IPC 发送给 Manager
-    match pty_factory.create(&req.shell, req.cols, req.rows, cwd) {
+    match pty_factory.create(ipc_client, &req.shell, req.cols, req.rows, cwd) {
         Ok((session_id, pid)) => {
             tracing::info!(
                 "PTY 会话创建成功: session_id={}, pid={}",

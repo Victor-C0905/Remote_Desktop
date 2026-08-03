@@ -19,6 +19,18 @@ pub mod worker_manager;
 #[cfg(unix)]
 pub mod ipc_server;
 
+#[cfg(unix)]
+pub mod orphan_reaper;
+
+#[cfg(unix)]
+pub mod crash_detector;
+
+#[cfg(unix)]
+pub mod signal_handler;
+
+#[cfg(unix)]
+pub mod hot_update_coordinator;
+
 pub use connection::ConnectionManager;
 pub use session::SessionManager;
 
@@ -33,6 +45,18 @@ pub use worker_manager::{WorkerManager, WorkerStatus, WorkerStatusEvent};
 
 #[cfg(unix)]
 pub use ipc_server::IpcServer;
+
+#[cfg(unix)]
+pub use orphan_reaper::OrphanProcessReaper;
+
+#[cfg(unix)]
+pub use crash_detector::WorkerCrashDetector;
+
+#[cfg(unix)]
+pub use signal_handler::{ReloadTrigger, watch_sighup, watch_sigterm};
+
+#[cfg(unix)]
+pub use hot_update_coordinator::HotUpdateCoordinator;
 
 use std::sync::Arc;
 use anyhow::Result;
@@ -54,6 +78,11 @@ pub struct Manager {
     /// IPC Server（接收 Worker 的 FD）
     #[cfg(unix)]
     ipc_server: Arc<IpcServer>,
+
+    /// 孤儿进程回收器
+    /// Phase 4 新增：在 PTY EOF 时回收 Session 僵尸进程
+    #[cfg(unix)]
+    orphan_reaper: Arc<OrphanProcessReaper>,
 }
 
 impl Manager {
@@ -86,11 +115,16 @@ impl Manager {
         // 创建会话管理器
         let session_manager = Arc::new(SessionManager::new());
 
+        // 创建孤儿进程回收器
+        // Phase 4 新增：用于在 PTY EOF 时回收 Session 僵尸进程
+        let orphan_reaper = Arc::new(OrphanProcessReaper::new(pty_registry.clone()));
+
         Ok(Self {
             pty_registry,
             worker_manager,
             session_manager,
             ipc_server,
+            orphan_reaper,
         })
     }
 
@@ -110,8 +144,11 @@ impl Manager {
     /// # 流程
     /// 1. 启动 IPC 服务器（监听 Worker 状态变化）
     /// 2. 启动 Worker 进程
-    /// 3. 等待 Worker 连接
-    pub async fn run(&self) -> Result<()> {
+    /// 3. 启动崩溃检测器（Phase 4 新增）
+    /// 4. 启动 SIGHUP 信号监听（Phase 4 新增）
+    /// 5. 启动热更新协调器（Phase 4 新增）
+    /// 6. 等待终止信号
+    pub async fn run(&mut self) -> Result<()> {
         #[cfg(unix)]
         {
             // 启动 IPC 服务器（在后台运行）
@@ -128,12 +165,34 @@ impl Manager {
             // 启动 Worker 进程
             self.worker_manager.start().await?;
 
-            tracing::info!("Manager 已启动");
+            // 启动崩溃检测器（Phase 4 新增）
+            // 在后台监控 Worker 进程状态，崩溃时自动重启
+            let mut crash_detector = WorkerCrashDetector::new(self.worker_manager.clone());
+            crash_detector.start();
+
+            // 启动 SIGHUP 信号监听（Phase 4 新增）
+            // 收到 SIGHUP 时发送 ReloadTrigger 事件给热更新协调器
+            let (trigger_tx, trigger_rx) = tokio::sync::mpsc::channel(16);
+            let _sighup_handle = watch_sighup(trigger_tx);
+
+            // 启动热更新协调器（Phase 4 新增）
+            // 监听触发事件，收到时执行 Worker 热更新流程
+            let coordinator = HotUpdateCoordinator::new(
+                self.worker_manager.clone(),
+                self.ipc_server.clone(),
+                trigger_rx,
+            );
+            tokio::spawn(coordinator.run());
+
+            tracing::info!("Manager 已启动（支持热更新）");
 
             // 等待终止信号
             tokio::signal::ctrl_c().await?;
 
             tracing::info!("收到终止信号，停止 Manager");
+
+            // 停止崩溃检测器
+            crash_detector.stop();
 
             // 停止 Worker
             self.worker_manager.stop().await?;

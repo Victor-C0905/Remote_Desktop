@@ -13,6 +13,15 @@ ExecStart=/usr/local/bin/gnome-remote-agent \
     --config /etc/gnome-remote/agent.toml \
     --log-dir /var/log/gnome-remote
 
+# Phase 4: 热更新支持
+# KillMode=process: 只杀死主进程，Session 子进程继续运行（成为孤儿进程）
+# 这样 Worker 热更新或崩溃重启时，已有终端会话不会中断
+KillMode=process
+
+# ExecReload: 发送 SIGHUP 信号触发优雅热更新
+# 使用方法: systemctl reload gnome-remote-agent
+ExecReload=/bin/kill -HUP $MAINPID
+
 Restart=on-failure
 RestartSec=5s
 StartLimitBurst=3

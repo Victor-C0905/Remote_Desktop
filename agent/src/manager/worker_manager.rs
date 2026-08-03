@@ -5,6 +5,7 @@
 
 use std::process::{Child, Command};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::SystemTime;
 use tokio::sync::{RwLock, broadcast};
 use anyhow::{Result, Context};
@@ -76,6 +77,10 @@ pub struct WorkerManager {
 
     /// 进程状态变化事件通道
     status_tx: broadcast::Sender<WorkerStatusEvent>,
+
+    /// 是否正在执行优雅关闭（用于区分崩溃和正常退出）
+    /// Phase 4 新增：崩溃检测器通过此标志判断 Worker 退出是否为正常关闭
+    is_graceful_shutdown: Arc<AtomicBool>,
 }
 
 impl WorkerManager {
@@ -96,6 +101,7 @@ impl WorkerManager {
             ipc_socket_path,
             max_restarts,
             status_tx,
+            is_graceful_shutdown: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -162,7 +168,7 @@ impl WorkerManager {
         if let Some(ref mut child) = *process_guard {
             let pid = Pid::from_raw(child.id() as i32);
 
-            // 发送 SIGTERM
+            // 发送 SIGTERM（nix 0.29 需要启用 "signal" feature）
             kill(pid, Signal::SIGTERM)
                 .context("Failed to send SIGTERM to worker")?;
 
@@ -255,9 +261,9 @@ impl WorkerManager {
 
     /// 检查 Worker 进程是否存活
     pub async fn is_alive(&self) -> bool {
-        let process_guard = self.worker_process.read().await;
+        let mut process_guard = self.worker_process.write().await;
 
-        if let Some(ref child) = *process_guard {
+        if let Some(ref mut child) = *process_guard {
             // 尝试检查进程状态
             match child.try_wait() {
                 Ok(Some(_status)) => {
@@ -295,6 +301,94 @@ impl WorkerManager {
 
             error!("Worker 进程崩溃: pid={}", info.pid);
         }
+    }
+
+    /// 标记为优雅关闭（用于区分崩溃和正常退出）
+    ///
+    /// 在发送 GracefulShutdown 请求前调用，使崩溃检测器能识别这是正常退出。
+    /// Phase 4 新增。
+    pub async fn mark_graceful_shutdown(&self) {
+        self.is_graceful_shutdown.store(true, Ordering::SeqCst);
+        tracing::info!("Worker 已标记为优雅关闭状态");
+    }
+
+    /// 检查是否是优雅关闭
+    ///
+    /// 崩溃检测器通过此方法判断 Worker 退出是否为正常关闭。
+    /// Phase 4 新增。
+    pub async fn is_graceful_shutdown(&self) -> bool {
+        self.is_graceful_shutdown.load(Ordering::SeqCst)
+    }
+
+    /// 重置优雅关闭标志（在新 Worker 启动后调用）
+    ///
+    /// Phase 4 新增。
+    pub async fn reset_graceful_shutdown(&self) {
+        self.is_graceful_shutdown.store(false, Ordering::SeqCst);
+    }
+
+    /// 尝试自动重启（崩溃后）
+    ///
+    /// 使用指数退避策略：2^restart_count 秒（最多 32 秒）。
+    /// Phase 4 新增。
+    ///
+    /// # 返回
+    ///
+    /// 成功返回 `Ok(())`，如果重启次数超过限制返回 `Err`。
+    pub async fn attempt_restart(&self) -> Result<()> {
+        // 读取当前重启次数
+        let restart_count = {
+            let info_guard = self.worker_info.read().await;
+            info_guard.as_ref().map(|i| i.restart_count).unwrap_or(0)
+        };
+
+        if restart_count >= self.max_restarts {
+            error!(
+                "Worker 崩溃且重启次数已达上限 ({}), 不再重启",
+                self.max_restarts
+            );
+            return Err(anyhow::anyhow!(
+                "Worker restart count exceeded: {}/{}",
+                restart_count,
+                self.max_restarts
+            ));
+        }
+
+        // 指数退避：2^n 秒，n 最大为 5（32 秒）
+        let delay_secs = 2u64.pow(restart_count.min(5));
+        info!(
+            "Worker 崩溃后等待 {} 秒后重启 (restart_count={})",
+            delay_secs, restart_count
+        );
+        tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+
+        // 重置优雅关闭标志
+        self.reset_graceful_shutdown().await;
+
+        // 调用 restart（会自动增加 restart_count）
+        self.restart().await
+    }
+
+    /// 等待 Worker 进程退出
+    ///
+    /// 阻塞当前任务直到 Worker 子进程退出。
+    /// Phase 4 新增。
+    pub async fn wait_for_exit(&self) -> Result<()> {
+        let mut process_guard = self.worker_process.write().await;
+
+        if let Some(ref mut child) = *process_guard {
+            match child.wait() {
+                Ok(status) => {
+                    info!("Worker 进程已退出: status={}", status);
+                }
+                Err(e) => {
+                    warn!("等待 Worker 进程退出时出错: {}", e);
+                }
+            }
+            *process_guard = None;
+        }
+
+        Ok(())
     }
 }
 
@@ -370,6 +464,52 @@ mod tests {
 
         // 尝试重启，应该失败
         let result = manager.restart().await;
+        assert!(result.is_err());
+    }
+
+    /// Phase 4 新增：测试优雅关闭标志
+    #[tokio::test]
+    async fn test_graceful_shutdown_flag() {
+        let manager = WorkerManager::new(
+            "/usr/bin/agent".to_string(),
+            "/tmp/test.sock".to_string(),
+            3
+        );
+
+        // 初始应为 false
+        assert!(!manager.is_graceful_shutdown().await);
+
+        // 标记后应为 true
+        manager.mark_graceful_shutdown().await;
+        assert!(manager.is_graceful_shutdown().await);
+
+        // 重置后应为 false
+        manager.reset_graceful_shutdown().await;
+        assert!(!manager.is_graceful_shutdown().await);
+    }
+
+    /// Phase 4 新增：测试 attempt_restart 在达到上限时返回错误
+    #[tokio::test]
+    async fn test_attempt_restart_exceeds_limit() {
+        let manager = WorkerManager::new(
+            "/nonexistent/binary".to_string(),
+            "/tmp/test.sock".to_string(),
+            2
+        );
+
+        // 手动设置 restart_count 达到上限
+        {
+            let mut info_guard = manager.worker_info.write().await;
+            *info_guard = Some(WorkerInfo {
+                pid: 1234,
+                started_at: SystemTime::now(),
+                restart_count: 2,  // 已达到限制
+                status: WorkerStatus::Crashed,
+            });
+        }
+
+        // 尝试重启，应该失败
+        let result = manager.attempt_restart().await;
         assert!(result.is_err());
     }
 }

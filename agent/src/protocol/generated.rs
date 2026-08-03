@@ -5,7 +5,7 @@
 pub struct ManagerRequest {
     #[prost(uint64, tag = "1")]
     pub request_id: u64,
-    #[prost(oneof = "manager_request::Payload", tags = "2, 4, 5, 6, 7, 8, 9")]
+    #[prost(oneof = "manager_request::Payload", tags = "2, 4, 5, 6, 7, 8, 9, 10")]
     pub payload: ::core::option::Option<manager_request::Payload>,
 }
 /// Nested message and enum types in `ManagerRequest`.
@@ -15,6 +15,7 @@ pub mod manager_request {
     pub enum Payload {
         #[prost(message, tag = "2")]
         CreateSession(super::CreateSession),
+        /// ResizeWindow 已移除：由 Manager 直接处理（Worker 不持有 master_fd）
         #[prost(message, tag = "4")]
         KillSession(super::KillSession),
         #[prost(message, tag = "5")]
@@ -27,6 +28,9 @@ pub mod manager_request {
         ExecuteCommand(super::ExecuteCommand),
         #[prost(message, tag = "9")]
         GetSystemInfo(super::GetSystemInfo),
+        /// 新增：优雅关闭请求
+        #[prost(message, tag = "10")]
+        GracefulShutdown(super::GracefulShutdown),
     }
 }
 /// Worker 响应
@@ -35,7 +39,7 @@ pub mod manager_request {
 pub struct WorkerResponse {
     #[prost(uint64, tag = "1")]
     pub request_id: u64,
-    #[prost(oneof = "worker_response::Payload", tags = "2, 3, 4, 5, 6, 7, 8")]
+    #[prost(oneof = "worker_response::Payload", tags = "2, 3, 4, 5, 6, 7, 8, 9")]
     pub payload: ::core::option::Option<worker_response::Payload>,
 }
 /// Nested message and enum types in `WorkerResponse`.
@@ -57,6 +61,9 @@ pub mod worker_response {
         SystemInfo(super::SystemInfo),
         #[prost(message, tag = "8")]
         Error(super::Error),
+        /// 新增：关闭确认
+        #[prost(message, tag = "9")]
+        ShutdownAck(super::ShutdownAck),
     }
 }
 /// 错误响应
@@ -248,4 +255,37 @@ pub struct DiskInfo {
     pub available_bytes: u64,
     #[prost(double, tag = "7")]
     pub usage_percent: f64,
+}
+/// Manager -> Worker 的优雅关闭请求
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GracefulShutdown {
+    /// 宽限期（秒），超时后强制杀死
+    #[prost(uint32, tag = "1")]
+    pub grace_period_secs: u32,
+    /// 是否进行状态迁移（Phase 4 暂不实现，始终为 false）
+    #[prost(bool, tag = "2")]
+    pub migrate_state: bool,
+    /// 触发原因
+    #[prost(string, tag = "3")]
+    pub reason: ::prost::alloc::string::String,
+}
+/// Worker -> Manager 的关闭确认
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ShutdownAck {
+    /// 是否成功完成所有未决任务
+    #[prost(bool, tag = "1")]
+    pub all_tasks_completed: bool,
+    /// 退出的会话数量（应为 0，不杀死 Sessions）
+    #[prost(uint32, tag = "2")]
+    pub sessions_count: u32,
+}
+/// Worker -> Manager 的状态迁移数据（Phase 4 暂不使用，预留扩展点）
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct WorkerStateSnapshot {
+    /// 待处理的请求 ID 列表
+    #[prost(uint64, repeated, tag = "1")]
+    pub pending_requests: ::prost::alloc::vec::Vec<u64>,
 }

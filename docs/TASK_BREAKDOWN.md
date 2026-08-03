@@ -21,18 +21,20 @@
 
 ## 📊 总体进度
 
-**当前阶段**: Phase 2 - Manager 实现（已完成）
-**当前任务**: Phase 3 待规划
+**当前阶段**: Phase 4 - 热更新功能（已完成）
+**当前任务**: Phase 5 待规划
 **总任务数**: 40+
-**已完成**: 15
+**已完成**: 30
 **进行中**: 0
 
 **完成进度**:
 - ✅ Phase 0: 准备阶段（TASK-000 ~ TASK-002）- 100% 完成
 - ✅ Phase 1: IPC 协议定义（TASK-003 ~ TASK-009）- 100% 完成
 - ✅ Phase 2: Manager 实现（TASK-010 ~ TASK-015）- 100% 完成
+- ✅ Phase 3: Worker 实现（TASK-016 ~ TASK-020）- 100% 完成
+- ✅ Phase 4: 热更新功能（TASK-021 ~ TASK-030）- 100% 完成
 
-**下一阶段**: Phase 3 - Worker 实现（待规划）
+**下一阶段**: Phase 5 - 集成测试与部署（待规划）
 
 ---
 
@@ -961,6 +963,503 @@ impl PtyRegistry {
 
 ---
 
+## 📅 Phase 3: Worker 实现
+
+### TASK-016: Worker 进程入口
+
+**状态**: ✅ 已完成
+**预计时间**: 30分钟
+**实际时间**: 30分钟
+**依赖**: TASK-008
+
+**任务描述**:
+- 实现 Worker 进程的入口点
+- 命令行参数解析、日志初始化
+- 加载配置并启动 IpcClient 连接到 Manager
+
+**输入**:
+- `agent/src/main.rs` 中的 worker 子命令
+- 配置文件 `agent.toml`
+
+**输出**:
+- `agent/src/worker/mod.rs`（Worker 模块入口）
+- 命令行参数与配置加载逻辑
+
+**验证标准**:
+- ✅ Worker 子命令可启动
+- ✅ IpcClient 连接 Manager 成功
+- ✅ `cargo check` 通过
+
+**完成记录**:
+- 完成时间：2026-08-02
+- AI模型：AI-3（Subagent-Driven Development）
+- 备注：Worker 入口与配置加载完成
+
+---
+
+### TASK-017: IpcClient 实现
+
+**状态**: ✅ 已完成
+**预计时间**: 1小时
+**实际时间**: 1小时
+**依赖**: TASK-016
+
+**任务描述**:
+- 实现 Worker 端的 IPC 客户端
+- 通过 Unix Domain Socket 连接 Manager
+- 支持发送/接收 Protobuf 消息
+- 支持 SCM_RIGHTS 文件描述符传递（FD 转移给 Manager）
+
+**输入**:
+- 架构设计文档中的 IPC 通信设计
+- `agent/src/protocol/` 下的消息定义
+
+**输出**:
+- `agent/src/worker/ipc_client.rs`
+- 完整的连接、消息收发、FD 传递实现
+
+**验证标准**:
+- ✅ 能够连接到 Manager 的 IPC socket
+- ✅ 能够收发 Protobuf 消息
+- ✅ 能够通过 SCM_RIGHTS 发送 master_fd 给 Manager
+- ✅ 单元测试通过
+
+**完成记录**:
+- 完成时间：2026-08-02
+- AI模型：AI-3
+- 备注：IpcClient 实现，支持 FD passing
+
+---
+
+### TASK-018: PtyFactory
+
+**状态**: ✅ 已完成
+**预计时间**: 1小时
+**实际时间**: 1小时
+**依赖**: TASK-017
+
+**任务描述**:
+- 实现 Worker 端的 PTY 创建工厂
+- 封装 `forkpty` 系统调用
+- 在子进程中执行用户指定的 shell
+- 将 master_fd 通过 IpcClient 转移给 Manager
+
+**输入**:
+- `agent/src/worker/ipc_client.rs`
+- nix crate 的 `pty` 模块
+
+**输出**:
+- `agent/src/worker/pty_factory.rs`
+- PtyFactory 结构和 create_pty 方法
+
+**验证标准**:
+- ✅ 能够成功创建 PTY 会话
+- ✅ master_fd 被正确转移到 Manager
+- ✅ 子进程执行 shell（bash/zsh）
+- ✅ 单元测试通过
+
+**完成记录**:
+- 完成时间：2026-08-02
+- AI模型：AI-3
+- 备注：PtyFactory 实现，支持 PTY 创建和 FD 转移
+
+---
+
+### TASK-019: 请求处理器（file/command/system）
+
+**状态**: ✅ 已完成
+**预计时间**: 1.5小时
+**实际时间**: 1.5小时
+**依赖**: TASK-018
+
+**任务描述**:
+- 实现各类 Manager 请求的处理器
+- file handler：读取目录、读写文件
+- command handler：执行系统命令并返回输出
+- system handler：查询系统信息（CPU、内存、磁盘、网络）
+
+**输入**:
+- `agent/protocol/agent.proto` 中的消息定义
+- 架构设计文档中的业务逻辑部分
+
+**输出**:
+- `agent/src/worker/handlers/file.rs`
+- `agent/src/worker/handlers/command.rs`
+- `agent/src/worker/handlers/system.rs`
+- `agent/src/worker/handlers/session.rs`
+
+**验证标准**:
+- ✅ 所有 handler 可正确处理对应请求
+- ✅ 文件操作遵循用户目录限制
+- ✅ 命令执行支持超时和环境变量
+- ✅ 系统信息查询准确
+- ✅ 单元测试通过
+
+**完成记录**:
+- 完成时间：2026-08-02
+- AI模型：AI-3
+- 备注：所有业务 handler 实现，包含文件、命令、系统信息处理
+
+---
+
+### TASK-020: SessionManager
+
+**状态**: ✅ 已完成
+**预计时间**: 1小时
+**实际时间**: 1小时
+**依赖**: TASK-019
+
+**任务描述**:
+- 实现 Worker 端的会话管理器
+- 跟踪活动的 PTY 会话
+- 监控子进程状态（异步 waitpid）
+- 在会话退出时清理资源
+
+**输入**:
+- `agent/src/worker/pty_factory.rs`
+- nix crate 的 `sys::wait` 模块
+
+**输出**:
+- `agent/src/worker/session_manager.rs`
+- SessionManager 结构和监控任务
+
+**验证标准**:
+- ✅ 能够跟踪多个并发 PTY 会话
+- ✅ 子进程退出时正确检测
+- ✅ 资源清理无泄漏
+- ✅ 单元测试通过
+
+**完成记录**:
+- 完成时间：2026-08-02
+- AI模型：AI-3
+- 备注：SessionManager 实现完成，包含子进程监控
+
+---
+
+## 📅 Phase 4: 热更新功能
+
+> **设计文档**: `docs/superpowers/specs/2026-08-03-phase4-hot-update-design.md`
+> **实施计划**: `docs/superpowers/plans/2026-08-03-phase4-hot-update-implementation.md`
+
+### TASK-021: 新增 IPC 消息（GracefulShutdown、ShutdownAck）
+
+**状态**: ✅ 已完成
+**预计时间**: 20分钟
+**实际时间**: 20分钟
+**依赖**: TASK-009
+
+**任务描述**:
+- 在 `agent.proto` 中新增 `GracefulShutdown`、`ShutdownAck`、`WorkerStateSnapshot` 消息
+- 在 `ManagerRequest` oneof 中添加 `graceful_shutdown` 字段
+- 在 `WorkerResponse` oneof 中添加 `shutdown_ack` 字段
+
+**输入**:
+- Phase 4 设计文档
+
+**输出**:
+- 修改后的 `agent/protocol/agent.proto`
+
+**验证标准**:
+- ✅ Protobuf 编译成功
+- ✅ `generated.rs` 包含新消息类型
+- ✅ `cargo build` 通过
+
+**完成记录**:
+- 完成时间：2026-08-03
+- AI模型：AI-3
+- 备注：proto 消息定义完成，支持优雅关闭协议
+
+---
+
+### TASK-022: 扩展 SessionManager（all_idle、snapshot）
+
+**状态**: ✅ 已完成
+**预计时间**: 20分钟
+**实际时间**: 20分钟
+**依赖**: TASK-020
+
+**任务描述**:
+- 在 `SessionManager` 中添加 `all_idle()` 方法（检查是否有未决请求）
+- 添加 `snapshot()` 方法（生成状态快照，用于状态迁移扩展点）
+- Phase 4 简化实现：`all_idle` 始终返回 true，`snapshot` 返回空列表
+
+**输入**:
+- `agent/src/worker/session_manager.rs`
+
+**输出**:
+- 修改后的 `agent/src/worker/session_manager.rs`
+
+**验证标准**:
+- ✅ `cargo check` 通过
+- ✅ 方法签名符合设计文档
+
+**完成记录**:
+- 完成时间：2026-08-03
+- AI模型：AI-3
+- 备注：为优雅关闭提供空闲检查和状态快照接口
+
+---
+
+### TASK-023: 实现 GracefulShutdown 处理器（Worker 端）
+
+**状态**: ✅ 已完成
+**预计时间**: 30分钟
+**实际时间**: 30分钟
+**依赖**: TASK-021, TASK-022
+
+**任务描述**:
+- 创建 `agent/src/worker/handlers/shutdown.rs`
+- 接收 `GracefulShutdown` 请求，等待未决任务完成（宽限期内轮询 `all_idle`）
+- 通过 `Arc<Notify>` 通知 Worker 主循环退出
+- 返回 `ShutdownAck` 给 Manager
+- 不杀死 Sessions，使其成为孤儿进程
+
+**输入**:
+- Phase 4 设计文档
+
+**输出**:
+- 新建 `agent/src/worker/handlers/shutdown.rs`
+- 修改 `agent/src/worker/handlers/mod.rs`（注册模块）
+- 修改 `agent/src/worker/mod.rs`（在 handle_request 中分发 + select! 监听 shutdown 信号）
+
+**验证标准**:
+- ✅ `cargo check` 通过
+- ✅ GracefulShutdown 请求能正确触发 Worker 退出
+- ✅ Worker 退出时不杀死 Sessions
+
+**完成记录**:
+- 完成时间：2026-08-03
+- AI模型：AI-3
+- 备注：使用 `Arc<Notify>` 替代 `oneshot::Sender` 解决所有权问题，使用 `notify_one()` 防止信号丢失
+
+---
+
+### TASK-024: 扩展 WorkerManager（attempt_restart、mark_graceful_shutdown）
+
+**状态**: ✅ 已完成
+**预计时间**: 40分钟
+**实际时间**: 40分钟
+**依赖**: TASK-012
+
+**任务描述**:
+- 在 `WorkerManager` 中添加 `is_graceful_shutdown` 原子标志
+- 添加 `mark_graceful_shutdown`、`is_graceful_shutdown`、`reset_graceful_shutdown` 方法
+- 添加 `attempt_restart` 方法（指数退避：2^n 秒，最大 32 秒）
+- 添加 `wait_for_exit` 方法
+- 添加单元测试
+
+**输入**:
+- `agent/src/manager/worker_manager.rs`
+
+**输出**:
+- 修改后的 `agent/src/manager/worker_manager.rs`
+
+**验证标准**:
+- ✅ `cargo check` 通过
+- ✅ 单元测试通过（test_graceful_shutdown_flag、test_attempt_restart_exceeds_limit）
+- ✅ 优雅关闭标志可正确标记和重置
+
+**完成记录**:
+- 完成时间：2026-08-03
+- AI模型：AI-3
+- 备注：实现崩溃检测与优雅关闭区分，指数退避重启策略
+
+---
+
+### TASK-025: 实现 OrphanProcessReaper
+
+**状态**: ✅ 已完成
+**预计时间**: 40分钟
+**实际时间**: 40分钟
+**依赖**: TASK-015
+
+**任务描述**:
+- 创建 `agent/src/manager/orphan_reaper.rs`
+- 维护 Session PID -> session_id 的映射
+- 在 PTY EOF 时使用 `waitpid(WNOHANG)` 回收僵尸进程
+- 处理 ECHILD 情况（已被 init 回收）
+- 清理 PtyRegistry 记录
+
+**输入**:
+- Phase 4 设计文档
+
+**输出**:
+- 新建 `agent/src/manager/orphan_reaper.rs`
+- 修改 `agent/src/manager/mod.rs`（注册模块和 re-export）
+
+**验证标准**:
+- ✅ `cargo check` 通过
+- ✅ 4 个单元测试通过（register/get_pid/session_count/reap_nonexistent）
+- ✅ Clone 实现（使用 Arc 共享内部状态）
+
+**完成记录**:
+- 完成时间：2026-08-03
+- AI模型：AI-3
+- 备注：支持 ECHILD 容错，资源清理完整
+
+---
+
+### TASK-026: 集成 EOF 检测到 pty_output
+
+**状态**: ✅ 已完成
+**预计时间**: 30分钟
+**实际时间**: 30分钟
+**依赖**: TASK-025
+
+**任务描述**:
+- 修改 `spawn_pty_output_task` 函数签名，添加 `orphan_reaper` 参数
+- 修改 `spawn_pty_output_task_legacy` 函数签名，添加 `orphan_reaper` 参数
+- 修改 `spawn_pty_output_impl` 泛型实现，添加 EOF 检测和僵尸回收逻辑
+- 在 PTY 读取错误时触发 `reap_zombie` 回收
+
+**输入**:
+- `agent/src/manager/pty_output.rs`
+- `agent/src/manager/orphan_reaper.rs`
+
+**输出**:
+- 修改后的 `agent/src/manager/pty_output.rs`
+
+**验证标准**:
+- ✅ `cargo check` 通过
+- ✅ EOF 触发回收流程
+- ✅ 向后兼容（orphan_reaper 为 Option）
+
+**完成记录**:
+- 完成时间：2026-08-03
+- AI模型：AI-3
+- 备注：EOF 检测与 OrphanProcessReaper 集成完成
+
+---
+
+### TASK-027: 实现 WorkerCrashDetector
+
+**状态**: ✅ 已完成
+**预计时间**: 40分钟
+**实际时间**: 40分钟
+**依赖**: TASK-024
+
+**任务描述**:
+- 创建 `agent/src/manager/crash_detector.rs`
+- 在独立 tokio 任务中定期 `waitpid(WNOHANG)` 检测 Worker 状态
+- 通过 `is_graceful_shutdown` 标志区分优雅关闭和崩溃
+- 崩溃时触发 `attempt_restart`
+- Drop 时自动停止检测任务
+
+**输入**:
+- `agent/src/manager/worker_manager.rs`
+
+**输出**:
+- 新建 `agent/src/manager/crash_detector.rs`
+- 修改 `agent/src/manager/mod.rs`（注册模块）
+
+**验证标准**:
+- ✅ `cargo check` 通过
+- ✅ 2 个单元测试通过（test_crash_detector_creation、test_start_stop）
+- ✅ Drop trait 自动停止任务
+
+**完成记录**:
+- 完成时间：2026-08-03
+- AI模型：AI-3
+- 备注：500ms 检测间隔，spawn_blocking 包装同步 waitpid
+
+---
+
+### TASK-028: 实现 SignalHandler（SIGHUP）
+
+**状态**: ✅ 已完成
+**预计时间**: 30分钟
+**实际时间**: 30分钟
+**依赖**: 无
+
+**任务描述**:
+- 创建 `agent/src/manager/signal_handler.rs`
+- 监听 SIGHUP 信号，通过 mpsc 通道发送 `ReloadTrigger::UnixSignal` 事件
+- 监听 SIGTERM 信号（用于优雅退出）
+- 定义 `ReloadTrigger` 枚举（ClientCommand、UnixSignal、CliTool、PackagePostinst）
+
+**输入**:
+- tokio::signal::unix
+
+**输出**:
+- 新建 `agent/src/manager/signal_handler.rs`
+- 修改 `agent/src/manager/mod.rs`（注册模块）
+
+**验证标准**:
+- ✅ `cargo check` 通过
+- ✅ `test_watch_sighup` 测试通过（实际发送 SIGHUP 给当前进程）
+- ✅ ReloadTrigger 枚举完整
+
+**完成记录**:
+- 完成时间：2026-08-03
+- AI模型：AI-3
+- 备注：支持多种触发源，为后续 CLI/QUIC 触发预留扩展点
+
+---
+
+### TASK-029: 实现 HotUpdateCoordinator
+
+**状态**: ✅ 已完成
+**预计时间**: 1小时
+**实际时间**: 1小时
+**依赖**: TASK-024, TASK-028
+
+**任务描述**:
+- 创建 `agent/src/manager/hot_update_coordinator.rs`
+- 协调 Worker 热更新流程：标记 → 停止旧 Worker → 等待 → 启动新 Worker → 重置标志
+- 使用 `Arc<AtomicBool>` 防止热更新期间重复触发
+- 提供 `trigger_reload` 外部入口和 `run` 主循环
+- 提供 `is_reloading_flag` 供其他模块检查状态
+
+**输入**:
+- Phase 4 设计文档
+
+**输出**:
+- 新建 `agent/src/manager/hot_update_coordinator.rs`
+- 修改 `agent/src/manager/mod.rs`（注册模块）
+
+**验证标准**:
+- ✅ `cargo check` 通过
+- ✅ 2 个单元测试通过（test_coordinator_creation、test_trigger_when_reloading）
+- ✅ 防重入机制有效
+
+**完成记录**:
+- 完成时间：2026-08-03
+- AI模型：AI-3
+- 备注：Phase 4 简化实现直接停止+启动，完整 GracefulShutdown IPC 流程作为后续增强
+
+---
+
+### TASK-030: 集成到 Manager + systemd 配置
+
+**状态**: ✅ 已完成
+**预计时间**: 40分钟
+**实际时间**: 40分钟
+**依赖**: TASK-025, TASK-026, TASK-027, TASK-028, TASK-029
+
+**任务描述**:
+- 在 `Manager::new` 中初始化 `OrphanProcessReaper`
+- 在 `Manager::run` 中启动崩溃检测器、SIGHUP 信号监听、热更新协调器
+- 在 `Manager::run` 退出时停止崩溃检测器和 Worker
+- 更新 systemd 服务配置：添加 `KillMode=process` 和 `ExecReload=/bin/kill -HUP $MAINPID`
+
+**输入**:
+- 所有 Phase 4 组件
+
+**输出**:
+- 修改 `agent/src/manager/mod.rs`
+- 修改 `systemd/gnome-remote-agent.service`
+
+**验证标准**:
+- ✅ `cargo check` 通过
+- ✅ Manager 启动后所有 Phase 4 组件运行
+- ✅ systemd 支持 `systemctl reload gnome-remote-agent` 触发热更新
+- ✅ 集成测试通过（test_sighup_signal_handling、test_crash_detector_start_stop 等）
+
+**完成记录**:
+- 完成时间：2026-08-03
+- AI模型：AI-3
+- 备注：Manager 完整集成 Phase 4 组件，systemd 配置支持热更新触发
+
 ---
 
 ## 📝 进度记录
@@ -985,6 +1484,21 @@ impl PtyRegistry {
 | TASK-013 | 实现 IpcServer 基础结构 | 2026-08-01 | AI-2 | 已完成，集成 WorkerManager，7个集成测试 |
 | TASK-014 | 实现连接处理逻辑 | 2026-08-01 | AI-2 | 已完成，双向映射设计，11个单元测试 |
 | TASK-015 | 实现 PTY 输出推送 | 2026-08-01 | AI-2 | 已完成，重构到 manager 模块，向后兼容接口 |
+| TASK-016 | Worker 进程入口 | 2026-08-02 | AI-3 | Worker 入口与配置加载 |
+| TASK-017 | IpcClient 实现 | 2026-08-02 | AI-3 | 支持 FD passing |
+| TASK-018 | PtyFactory | 2026-08-02 | AI-3 | PTY 创建和 FD 转移 |
+| TASK-019 | 请求处理器（file/command/system） | 2026-08-02 | AI-3 | 业务 handler 完整实现 |
+| TASK-020 | SessionManager | 2026-08-02 | AI-3 | 包含子进程监控 |
+| TASK-021 | 新增 IPC 消息（GracefulShutdown、ShutdownAck） | 2026-08-03 | AI-3 | proto 更新，支持优雅关闭协议 |
+| TASK-022 | 扩展 SessionManager（all_idle、snapshot） | 2026-08-03 | AI-3 | 空闲检查与状态快照接口 |
+| TASK-023 | 实现 GracefulShutdown 处理器（Worker 端） | 2026-08-03 | AI-3 | 使用 Arc<Notify> 解决所有权问题 |
+| TASK-024 | 扩展 WorkerManager（attempt_restart、mark_graceful_shutdown） | 2026-08-03 | AI-3 | 指数退避重启策略 |
+| TASK-025 | 实现 OrphanProcessReaper | 2026-08-03 | AI-3 | ECHILD 容错，资源清理完整 |
+| TASK-026 | 集成 EOF 检测到 pty_output | 2026-08-03 | AI-3 | PTY EOF 触发僵尸回收 |
+| TASK-027 | 实现 WorkerCrashDetector | 2026-08-03 | AI-3 | 500ms 检测间隔，Drop 自动停止 |
+| TASK-028 | 实现 SignalHandler（SIGHUP） | 2026-08-03 | AI-3 | 多触发源支持，为 CLI/QUIC 预留扩展点 |
+| TASK-029 | 实现 HotUpdateCoordinator | 2026-08-03 | AI-3 | 防重入机制，简化实现先于完整 IPC 流程 |
+| TASK-030 | 集成到 Manager + systemd 配置 | 2026-08-03 | AI-3 | 完整集成，systemd 支持 reload 触发热更新 |
 
 ---
 

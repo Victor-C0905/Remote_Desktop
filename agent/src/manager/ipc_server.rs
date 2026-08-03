@@ -9,7 +9,7 @@ use tokio::net::UnixListener;
 use tokio::sync::RwLock;
 use anyhow::{Result, Context};
 use nix::sys::socket::{recvmsg, ControlMessageOwned, MsgFlags};
-use nix::sys::uio::IoVec;
+use std::io::IoSliceMut;
 use tracing::{info, warn, error};
 
 use super::pty_registry::{PtyRegistry, PtySession, UserInfo};
@@ -374,10 +374,11 @@ fn receive_fd_from_stream(stream: &tokio::net::UnixStream) -> Result<RawFd> {
 
     let raw_fd = stream.as_raw_fd();
     let mut buf = [0u8; 1];
-    let mut iov = [IoVec::from_mut_slice(&mut buf)];
-    let mut cmsg_buf = [0u8; 64];
+    let mut iov = [IoSliceMut::new(&mut buf)];
+    // nix 0.29 的 recvmsg 要求 cmsg_buffer 为 Option<&mut Vec<u8>>
+    let mut cmsg_buf = vec![0u8; 64];
 
-    let msg = recvmsg(
+    let msg = recvmsg::<()>(
         raw_fd,
         &mut iov,
         Some(&mut cmsg_buf),
@@ -462,10 +463,14 @@ mod tests {
         // 模拟发送 Worker 启动事件（通过 update_status）
         worker_manager.update_status(WorkerStatus::Starting).await;
 
-        // 接收事件（但不实际接受连接，因为没有真实的 Worker）
-        let event = event_rx.recv().await;
-        // 由于没有真实的 worker_info，事件可能不会被发送
-        // 所以我们只验证 subscribe() 能正常工作
+        // 接收事件（添加超时避免死锁：没有真实 Worker 时不会发送事件）
+        let event = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            event_rx.recv()
+        ).await;
+
+        // 验证 subscribe() 能正常工作（事件可能为 None，因为 worker_info 为 None）
+        // 只要不死锁即可
 
         // 清理
         server.stop().await.unwrap();

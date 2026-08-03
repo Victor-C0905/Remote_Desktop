@@ -183,6 +183,25 @@ impl SessionManager {
         }
     }
 
+    /// 检查所有会话是否空闲（无未决请求）
+    ///
+    /// Phase 4 简化实现：始终返回 true（当前 SessionManager 不跟踪请求状态）
+    /// 后续可扩展为跟踪每个会话的活跃请求数
+    pub async fn all_idle(&self) -> bool {
+        // 当前实现：SessionManager 只跟踪 PTY 会话生命周期
+        // PTY 会话本身是长连接，不算"未决请求"
+        true
+    }
+
+    /// 生成当前状态快照（用于状态迁移）
+    ///
+    /// Phase 4 暂不实现复杂状态迁移，返回空快照
+    pub async fn snapshot(&self) -> Vec<u64> {
+        // 返回空列表（无未决请求）
+        // 后续可扩展为返回正在执行的命令的 request_id 列表
+        Vec::new()
+    }
+
     /// 监控子进程退出
     ///
     /// # 返回
