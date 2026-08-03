@@ -70,7 +70,10 @@ pub fn apply_diff(old_text: &str, diffs: &[FileDiff]) -> String {
         match diff.diff_type {
             DiffType::Insert => {
                 if let Some(new_content) = &diff.new_content {
-                    lines.insert(line_idx, new_content.clone());
+                    // lines() 方法会去掉换行符，因此数组中的元素不带 \n
+                    // new_content 可能带尾部换行符（客户端按行发送），需要去掉
+                    let content = new_content.trim_end_matches('\n');
+                    lines.insert(line_idx, content.to_string());
                 }
             }
             DiffType::Delete => {
@@ -81,7 +84,9 @@ pub fn apply_diff(old_text: &str, diffs: &[FileDiff]) -> String {
             DiffType::Replace => {
                 if line_idx < lines.len() {
                     if let Some(new_content) = &diff.new_content {
-                        lines[line_idx] = new_content.clone();
+                        // 同 Insert，去掉尾部换行符避免 join 后多出空行
+                        let content = new_content.trim_end_matches('\n');
+                        lines[line_idx] = content.to_string();
                     }
                 }
             }
