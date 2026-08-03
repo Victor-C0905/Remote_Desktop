@@ -146,16 +146,24 @@ impl UserExecutor {
                     // 执行闭包
                     let result = f();
 
-                    // 将 anyhow::Error 转换为 String 以便序列化
-                    let serializable_result = result.map_err(|e| e.to_string());
-
-                    // 序列化结果并写入管道
-                    match serde_json::to_vec(&serializable_result) {
-                        Ok(data) => {
-                            // 先写入长度（4 字节小端）
-                            let len = (data.len() as u32).to_le_bytes();
-                            if write_all_to_pipe(write_fd, &len).is_err() || write_all_to_pipe(write_fd, &data).is_err() {
-                                let _ = write_error_to_pipe(write_fd, "写入结果失败");
+                    // 根据结果类型分别处理：
+                    // - Ok(T): 序列化 T 直接写入管道（父进程按 T 反序列化）
+                    // - Err(e): 通过 write_error_to_pipe 写入错误（带 0x00 标记）
+                    match result {
+                        Ok(val) => {
+                            match serde_json::to_vec(&val) {
+                                Ok(data) => {
+                                    // 先写入长度（4 字节小端）
+                                    let len = (data.len() as u32).to_le_bytes();
+                                    if write_all_to_pipe(write_fd, &len).is_err()
+                                        || write_all_to_pipe(write_fd, &data).is_err()
+                                    {
+                                        let _ = write_error_to_pipe(write_fd, "写入结果失败");
+                                    }
+                                }
+                                Err(e) => {
+                                    let _ = write_error_to_pipe(write_fd, &e.to_string());
+                                }
                             }
                         }
                         Err(e) => {
@@ -498,7 +506,7 @@ mod tests {
         let executor = UserExecutor::new(&session);
 
         let result: Result<i32> = executor.execute_as_user(|| Ok(42));
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "execute_as_user failed: {:?}", result.err());
         assert_eq!(result.unwrap(), 42);
     }
 
