@@ -75,6 +75,20 @@ impl PtyRegistry {
         sessions.get(session_id).cloned()
     }
 
+    /// 获取 PTY master_fd
+    ///
+    /// # 参数
+    /// - `session_id`: PTY 会话 ID
+    ///
+    /// # 返回
+    /// 返回 master_fd 或错误
+    pub async fn get_fd(&self, session_id: &str) -> Result<RawFd> {
+        let sessions = self.sessions.read().await;
+        sessions.get(session_id)
+            .map(|s| s.master_fd)
+            .ok_or_else(|| anyhow::anyhow!("Session {} not found", session_id))
+    }
+
     /// 获取所有活动会话的 ID
     pub async fn list_sessions(&self) -> Vec<String> {
         let sessions = self.sessions.read().await;
