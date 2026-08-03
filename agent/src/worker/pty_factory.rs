@@ -6,7 +6,6 @@
 //! - 将 master_fd 通过 IPC 发送给 Manager
 
 use anyhow::{Result, Context, anyhow};
-use std::sync::Arc;
 use std::os::unix::io::AsRawFd;
 use nix::pty::{forkpty, ForkptyResult};
 use nix::unistd::{execvp, Pid};
@@ -19,26 +18,20 @@ use super::IpcClient;
 /// PTY 工厂
 ///
 /// 负责创建 PTY 会话并将文件描述符转移给 Manager。
-pub struct PtyFactory {
-    /// IPC 客户端，用于发送 master_fd 给 Manager
-    ipc_client: Arc<IpcClient>,
-}
+/// 注意：PtyFactory 不持有 IpcClient，而是在 create 时借用，避免与主循环的 &mut 冲突。
+pub struct PtyFactory;
 
 impl PtyFactory {
     /// 创建 PTY 工厂实例
     ///
-    /// # 参数
-    ///
-    /// - `ipc_client`: IPC 客户端引用，用于发送 master_fd 给 Manager
-    ///
     /// # 示例
     ///
     /// ```rust,ignore
-    /// let ipc_client = Arc::new(IpcClient::connect("/tmp/agent-worker.sock").await?);
-    /// let factory = PtyFactory::new(ipc_client);
+    /// let factory = PtyFactory::new();
+    /// let (session_id, pid) = factory.create(&ipc_client, "/bin/bash", 80, 24, None)?;
     /// ```
-    pub fn new(ipc_client: Arc<IpcClient>) -> Self {
-        Self { ipc_client }
+    pub fn new() -> Self {
+        Self
     }
 
     /// 创建 PTY 会话
@@ -67,11 +60,12 @@ impl PtyFactory {
     /// # 示例
     ///
     /// ```rust,ignore
-    /// let factory = PtyFactory::new(ipc_client);
-    /// let (session_id, pid) = factory.create("/bin/bash", 80, 24, Some("/home/user"))?;
+    /// let factory = PtyFactory::new();
+    /// let (session_id, pid) = factory.create(&ipc_client, "/bin/bash", 80, 24, Some("/home/user"))?;
     /// ```
     pub fn create(
         &self,
+        ipc_client: &IpcClient,
         shell: &str,
         cols: u32,
         rows: u32,
@@ -90,13 +84,14 @@ impl PtyFactory {
         let rows = rows as u16;
 
         // 1. 调用 forkpty 创建 PTY
-        let result = forkpty(None, None)
+        // nix 0.29 将 forkpty 标记为 unsafe（因为它涉及 fork 语义）
+        let result = unsafe { forkpty(None, None) }
             .context("Failed to fork PTY")?;
 
         match result {
-            ForkptyResult::Parent { master, child_pid } => {
+            ForkptyResult::Parent { master, child } => {
                 // 父进程逻辑
-                tracing::info!("PTY 子进程已启动: pid={}", child_pid);
+                tracing::info!("PTY 子进程已启动: pid={}", child);
 
                 let master_fd = master.as_raw_fd();
 
@@ -105,7 +100,8 @@ impl PtyFactory {
                     .context("Failed to set window size")?;
 
                 // 3. 通过 IPC 发送 master_fd 给 Manager
-                self.ipc_client.send_fd(master_fd)
+                // send_fd 是同步方法，签名为 &self，无需 &mut
+                ipc_client.send_fd(master_fd)
                     .context("Failed to send master_fd to Manager")?;
 
                 // 关闭 master_fd，避免资源泄漏
@@ -115,10 +111,10 @@ impl PtyFactory {
 
                 tracing::info!(
                     "PTY 会话已创建: session_id={}, pid={}",
-                    session_id, child_pid
+                    session_id, child
                 );
 
-                Ok((session_id, child_pid.as_raw() as i32))
+                Ok((session_id, child.as_raw() as i32))
             }
             ForkptyResult::Child => {
                 // 子进程逻辑
@@ -146,9 +142,15 @@ impl PtyFactory {
                 let shell_path = which::which(shell);
                 match shell_path {
                     Ok(path) => {
-                        let args = vec![shell.to_string()];
+                        // execvp 要求 args 为 &[&CStr]
+                        // nix 0.29: execvp<S: AsRef<CStr>>(filename: S, args: &[S])
+                        let path_cstr = std::ffi::CString::new(path.to_string_lossy().as_ref())
+                            .context("Invalid shell path")?;
+                        let arg0_cstr = std::ffi::CString::new(shell.to_string())
+                            .context("Invalid shell arg")?;
+                        let args = [arg0_cstr.as_ref()];
                         // execvp 成功时不会返回
-                        let _ = execvp(&path, &args);
+                        let _ = execvp(&path_cstr, &args);
                         // 如果执行到这里，说明 execvp 失败了
                         eprintln!("Failed to exec shell: {}", shell);
                         std::process::exit(1);
@@ -208,8 +210,13 @@ impl PtyFactory {
 ///
 /// 成功返回 `Ok(())`，失败返回错误。
 fn configure_terminal(fd: std::os::unix::io::RawFd) -> Result<()> {
+    use std::os::unix::io::BorrowedFd;
+
+    // nix 0.29 的 tcgetattr/tcsetattr 接受 AsFd
+    let fd_borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
+
     // 获取当前终端属性
-    let mut termios = tcgetattr(fd)
+    let mut termios = tcgetattr(fd_borrowed)
         .context("Failed to get terminal attributes")?;
 
     // 启用回显、规范模式、信号字符等
@@ -225,7 +232,7 @@ fn configure_terminal(fd: std::os::unix::io::RawFd) -> Result<()> {
     termios.output_flags.remove(OutputFlags::OPOST);
 
     // 设置终端属性
-    tcsetattr(fd, SetArg::TCSANOW, &termios)
+    tcsetattr(fd_borrowed, SetArg::TCSANOW, &termios)
         .context("Failed to set terminal attributes")?;
 
     Ok(())

@@ -96,6 +96,7 @@ impl Default for PtyOutputConfig {
 /// - `send`: QUIC SendStream（用于发送数据给客户端）
 /// - `stats_manager`: 统计管理器（可选）
 /// - `config`: 输出推送配置
+/// - `orphan_reaper`: 孤儿进程回收器（可选，用于 PTY EOF 时回收僵尸进程）
 ///
 /// # 返回
 /// 返回任务句柄
@@ -105,8 +106,9 @@ pub async fn spawn_pty_output_task(
     send: Arc<Mutex<SendStream>>,
     stats_manager: Option<Arc<crate::auth::StatsManager>>,
     config: PtyOutputConfig,
+    orphan_reaper: Option<super::orphan_reaper::OrphanProcessReaper>,
 ) -> tokio::task::JoinHandle<()> {
-    spawn_pty_output_impl(pty_registry, session_id, send, stats_manager, config).await
+    spawn_pty_output_impl(pty_registry, session_id, send, stats_manager, config, orphan_reaper).await
 }
 
 /// 启动 PTY 输出推送任务（向后兼容：使用 PtyManager）
@@ -117,6 +119,7 @@ pub async fn spawn_pty_output_task(
 /// - `send`: QUIC SendStream（用于发送数据给客户端）
 /// - `stats_manager`: 统计管理器（可选）
 /// - `config`: 输出推送配置
+/// - `orphan_reaper`: 孤儿进程回收器（可选，用于 PTY EOF 时回收僵尸进程）
 ///
 /// # 返回
 /// 返回任务句柄
@@ -127,29 +130,37 @@ pub async fn spawn_pty_output_task_legacy(
     send: Arc<Mutex<SendStream>>,
     stats_manager: Option<Arc<crate::auth::StatsManager>>,
     config: PtyOutputConfig,
+    orphan_reaper: Option<super::orphan_reaper::OrphanProcessReaper>,
 ) -> tokio::task::JoinHandle<()> {
-    spawn_pty_output_impl(pty_manager, session_id, send, stats_manager, config).await
+    spawn_pty_output_impl(pty_manager, session_id, send, stats_manager, config, orphan_reaper).await
 }
 
 /// PTY 读取器 Trait（内部抽象）
+/// 注意：trait 中的 async fn 返回的 Future 默认不实现 Send，
+/// 而 tokio::spawn 要求 Future: Send。
+/// 因此手动使用 BoxFuture 替代 async fn in trait，避免引入 async-trait 依赖。
 #[cfg(unix)]
 trait PtyReader: Send + Sync {
-    async fn read(&self, session_id: &str) -> Result<Vec<u8>>;
+    fn read<'a>(&'a self, session_id: &'a str) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>>> + Send + 'a>>;
 }
 
 // 为 PtyRegistry 实现读取器
 #[cfg(unix)]
 impl PtyReader for PtyRegistry {
-    async fn read(&self, session_id: &str) -> Result<Vec<u8>> {
-        PtyRegistry::read(self, session_id).await
+    fn read<'a>(&'a self, session_id: &'a str) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>>> + Send + 'a>> {
+        Box::pin(async move {
+            PtyRegistry::read(self, session_id).await
+        })
     }
 }
 
 // 为 PtyManager 实现读取器（向后兼容）
 #[cfg(unix)]
 impl PtyReader for PtyManager {
-    async fn read(&self, session_id: &str) -> Result<Vec<u8>> {
-        PtyManager::read(self, session_id).await
+    fn read<'a>(&'a self, session_id: &'a str) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>>> + Send + 'a>> {
+        Box::pin(async move {
+            PtyManager::read(self, session_id).await
+        })
     }
 }
 
@@ -161,6 +172,7 @@ async fn spawn_pty_output_impl<R>(
     send: Arc<Mutex<SendStream>>,
     stats_manager: Option<Arc<crate::auth::StatsManager>>,
     config: PtyOutputConfig,
+    orphan_reaper: Option<super::orphan_reaper::OrphanProcessReaper>,
 ) -> tokio::task::JoinHandle<()>
 where
     R: PtyReader + 'static,
@@ -168,6 +180,7 @@ where
     tokio::spawn(async move {
         let mut batch_buffer = Vec::with_capacity(config.batch_size);
         let mut last_send_time = std::time::Instant::now();
+        let mut eof_detected = false;
 
         loop {
             // 从 PTY 读取输出
@@ -227,7 +240,9 @@ where
                     sleep(Duration::from_millis(config.poll_interval_ms)).await;
                 }
                 Err(e) => {
-                    warn!("PTY 读取失败: session_id={}, error={}", session_id, e);
+                    // PTY 读取错误通常意味着会话已关闭（EOF）
+                    warn!("PTY 读取失败（可能 EOF）: session_id={}, error={}", session_id, e);
+                    eof_detected = true;
                     break;
                 }
             }
@@ -240,6 +255,22 @@ where
             // 记录终端输出字节数
             if let Some(ref stats) = stats_manager {
                 stats.record_terminal_bytes(batch_buffer.len() as u64);
+            }
+        }
+
+        // EOF 处理：回收孤儿进程并清理资源
+        // Phase 4 新增：在 PTY 会话结束时，通过 OrphanProcessReaper 回收僵尸进程
+        if eof_detected {
+            tracing::info!("PTY 会话结束: session_id={}", session_id);
+
+            if let Some(ref reaper) = orphan_reaper {
+                // 获取 session 对应的 PID
+                if let Some(pid) = reaper.get_pid(&session_id).await {
+                    tracing::info!("回收孤儿进程: session_id={}, pid={}", session_id, pid);
+                    let _ = reaper.reap_zombie(pid).await;
+                } else {
+                    tracing::debug!("未找到 session_id 对应的 PID（可能已清理）: {}", session_id);
+                }
             }
         }
 

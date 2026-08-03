@@ -18,6 +18,7 @@ message ManagerRequest {
         WriteFile write_file = 7;
         ExecuteCommand execute_command = 8;
         GetSystemInfo get_system_info = 9;
+        GracefulShutdown graceful_shutdown = 10;  // 新增：优雅关闭请求
     }
 }
 
@@ -32,6 +33,7 @@ message WorkerResponse {
         CommandOutput command_output = 6;
         SystemInfo system_info = 7;
         Error error = 8;
+        ShutdownAck shutdown_ack = 9;  // 新增：关闭确认
     }
 }
 
@@ -155,4 +157,24 @@ message DiskInfo {
     uint64 used_bytes = 5;
     uint64 available_bytes = 6;
     double usage_percent = 7;
+}
+
+// ===== 热更新 =====
+
+// Manager -> Worker 的优雅关闭请求
+message GracefulShutdown {
+    uint32 grace_period_secs = 1;   // 宽限期（秒），超时后强制杀死
+    bool migrate_state = 2;          // 是否进行状态迁移（Phase 4 暂不实现，始终为 false）
+    string reason = 3;               // 触发原因
+}
+
+// Worker -> Manager 的关闭确认
+message ShutdownAck {
+    bool all_tasks_completed = 1;    // 是否成功完成所有未决任务
+    uint32 sessions_count = 2;       // 退出的会话数量（应为 0，不杀死 Sessions）
+}
+
+// Worker -> Manager 的状态迁移数据（Phase 4 暂不使用，预留扩展点）
+message WorkerStateSnapshot {
+    repeated uint64 pending_requests = 1;  // 待处理的请求 ID 列表
 }

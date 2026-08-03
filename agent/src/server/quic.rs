@@ -1507,6 +1507,9 @@ async fn handle_terminal_stream(
         send.clone(),
         Some(stats_manager.clone()),
         config,
+        // Phase 4: 暂不传入 OrphanProcessReaper，保持向后兼容
+        // 后续在 Worker 热更新集成完成后，由调用方传入实际实例
+        None,
     ).await;
 
     // 订阅连接关闭信号（需要在 select! 之前可变绑定）

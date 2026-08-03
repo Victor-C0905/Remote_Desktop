@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct AgentConfig {
     pub server: ServerConfig,
     pub auth: AuthConfig,
@@ -28,10 +28,30 @@ pub struct ServerConfig {
     pub key_path: String,
 }
 
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            bind: "0.0.0.0".into(),
+            quic_port: default_quic_port(),
+            ws_port: default_ws_port(),
+            cert_path: "./cert.pem".into(),
+            key_path: "./key.pem".into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AuthConfig {
     #[serde(default)]
     pub ssh: SshAuthConfig,
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            ssh: SshAuthConfig::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -53,6 +73,14 @@ pub struct SecurityConfig {
     pub blocked_commands: Vec<String>,
 }
 
+impl Default for SecurityConfig {
+    fn default() -> Self {
+        Self {
+            blocked_commands: default_blocked_commands(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LimitsConfig {
     #[serde(default = "default_max_sessions")]
@@ -65,6 +93,17 @@ pub struct LimitsConfig {
     /// 默认 300 秒（5 分钟）
     #[serde(default = "default_connection_idle_timeout")]
     pub connection_idle_timeout_secs: u64,
+}
+
+impl Default for LimitsConfig {
+    fn default() -> Self {
+        Self {
+            max_terminal_sessions: default_max_sessions(),
+            max_file_transfer_mb: default_max_file_mb(),
+            metrics_interval_secs: default_metrics_interval(),
+            connection_idle_timeout_secs: default_connection_idle_timeout(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -80,6 +119,17 @@ pub struct CollectorsConfig {
 
     #[serde(default = "default_service_status_interval")]
     pub service_status_interval_secs: u64,
+}
+
+impl Default for CollectorsConfig {
+    fn default() -> Self {
+        Self {
+            metrics_interval_secs: default_metrics_interval(),
+            file_changes_delay_ms: default_file_changes_delay(),
+            process_scan_interval_secs: default_process_scan_interval(),
+            service_status_interval_secs: default_service_status_interval(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

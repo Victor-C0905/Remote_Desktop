@@ -11,7 +11,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use prost::Message;
 use std::os::unix::io::AsRawFd;
 use nix::sys::socket::{sendmsg, ControlMessage, MsgFlags};
-use nix::sys::uio::IoVec;
+use std::io::IoSlice;
 
 use crate::protocol::generated::{ManagerRequest, WorkerResponse};
 
@@ -84,10 +84,11 @@ impl IpcClient {
 
         // 发送一个字节的 dummy 数据（必须发送至少一个字节）
         let dummy_data = [1u8];
-        let iov = [IoVec::from_slice(&dummy_data)];
+        let iov = [IoSlice::new(&dummy_data)];
 
         // 使用 sendmsg 发送控制消息
-        sendmsg(
+        // 显式指定地址类型为 ()（不发送目标地址，因为是已连接 socket）
+        sendmsg::<()>(
             self.stream.as_raw_fd(),
             &iov,
             &[cmsg],
@@ -123,7 +124,7 @@ impl IpcClient {
     /// let response = WorkerResponse { ... };
     /// client.send_message(&response).await?;
     /// ```
-    pub async fn send_message<T: Message>(&self, msg: &T) -> Result<()> {
+    pub async fn send_message<T: Message>(&mut self, msg: &T) -> Result<()> {
         // 编码 Protobuf 消息
         let mut buf = Vec::new();
         msg.encode(&mut buf)
@@ -161,7 +162,7 @@ impl IpcClient {
     /// ```rust,ignore
     /// let request: ManagerRequest = client.receive_message().await?;
     /// ```
-    pub async fn receive_message<T: Message + Default>(&self) -> Result<T> {
+    pub async fn receive_message<T: Message + Default>(&mut self) -> Result<T> {
         // 读取消息长度（4字节 big-endian）
         let mut len_buf = [0u8; 4];
         self.stream.read_exact(&mut len_buf).await
@@ -203,7 +204,7 @@ impl IpcClient {
     ///     _ => { ... }
     /// }
     /// ```
-    pub async fn receive_request(&self) -> Result<ManagerRequest> {
+    pub async fn receive_request(&mut self) -> Result<ManagerRequest> {
         self.receive_message().await
     }
 
@@ -226,7 +227,7 @@ impl IpcClient {
     /// };
     /// client.send_response(&response).await?;
     /// ```
-    pub async fn send_response(&self, response: &WorkerResponse) -> Result<()> {
+    pub async fn send_response(&mut self, response: &WorkerResponse) -> Result<()> {
         self.send_message(response).await
     }
 }
