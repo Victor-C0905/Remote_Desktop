@@ -144,4 +144,64 @@ impl Manager {
 
         Ok(())
     }
+
+    /// 处理终端窗口大小调整（由 QUIC 层调用）
+    ///
+    /// # 参数
+    /// - `session_id`: PTY 会话 ID
+    /// - `cols`: 列数
+    /// - `rows`: 行数
+    ///
+    /// # 返回
+    /// 成功返回 Ok(())，失败返回错误
+    ///
+    /// # 架构说明
+    /// ResizeWindow 需要操作 master_fd（通过 ioctl），
+    /// 而 master_fd 由 Manager 持有（在 PtyRegistry 中），
+    /// 因此由 Manager 直接处理，不通过 Worker。
+    #[cfg(unix)]
+    pub async fn handle_resize_window(&self, session_id: &str, cols: u32, rows: u32) -> Result<()> {
+        tracing::debug!("ResizeWindow: session_id={}, cols={}, rows={}", session_id, cols, rows);
+
+        // 从 PtyRegistry 获取 master_fd
+        let master_fd = self.pty_registry.get_fd(session_id).await
+            .map_err(|e| {
+                tracing::warn!("获取 master_fd 失败: session_id={}, error={}", session_id, e);
+                e
+            })?;
+
+        // 调用 ioctl 调整终端大小
+        self.set_window_size(master_fd, cols, rows)?;
+
+        tracing::info!("终端窗口大小调整成功: session_id={}, cols={}, rows={}", session_id, cols, rows);
+        Ok(())
+    }
+
+    /// 设置终端窗口大小（内部辅助函数）
+    ///
+    /// # 参数
+    /// - `fd`: master_fd
+    /// - `cols`: 列数
+    /// - `rows`: 行数
+    #[cfg(unix)]
+    fn set_window_size(&self, fd: std::os::unix::io::RawFd, cols: u32, rows: u32) -> Result<()> {
+        use nix::libc::{ioctl, winsize, TIOCSWINSZ};
+
+        let ws = winsize {
+            ws_col: cols as u16,
+            ws_row: rows as u16,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+
+        let ret = unsafe { ioctl(fd, TIOCSWINSZ, &ws) };
+
+        if ret < 0 {
+            let err = nix::errno::Errno::last();
+            tracing::error!("ioctl(TIOCSWINSZ) 失败: fd={}, error={}", fd, err);
+            return Err(anyhow::anyhow!("Failed to set window size: {}", err));
+        }
+
+        Ok(())
+    }
 }

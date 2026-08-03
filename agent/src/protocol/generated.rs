@@ -5,7 +5,7 @@
 pub struct ManagerRequest {
     #[prost(uint64, tag = "1")]
     pub request_id: u64,
-    #[prost(oneof = "manager_request::Payload", tags = "2, 3, 4, 5, 6, 7, 8, 9")]
+    #[prost(oneof = "manager_request::Payload", tags = "2, 4, 5, 6, 7, 8, 9")]
     pub payload: ::core::option::Option<manager_request::Payload>,
 }
 /// Nested message and enum types in `ManagerRequest`.
@@ -15,8 +15,6 @@ pub mod manager_request {
     pub enum Payload {
         #[prost(message, tag = "2")]
         CreateSession(super::CreateSession),
-        #[prost(message, tag = "3")]
-        ResizeWindow(super::ResizeWindow),
         #[prost(message, tag = "4")]
         KillSession(super::KillSession),
         #[prost(message, tag = "5")]

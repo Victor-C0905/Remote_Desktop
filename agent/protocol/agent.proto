@@ -11,7 +11,7 @@ message ManagerRequest {
     uint64 request_id = 1;
     oneof payload {
         CreateSession create_session = 2;
-        ResizeWindow resize_window = 3;
+        // ResizeWindow 已移除：由 Manager 直接处理（Worker 不持有 master_fd）
         KillSession kill_session = 4;
         ReadDir read_dir = 5;
         ReadFile read_file = 6;
