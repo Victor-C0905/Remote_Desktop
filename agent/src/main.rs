@@ -187,9 +187,9 @@ async fn run_worker_mode(args: &Args) -> Result<()> {
 
     tracing::info!("Worker 模式启动，连接到: {}", ipc_socket_path);
 
-    // TODO: TASK-017 将实现 IpcClient 连接和消息处理
-    // let ipc_client = gnome_remote_agent::worker::IpcClient::connect(&ipc_socket_path).await?;
-    // gnome_remote_agent::worker::run(ipc_client).await?;
+    // 初始化 IpcClient 并连接到 Manager
+    let ipc_client = gnome_remote_agent::worker::IpcClient::connect(&ipc_socket_path).await?;
+    gnome_remote_agent::worker::run(ipc_client).await?;
 
     tracing::info!("Worker 进程已退出");
 

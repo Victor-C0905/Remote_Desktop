@@ -134,23 +134,57 @@ fi
 
 # 2/3 配置 systemd 服务
 echo ">>> [2/3] 配置系统服务..."
-cat > /etc/systemd/system/$SERVICE_NAME.service << EOF
+
+# 查找 systemd service 模板文件
+# 优先使用项目根目录的 systemd/gnome-remote-agent.service（包含 Phase 4 热更新配置）
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SERVICE_TEMPLATE=""
+
+# 尝试多个可能的路径（支持打包部署和源码部署）
+if [ -f "$SCRIPT_DIR/../systemd/gnome-remote-agent.service" ]; then
+    SERVICE_TEMPLATE="$SCRIPT_DIR/../systemd/gnome-remote-agent.service"
+elif [ -f "$SCRIPT_DIR/../../systemd/gnome-remote-agent.service" ]; then
+    SERVICE_TEMPLATE="$SCRIPT_DIR/../../systemd/gnome-remote-agent.service"
+elif [ -f "$SCRIPT_DIR/systemd/gnome-remote-agent.service" ]; then
+    SERVICE_TEMPLATE="$SCRIPT_DIR/systemd/gnome-remote-agent.service"
+fi
+
+if [ -n "$SERVICE_TEMPLATE" ] && [ -f "$SERVICE_TEMPLATE" ]; then
+    echo "  使用 service 模板: $SERVICE_TEMPLATE"
+
+    # 复制 service 文件，替换二进制路径和服务名称
+    sed \
+        -e "s|/usr/local/bin/gnome-remote-agent|$INSTALL_DIR/$SERVICE_NAME|g" \
+        -e "s|gnome-remote-agent|$SERVICE_NAME|g" \
+        "$SERVICE_TEMPLATE" > /etc/systemd/system/$SERVICE_NAME.service
+else
+    echo "  警告: 未找到 service 模板，使用内联最小配置"
+    cat > /etc/systemd/system/$SERVICE_NAME.service << EOF
 [Unit]
 Description=GNOME Remote Agent
-After=network.target
+After=network.target network-online.target
+Wants=network-online.target
 
 [Service]
-Type=simple
+Type=notify
 User=root
-WorkingDirectory=/etc/$SERVICE_NAME
-ExecStart=$INSTALL_DIR/$SERVICE_NAME --config /etc/$SERVICE_NAME/agent.toml
+Group=root
+ExecStart=$INSTALL_DIR/$SERVICE_NAME --config /etc/$SERVICE_NAME/agent.toml --log-dir /var/log/gnome-remote
+KillMode=process
+ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
 RestartSec=5s
+LimitNOFILE=65536
 Environment="RUST_LOG=info"
+Environment="HOME=/var/lib/gnome-remote"
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=$SERVICE_NAME
 
 [Install]
 WantedBy=multi-user.target
 EOF
+fi
 
 # 3/3 启动服务
 echo ">>> [3/3] 启动服务..."
