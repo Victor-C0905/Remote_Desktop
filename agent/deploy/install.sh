@@ -164,17 +164,18 @@ else
 Description=GNOME Remote Agent
 After=network.target network-online.target
 Wants=network-online.target
+StartLimitBurst=3
+StartLimitIntervalSec=60
 
 [Service]
-Type=notify
+Type=simple
 User=root
 Group=root
 ExecStart=$INSTALL_DIR/$SERVICE_NAME --config /etc/$SERVICE_NAME/agent.toml --log-dir /var/log/gnome-remote
-KillMode=process
-ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
 RestartSec=5s
 LimitNOFILE=65536
+LimitNPROC=infinity
 Environment="RUST_LOG=info"
 Environment="HOME=/var/lib/gnome-remote"
 StandardOutput=journal

@@ -3,9 +3,11 @@ Description=GNOME Remote Agent - SSH-like Remote Management
 Documentation=https://github.com/yourname/gnome-remote
 After=network.target network-online.target
 Wants=network-online.target
+StartLimitBurst=3
+StartLimitIntervalSec=60
 
 [Service]
-Type=notify
+Type=simple
 User=root
 Group=root
 
@@ -13,27 +15,37 @@ ExecStart=/usr/local/bin/gnome-remote-agent \
     --config /etc/gnome-remote/agent.toml \
     --log-dir /var/log/gnome-remote
 
-# Phase 4: 热更新支持
-# KillMode=process: 只杀死主进程，Session 子进程继续运行（成为孤儿进程）
-# 这样 Worker 热更新或崩溃重启时，已有终端会话不会中断
-KillMode=process
-
-# ExecReload: 发送 SIGHUP 信号触发优雅热更新
-# 使用方法: systemctl reload gnome-remote-agent
-ExecReload=/bin/kill -HUP $MAINPID
+# ====================================================================
+# Phase 4 热更新配置（当前未启用）
+# ====================================================================
+# 以下配置需要 agent 集成 Manager 架构后才能启用。
+# 当前 agent 仍使用旧架构（main.rs 直接调用 server::quic::run），
+# 不支持 SIGHUP 信号处理，启用以下配置会导致：
+# - systemctl reload 发送 SIGHUP → agent 进程被杀
+# - KillMode=process 在没有 Worker 子进程时无意义
+#
+# 启用条件：
+# 1. main.rs 集成 Manager::run()（替换直接调用 server::quic::run）
+# 2. 验证 SIGHUP 信号处理正常（HotUpdateCoordinator 启动）
+# 3. 验证 Worker 子进程正常启动和退出
+#
+# 启用方法：取消下面两行的注释
+# KillMode=process
+# ExecReload=/bin/kill -HUP $MAINPID
+# ====================================================================
 
 Restart=on-failure
 RestartSec=5s
-StartLimitBurst=3
-StartLimitIntervalSec=60
 
 # 安全配置
+# 注意：不要使用 CapabilityBoundingSet 限制能力
+# agent 需要读取所有用户的 .ssh/authorized_keys 文件（公钥认证）
+# 和切换用户身份（PAM 认证），需要完整能力
 NoNewPrivileges=false
-CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_SYS_ADMIN CAP_NET_BIND_SERVICE
 
 # 资源限制
 LimitNOFILE=65536
-LimitNPROC=unlimited
+LimitNPROC=infinity
 
 # 环境变量
 Environment="RUST_LOG=info"
