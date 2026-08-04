@@ -39,20 +39,22 @@ fn test_systemd_service_contains_phase4_config() {
     let content = std::fs::read_to_string(&path)
         .expect("Failed to read systemd service file");
 
-    // 验证 Phase 4 热更新配置
+    // 验证 Type=simple（agent 未实现 sd_notify）
     assert!(
-        content.contains("KillMode=process"),
-        "Service should contain KillMode=process for Phase 4 hot update"
+        content.contains("Type=simple"),
+        "Service should use Type=simple (agent does not implement sd_notify)"
     );
 
+    // Phase 4 热更新配置（KillMode/ExecReload）当前被注释
+    // 需要等 main.rs 集成 Manager 架构后才能启用
+    // 验证配置文件中存在相关注释说明（非启用状态）
+    let has_killmode_comment = content
+        .lines()
+        .filter(|line| line.trim_start().starts_with('#'))
+        .any(|line| line.contains("KillMode=process"));
     assert!(
-        content.contains("ExecReload"),
-        "Service should contain ExecReload for Phase 4 hot update"
-    );
-
-    assert!(
-        content.contains("Type=notify"),
-        "Service should use Type=notify for systemd notification"
+        has_killmode_comment,
+        "Service should contain commented KillMode=process (Phase 4 not yet integrated)"
     );
 }
 
@@ -62,15 +64,22 @@ fn test_systemd_service_contains_security_config() {
     let content = std::fs::read_to_string(&path)
         .expect("Failed to read systemd service file");
 
-    // 验证安全配置
-    assert!(
-        content.contains("CapabilityBoundingSet"),
-        "Service should contain CapabilityBoundingSet"
-    );
-
+    // 验证资源限制配置
     assert!(
         content.contains("LimitNOFILE"),
         "Service should contain LimitNOFILE"
+    );
+
+    // 验证未使用 CapabilityBoundingSet 限制能力
+    // agent 需要读取所有用户的 .ssh/authorized_keys 文件（公钥认证）
+    // 和切换用户身份（PAM 认证），需要完整能力
+    let has_capability_restriction = content
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .any(|line| line.contains("CapabilityBoundingSet"));
+    assert!(
+        !has_capability_restriction,
+        "Service should NOT restrict capabilities (breaks authorized_keys reading)"
     );
 }
 
@@ -113,10 +122,10 @@ fn test_install_script_uses_service_template() {
         "install.sh should reference the systemd service template file"
     );
 
-    // 验证不再使用旧的 simple Type 内联生成（应有 KillMode=process 或模板引用）
+    // 验证 install.sh 包含 Type=simple（当前部署版本）
     assert!(
-        content.contains("KillMode=process") || content.contains("SERVICE_TEMPLATE"),
-        "install.sh should include Phase 4 KillMode=process config or use template"
+        content.contains("Type=simple"),
+        "install.sh should use Type=simple (current agent version)"
     );
 }
 
