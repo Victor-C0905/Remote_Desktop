@@ -168,19 +168,28 @@ impl WorkerManager {
         if let Some(ref mut child) = *process_guard {
             let pid = Pid::from_raw(child.id() as i32);
 
-            // 发送 SIGTERM（nix 0.29 需要启用 "signal" feature）
-            kill(pid, Signal::SIGTERM)
-                .context("Failed to send SIGTERM to worker")?;
+            // 发送 SIGTERM,如果进程已不存在(ESRCH),忽略错误继续清理
+            match kill(pid, Signal::SIGTERM) {
+                Ok(()) => {
+                    info!("已发送 SIGTERM 到 Worker 进程: pid={}", child.id());
+                }
+                Err(nix::errno::Errno::ESRCH) => {
+                    // 进程已不存在(可能已崩溃或被杀死),继续清理资源
+                    info!("Worker 进程已不存在: pid={}", child.id());
+                }
+                Err(e) => {
+                    return Err(anyhow::anyhow!("Failed to send SIGTERM to worker: {}", e));
+                }
+            }
 
-            info!("已发送 SIGTERM 到 Worker 进程: pid={}", child.id());
-
-            // 等待进程退出（最多等待 5 秒）
+            // 等待进程退出(进程已死时 wait 仅回收资源,可能已被 waitpid 回收则忽略错误)
             match child.wait() {
                 Ok(status) => {
                     info!("Worker 进程已退出: pid={}, status={}", child.id(), status);
                 }
                 Err(e) => {
-                    warn!("等待 Worker 进程退出失败: {}", e);
+                    // 进程可能已被 CrashDetector 的 waitpid 回收,不算错误
+                    warn!("等待 Worker 进程退出失败(可能已被回收): {}", e);
                 }
             }
 

@@ -36,3 +36,11 @@ log_path = "/var/log/gnome-remote/audit.log"
 level = "info"
 # 日志输出目录
 dir = "logs"
+
+[worker]
+# Agent 二进制路径(相对于 agent 进程工作目录)
+agent_binary = "./target/release/agent"
+# IPC Socket 路径
+ipc_socket_path = "/tmp/gnome-remote-worker.sock"
+# 最大重启次数
+max_restarts = 3
