@@ -1,19 +1,27 @@
 //! IPC 服务器
 //!
 //! 接收 Worker 发送的 PTY master_fd，并与 WorkerManager 和 PtyRegistry 集成。
+//! 阶段 2:新增双向通信能力(发送请求到 Worker + 接收响应)。
 
 use std::collections::HashMap;
 use std::os::unix::io::RawFd;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::net::UnixListener;
 use tokio::sync::RwLock;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use anyhow::{Result, Context};
 use nix::sys::socket::{recvmsg, ControlMessageOwned, MsgFlags};
+use prost::Message;
 use std::io::IoSliceMut;
 use tracing::{info, warn, error};
 
 use super::pty_registry::{PtyRegistry, PtySession, UserInfo};
 use super::worker_manager::{WorkerManager, WorkerStatus};
+use crate::protocol::generated::{
+    ManagerRequest, WorkerResponse,
+    manager_request, worker_response,
+};
 
 /// IPC 连接信息
 #[derive(Debug)]
@@ -38,10 +46,63 @@ impl IpcConnection {
         }
     }
 
-    /// 接收文件描述符
-    pub fn receive_fd(&mut self) -> Result<RawFd> {
-        if let Some(ref stream) = self.stream {
+    /// 接收文件描述符(异步)
+    ///
+    /// 先等待 stream 可读,再调用 recvmsg 接收 SCM_RIGHTS
+    pub async fn receive_fd(&mut self) -> Result<RawFd> {
+        if let Some(ref mut stream) = self.stream {
+            // 等待数据就绪(非阻塞 socket 需要先 await)
+            stream.readable().await
+                .context("Failed to wait for stream readable")?;
             receive_fd_from_stream(stream)
+        } else {
+            Err(anyhow::anyhow!("No stream available"))
+        }
+    }
+
+    /// 发送 ManagerRequest 到 Worker(异步)
+    ///
+    /// 消息格式:[4字节长度(big-endian)] + [protobuf 内容]
+    pub async fn send_request(&mut self, request: &ManagerRequest) -> Result<()> {
+        if let Some(ref mut stream) = self.stream {
+            let mut buf = Vec::new();
+            request.encode(&mut buf)
+                .context("Failed to encode ManagerRequest")?;
+            let len = buf.len() as u32;
+            stream.write_all(&len.to_be_bytes()).await
+                .context("Failed to write request length")?;
+            stream.write_all(&buf).await
+                .context("Failed to write request content")?;
+            tracing::debug!("已发送请求到 Worker: request_id={}, len={}", request.request_id, buf.len());
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("No stream available"))
+        }
+    }
+
+    /// 接收 WorkerResponse(异步,不含 FD)
+    ///
+    /// 消息格式:[4字节长度(big-endian)] + [protobuf 内容]
+    pub async fn receive_response(&mut self) -> Result<WorkerResponse> {
+        if let Some(ref mut stream) = self.stream {
+            let mut len_buf = [0u8; 4];
+            stream.read_exact(&mut len_buf).await
+                .context("Failed to read response length")?;
+            let len = u32::from_be_bytes(len_buf) as usize;
+
+            const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
+            if len > MAX_MESSAGE_SIZE {
+                anyhow::bail!("Response too large: {} bytes", len);
+            }
+
+            let mut msg_buf = vec![0u8; len];
+            stream.read_exact(&mut msg_buf).await
+                .context("Failed to read response content")?;
+
+            let msg = WorkerResponse::decode(&msg_buf[..])
+                .context("Failed to decode WorkerResponse")?;
+            tracing::debug!("已接收 Worker 响应: len={}", len);
+            Ok(msg)
         } else {
             Err(anyhow::anyhow!("No stream available"))
         }
@@ -74,6 +135,9 @@ pub struct IpcServer {
 
     /// 活动的连接（connection_id -> IpcConnection）
     connections: Arc<RwLock<HashMap<String, IpcConnection>>>,
+
+    /// 请求 ID 计数器(阶段 2 新增,用于生成唯一的 request_id)
+    request_id_counter: AtomicU64,
 }
 
 impl IpcServer {
@@ -94,6 +158,7 @@ impl IpcServer {
             pty_registry,
             worker_manager,
             connections: Arc::new(RwLock::new(HashMap::new())),
+            request_id_counter: AtomicU64::new(1),
         }
     }
 
@@ -181,7 +246,7 @@ impl IpcServer {
 
         if let Some(mut connection) = connections.remove(connection_id) {
             // 接收 FD
-            let master_fd = connection.receive_fd()
+            let master_fd = connection.receive_fd().await
                 .context("Failed to receive FD from worker")?;
 
             info!(
@@ -214,6 +279,151 @@ impl IpcServer {
         } else {
             Err(anyhow::anyhow!("Connection not found: {}", connection_id))
         }
+    }
+
+    /// 发送 CreateSession 请求到 Worker 并接收 FD + 响应(阶段 2 新增)
+    ///
+    /// 这是原子的 request-response 操作:
+    /// 1. 发送 CreateSession 请求到 Worker
+    /// 2. Worker 创建 PTY,forkpty 子进程(setuid/setgid),通过 SCM_RIGHTS 发送 master_fd
+    /// 3. Worker 发送 SessionCreated 响应(含 session_id)
+    /// 4. Manager 接收 FD + 响应,注册到 PtyRegistry
+    ///
+    /// # 参数
+    /// - `request`: CreateSession 请求(含 shell/cols/rows/uid/gid 等)
+    /// - `user_info`: 用户信息(用于 PtyRegistry 注册)
+    ///
+    /// # 返回
+    /// 成功返回 session_id,失败返回错误
+    pub async fn create_pty_session(
+        &self,
+        request: crate::protocol::generated::CreateSession,
+        user_info: UserInfo,
+    ) -> Result<String> {
+        // 生成唯一 request_id
+        let request_id = self.request_id_counter.fetch_add(1, Ordering::Relaxed);
+
+        // 构造 ManagerRequest
+        let manager_request = ManagerRequest {
+            request_id,
+            payload: Some(manager_request::Payload::CreateSession(request)),
+        };
+
+        // 获取活跃连接(不 remove,只 get_mut)
+        let mut connections = self.connections.write().await;
+
+        // 取第一个活跃连接(阶段 2 只有一个 Worker)
+        let connection = connections.values_mut().next()
+            .ok_or_else(|| anyhow::anyhow!("No active Worker connection"))?;
+
+        info!("发送 CreateSession 请求到 Worker: request_id={}", request_id);
+
+        // 1. 发送请求
+        connection.send_request(&manager_request).await
+            .context("Failed to send CreateSession request to Worker")?;
+
+        // 2. 接收 master_fd (SCM_RIGHTS)
+        // 注意:Worker 先 send_fd(1字节dummy + SCM_RIGHTS),再 send_response(4字节长度 + protobuf)
+        // recvmsg 只消费 1 字节普通数据 + 控制消息,不会吞掉后续 send_response 的数据
+        let master_fd = connection.receive_fd().await
+            .context("Failed to receive master_fd from Worker")?;
+
+        // 3. 接收 WorkerResponse
+        let response = connection.receive_response().await
+            .context("Failed to receive response from Worker")?;
+
+        // 4. 解析响应
+        match response.payload {
+            Some(worker_response::Payload::SessionCreated(session_created)) => {
+                let session_id = session_created.session_id;
+
+                // 设置 master_fd 为非阻塞模式
+                let flags = nix::fcntl::OFlag::from_bits_truncate(
+                    nix::fcntl::fcntl(master_fd, nix::fcntl::FcntlArg::F_GETFL)
+                        .unwrap_or(nix::fcntl::OFlag::empty().bits())
+                );
+                let new_flags = flags | nix::fcntl::OFlag::O_NONBLOCK;
+                let _ = nix::fcntl::fcntl(master_fd, nix::fcntl::FcntlArg::F_SETFL(new_flags));
+
+                // 注册到 PtyRegistry
+                let pty_session = PtySession {
+                    session_id: session_id.clone(),
+                    master_fd,
+                    user_info,
+                    created_at: std::time::SystemTime::now(),
+                };
+
+                if let Err(e) = self.pty_registry.register(pty_session).await {
+                    // 注册失败,关闭 FD 防止泄漏
+                    let _ = nix::unistd::close(master_fd);
+                    return Err(e.context("Failed to register PTY session"));
+                }
+
+                info!(
+                    "PTY 会话创建成功(通过 Worker): session_id={}, fd={}",
+                    session_id, master_fd
+                );
+
+                Ok(session_id)
+            }
+            Some(worker_response::Payload::Error(err)) => {
+                // Worker 返回错误,关闭已接收的 FD
+                let _ = nix::unistd::close(master_fd);
+                Err(anyhow::anyhow!("Worker error: code={}, message={}", err.code, err.message))
+            }
+            _ => {
+                let _ = nix::unistd::close(master_fd);
+                Err(anyhow::anyhow!("Unexpected response from Worker: {:?}", response.payload))
+            }
+        }
+    }
+
+    /// 发送通用请求到 Worker 并接收响应(阶段 3 新增)
+    ///
+    /// 适用于不需要 FD 传递的业务操作(ReadDir/ReadFile/WriteFile 等)。
+    /// 这是原子的 request-response 操作:
+    /// 1. 生成唯一 request_id
+    /// 2. 发送 ManagerRequest 到 Worker
+    /// 3. 接收 WorkerResponse
+    ///
+    /// # 参数
+    /// - `payload`: manager_request::Payload(具体的请求类型)
+    ///
+    /// # 返回
+    /// 成功返回 WorkerResponse,失败返回错误
+    pub async fn send_request(
+        &self,
+        payload: manager_request::Payload,
+    ) -> Result<crate::protocol::generated::WorkerResponse> {
+        // 生成唯一 request_id
+        let request_id = self.request_id_counter.fetch_add(1, Ordering::Relaxed);
+
+        // 构造 ManagerRequest
+        let manager_request = ManagerRequest {
+            request_id,
+            payload: Some(payload),
+        };
+
+        // 获取活跃连接
+        let mut connections = self.connections.write().await;
+
+        // 取第一个活跃连接(当前只有一个 Worker)
+        let connection = connections.values_mut().next()
+            .ok_or_else(|| anyhow::anyhow!("No active Worker connection"))?;
+
+        tracing::debug!("发送业务请求到 Worker: request_id={}", request_id);
+
+        // 1. 发送请求
+        connection.send_request(&manager_request).await
+            .context("Failed to send request to Worker")?;
+
+        // 2. 接收响应(不含 FD)
+        let response = connection.receive_response().await
+            .context("Failed to receive response from Worker")?;
+
+        tracing::debug!("收到 Worker 响应: request_id={}", request_id);
+
+        Ok(response)
     }
 
     /// 清理指定 Worker 的连接

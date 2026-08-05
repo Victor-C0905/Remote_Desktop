@@ -5,7 +5,7 @@
 pub struct ManagerRequest {
     #[prost(uint64, tag = "1")]
     pub request_id: u64,
-    #[prost(oneof = "manager_request::Payload", tags = "2, 4, 5, 6, 7, 8, 9, 10")]
+    #[prost(oneof = "manager_request::Payload", tags = "2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17")]
     pub payload: ::core::option::Option<manager_request::Payload>,
 }
 /// Nested message and enum types in `ManagerRequest`.
@@ -28,6 +28,20 @@ pub mod manager_request {
         ExecuteCommand(super::ExecuteCommand),
         #[prost(message, tag = "9")]
         GetSystemInfo(super::GetSystemInfo),
+        #[prost(message, tag = "11")]
+        Delete(super::Delete),
+        #[prost(message, tag = "12")]
+        Mkdir(super::Mkdir),
+        #[prost(message, tag = "13")]
+        Rename(super::Rename),
+        #[prost(message, tag = "14")]
+        Copy(super::Copy),
+        #[prost(message, tag = "15")]
+        Move(super::Move),
+        #[prost(message, tag = "16")]
+        FileExists(super::FileExists),
+        #[prost(message, tag = "17")]
+        ApplyDiff(super::ApplyDiff),
         /// 新增：优雅关闭请求
         #[prost(message, tag = "10")]
         GracefulShutdown(super::GracefulShutdown),
@@ -39,7 +53,7 @@ pub mod manager_request {
 pub struct WorkerResponse {
     #[prost(uint64, tag = "1")]
     pub request_id: u64,
-    #[prost(oneof = "worker_response::Payload", tags = "2, 3, 4, 5, 6, 7, 8, 9")]
+    #[prost(oneof = "worker_response::Payload", tags = "2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16")]
     pub payload: ::core::option::Option<worker_response::Payload>,
 }
 /// Nested message and enum types in `WorkerResponse`.
@@ -61,6 +75,20 @@ pub mod worker_response {
         SystemInfo(super::SystemInfo),
         #[prost(message, tag = "8")]
         Error(super::Error),
+        #[prost(message, tag = "10")]
+        DeleteResult(super::DeleteResult),
+        #[prost(message, tag = "11")]
+        MkdirResult(super::MkdirResult),
+        #[prost(message, tag = "12")]
+        RenameResult(super::RenameResult),
+        #[prost(message, tag = "13")]
+        CopyResult(super::CopyResult),
+        #[prost(message, tag = "14")]
+        MoveResult(super::MoveResult),
+        #[prost(message, tag = "15")]
+        FileExistsResult(super::FileExistsResult),
+        #[prost(message, tag = "16")]
+        ApplyDiffResult(super::ApplyDiffResult),
         /// 新增：关闭确认
         #[prost(message, tag = "9")]
         ShutdownAck(super::ShutdownAck),
@@ -86,6 +114,15 @@ pub struct CreateSession {
     pub shell: ::prost::alloc::string::String,
     #[prost(string, tag = "4")]
     pub working_directory: ::prost::alloc::string::String,
+    /// 阶段 2 新增:用户隔离信息
+    #[prost(uint32, tag = "5")]
+    pub uid: u32,
+    #[prost(uint32, tag = "6")]
+    pub gid: u32,
+    #[prost(string, tag = "7")]
+    pub username: ::prost::alloc::string::String,
+    #[prost(string, tag = "8")]
+    pub home_dir: ::prost::alloc::string::String,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -114,6 +151,18 @@ pub struct KillSession {
 pub struct ReadDir {
     #[prost(string, tag = "1")]
     pub path: ::prost::alloc::string::String,
+    /// 用户上下文(阶段 3 新增):UID
+    #[prost(uint32, tag = "2")]
+    pub uid: u32,
+    /// 用户上下文(阶段 3 新增):GID
+    #[prost(uint32, tag = "3")]
+    pub gid: u32,
+    /// 用户上下文(阶段 3 新增):用户名
+    #[prost(string, tag = "4")]
+    pub username: ::prost::alloc::string::String,
+    /// 用户上下文(阶段 3 新增):家目录
+    #[prost(string, tag = "5")]
+    pub home_dir: ::prost::alloc::string::String,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -142,6 +191,18 @@ pub struct FileEntry {
 pub struct ReadFile {
     #[prost(string, tag = "1")]
     pub path: ::prost::alloc::string::String,
+    /// 用户上下文(阶段 3 新增):UID
+    #[prost(uint32, tag = "2")]
+    pub uid: u32,
+    /// 用户上下文(阶段 3 新增):GID
+    #[prost(uint32, tag = "3")]
+    pub gid: u32,
+    /// 用户上下文(阶段 3 新增):用户名
+    #[prost(string, tag = "4")]
+    pub username: ::prost::alloc::string::String,
+    /// 用户上下文(阶段 3 新增):家目录
+    #[prost(string, tag = "5")]
+    pub home_dir: ::prost::alloc::string::String,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -162,6 +223,18 @@ pub struct WriteFile {
     pub path: ::prost::alloc::string::String,
     #[prost(bytes = "vec", tag = "2")]
     pub content: ::prost::alloc::vec::Vec<u8>,
+    /// 用户上下文(阶段 3 新增):UID
+    #[prost(uint32, tag = "3")]
+    pub uid: u32,
+    /// 用户上下文(阶段 3 新增):GID
+    #[prost(uint32, tag = "4")]
+    pub gid: u32,
+    /// 用户上下文(阶段 3 新增):用户名
+    #[prost(string, tag = "5")]
+    pub username: ::prost::alloc::string::String,
+    /// 用户上下文(阶段 3 新增):家目录
+    #[prost(string, tag = "6")]
+    pub home_dir: ::prost::alloc::string::String,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -175,6 +248,142 @@ pub struct WriteResult {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Delete {
+    #[prost(string, tag = "1")]
+    pub path: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "2")]
+    pub uid: u32,
+    #[prost(uint32, tag = "3")]
+    pub gid: u32,
+    #[prost(string, tag = "4")]
+    pub username: ::prost::alloc::string::String,
+    #[prost(string, tag = "5")]
+    pub home_dir: ::prost::alloc::string::String,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DeleteResult {
+    #[prost(bool, tag = "1")]
+    pub success: bool,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Mkdir {
+    #[prost(string, tag = "1")]
+    pub path: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "2")]
+    pub uid: u32,
+    #[prost(uint32, tag = "3")]
+    pub gid: u32,
+    #[prost(string, tag = "4")]
+    pub username: ::prost::alloc::string::String,
+    #[prost(string, tag = "5")]
+    pub home_dir: ::prost::alloc::string::String,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MkdirResult {
+    #[prost(string, tag = "1")]
+    pub path: ::prost::alloc::string::String,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Rename {
+    #[prost(string, tag = "1")]
+    pub old_path: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub new_path: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "3")]
+    pub uid: u32,
+    #[prost(uint32, tag = "4")]
+    pub gid: u32,
+    #[prost(string, tag = "5")]
+    pub username: ::prost::alloc::string::String,
+    #[prost(string, tag = "6")]
+    pub home_dir: ::prost::alloc::string::String,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RenameResult {
+    #[prost(string, tag = "1")]
+    pub old_path: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub new_path: ::prost::alloc::string::String,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Copy {
+    #[prost(string, tag = "1")]
+    pub src: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub dst: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "3")]
+    pub uid: u32,
+    #[prost(uint32, tag = "4")]
+    pub gid: u32,
+    #[prost(string, tag = "5")]
+    pub username: ::prost::alloc::string::String,
+    #[prost(string, tag = "6")]
+    pub home_dir: ::prost::alloc::string::String,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CopyResult {
+    #[prost(string, tag = "1")]
+    pub src: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub dst: ::prost::alloc::string::String,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Move {
+    #[prost(string, tag = "1")]
+    pub src: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub dst: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "3")]
+    pub uid: u32,
+    #[prost(uint32, tag = "4")]
+    pub gid: u32,
+    #[prost(string, tag = "5")]
+    pub username: ::prost::alloc::string::String,
+    #[prost(string, tag = "6")]
+    pub home_dir: ::prost::alloc::string::String,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MoveResult {
+    #[prost(string, tag = "1")]
+    pub src: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub dst: ::prost::alloc::string::String,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FileExists {
+    #[prost(string, tag = "1")]
+    pub path: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "2")]
+    pub uid: u32,
+    #[prost(uint32, tag = "3")]
+    pub gid: u32,
+    #[prost(string, tag = "4")]
+    pub username: ::prost::alloc::string::String,
+    #[prost(string, tag = "5")]
+    pub home_dir: ::prost::alloc::string::String,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FileExistsResult {
+    #[prost(bool, tag = "1")]
+    pub exists: bool,
+    #[prost(uint64, tag = "2")]
+    pub size: u64,
+    #[prost(uint64, tag = "3")]
+    pub mtime: u64,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ExecuteCommand {
     #[prost(string, tag = "1")]
     pub command: ::prost::alloc::string::String,
@@ -182,6 +391,18 @@ pub struct ExecuteCommand {
     pub args: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(string, tag = "3")]
     pub working_directory: ::prost::alloc::string::String,
+    /// 用户上下文(阶段 3 新增):UID
+    #[prost(uint32, tag = "4")]
+    pub uid: u32,
+    /// 用户上下文(阶段 3 新增):GID
+    #[prost(uint32, tag = "5")]
+    pub gid: u32,
+    /// 用户上下文(阶段 3 新增):用户名
+    #[prost(string, tag = "6")]
+    pub username: ::prost::alloc::string::String,
+    /// 用户上下文(阶段 3 新增):家目录
+    #[prost(string, tag = "7")]
+    pub home_dir: ::prost::alloc::string::String,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -192,6 +413,54 @@ pub struct CommandOutput {
     pub stderr: ::prost::alloc::vec::Vec<u8>,
     #[prost(int32, tag = "3")]
     pub exit_code: i32,
+}
+/// 文件差异项
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FileDiff {
+    /// 差异类型: 0=insert, 1=delete, 2=replace
+    #[prost(int32, tag = "1")]
+    pub diff_type: i32,
+    /// 行号(从 1 开始)
+    #[prost(uint32, tag = "2")]
+    pub line_number: u32,
+    /// 原内容(replace/delete 时存在)
+    #[prost(string, tag = "3")]
+    pub old_content: ::prost::alloc::string::String,
+    /// 新内容(replace/insert 时存在)
+    #[prost(string, tag = "4")]
+    pub new_content: ::prost::alloc::string::String,
+}
+/// 应用差异
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ApplyDiff {
+    #[prost(string, tag = "1")]
+    pub path: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "2")]
+    pub base_mtime: u64,
+    #[prost(message, repeated, tag = "3")]
+    pub diffs: ::prost::alloc::vec::Vec<FileDiff>,
+    #[prost(uint32, tag = "4")]
+    pub uid: u32,
+    #[prost(uint32, tag = "5")]
+    pub gid: u32,
+    #[prost(string, tag = "6")]
+    pub username: ::prost::alloc::string::String,
+    #[prost(string, tag = "7")]
+    pub home_dir: ::prost::alloc::string::String,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ApplyDiffResult {
+    #[prost(string, tag = "1")]
+    pub path: ::prost::alloc::string::String,
+    #[prost(bool, tag = "2")]
+    pub success: bool,
+    #[prost(uint64, tag = "3")]
+    pub new_mtime: u64,
+    #[prost(string, tag = "4")]
+    pub error: ::prost::alloc::string::String,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

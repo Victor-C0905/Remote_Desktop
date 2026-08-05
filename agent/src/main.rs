@@ -221,9 +221,6 @@ async fn run_manager_mode(args: &Args) -> Result<()> {
     let event_bus = Arc::new(event_bus::EventBus::new());
     let subscription_manager = Arc::new(subscription::SubscriptionManager::new(cfg.clone(), event_bus.clone()));
 
-    // 创建 PTY 管理器
-    let pty_manager = Arc::new(pty::PtyManager::new());
-
     // 初始化审计日志
     let audit_log = Arc::new(audit::AuditLogger::new(&cfg.audit.log_path)
         .expect("无法创建审计日志文件"));
@@ -239,11 +236,13 @@ async fn run_manager_mode(args: &Args) -> Result<()> {
         cfg.auth.ssh.enable_pubkey, cfg.auth.ssh.enable_password);
 
     // 阶段 1 新增:实例化并启动 Manager(IPC + Worker + CrashDetector)
+    // 阶段 2:包装为 Arc<Manager>,以便共享给 quic::run 等并发任务
     #[cfg(unix)]
-    let mut manager = {
+    let manager = {
         let m = Manager::new(&cfg).await?;
         tracing::info!("Manager 已实例化,正在启动...");
-        m
+        // start 后包装成 Arc(阶段 2:start/shutdown 已改为 &self)
+        Arc::new(m)
     };
     #[cfg(unix)]
     manager.start().await?;
@@ -256,9 +255,10 @@ async fn run_manager_mode(args: &Args) -> Result<()> {
             key_clone,
             subscription_manager.clone(),
             event_bus.clone(),
-            pty_manager.clone(),
             authenticator.clone(),
             audit_log.clone(),
+            #[cfg(unix)]
+            manager.clone(),
         ),
         server::websocket::run(cfg.clone(), cert, key),
     );

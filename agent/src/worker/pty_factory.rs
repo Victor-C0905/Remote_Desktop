@@ -15,6 +15,15 @@ use uuid::Uuid;
 
 use super::IpcClient;
 
+/// 用户上下文信息(用于 PTY 用户隔离)
+#[derive(Debug, Clone)]
+pub struct UserContext {
+    pub uid: u32,
+    pub gid: u32,
+    pub username: String,
+    pub home_dir: String,
+}
+
 /// PTY 工厂
 ///
 /// 负责创建 PTY 会话并将文件描述符转移给 Manager。
@@ -42,6 +51,7 @@ impl PtyFactory {
     /// - `cols`: 终端列数
     /// - `rows`: 终端行数
     /// - `cwd`: 工作目录（可选）
+    /// - `user_info`: 用户上下文（可选，Some 时启用用户隔离）
     ///
     /// # 返回
     ///
@@ -61,7 +71,7 @@ impl PtyFactory {
     ///
     /// ```rust,ignore
     /// let factory = PtyFactory::new();
-    /// let (session_id, pid) = factory.create(&ipc_client, "/bin/bash", 80, 24, Some("/home/user"))?;
+    /// let (session_id, pid) = factory.create(&ipc_client, "/bin/bash", 80, 24, None, None)?;
     /// ```
     pub fn create(
         &self,
@@ -70,6 +80,7 @@ impl PtyFactory {
         cols: u32,
         rows: u32,
         cwd: Option<&str>,
+        user_info: Option<&UserContext>,  // 新增:用户隔离信息
     ) -> Result<(String, i32)> {
         // 生成唯一的 session_id
         let session_id = Uuid::new_v4().to_string();
@@ -101,13 +112,13 @@ impl PtyFactory {
 
                 // 3. 通过 IPC 发送 master_fd 给 Manager
                 // send_fd 是同步方法，签名为 &self，无需 &mut
+                // SCM_RIGHTS 会复制 fd,发送后 Worker 端的 fd 仍然有效
                 ipc_client.send_fd(master_fd)
                     .context("Failed to send master_fd to Manager")?;
 
-                // 关闭 master_fd，避免资源泄漏
-                // 发送 FD 后，父进程不再需要持有该文件描述符
-                nix::unistd::close(master_fd)
-                    .context("Failed to close master_fd")?;
+                // 注意:不手动 close master_fd
+                // master 是 OwnedFd,在函数返回时 Drop 会自动关闭
+                // 手动 close 会导致 IO safety violation (double close)
 
                 tracing::info!(
                     "PTY 会话已创建: session_id={}, pid={}",
@@ -120,7 +131,37 @@ impl PtyFactory {
                 // 子进程逻辑
                 // 注意：子进程中的错误处理要特别小心，不能使用 tracing 等可能已经初始化的库
 
-                // 设置工作目录
+                // 用户隔离:切换到目标用户(必须先 setgid,再 setuid)
+                if let Some(user) = user_info {
+                    unsafe {
+                        if libc::setgid(user.gid as libc::gid_t) != 0 {
+                            eprintln!("setgid 失败: gid={}", user.gid);
+                            std::process::exit(1);
+                        }
+                        if libc::setuid(user.uid as libc::uid_t) != 0 {
+                            eprintln!("setuid 失败: uid={}", user.uid);
+                            std::process::exit(1);
+                        }
+                    }
+                }
+
+                // 设置用户相关环境变量(如果有 user_info)
+                if let Some(user) = user_info {
+                    std::env::set_var("HOME", &user.home_dir);
+                    std::env::set_var("USER", &user.username);
+                    std::env::set_var("LOGNAME", &user.username);
+                    std::env::set_var("SHELL", shell);
+
+                    // 如果没有指定 cwd,使用用户的 home_dir
+                    if cwd.is_none() {
+                        if let Err(e) = std::env::set_current_dir(&user.home_dir) {
+                            eprintln!("Failed to set working directory: {}", e);
+                            std::process::exit(1);
+                        }
+                    }
+                }
+
+                // 设置工作目录（如果指定了 cwd，仍然使用它，覆盖 home_dir）
                 if let Some(dir) = cwd {
                     if let Err(e) = std::env::set_current_dir(dir) {
                         eprintln!("Failed to set working directory: {}", e);
