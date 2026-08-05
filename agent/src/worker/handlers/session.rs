@@ -11,6 +11,7 @@ use crate::protocol::generated::{
     WorkerResponse, worker_response, Error,
 };
 use super::super::{PtyFactory, SessionManager, IpcClient};
+use super::super::pty_factory::UserContext;
 use nix::unistd::Pid;
 
 /// 处理 CreateSession 请求
@@ -58,9 +59,21 @@ pub async fn handle_create_session(
         Some(req.working_directory.as_str())
     };
 
+    // 构造用户上下文(如果 uid > 0,表示需要用户隔离)
+    let user_context = if req.uid > 0 {
+        Some(UserContext {
+            uid: req.uid,
+            gid: req.gid,
+            username: req.username.clone(),
+            home_dir: req.home_dir.clone(),
+        })
+    } else {
+        None
+    };
+
     // 调用 PtyFactory 创建 PTY
     // 注意：master_fd 会自动通过 IPC 发送给 Manager
-    match pty_factory.create(ipc_client, &req.shell, req.cols, req.rows, cwd) {
+    match pty_factory.create(ipc_client, &req.shell, req.cols, req.rows, cwd, user_context.as_ref()) {
         Ok((session_id, pid)) => {
             tracing::info!(
                 "PTY 会话创建成功: session_id={}, pid={}",

@@ -172,6 +172,27 @@ async fn handle_request(
         Some(crate::protocol::generated::manager_request::Payload::GracefulShutdown(req)) => {
             handlers::shutdown::handle_graceful_shutdown(req, session_manager, shutdown_notify).await
         }
+        Some(crate::protocol::generated::manager_request::Payload::Delete(req)) => {
+            handlers::file::handle_delete(req).await
+        }
+        Some(crate::protocol::generated::manager_request::Payload::Mkdir(req)) => {
+            handlers::file::handle_mkdir(req).await
+        }
+        Some(crate::protocol::generated::manager_request::Payload::Rename(req)) => {
+            handlers::file::handle_rename(req).await
+        }
+        Some(crate::protocol::generated::manager_request::Payload::Copy(req)) => {
+            handlers::file::handle_copy(req).await
+        }
+        Some(crate::protocol::generated::manager_request::Payload::Move(req)) => {
+            handlers::file::handle_move(req).await
+        }
+        Some(crate::protocol::generated::manager_request::Payload::FileExists(req)) => {
+            handlers::file::handle_file_exists(req).await
+        }
+        Some(crate::protocol::generated::manager_request::Payload::ApplyDiff(req)) => {
+            handlers::file::handle_apply_diff(req).await
+        }
         None => {
             tracing::warn!("收到空请求 payload");
 

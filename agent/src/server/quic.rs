@@ -22,7 +22,7 @@ use crate::audit::AuditLogger;
 
 // 导入 manager 模块的 PTY 输出任务
 #[cfg(unix)]
-use crate::manager::{spawn_pty_output_task_legacy, PtyOutputConfig};
+use crate::manager::{spawn_pty_output_task_v2, PtyOutputConfig};
 
 // 全局 Stream ID 计数器
 static STREAM_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -163,22 +163,26 @@ impl ConnectionContext {
     /// 3. 清理超时的传输会话（安全兜底）
     pub async fn cleanup(
         &self,
-        pty_manager: &PtyManager,
+        #[cfg(unix)] pty_registry: &crate::manager::PtyRegistry,
         subscription_manager: &SubscriptionManager,
     ) {
-        // 1. 清理 PTY 会话
-        let pty_ids = self.pty_session_ids.lock().await.clone();
-        for session_id in &pty_ids {
-            match pty_manager.remove(session_id).await {
-                Ok(_) => {
-                    tracing::info!("[ConnectionContext] 已清理 PTY 会话: {}", session_id);
-                }
-                Err(e) => {
-                    // PTY 会话可能已被 handle_terminal_stream 自行清理，这是正常的
-                    tracing::debug!("[ConnectionContext] PTY 会话清理（可能已移除）: {}: {}", session_id, e);
+        // 1. 清理 PTY 会话（仅 Unix,使用 PtyRegistry）
+        #[cfg(unix)]
+        {
+            let pty_ids = self.pty_session_ids.lock().await.clone();
+            for session_id in &pty_ids {
+                match pty_registry.unregister(session_id).await {
+                    Ok(_) => {
+                        tracing::info!("[ConnectionContext] 已清理 PTY 会话: {}", session_id);
+                    }
+                    Err(e) => {
+                        // PTY 会话可能已被 handle_terminal_stream 自行清理，这是正常的
+                        tracing::debug!("[ConnectionContext] PTY 会话清理（可能已移除）: {}: {}", session_id, e);
+                    }
                 }
             }
         }
+        // 非 Unix 平台无 PTY 会话需要清理（PtyManager 非 Unix 桩实现无需调用）
 
         // 2. 清理订阅
         let sids = self.stream_ids.lock().await.clone();
@@ -226,9 +230,10 @@ pub async fn run(
     key: PrivateKeyDer<'static>,
     subscription_manager: Arc<SubscriptionManager>,
     event_bus: Arc<EventBus>,
-    pty_manager: Arc<PtyManager>,
     authenticator: Arc<CompositeAuthenticator>,
     audit_log: Arc<AuditLogger>,
+    #[cfg(unix)]
+    manager: Arc<crate::manager::Manager>,
 ) -> Result<()> {
     let addr = format!("{}:{}", cfg.server.bind, cfg.server.quic_port);
     tracing::info!("🔵 QUIC 服务器监听: {}", addr);
@@ -270,13 +275,14 @@ pub async fn run(
         let cfg_clone = cfg.clone();
         let subscription_manager_clone = subscription_manager.clone();
         let event_bus_clone = event_bus.clone();
-        let pty_manager_clone = pty_manager.clone();
         let authenticator_clone = authenticator.clone();
         let audit_log_clone = audit_log.clone();
         let rate_limiter_clone = rate_limiter.clone();
         let challenge_manager_clone = challenge_manager.clone();
         let stats_manager_clone = stats_manager.clone();
         let timeout_secs = idle_timeout_secs;
+        #[cfg(unix)]
+        let manager_clone = manager.clone();
         tokio::spawn(async move {
             let conn = incoming.await;
             match conn {
@@ -286,13 +292,14 @@ pub async fn run(
                         &cfg_clone,
                         subscription_manager_clone,
                         event_bus_clone,
-                        pty_manager_clone,
                         authenticator_clone,
                         audit_log_clone,
                         rate_limiter_clone,
                         challenge_manager_clone,
                         stats_manager_clone,
                         timeout_secs,
+                        #[cfg(unix)]
+                        manager_clone,
                     ).await {
                         tracing::warn!("QUIC 连接错误: {}", e);
                     }
@@ -331,13 +338,14 @@ async fn handle_connection(
     cfg: &AgentConfig,
     subscription_manager: Arc<SubscriptionManager>,
     event_bus: Arc<EventBus>,
-    pty_manager: Arc<PtyManager>,
     authenticator: Arc<CompositeAuthenticator>,
     audit_log: Arc<AuditLogger>,
     rate_limiter: Arc<AuthRateLimiter>,
     challenge_manager: Arc<ChallengeManager>,
     stats_manager: Arc<StatsManager>,
     idle_timeout_secs: u64,
+    #[cfg(unix)]
+    manager: Arc<crate::manager::Manager>,
 ) -> Result<()> {
     let remote = connection.remote_address();
     tracing::info!("✅ 新的 QUIC 连接来自: {}", remote);
@@ -943,20 +951,22 @@ async fn handle_connection(
         let cfg_inner = cfg.clone();
         let subscription_manager_inner = subscription_manager.clone();
         let event_bus_inner = event_bus.clone();
-        let pty_manager_inner = pty_manager.clone();
         let ctx_inner = ctx.clone();
         let session_inner = session.clone();
         let stats_manager_inner = stats_manager.clone();  // 克隆 stats_manager
+        #[cfg(unix)]
+        let manager_inner = manager.clone();
         tokio::spawn(async move {
             if let Err(e) = handle_stream(
                 stream,
                 &cfg_inner,
                 subscription_manager_inner,
                 event_bus_inner,
-                pty_manager_inner,
                 ctx_inner,
                 &session_inner,
                 stats_manager_inner,  // 传递 stats_manager 参数
+                #[cfg(unix)]
+                manager_inner,
             ).await {
                 tracing::warn!("QUIC Stream 处理错误: {}", e);
             }
@@ -969,7 +979,10 @@ async fn handle_connection(
 
     // 确保资源被清理（无论正常关闭还是超时）
     ctx.shutdown();
-    ctx.cleanup(&pty_manager, &subscription_manager).await;
+    #[cfg(unix)]
+    ctx.cleanup(manager.pty_registry(), &subscription_manager).await;
+    #[cfg(not(unix))]
+    ctx.cleanup(&subscription_manager).await;
 
     // 记录连接关闭统计（暂时记录为正常关闭）
     // TODO: 将来可以根据超时检查任务的状态来判断关闭原因
@@ -985,11 +998,11 @@ async fn handle_stream(
     cfg: &AgentConfig,
     subscription_manager: Arc<SubscriptionManager>,
     event_bus: Arc<EventBus>,
-    #[cfg(unix)] pty_manager: Arc<PtyManager>,
-    #[cfg(not(unix))] _pty_manager: Arc<PtyManager>,
     ctx: Arc<ConnectionContext>,
     session: &UserSession,
     stats_manager: Arc<StatsManager>,  // 新增参数：统计管理器
+    #[cfg(unix)]
+    manager: Arc<crate::manager::Manager>,
 ) -> Result<()> {
     let (mut send, mut recv) = stream;
 
@@ -1144,9 +1157,9 @@ async fn handle_stream(
             tracing::info!("终端创建请求: shell={}, cols={}, rows={}, cwd={:?}, user={}",
                 shell, cols, rows, working_directory, session.username);
 
-            // 使用 spawn_as_user 创建 PTY 会话（切换到登录用户身份）
-            // 历史遗留问题：之前使用 spawn() 方法，不会切换用户，导致终端以Agent运行用户身份运行
-            let session_id = pty_manager.spawn_as_user(&shell, *cols, *rows, working_directory.as_deref(), session).await?;
+            // 阶段 2:通过 Worker 子进程创建 PTY 会话(Worker forkpty 并通过 SCM_RIGHTS 传递 master_fd)
+            // 替代旧的 pty_manager.spawn_as_user(直接在 Manager 进程中 forkpty)
+            let session_id = manager.create_pty_session(&shell, *cols as u32, *rows as u32, working_directory.as_deref(), session).await?;
 
             // 注册到连接上下文（连接关闭时自动清理 PTY 会话）
             ctx.register_pty_session(session_id.clone()).await;
@@ -1160,10 +1173,11 @@ async fn handle_stream(
                 session_id.clone(),
                 send,
                 recv,
-                pty_manager,
+                manager.pty_registry().clone(),  // 阶段 2:改用 PtyRegistry
                 envelope.request_id,  // 传递 request_id 用于发送响应
                 shutdown_rx,          // 传递关闭信号
                 stats_manager.clone(), // 传递统计管理器
+                manager.clone(),  // 阶段 2:传递 Manager 用于 PTY 输出任务
             ).await?;
 
             tracing::info!("终端 Stream 结束: session_id={}", session_id);
@@ -1185,7 +1199,8 @@ async fn handle_stream(
         Payload::TerminalData { session_id, data, is_input } => {
             // 单条终端数据消息（用于非持久连接）
             if *is_input {
-                pty_manager.write(&session_id, &data).await?;
+                // 阶段 2:通过 PtyRegistry 写入(替代 pty_manager.write)
+                manager.pty_registry().write(&session_id, &data).await?;
             } else {
                 // 输出数据不应该从客户端发送
                 tracing::warn!("收到意外的终端输出数据: session_id={}", session_id);
@@ -1213,7 +1228,8 @@ async fn handle_stream(
         #[cfg(unix)]
         Payload::TerminalResizeRequest { session_id, cols, rows } => {
             // 调整远程 PTY 大小
-            match pty_manager.resize(&session_id, *cols, *rows).await {
+            // 阶段 2:通过 PtyRegistry 调整(替代 pty_manager.resize)
+            match manager.pty_registry().resize(&session_id, *cols, *rows).await {
                 Ok(()) => {
                     tracing::info!("PTY resize 成功: session_id={}, {}x{}", session_id, cols, rows);
                     let response = Envelope::new(envelope.request_id, Payload::TerminalResizeResponse);
@@ -1328,7 +1344,56 @@ async fn handle_stream(
         }
 
         _ => {
-            // 其他请求使用异步 handler
+            // 阶段 3:优先尝试路由到 Worker(ReadDir/ReadFile/WriteFile 等)
+            // Worker 不处理的请求返回 None,回退到本地 handler
+            #[cfg(unix)]
+            {
+                match manager.route_to_worker(&envelope.payload, session).await {
+                    Ok(Some(worker_payload)) => {
+                        // Worker 已处理,构造响应并发送
+                        let response = Envelope::new(envelope.request_id, worker_payload);
+                        match response.encode() {
+                            Ok(resp_bytes) => {
+                                if let Err(e) = write_message(&mut send, &resp_bytes).await {
+                                    tracing::warn!("发送 Worker 响应失败: {}", e);
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!("编码 Worker 响应失败: {}", e);
+                            }
+                        }
+                        return Ok(());
+                    }
+                    Ok(None) => {
+                        // 该请求不需要路由到 Worker,回退到本地 handler
+                        tracing::debug!("请求不经 Worker 路由,使用本地 handler: {:?}", envelope.payload.type_name());
+                    }
+                    Err(e) => {
+                        // Worker 路由失败,返回错误响应
+                        tracing::error!("Worker 路由失败: {}", e);
+                        let response = Envelope::new(
+                            envelope.request_id,
+                            Payload::Error {
+                                code: -1,
+                                message: format!("Worker 路由失败: {}", e),
+                            },
+                        );
+                        match response.encode() {
+                            Ok(resp_bytes) => {
+                                if let Err(e) = write_message(&mut send, &resp_bytes).await {
+                                    tracing::warn!("发送错误响应失败: {}", e);
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!("编码错误响应失败: {}", e);
+                            }
+                        }
+                        return Ok(());
+                    }
+                }
+            }
+
+            // 本地 handler 处理(不经 Worker 的请求,或非 Unix 平台)
             let response = crate::handler::handle_envelope(&envelope, cfg, session, stats_manager.clone()).await;
             match response.encode() {
                 Ok(resp_bytes) => {
@@ -1412,10 +1477,11 @@ async fn handle_terminal_stream(
     session_id: String,
     send: SendStream,
     mut recv: RecvStream,
-    pty_manager: Arc<PtyManager>,
+    pty_registry: Arc<crate::manager::PtyRegistry>,  // 阶段 2:改用 PtyRegistry
     request_id: u32,  // 新增：用于发送响应
     shutdown_rx: broadcast::Receiver<()>,  // 连接关闭信号
     stats_manager: Arc<StatsManager>,  // 新增：统计管理器
+    manager: Arc<crate::manager::Manager>,  // 阶段 2:传递 Manager 用于 PTY 输出任务
 ) -> Result<()> {
     tracing::info!("终端双向隧道启动: session_id={}", session_id);
 
@@ -1426,7 +1492,7 @@ async fn handle_terminal_stream(
     // ── 关键修改：先启动客户端输入读取任务，确保数据接收通道就绪 ────
     // 这样可以避免客户端发送的早期输入数据丢失
     let session_id_clone = session_id.clone();
-    let pty_manager_clone = pty_manager.clone();
+    let pty_registry_clone = pty_registry.clone();
     let (client_read_started_tx, client_read_started_rx) = tokio::sync::oneshot::channel();
 
     let client_read_task = tokio::spawn(async move {
@@ -1446,8 +1512,8 @@ async fn handle_terminal_stream(
                     let mut data = vec![0u8; len];
                     match recv.read_exact(&mut data).await {
                         Ok(_) => {
-                            // 写入 PTY
-                            if let Err(e) = pty_manager_clone.write(&session_id_clone, &data).await {
+                            // 写入 PTY(阶段 2:通过 PtyRegistry 写入)
+                            if let Err(e) = pty_registry_clone.write(&session_id_clone, &data).await {
                                 tracing::warn!("写入 PTY 失败: {}", e);
                                 break;
                             }
@@ -1499,17 +1565,15 @@ async fn handle_terminal_stream(
 
     tracing::info!("终端会话创建成功，响应已发送: session_id={}", session_id);
 
-    // 启动 PTY 输出推送任务（使用 manager 模块）
+    // 启动 PTY 输出推送任务（阶段 2:使用 v2 版本,基于 PtyRegistry + Manager）
     let config = PtyOutputConfig::default();
-    let pty_read_task = spawn_pty_output_task_legacy(
-        pty_manager.clone(),
+    let pty_read_task = spawn_pty_output_task_v2(
+        pty_registry.clone(),
         session_id.clone(),
         send.clone(),
         Some(stats_manager.clone()),
         config,
-        // Phase 4: 暂不传入 OrphanProcessReaper，保持向后兼容
-        // 后续在 Worker 热更新集成完成后，由调用方传入实际实例
-        None,
+        manager.clone(),
     ).await;
 
     // 订阅连接关闭信号（需要在 select! 之前可变绑定）
@@ -1535,8 +1599,8 @@ async fn handle_terminal_stream(
         }
     }
 
-    // 清理 PTY 会话
-    pty_manager.remove(&session_id).await?;
+    // 清理 PTY 会话(阶段 2:通过 PtyRegistry 注销)
+    pty_registry.unregister(&session_id).await?;
 
     Ok(())
 }

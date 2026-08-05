@@ -28,18 +28,19 @@
 //! ## 新代码（使用 manager 模块）
 //!
 //! ```rust,ignore
-//! use crate::manager::{spawn_pty_output_task, PtyOutputConfig};
+//! use crate::manager::{spawn_pty_output_task_v2, PtyOutputConfig};
 //!
 //! // 创建配置（可选，有默认值）
 //! let config = PtyOutputConfig::default();
 //!
 //! // 启动 PTY 输出推送任务
-//! let output_task = spawn_pty_output_task(
-//!     pty_manager,      // Arc<PtyManager>
+//! let output_task = spawn_pty_output_task_v2(
+//!     pty_registry,     // Arc<PtyRegistry>
 //!     session_id,       // String
 //!     quic_stream,      // Arc<Mutex<SendStream>>
 //!     Some(stats_manager), // Option<Arc<StatsManager>>
 //!     config,           // PtyOutputConfig
+//!     manager,          // Arc<Manager>
 //! );
 //!
 //! // 在 select! 中等待任务完成
@@ -60,10 +61,6 @@ use anyhow::Result;
 use tracing::{debug, warn};
 
 use super::pty_registry::PtyRegistry;
-
-// 向后兼容：支持旧的 PtyManager
-#[cfg(unix)]
-use crate::pty::PtyManager;
 
 /// PTY 输出推送配置
 #[derive(Debug, Clone)]
@@ -88,51 +85,34 @@ impl Default for PtyOutputConfig {
     }
 }
 
-/// 启动 PTY 输出推送任务（新架构：使用 PtyRegistry）
+/// 启动 PTY 输出推送任务（阶段 2：使用 PtyRegistry + Manager）
+///
+/// - 使用 `PtyRegistry`（新架构）管理 PTY 会话
+/// - 通过 `Manager` 获取 `OrphanProcessReaper`，无需调用方手动传入
 ///
 /// # 参数
-/// - `pty_registry`: PTY 注册表
+/// - `pty_registry`: PTY 注册表（新架构）
 /// - `session_id`: PTY 会话 ID
 /// - `send`: QUIC SendStream（用于发送数据给客户端）
 /// - `stats_manager`: 统计管理器（可选）
 /// - `config`: 输出推送配置
-/// - `orphan_reaper`: 孤儿进程回收器（可选，用于 PTY EOF 时回收僵尸进程）
+/// - `manager`: Manager 引用（用于获取 OrphanProcessReaper）
 ///
 /// # 返回
 /// 返回任务句柄
-pub async fn spawn_pty_output_task(
+#[cfg(unix)]
+pub async fn spawn_pty_output_task_v2(
     pty_registry: Arc<PtyRegistry>,
     session_id: String,
     send: Arc<Mutex<SendStream>>,
     stats_manager: Option<Arc<crate::auth::StatsManager>>,
     config: PtyOutputConfig,
-    orphan_reaper: Option<super::orphan_reaper::OrphanProcessReaper>,
+    manager: Arc<super::Manager>,
 ) -> tokio::task::JoinHandle<()> {
-    spawn_pty_output_impl(pty_registry, session_id, send, stats_manager, config, orphan_reaper).await
-}
-
-/// 启动 PTY 输出推送任务（向后兼容：使用 PtyManager）
-///
-/// # 参数
-/// - `pty_manager`: PTY 管理器（旧架构）
-/// - `session_id`: PTY 会话 ID
-/// - `send`: QUIC SendStream（用于发送数据给客户端）
-/// - `stats_manager`: 统计管理器（可选）
-/// - `config`: 输出推送配置
-/// - `orphan_reaper`: 孤儿进程回收器（可选，用于 PTY EOF 时回收僵尸进程）
-///
-/// # 返回
-/// 返回任务句柄
-#[cfg(unix)]
-pub async fn spawn_pty_output_task_legacy(
-    pty_manager: Arc<PtyManager>,
-    session_id: String,
-    send: Arc<Mutex<SendStream>>,
-    stats_manager: Option<Arc<crate::auth::StatsManager>>,
-    config: PtyOutputConfig,
-    orphan_reaper: Option<super::orphan_reaper::OrphanProcessReaper>,
-) -> tokio::task::JoinHandle<()> {
-    spawn_pty_output_impl(pty_manager, session_id, send, stats_manager, config, orphan_reaper).await
+    // 从 Manager 获取 OrphanProcessReaper（用于 PTY EOF 时回收僵尸进程）
+    // OrphanProcessReaper 内部字段均为 Arc,clone 开销很小
+    let orphan_reaper = (**manager.orphan_reaper()).clone();
+    spawn_pty_output_impl(pty_registry, session_id, send, stats_manager, config, Some(orphan_reaper)).await
 }
 
 /// PTY 读取器 Trait（内部抽象）
@@ -150,16 +130,6 @@ impl PtyReader for PtyRegistry {
     fn read<'a>(&'a self, session_id: &'a str) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>>> + Send + 'a>> {
         Box::pin(async move {
             PtyRegistry::read(self, session_id).await
-        })
-    }
-}
-
-// 为 PtyManager 实现读取器（向后兼容）
-#[cfg(unix)]
-impl PtyReader for PtyManager {
-    fn read<'a>(&'a self, session_id: &'a str) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>>> + Send + 'a>> {
-        Box::pin(async move {
-            PtyManager::read(self, session_id).await
         })
     }
 }
@@ -313,46 +283,36 @@ mod tests {
         assert_eq!(config.poll_interval_ms, 20);
     }
 
-    /// 验证新旧接口兼容性测试
+    /// 验证 PTY 输出推送接口
     ///
     /// 测试目标：
-    /// 1. spawn_pty_output_task（新架构：使用 PtyRegistry）
-    /// 2. spawn_pty_output_task_legacy（向后兼容：使用 PtyManager）
-    ///
-    /// 两者的行为应该完全一致：
-    /// - 批量发送逻辑相同
-    /// - 错误处理相同
-    /// - 统计记录相同
+    /// - spawn_pty_output_task_v2（使用 PtyRegistry + Manager）
+    /// - PtyReader trait 实现正确
     #[cfg(unix)]
     mod integration_tests {
         use super::*;
-        use tokio::sync::Mutex;
-        use std::sync::Arc;
 
         #[test]
         fn test_pty_reader_trait_implementation() {
             // 验证 PtyReader trait 实现正确
-            // 这个测试确保两个实现者（PtyRegistry 和 PtyManager）都能正确实现接口
+            // 这个测试确保 PtyRegistry 正确实现接口
 
-            // 注意：由于 PtyRegistry 和 PtyManager 的构造需要特定环境，
+            // 注意：由于 PtyRegistry 的构造需要特定环境，
             // 这里主要验证编译时类型检查通过
             fn _assert_pty_reader_implemented<T: PtyReader>() {}
 
             _assert_pty_reader_implemented::<PtyRegistry>();
-            _assert_pty_reader_implemented::<PtyManager>();
         }
 
         #[test]
         fn test_batch_logic_consistency() {
-            // 验证批量发送逻辑一致性
-            // 两套实现应该使用相同的批量阈值
+            // 验证批量发送配置一致性
 
-            let config_new = PtyOutputConfig::default();
-            let config_legacy = PtyOutputConfig::default();
+            let config = PtyOutputConfig::default();
 
-            assert_eq!(config_new.batch_size, config_legacy.batch_size);
-            assert_eq!(config_new.batch_interval_ms, config_legacy.batch_interval_ms);
-            assert_eq!(config_new.poll_interval_ms, config_legacy.poll_interval_ms);
+            assert_eq!(config.batch_size, 1024);
+            assert_eq!(config.batch_interval_ms, 30);
+            assert_eq!(config.poll_interval_ms, 10);
         }
     }
 }

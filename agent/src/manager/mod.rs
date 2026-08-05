@@ -31,6 +31,9 @@ pub mod signal_handler;
 #[cfg(unix)]
 pub mod hot_update_coordinator;
 
+// 阶段 3 新增:协议适配层(跨平台,纯转换逻辑)
+pub mod protocol_adapter;
+
 pub use connection::ConnectionManager;
 pub use session::SessionManager;
 
@@ -38,7 +41,7 @@ pub use session::SessionManager;
 pub use pty_registry::{PtyRegistry, PtySession, UserInfo};
 
 #[cfg(unix)]
-pub use pty_output::{PtyOutputConfig, spawn_pty_output_task, spawn_pty_output_task_legacy};
+pub use pty_output::{PtyOutputConfig, spawn_pty_output_task_v2};
 
 #[cfg(unix)]
 pub use worker_manager::{WorkerManager, WorkerInfo, WorkerStatus, WorkerStatusEvent};
@@ -57,6 +60,9 @@ pub use signal_handler::{ReloadTrigger, watch_sighup, watch_sigterm};
 
 #[cfg(unix)]
 pub use hot_update_coordinator::HotUpdateCoordinator;
+
+// 阶段 3 新增:协议适配层导出
+pub use protocol_adapter::{UserContext, serde_to_worker_request, worker_response_to_serde};
 
 use std::sync::Arc;
 use anyhow::Result;
@@ -86,8 +92,9 @@ pub struct Manager {
 
     /// 崩溃检测器
     /// 阶段 1:启动后持续监控 Worker 进程状态
+    /// 使用 Mutex 包装以支持 `&self` 的 start/shutdown(内部可变性)
     #[cfg(unix)]
-    crash_detector: Option<WorkerCrashDetector>,
+    crash_detector: tokio::sync::Mutex<Option<WorkerCrashDetector>>,
 }
 
 impl Manager {
@@ -130,7 +137,7 @@ impl Manager {
             session_manager,
             ipc_server,
             orphan_reaper,
-            crash_detector: None,
+            crash_detector: tokio::sync::Mutex::new(None),
         })
     }
 
@@ -214,8 +221,11 @@ impl Manager {
     ///
     /// 启动 IPC 服务器、Worker 子进程、崩溃检测器,然后立即返回。
     /// 不等待 ctrl_c 信号,由调用方决定何时调用 `shutdown`。
+    ///
+    /// 注意:签名改为 `&self`(阶段 2),通过内部可变性(Mutex)管理 crash_detector,
+    /// 以便 Manager 可以被 `Arc` 共享给 quic::run 等多个并发任务。
     #[cfg(unix)]
-    pub async fn start(&mut self) -> Result<()> {
+    pub async fn start(&self) -> Result<()> {
         // 启动 IPC 服务器(在后台运行)
         let ipc_server = self.ipc_server.clone();
         tokio::spawn(async move {
@@ -233,7 +243,7 @@ impl Manager {
         // 启动崩溃检测器
         let mut crash_detector = WorkerCrashDetector::new(self.worker_manager.clone());
         crash_detector.start();
-        self.crash_detector = Some(crash_detector);
+        *self.crash_detector.lock().await = Some(crash_detector);
 
         tracing::info!("Manager 已启动(IPC + Worker + CrashDetector)");
 
@@ -241,12 +251,14 @@ impl Manager {
     }
 
     /// 停止 Manager(非阻塞)
+    ///
+    /// 注意:签名改为 `&self`(阶段 2),通过内部可变性(Mutex)取出 crash_detector。
     #[cfg(unix)]
-    pub async fn shutdown(&mut self) -> Result<()> {
+    pub async fn shutdown(&self) -> Result<()> {
         tracing::info!("正在停止 Manager");
 
         // 停止崩溃检测器
-        if let Some(mut detector) = self.crash_detector.take() {
+        if let Some(mut detector) = self.crash_detector.lock().await.take() {
             detector.stop();
         }
 
@@ -296,6 +308,104 @@ impl Manager {
     #[cfg(unix)]
     pub async fn worker_info(&self) -> Option<WorkerInfo> {
         self.worker_manager.get_info().await
+    }
+
+    /// 通过 Worker 创建 PTY 会话(阶段 2 新增)
+    ///
+    /// 将 PTY 创建请求发送到 Worker 子进程,Worker forkpty 并通过 SCM_RIGHTS 传递 master_fd。
+    /// 创建成功后,master_fd 自动注册到 PtyRegistry。
+    ///
+    /// # 参数
+    /// - `shell`: Shell 路径(如 /bin/bash),空字符串则使用用户默认 shell
+    /// - `cols`: 终端列数
+    /// - `rows`: 终端行数
+    /// - `cwd`: 工作目录(可选)
+    /// - `user_session`: 用户会话(含 uid/gid/username 等)
+    ///
+    /// # 返回
+    /// 成功返回 session_id,失败返回错误
+    #[cfg(unix)]
+    pub async fn create_pty_session(
+        &self,
+        shell: &str,
+        cols: u32,
+        rows: u32,
+        cwd: Option<&str>,
+        user_session: &crate::auth::session::UserSession,
+    ) -> Result<String> {
+        let request = crate::protocol::generated::CreateSession {
+            cols,
+            rows,
+            shell: shell.to_string(),
+            working_directory: cwd.unwrap_or("").to_string(),
+            uid: user_session.uid,
+            gid: user_session.gid,
+            username: user_session.username.clone(),
+            home_dir: user_session.home_dir.to_string_lossy().to_string(),
+        };
+
+        let user_info = UserInfo::new(
+            user_session.username.clone(),
+            user_session.uid,
+            user_session.gid,
+        );
+
+        self.ipc_server.create_pty_session(request, user_info).await
+    }
+
+    /// 路由业务请求到 Worker(阶段 3 新增)
+    ///
+    /// 将客户端 serde Payload 通过协议适配层转换为 Worker protobuf 请求,
+    /// 发送到 Worker 处理,再将 Worker 响应转换回客户端 serde Payload。
+    ///
+    /// # 参数
+    /// - `payload`: 客户端发送的 serde Payload(如 ReadDirRequest/ReadFileRequest/WriteFileRequest)
+    /// - `user_session`: 用户会话(含 uid/gid/username 等,用于 Worker 用户隔离)
+    ///
+    /// # 返回
+    /// - `Ok(Some(Payload))`: Worker 已处理,返回转换后的客户端响应
+    /// - `Ok(None)`: 该 payload 不需要路由到 Worker(如 Ping/Subscribe),由调用方直接处理
+    /// - `Err(_)`: 路由或 Worker 处理失败
+    #[cfg(unix)]
+    pub async fn route_to_worker(
+        &self,
+        payload: &crate::protocol::Payload,
+        user_session: &crate::auth::session::UserSession,
+    ) -> Result<Option<crate::protocol::Payload>> {
+        // 1. 协议适配:serde Payload → Worker manager_request::Payload
+        let user_context = protocol_adapter::UserContext::from(user_session);
+        let worker_payload = protocol_adapter::serde_to_worker_request(payload, &user_context);
+
+        // 不需要路由到 Worker 的请求,返回 None
+        let worker_payload = match worker_payload {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+
+        // 2. 通过 IPC 发送到 Worker,接收响应
+        let worker_response = self.ipc_server.send_request(worker_payload).await
+            .map_err(|e| {
+                tracing::error!("Worker 请求失败: {}", e);
+                e
+            })?;
+
+        // 3. 协议适配:Worker WorkerResponse → serde Payload
+        let serde_payload = protocol_adapter::worker_response_to_serde(&worker_response)
+            .ok_or_else(|| anyhow::anyhow!("协议适配层无法转换 Worker 响应"))?;
+
+        Ok(Some(serde_payload))
+    }
+
+    /// 获取 PtyRegistry 引用(供 quic.rs 读写 PTY)
+    #[cfg(unix)]
+    pub fn pty_registry(&self) -> &Arc<PtyRegistry> {
+        &self.pty_registry
+    }
+
+    /// 获取 OrphanProcessReaper 引用(供 PTY 输出任务在 EOF 时回收僵尸进程)
+    #[cfg(unix)]
+    pub fn orphan_reaper(&self) -> &Arc<OrphanProcessReaper> {
+        &self.orphan_reaper
     }
 
     /// 设置终端窗口大小（内部辅助函数）

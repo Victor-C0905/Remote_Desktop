@@ -18,6 +18,13 @@ message ManagerRequest {
         WriteFile write_file = 7;
         ExecuteCommand execute_command = 8;
         GetSystemInfo get_system_info = 9;
+        Delete delete = 11;
+        Mkdir mkdir = 12;
+        Rename rename = 13;
+        Copy copy = 14;
+        Move move = 15;
+        FileExists file_exists = 16;
+        ApplyDiff apply_diff = 17;
         GracefulShutdown graceful_shutdown = 10;  // 新增：优雅关闭请求
     }
 }
@@ -33,6 +40,13 @@ message WorkerResponse {
         CommandOutput command_output = 6;
         SystemInfo system_info = 7;
         Error error = 8;
+        DeleteResult delete_result = 10;
+        MkdirResult mkdir_result = 11;
+        RenameResult rename_result = 12;
+        CopyResult copy_result = 13;
+        MoveResult move_result = 14;
+        FileExistsResult file_exists_result = 15;
+        ApplyDiffResult apply_diff_result = 16;
         ShutdownAck shutdown_ack = 9;  // 新增：关闭确认
     }
 }
@@ -50,6 +64,11 @@ message CreateSession {
     uint32 rows = 2;
     string shell = 3;
     string working_directory = 4;
+    // 阶段 2 新增:用户隔离信息
+    uint32 uid = 5;
+    uint32 gid = 6;
+    string username = 7;
+    string home_dir = 8;
 }
 
 message SessionCreated {
@@ -67,9 +86,16 @@ message KillSession {
 }
 
 // ===== 文件操作 =====
+// 阶段 3 新增:所有文件操作消息包含用户上下文(uid/gid/username/home_dir),
+// Worker 据此使用 UserExecutor(fork+setuid)执行用户隔离
 
 message ReadDir {
     string path = 1;
+    // 用户上下文(阶段 3 新增)
+    uint32 uid = 2;
+    uint32 gid = 3;
+    string username = 4;
+    string home_dir = 5;
 }
 
 message DirListing {
@@ -87,6 +113,11 @@ message FileEntry {
 
 message ReadFile {
     string path = 1;
+    // 用户上下文(阶段 3 新增)
+    uint32 uid = 2;
+    uint32 gid = 3;
+    string username = 4;
+    string home_dir = 5;
 }
 
 message FileContent {
@@ -99,6 +130,11 @@ message FileContent {
 message WriteFile {
     string path = 1;
     bytes content = 2;
+    // 用户上下文(阶段 3 新增)
+    uint32 uid = 3;
+    uint32 gid = 4;
+    string username = 5;
+    string home_dir = 6;
 }
 
 message WriteResult {
@@ -107,18 +143,141 @@ message WriteResult {
     uint64 size = 3;
 }
 
+// 删除文件/目录
+message Delete {
+    string path = 1;
+    uint32 uid = 2;
+    uint32 gid = 3;
+    string username = 4;
+    string home_dir = 5;
+}
+
+message DeleteResult {
+    bool success = 1;
+}
+
+// 创建目录
+message Mkdir {
+    string path = 1;
+    uint32 uid = 2;
+    uint32 gid = 3;
+    string username = 4;
+    string home_dir = 5;
+}
+
+message MkdirResult {
+    string path = 1;
+}
+
+// 重命名/移动
+message Rename {
+    string old_path = 1;
+    string new_path = 2;
+    uint32 uid = 3;
+    uint32 gid = 4;
+    string username = 5;
+    string home_dir = 6;
+}
+
+message RenameResult {
+    string old_path = 1;
+    string new_path = 2;
+}
+
+// 复制(仅文件)
+message Copy {
+    string src = 1;
+    string dst = 2;
+    uint32 uid = 3;
+    uint32 gid = 4;
+    string username = 5;
+    string home_dir = 6;
+}
+
+message CopyResult {
+    string src = 1;
+    string dst = 2;
+}
+
+// 移动(等同于 Rename)
+message Move {
+    string src = 1;
+    string dst = 2;
+    uint32 uid = 3;
+    uint32 gid = 4;
+    string username = 5;
+    string home_dir = 6;
+}
+
+message MoveResult {
+    string src = 1;
+    string dst = 2;
+}
+
+// 检查文件是否存在
+message FileExists {
+    string path = 1;
+    uint32 uid = 2;
+    uint32 gid = 3;
+    string username = 4;
+    string home_dir = 5;
+}
+
+message FileExistsResult {
+    bool exists = 1;
+    uint64 size = 2;
+    uint64 mtime = 3;
+}
+
 // ===== 命令执行 =====
 
 message ExecuteCommand {
     string command = 1;
     repeated string args = 2;
     string working_directory = 3;
+    // 用户上下文(阶段 3 新增)
+    uint32 uid = 4;
+    uint32 gid = 5;
+    string username = 6;
+    string home_dir = 7;
 }
 
 message CommandOutput {
     bytes stdout = 1;
     bytes stderr = 2;
     int32 exit_code = 3;
+}
+
+// ===== 差异应用 =====
+
+// 文件差异项
+message FileDiff {
+    // 差异类型: 0=insert, 1=delete, 2=replace
+    int32 diff_type = 1;
+    // 行号(从 1 开始)
+    uint32 line_number = 2;
+    // 原内容(replace/delete 时存在)
+    string old_content = 3;
+    // 新内容(replace/insert 时存在)
+    string new_content = 4;
+}
+
+// 应用差异
+message ApplyDiff {
+    string path = 1;
+    uint64 base_mtime = 2;
+    repeated FileDiff diffs = 3;
+    uint32 uid = 4;
+    uint32 gid = 5;
+    string username = 6;
+    string home_dir = 7;
+}
+
+message ApplyDiffResult {
+    string path = 1;
+    bool success = 2;
+    uint64 new_mtime = 3;
+    string error = 4;
 }
 
 // ===== 系统信息 =====
