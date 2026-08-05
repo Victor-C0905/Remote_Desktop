@@ -41,7 +41,7 @@ pub use pty_registry::{PtyRegistry, PtySession, UserInfo};
 pub use pty_output::{PtyOutputConfig, spawn_pty_output_task, spawn_pty_output_task_legacy};
 
 #[cfg(unix)]
-pub use worker_manager::{WorkerManager, WorkerStatus, WorkerStatusEvent};
+pub use worker_manager::{WorkerManager, WorkerInfo, WorkerStatus, WorkerStatusEvent};
 
 #[cfg(unix)]
 pub use ipc_server::IpcServer;
@@ -83,6 +83,11 @@ pub struct Manager {
     /// Phase 4 新增：在 PTY EOF 时回收 Session 僵尸进程
     #[cfg(unix)]
     orphan_reaper: Arc<OrphanProcessReaper>,
+
+    /// 崩溃检测器
+    /// 阶段 1:启动后持续监控 Worker 进程状态
+    #[cfg(unix)]
+    crash_detector: Option<WorkerCrashDetector>,
 }
 
 impl Manager {
@@ -125,6 +130,7 @@ impl Manager {
             session_manager,
             ipc_server,
             orphan_reaper,
+            crash_detector: None,
         })
     }
 
@@ -204,6 +210,56 @@ impl Manager {
         Ok(())
     }
 
+    /// 启动 Manager(非阻塞)
+    ///
+    /// 启动 IPC 服务器、Worker 子进程、崩溃检测器,然后立即返回。
+    /// 不等待 ctrl_c 信号,由调用方决定何时调用 `shutdown`。
+    #[cfg(unix)]
+    pub async fn start(&mut self) -> Result<()> {
+        // 启动 IPC 服务器(在后台运行)
+        let ipc_server = self.ipc_server.clone();
+        tokio::spawn(async move {
+            if let Err(e) = ipc_server.run().await {
+                tracing::error!("IPC 服务器运行失败: {}", e);
+            }
+        });
+
+        // 给 IPC 服务器一点时间启动
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // 启动 Worker 进程
+        self.worker_manager.start().await?;
+
+        // 启动崩溃检测器
+        let mut crash_detector = WorkerCrashDetector::new(self.worker_manager.clone());
+        crash_detector.start();
+        self.crash_detector = Some(crash_detector);
+
+        tracing::info!("Manager 已启动(IPC + Worker + CrashDetector)");
+
+        Ok(())
+    }
+
+    /// 停止 Manager(非阻塞)
+    #[cfg(unix)]
+    pub async fn shutdown(&mut self) -> Result<()> {
+        tracing::info!("正在停止 Manager");
+
+        // 停止崩溃检测器
+        if let Some(mut detector) = self.crash_detector.take() {
+            detector.stop();
+        }
+
+        // 停止 Worker
+        self.worker_manager.stop().await?;
+
+        // 停止 IPC 服务器
+        self.ipc_server.stop().await?;
+
+        tracing::info!("Manager 已停止");
+        Ok(())
+    }
+
     /// 处理终端窗口大小调整（由 QUIC 层调用）
     ///
     /// # 参数
@@ -234,6 +290,12 @@ impl Manager {
 
         tracing::info!("终端窗口大小调整成功: session_id={}, cols={}, rows={}", session_id, cols, rows);
         Ok(())
+    }
+
+    /// 获取 Worker 进程信息(供外部测试和监控使用)
+    #[cfg(unix)]
+    pub async fn worker_info(&self) -> Option<WorkerInfo> {
+        self.worker_manager.get_info().await
     }
 
     /// 设置终端窗口大小（内部辅助函数）

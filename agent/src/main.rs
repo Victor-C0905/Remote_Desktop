@@ -7,6 +7,9 @@ use gnome_remote_agent::auth::CompositeAuthenticator;
 // 使用库中的模块
 use gnome_remote_agent::{config, cert, event_bus, subscription, pty, audit, server};
 
+#[cfg(unix)]
+use gnome_remote_agent::manager::Manager;
+
 #[derive(Parser, Debug)]
 #[command(name = "gnome-remote-agent")]
 #[command(about = "GNOME Remote Control — 远程 Agent 服务端")]
@@ -70,9 +73,10 @@ fn init_logging(_args: &Args, cfg: &config::AgentConfig) {
             .unwrap_or_else(|_| "agent=debug".into())
     } else {
         // 生产模式：使用配置文件中的日志级别
+        // 注意:agent 是二进制 crate,gnome_remote_agent 是库 crate(manager/worker 等模块在其中)
         tracing_subscriber::EnvFilter::new(format!(
-            "agent={},agent::server={},agent::handler={},tokio=info",
-            log_level, log_level, log_level
+            "agent={},agent::server={},agent::handler={},gnome_remote_agent={},tokio=info",
+            log_level, log_level, log_level, log_level
         ))
     };
 
@@ -100,7 +104,7 @@ fn init_logging(_args: &Args, cfg: &config::AgentConfig) {
                         .with_ansi(false)
                         .with_writer(non_blocking)
                         .with_filter(tracing_subscriber::EnvFilter::new(
-                            "agent=debug,agent::server=debug,agent::handler=debug,tokio=info",
+                            "agent=debug,agent::server=debug,agent::handler=debug,gnome_remote_agent=debug,tokio=info",
                         )),
                 )
                 .init();
@@ -122,7 +126,7 @@ fn init_logging(_args: &Args, cfg: &config::AgentConfig) {
                         .with_ansi(false)
                         .with_writer(non_blocking)
                         .with_filter(tracing_subscriber::EnvFilter::new(
-                            "agent=debug,agent::server=debug,agent::handler=debug,tokio=info",
+                            "agent=debug,agent::server=debug,agent::handler=debug,gnome_remote_agent=debug,tokio=info",
                         )),
                 )
                 .init();
@@ -234,8 +238,18 @@ async fn run_manager_mode(args: &Args) -> Result<()> {
     tracing::info!("认证器已初始化 (公钥认证: {}, 密码认证: {})",
         cfg.auth.ssh.enable_pubkey, cfg.auth.ssh.enable_password);
 
+    // 阶段 1 新增:实例化并启动 Manager(IPC + Worker + CrashDetector)
+    #[cfg(unix)]
+    let mut manager = {
+        let m = Manager::new(&cfg).await?;
+        tracing::info!("Manager 已实例化,正在启动...");
+        m
+    };
+    #[cfg(unix)]
+    manager.start().await?;
+
     let key_clone = key.clone_key();
-    tokio::try_join!(
+    let result = tokio::try_join!(
         server::quic::run(
             cfg.clone(),
             cert.clone(),
@@ -247,7 +261,12 @@ async fn run_manager_mode(args: &Args) -> Result<()> {
             audit_log.clone(),
         ),
         server::websocket::run(cfg.clone(), cert, key),
-    )?;
+    );
 
+    // 阶段 1 新增:QUIC/WS 退出后停止 Manager
+    #[cfg(unix)]
+    manager.shutdown().await?;
+
+    result?;
     Ok(())
 }
