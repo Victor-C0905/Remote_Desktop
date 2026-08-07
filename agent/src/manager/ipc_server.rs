@@ -337,25 +337,23 @@ impl IpcServer {
             payload: Some(manager_request::Payload::CreateSession(request)),
         };
 
-        // 获取活跃连接(不 remove,只 get_mut)
-        let mut connections = self.connections.write().await;
-
-        // 取第一个活跃连接(阶段 2 只有一个 Worker)
-        // 记录 connection_id,以便失败时清理坏连接
-        let connection_id = connections.keys().next().cloned()
-            .ok_or_else(|| anyhow::anyhow!("No active Worker connection"))?;
-
-        let connection = connections.get_mut(&connection_id)
-            .expect("connection must exist after keys().next()");
+        // 取出连接（不持有锁整个 await 过程，避免阻塞 IPC server run 循环）
+        // 操作完成后在函数末尾 insert 回去
+        let connection_id;
+        let mut connection = {
+            let mut connections = self.connections.write().await;
+            connection_id = connections.keys().next().cloned()
+                .ok_or_else(|| anyhow::anyhow!("No active Worker connection"))?;
+            connections.remove(&connection_id)
+                .expect("connection must exist after keys().next()")
+        };
 
         info!("发送 CreateSession 请求到 Worker: request_id={}", request_id);
 
         // 1. 发送请求
         if let Err(e) = connection.send_request(&manager_request).await {
             error!("发送 CreateSession 请求失败,清理连接: connection_id={}, error={:?}", connection_id, e);
-            if let Some(mut conn) = connections.remove(&connection_id) {
-                conn.close();
-            }
+            connection.close();
             return Err(e.context("Failed to send CreateSession request to Worker"));
         }
 
@@ -366,9 +364,7 @@ impl IpcServer {
             Ok(fd) => fd,
             Err(e) => {
                 error!("接收 master_fd 失败,清理连接: connection_id={}, error={:?}", connection_id, e);
-                if let Some(mut conn) = connections.remove(&connection_id) {
-                    conn.close();
-                }
+                connection.close();
                 return Err(e.context("Failed to receive master_fd from Worker"));
             }
         };
@@ -378,9 +374,7 @@ impl IpcServer {
             Ok(resp) => resp,
             Err(e) => {
                 error!("接收 CreateSession 响应失败,清理连接: connection_id={}, error={:?}", connection_id, e);
-                if let Some(mut conn) = connections.remove(&connection_id) {
-                    conn.close();
-                }
+                connection.close();
                 // FD 已接收但响应失败,关闭 FD 防止泄漏
                 let _ = nix::unistd::close(master_fd);
                 return Err(e.context("Failed to receive response from Worker"));
@@ -388,7 +382,7 @@ impl IpcServer {
         };
 
         // 4. 解析响应
-        match response.payload {
+        let result = match response.payload {
             Some(worker_response::Payload::SessionCreated(session_created)) => {
                 let session_id = session_created.session_id;
 
@@ -411,15 +405,14 @@ impl IpcServer {
                 if let Err(e) = self.pty_registry.register(pty_session).await {
                     // 注册失败,关闭 FD 防止泄漏
                     let _ = nix::unistd::close(master_fd);
-                    return Err(e.context("Failed to register PTY session"));
+                    Err(e.context("Failed to register PTY session"))
+                } else {
+                    info!(
+                        "PTY 会话创建成功(通过 Worker): session_id={}, fd={}",
+                        session_id, master_fd
+                    );
+                    Ok(session_id)
                 }
-
-                info!(
-                    "PTY 会话创建成功(通过 Worker): session_id={}, fd={}",
-                    session_id, master_fd
-                );
-
-                Ok(session_id)
             }
             Some(worker_response::Payload::Error(err)) => {
                 // Worker 返回错误,关闭已接收的 FD
@@ -430,7 +423,16 @@ impl IpcServer {
                 let _ = nix::unistd::close(master_fd);
                 Err(anyhow::anyhow!("Unexpected response from Worker: {:?}", response.payload))
             }
+        };
+
+        // 将连接放回 connections（无论成功还是失败，连接仍然可用）
+        // 除非上面已经 close 了（错误路径）
+        {
+            let mut connections = self.connections.write().await;
+            connections.insert(connection_id.clone(), connection);
         }
+
+        result
     }
 
     /// 发送通用请求到 Worker 并接收响应(阶段 3 新增)
@@ -459,16 +461,15 @@ impl IpcServer {
             payload: Some(payload),
         };
 
-        // 获取活跃连接
-        let mut connections = self.connections.write().await;
-
-        // 取第一个活跃连接(当前只有一个 Worker)
-        // 记录 connection_id,以便 receive_response 失败时清理坏连接
-        let connection_id = connections.keys().next().cloned()
-            .ok_or_else(|| anyhow::anyhow!("No active Worker connection"))?;
-
-        let connection = connections.get_mut(&connection_id)
-            .expect("connection must exist after keys().next()");
+        // 取出连接（不持有锁整个 await 过程，避免阻塞 IPC server run 循环）
+        let connection_id;
+        let mut connection = {
+            let mut connections = self.connections.write().await;
+            connection_id = connections.keys().next().cloned()
+                .ok_or_else(|| anyhow::anyhow!("No active Worker connection"))?;
+            connections.remove(&connection_id)
+                .expect("connection must exist after keys().next()")
+        };
 
         tracing::debug!("发送业务请求到 Worker: request_id={}", request_id);
 
@@ -476,9 +477,7 @@ impl IpcServer {
         if let Err(e) = connection.send_request(&manager_request).await {
             // 发送失败,连接可能已断开,清理坏连接
             error!("发送请求到 Worker 失败,清理连接: connection_id={}, error={:?}", connection_id, e);
-            if let Some(mut conn) = connections.remove(&connection_id) {
-                conn.close();
-            }
+            connection.close();
             return Err(e.context("Failed to send request to Worker"));
         }
 
@@ -487,19 +486,22 @@ impl IpcServer {
             Ok(resp) => resp,
             Err(e) => {
                 // receive_response 失败(EOF/解码失败等),连接已不可用
-                // 清理坏连接,防止后续请求继续使用
                 error!(
                     "接收 Worker 响应失败,清理连接: connection_id={}, request_id={}, error={:?}",
                     connection_id, request_id, e
                 );
-                if let Some(mut conn) = connections.remove(&connection_id) {
-                    conn.close();
-                }
+                connection.close();
                 return Err(e.context("Failed to receive response from Worker"));
             }
         };
 
         tracing::debug!("收到 Worker 响应: request_id={}", request_id);
+
+        // 将连接放回 connections
+        {
+            let mut connections = self.connections.write().await;
+            connections.insert(connection_id, connection);
+        }
 
         Ok(response)
     }

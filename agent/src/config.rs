@@ -211,7 +211,19 @@ fn default_enable_password() -> bool { true }
 fn default_pam_service() -> String { "sshd".into() }
 
 // Worker 默认值
-fn default_agent_binary() -> String { "./agent".into() }
+/// 默认 Agent 二进制路径：自动获取当前可执行文件的绝对路径
+///
+/// 设计原则：开箱即用，用户无需在配置文件中手动指定 worker.agent_binary。
+/// 通过 std::env::current_exe() 获取当前进程的可执行文件路径，
+/// Manager 用同一路径 + --worker 参数启动 Worker 子进程。
+/// 这样无论部署到 /usr/local/bin/ 还是其他目录都能正确工作。
+fn default_agent_binary() -> String {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.canonicalize().ok())
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| "./agent".into())
+}
 fn default_ipc_socket_path() -> String { "/tmp/gnome-remote-worker.sock".into() }
 fn default_max_restarts() -> u32 { 3 }
 

@@ -1,5 +1,21 @@
 #!/bin/bash
 # GNOME Remote Agent 更新脚本
+#
+# 更新流程:
+#   1. 备份旧版本
+#   2. rm + cp 替换二进制文件（不需要 stop，rm unlink 不影响运行中进程）
+#   3. systemctl restart（systemd 原子操作，不受 PTY 关闭的 SIGHUP 影响）
+#
+# 关键原理:
+#   - rm(unlink) 只删除目录项,运行中进程持有的 inode 不受影响
+#   - cp 创建新文件,不会触发 ETXTBSY（因为是新 inode）
+#   - systemctl restart 由 systemd(PID 1)执行 stop + start,
+#     不依赖发起请求的终端是否存活
+#   - 因此可以安全地通过 gnome-remote 终端执行本脚本
+#
+# 用法:
+#   sudo bash update.sh                  # 默认更新
+#   sudo bash update.sh --name my-remote # 自定义服务名
 
 set -e
 
@@ -23,12 +39,16 @@ GNOME Remote Agent 更新工具
     sudo $0 --name my-remote
 
 更新流程:
-    1. 检查新版本二进制文件
-    2. 停止旧服务
-    3. 备份旧版本（可选）
-    4. 替换二进制文件
-    5. 重启服务
-    6. 验证服务状态
+    1. 备份旧版本
+    2. 替换二进制文件（rm + cp，不需要 stop）
+    3. systemctl restart（systemd 原子操作）
+    4. 验证服务状态
+
+可通过 gnome-remote 终端安全执行:
+    本脚本不依赖 stop + cp + start 三段式,
+    而是 rm + cp 替换后直接 systemctl restart。
+    systemctl restart 由 systemd 完成 stop + start,
+    不受 PTY 关闭的 SIGHUP 影响。
 
 EOF
     exit 0
@@ -111,8 +131,8 @@ if [[ ! $REPLY =~ ^[Yy]$ ]]; then
     exit 0
 fi
 
-# 1/5 备份旧版本
-echo ">>> [1/5] 备份旧版本..."
+# 1/4 备份旧版本
+echo ">>> [1/4] 备份旧版本..."
 BACKUP_DIR="/var/backups/$SERVICE_NAME"
 mkdir -p "$BACKUP_DIR"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
@@ -120,17 +140,13 @@ BACKUP_FILE="$BACKUP_DIR/${SERVICE_NAME}_$TIMESTAMP"
 cp "$OLD_BINARY" "$BACKUP_FILE"
 echo "备份位置: $BACKUP_FILE"
 
-# 2/5 停止服务
-echo ">>> [2/5] 停止服务..."
-if systemctl is-active --quiet $SERVICE_NAME; then
-    systemctl stop $SERVICE_NAME
-    echo "服务已停止"
-else
-    echo "服务未运行"
-fi
-
-# 3/5 替换二进制文件
-echo ">>> [3/5] 更新程序..."
+# 2/4 替换二进制文件
+echo ">>> [2/4] 替换二进制文件..."
+# 关键: 用 rm + cp 替代直接 cp 覆盖
+# - rm(unlink) 只删除目录项,运行中进程持有的 inode 不受影响
+# - cp 创建新文件(新 inode),不会触发 ETXTBSY
+# - 因此不需要 stop 服务即可替换二进制
+rm -f "$OLD_BINARY"
 cp "$NEW_BINARY" "$OLD_BINARY"
 chmod +x "$OLD_BINARY"
 # 更新生产配置（备份旧配置，但不覆盖用户修改）
@@ -144,12 +160,17 @@ if [ -f "$NEW_CONFIG" ]; then
 fi
 echo "程序已更新"
 
-# 4/5 启动服务
-echo ">>> [4/5] 启动服务..."
-systemctl start $SERVICE_NAME
+# 3/4 重启服务
+echo ">>> [3/4] 重启服务..."
+# systemctl restart 是 systemd 的原子操作:
+# - 由 systemd(PID 1)执行 stop + start
+# - 不依赖当前终端是否存活
+# - 即使 PTY 关闭(bash 收到 SIGHUP 退出),systemd 仍会完成 restart
+# - 通过 gnome-remote 终端执行时,终端会断开,但服务会成功重启
+systemctl restart $SERVICE_NAME
 
-# 5/5 验证状态
-echo ">>> [5/5] 验证服务..."
+# 4/4 验证状态
+echo ">>> [4/4] 验证服务..."
 sleep 3
 if systemctl is-active --quiet $SERVICE_NAME; then
     echo ""
@@ -160,7 +181,9 @@ if systemctl is-active --quiet $SERVICE_NAME; then
     echo ""
     echo "如需回滚:"
     echo "  sudo systemctl stop $SERVICE_NAME"
+    echo "  sudo rm -f $OLD_BINARY"
     echo "  sudo cp $BACKUP_FILE $OLD_BINARY"
+    echo "  sudo chmod +x $OLD_BINARY"
     echo "  sudo systemctl start $SERVICE_NAME"
     echo ""
 else
@@ -169,7 +192,9 @@ else
     echo ""
     echo "自动回滚..."
     systemctl stop $SERVICE_NAME 2>/dev/null || true
+    rm -f "$OLD_BINARY"
     cp "$BACKUP_FILE" "$OLD_BINARY"
+    chmod +x "$OLD_BINARY"
     systemctl start $SERVICE_NAME
     echo "已回滚到旧版本"
     journalctl -u $SERVICE_NAME -n 50 --no-pager

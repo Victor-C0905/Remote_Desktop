@@ -122,6 +122,12 @@ echo ">>> [1/3] 安装程序..."
 mkdir -p "$INSTALL_DIR"
 mkdir -p "/etc/$SERVICE_NAME"
 mkdir -p "/var/log/gnome-remote"
+mkdir -p "/var/lib/gnome-remote"  # WorkingDirectory 目录
+# 注意: 不能直接 cp 覆盖正在运行的二进制文件
+# Linux 对运行中的可执行文件有 ETXTBSY(Text file busy) 保护
+# 解决方案: 先 rm(unlink),再 cp
+# rm 只是减少文件链接数,运行中进程持有的 inode 不受影响
+rm -f "$INSTALL_DIR/$SERVICE_NAME"
 cp "$BINARY_FILE" "$INSTALL_DIR/$SERVICE_NAME"
 chmod +x "$INSTALL_DIR/$SERVICE_NAME"
 # 安装配置（如果目标配置不存在）
@@ -141,12 +147,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVICE_TEMPLATE=""
 
 # 尝试多个可能的路径（支持打包部署和源码部署）
-if [ -f "$SCRIPT_DIR/../systemd/gnome-remote-agent.service" ]; then
+# 打包部署：systemd/gnome-remote-agent.service 在子目录
+# 源码部署：systemd/ 在项目根目录
+if [ -f "$SCRIPT_DIR/systemd/gnome-remote-agent.service" ]; then
+    SERVICE_TEMPLATE="$SCRIPT_DIR/systemd/gnome-remote-agent.service"
+elif [ -f "$SCRIPT_DIR/../systemd/gnome-remote-agent.service" ]; then
     SERVICE_TEMPLATE="$SCRIPT_DIR/../systemd/gnome-remote-agent.service"
 elif [ -f "$SCRIPT_DIR/../../systemd/gnome-remote-agent.service" ]; then
     SERVICE_TEMPLATE="$SCRIPT_DIR/../../systemd/gnome-remote-agent.service"
-elif [ -f "$SCRIPT_DIR/systemd/gnome-remote-agent.service" ]; then
-    SERVICE_TEMPLATE="$SCRIPT_DIR/systemd/gnome-remote-agent.service"
 fi
 
 if [ -n "$SERVICE_TEMPLATE" ] && [ -f "$SERVICE_TEMPLATE" ]; then
@@ -171,7 +179,10 @@ StartLimitIntervalSec=60
 Type=simple
 User=root
 Group=root
+WorkingDirectory=/var/lib/gnome-remote
 ExecStart=$INSTALL_DIR/$SERVICE_NAME --config /etc/$SERVICE_NAME/agent.toml --log-dir /var/log/gnome-remote
+KillMode=process
+ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
 RestartSec=5s
 LimitNOFILE=65536

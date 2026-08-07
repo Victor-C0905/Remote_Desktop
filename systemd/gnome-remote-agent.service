@@ -11,28 +11,27 @@ Type=simple
 User=root
 Group=root
 
+# Linux 规范：设置工作目录
+# - 证书等相对路径(cert.pem/key.pem)基于此目录解析
+# - Worker 路径通过 /proc/self/exe 获取,不依赖此目录
+WorkingDirectory=/var/lib/gnome-remote
+
 ExecStart=/usr/local/bin/gnome-remote-agent \
     --config /etc/gnome-remote/agent.toml \
     --log-dir /var/log/gnome-remote
 
 # ====================================================================
-# Phase 4 热更新配置（当前未启用）
+# Phase 4 热更新配置（Manager/Worker 架构已集成，已启用）
 # ====================================================================
-# 以下配置需要 agent 集成 Manager 架构后才能启用。
-# 当前 agent 仍使用旧架构（main.rs 直接调用 server::quic::run），
-# 不支持 SIGHUP 信号处理，启用以下配置会导致：
-# - systemctl reload 发送 SIGHUP → agent 进程被杀
-# - KillMode=process 在没有 Worker 子进程时无意义
-#
-# 启用条件：
-# 1. main.rs 集成 Manager::run()（替换直接调用 server::quic::run）
-# 2. 验证 SIGHUP 信号处理正常（HotUpdateCoordinator 启动）
-# 3. 验证 Worker 子进程正常启动和退出
-#
-# 启用方法：取消下面两行的注释
-# KillMode=process
-# ExecReload=/bin/kill -HUP $MAINPID
+# 架构迁移已完成（main.rs → Manager::start → Worker 子进程）：
+# - SIGHUP 信号由 watch_sighup 监听并触发 HotUpdateCoordinator
+# - KillMode=process：systemctl stop/restart 只杀 Manager，Worker 由
+#   Manager 优雅关闭；避免 KillMode=control-group 误杀 Worker 导致
+#   PTY 会话意外中断
+# - ExecReload：systemctl reload 发送 SIGHUP，触发热更新（不中断现有会话）
 # ====================================================================
+KillMode=process
+ExecReload=/bin/kill -HUP $MAINPID
 
 Restart=on-failure
 RestartSec=5s
