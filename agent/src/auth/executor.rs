@@ -27,8 +27,6 @@ pub struct UserExecutor {
     gid: u32,
     /// 用户家目录
     home_dir: PathBuf,
-    /// 会话ID
-    session_id: String,
 }
 
 impl UserExecutor {
@@ -38,7 +36,6 @@ impl UserExecutor {
             uid: session.uid,
             gid: session.gid,
             home_dir: session.home_dir.clone(),
-            session_id: session.session_id.clone(),
         }
     }
 

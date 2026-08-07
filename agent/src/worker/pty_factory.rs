@@ -8,7 +8,7 @@
 use anyhow::{Result, Context, anyhow};
 use std::os::unix::io::AsRawFd;
 use nix::pty::{forkpty, ForkptyResult};
-use nix::unistd::{execvp, Pid};
+use nix::unistd::execvp;
 use nix::sys::termios::{tcgetattr, tcsetattr, SetArg, OutputFlags, LocalFlags};
 use nix::libc::{ioctl, TIOCSWINSZ, winsize};
 use uuid::Uuid;

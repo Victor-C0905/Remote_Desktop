@@ -8,8 +8,8 @@ use std::os::unix::io::RawFd;
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::sync::RwLock;
-use anyhow::{Result, Context};
-use tracing::{info, warn, debug};
+use anyhow::Result;
+use tracing::{info, debug};
 
 /// PTY 会话信息
 #[derive(Debug, Clone)]

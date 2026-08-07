@@ -14,7 +14,6 @@ pub mod manager;
 pub mod protocol;
 pub mod server;
 pub mod subscription;
-pub mod pty;
 pub mod diff;
 pub mod transfer_session;
 

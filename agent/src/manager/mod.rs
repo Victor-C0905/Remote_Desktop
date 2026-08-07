@@ -78,9 +78,6 @@ pub struct Manager {
     #[cfg(unix)]
     worker_manager: Arc<WorkerManager>,
 
-    /// 用户会话管理器
-    session_manager: Arc<SessionManager>,
-
     /// IPC Server（接收 Worker 的 FD）
     #[cfg(unix)]
     ipc_server: Arc<IpcServer>,
@@ -104,7 +101,7 @@ impl Manager {
     /// 1. 创建 PtyRegistry
     /// 2. 创建 WorkerManager
     /// 3. 创建 IpcServer（集成 WorkerManager）
-    /// 4. 创建 SessionManager
+    /// 4. 创建 OrphanProcessReaper
     #[cfg(unix)]
     pub async fn new(config: &AgentConfig) -> Result<Self> {
         // 创建 PTY 注册表
@@ -124,9 +121,6 @@ impl Manager {
             worker_manager.clone(),
         ));
 
-        // 创建会话管理器
-        let session_manager = Arc::new(SessionManager::new());
-
         // 创建孤儿进程回收器
         // Phase 4 新增：用于在 PTY EOF 时回收 Session 僵尸进程
         let orphan_reaper = Arc::new(OrphanProcessReaper::new(pty_registry.clone()));
@@ -134,7 +128,6 @@ impl Manager {
         Ok(Self {
             pty_registry,
             worker_manager,
-            session_manager,
             ipc_server,
             orphan_reaper,
             crash_detector: tokio::sync::Mutex::new(None),
@@ -144,12 +137,7 @@ impl Manager {
     /// 创建新的 Manager（非 Unix 平台）
     #[cfg(not(unix))]
     pub async fn new(config: &AgentConfig) -> Result<Self> {
-        // 创建会话管理器
-        let session_manager = Arc::new(SessionManager::new());
-
-        Ok(Self {
-            session_manager,
-        })
+        Ok(Self {})
     }
 
     /// 启动 Manager
@@ -192,7 +180,6 @@ impl Manager {
             // 监听触发事件，收到时执行 Worker 热更新流程
             let coordinator = HotUpdateCoordinator::new(
                 self.worker_manager.clone(),
-                self.ipc_server.clone(),
                 trigger_rx,
             );
             tokio::spawn(coordinator.run());
