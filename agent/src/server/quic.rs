@@ -7,13 +7,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{broadcast, Mutex};
 
 // Unix平台特有的导入(终端功能)
-#[cfg(unix)]
-use tokio::time::{sleep, Duration};
-#[cfg(not(unix))]
 use tokio::time::Duration;
 
 use crate::config::AgentConfig;
-use crate::pty::PtyManager;
 use crate::subscription::SubscriptionManager;
 use crate::event_bus::EventBus;
 use crate::protocol::{Envelope, Payload};
@@ -1487,7 +1483,6 @@ async fn handle_terminal_stream(
 
     // 使用 Arc 包装 send，让两个任务都能访问
     let send = Arc::new(tokio::sync::Mutex::new(send));
-    let send_clone = send.clone();
 
     // ── 关键修改：先启动客户端输入读取任务，确保数据接收通道就绪 ────
     // 这样可以避免客户端发送的早期输入数据丢失

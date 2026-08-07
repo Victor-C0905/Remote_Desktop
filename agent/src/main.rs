@@ -5,7 +5,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 use gnome_remote_agent::auth::CompositeAuthenticator;
 
 // 使用库中的模块
-use gnome_remote_agent::{config, cert, event_bus, subscription, pty, audit, server};
+use gnome_remote_agent::{config, cert, event_bus, subscription, audit, server};
 
 #[cfg(unix)]
 use gnome_remote_agent::manager::Manager;

@@ -58,8 +58,6 @@ impl UserNamespace {
     pub fn create_and_switch(&self) -> Result<()> {
         use nix::sched::CloneFlags;
         use nix::unistd::getuid;
-        use std::fs::File;
-        use std::io::Write;
 
         tracing::info!(
             "创建User Namespace: inner_uid={}, inner_gid={}",

@@ -26,7 +26,6 @@ use tokio::sync::mpsc;
 use tracing::{info, warn, error};
 
 use super::worker_manager::WorkerManager;
-use super::ipc_server::IpcServer;
 use super::signal_handler::ReloadTrigger;
 
 /// 热更新协调器
@@ -41,7 +40,6 @@ use super::signal_handler::ReloadTrigger;
 ///
 /// let coordinator = HotUpdateCoordinator::new(
 ///     worker_manager,
-///     ipc_server,
 ///     trigger_rx,
 /// );
 /// tokio::spawn(coordinator.run());
@@ -49,8 +47,6 @@ use super::signal_handler::ReloadTrigger;
 pub struct HotUpdateCoordinator {
     /// Worker 管理器
     worker_manager: Arc<WorkerManager>,
-    /// IPC 服务器
-    ipc_server: Arc<IpcServer>,
     /// 触发事件接收器
     trigger_rx: mpsc::Receiver<ReloadTrigger>,
     /// 当前是否正在执行热更新（防止重复触发）
@@ -63,16 +59,13 @@ impl HotUpdateCoordinator {
     /// # 参数
     ///
     /// - `worker_manager`: Worker 管理器
-    /// - `ipc_server`: IPC 服务器
     /// - `trigger_rx`: 触发事件接收器
     pub fn new(
         worker_manager: Arc<WorkerManager>,
-        ipc_server: Arc<IpcServer>,
         trigger_rx: mpsc::Receiver<ReloadTrigger>,
     ) -> Self {
         Self {
             worker_manager,
-            ipc_server,
             trigger_rx,
             is_reloading: Arc::new(AtomicBool::new(false)),
         }
@@ -199,39 +192,27 @@ mod tests {
 
     #[tokio::test]
     async fn test_coordinator_creation() {
-        let pty_registry = Arc::new(PtyRegistry::new());
         let worker_manager = Arc::new(WorkerManager::new(
             "/usr/bin/agent".to_string(),
             "/tmp/test.sock".to_string(),
             3,
         ));
-        let ipc_server = Arc::new(IpcServer::new(
-            "/tmp/test.sock".to_string(),
-            pty_registry,
-            worker_manager.clone(),
-        ));
         let (_tx, rx) = mpsc::channel(16);
 
-        let coordinator = HotUpdateCoordinator::new(worker_manager, ipc_server, rx);
+        let coordinator = HotUpdateCoordinator::new(worker_manager, rx);
         assert!(!coordinator.is_reloading.load(Ordering::SeqCst));
     }
 
     #[tokio::test]
     async fn test_trigger_when_reloading() {
-        let pty_registry = Arc::new(PtyRegistry::new());
         let worker_manager = Arc::new(WorkerManager::new(
             "/usr/bin/agent".to_string(),
             "/tmp/test.sock".to_string(),
             3,
         ));
-        let ipc_server = Arc::new(IpcServer::new(
-            "/tmp/test.sock".to_string(),
-            pty_registry,
-            worker_manager.clone(),
-        ));
         let (_tx, rx) = mpsc::channel(16);
 
-        let coordinator = HotUpdateCoordinator::new(worker_manager, ipc_server, rx);
+        let coordinator = HotUpdateCoordinator::new(worker_manager, rx);
 
         // 手动设置 is_reloading 标志
         coordinator.is_reloading.store(true, Ordering::SeqCst);

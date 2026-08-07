@@ -8,7 +8,7 @@ use sysinfo::System;
 
 use crate::protocol::generated::{
     GetSystemInfo, SystemInfo, CpuInfo, MemoryInfo, DiskInfo,
-    WorkerResponse, worker_response, Error,
+    WorkerResponse, worker_response,
 };
 
 /// 处理 GetSystemInfo 请求
@@ -65,7 +65,7 @@ pub async fn handle_get_system_info(_req: GetSystemInfo) -> WorkerResponse {
     let memory_info = collect_memory_info(&sys);
 
     // 获取磁盘信息
-    let disks = collect_disk_info(&sys);
+    let disks = collect_disk_info();
 
     tracing::debug!(
         "系统信息采集完成: hostname={}, os={}, uptime={}s",
@@ -147,14 +147,10 @@ fn collect_memory_info(sys: &System) -> Option<MemoryInfo> {
 
 /// 收集磁盘信息
 ///
-/// # 参数
-///
-/// - `sys`: System 实例
-///
 /// # 返回
 ///
 /// 返回 `DiskInfo` 列表。
-fn collect_disk_info(sys: &System) -> Vec<DiskInfo> {
+fn collect_disk_info() -> Vec<DiskInfo> {
     use sysinfo::Disks;
 
     let disks = Disks::new_with_refreshed_list();
