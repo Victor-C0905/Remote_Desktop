@@ -384,7 +384,9 @@ impl Manager {
         // 2. 通过 IPC 发送到 Worker,接收响应
         let worker_response = self.ipc_server.send_request(worker_payload).await
             .map_err(|e| {
-                tracing::error!("Worker 请求失败: {}", e);
+                // 使用 {:?} 打印完整错误链,定位 receive_response 失败的根本原因
+                // (EOF/解码失败/连接断开等)
+                tracing::error!("Worker 请求失败: {:?}", e);
                 e
             })?;
 

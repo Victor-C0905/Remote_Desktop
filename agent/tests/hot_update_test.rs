@@ -12,7 +12,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 use gnome_remote_agent::manager::{
-    WorkerManager, PtyRegistry, IpcServer,
+    WorkerManager, PtyRegistry,
     OrphanProcessReaper, WorkerCrashDetector,
     HotUpdateCoordinator, ReloadTrigger, watch_sighup,
 };
@@ -79,20 +79,14 @@ async fn test_worker_manager_graceful_shutdown_flag() {
 
 #[tokio::test]
 async fn test_hot_update_coordinator_creation() {
-    let pty_registry = Arc::new(PtyRegistry::new());
     let worker_manager = Arc::new(WorkerManager::new(
         "/usr/bin/agent".to_string(),
         "/tmp/test.sock".to_string(),
         3,
     ));
-    let ipc_server = Arc::new(IpcServer::new(
-        "/tmp/test.sock".to_string(),
-        pty_registry,
-        worker_manager.clone(),
-    ));
     let (_tx, rx) = mpsc::channel(16);
 
-    let coordinator = HotUpdateCoordinator::new(worker_manager, ipc_server, rx);
+    let coordinator = HotUpdateCoordinator::new(worker_manager, rx);
     let flag = coordinator.is_reloading_flag();
     assert!(!flag.load(std::sync::atomic::Ordering::SeqCst));
 }
@@ -137,20 +131,14 @@ async fn test_crash_detector_start_stop() {
 
 #[tokio::test]
 async fn test_hot_update_coordinator_rejects_duplicate_trigger() {
-    let pty_registry = Arc::new(PtyRegistry::new());
     let worker_manager = Arc::new(WorkerManager::new(
         "/usr/bin/agent".to_string(),
         "/tmp/test.sock".to_string(),
         3,
     ));
-    let ipc_server = Arc::new(IpcServer::new(
-        "/tmp/test.sock".to_string(),
-        pty_registry,
-        worker_manager.clone(),
-    ));
     let (_tx, rx) = mpsc::channel(16);
 
-    let coordinator = HotUpdateCoordinator::new(worker_manager, ipc_server, rx);
+    let coordinator = HotUpdateCoordinator::new(worker_manager, rx);
 
     // 手动设置 is_reloading
     coordinator.is_reloading_flag()
