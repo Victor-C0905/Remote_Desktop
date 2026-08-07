@@ -59,8 +59,10 @@ pub async fn handle_create_session(
         Some(req.working_directory.as_str())
     };
 
-    // 构造用户上下文(如果 uid > 0,表示需要用户隔离)
-    let user_context = if req.uid > 0 {
+    // 构造用户上下文
+    // 注意:root 用户(uid=0)也需要设置环境变量(HOME/USER)和工作目录
+    // setuid(0)/setgid(0) 对 root 是 no-op,不会失败
+    let user_context = if !req.username.is_empty() {
         Some(UserContext {
             uid: req.uid,
             gid: req.gid,

@@ -9,7 +9,6 @@ use anyhow::{Result, Context, anyhow};
 use std::os::unix::io::AsRawFd;
 use nix::pty::{forkpty, ForkptyResult};
 use nix::unistd::execvp;
-use nix::sys::termios::{tcgetattr, tcsetattr, SetArg, OutputFlags, LocalFlags};
 use nix::libc::{ioctl, TIOCSWINSZ, winsize};
 use uuid::Uuid;
 
@@ -173,11 +172,9 @@ impl PtyFactory {
                 std::env::set_var("TERM", "xterm-256color");
                 std::env::set_var("SHELL", shell);
 
-                // 配置终端属性（确保回显等设置正确）
-                if let Ok(fd) = nix::unistd::dup2(0, 0) {
-                    // 尝试设置终端属性，失败也继续
-                    let _ = configure_terminal(fd);
-                }
+                // 注意:不调用 configure_terminal
+                // forkpty 创建的 PTY slave 已有合理的默认 termios 设置
+                // 手动修改(特别是禁用 OPOST)会导致换行符不被转换,终端布局错乱
 
                 // 执行 shell
                 let shell_path = which::which(shell);
@@ -239,58 +236,7 @@ impl PtyFactory {
     }
 }
 
-/// 配置终端属性
-///
-/// 确保终端回显、规范模式等设置正确。
-///
-/// # 参数
-///
-/// - `fd`: 终端文件描述符
-///
-/// # 返回
-///
-/// 成功返回 `Ok(())`，失败返回错误。
-fn configure_terminal(fd: std::os::unix::io::RawFd) -> Result<()> {
-    use std::os::unix::io::BorrowedFd;
-
-    // nix 0.29 的 tcgetattr/tcsetattr 接受 AsFd
-    let fd_borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
-
-    // 获取当前终端属性
-    let mut termios = tcgetattr(fd_borrowed)
-        .context("Failed to get terminal attributes")?;
-
-    // 启用回显、规范模式、信号字符等
-    let local_flags = LocalFlags::ECHO
-        | LocalFlags::ECHOE
-        | LocalFlags::ECHOK
-        | LocalFlags::ICANON
-        | LocalFlags::ISIG;
-
-    termios.local_flags.insert(local_flags);
-
-    // 禁用输出处理（让 shell 自己处理）
-    termios.output_flags.remove(OutputFlags::OPOST);
-
-    // 设置终端属性
-    tcsetattr(fd_borrowed, SetArg::TCSANOW, &termios)
-        .context("Failed to set terminal attributes")?;
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::sync::Arc;
-
     // 注意：由于 PtyFactory 需要实际的 IPC 连接，单元测试需要在集成测试中进行
-    // 这里只测试辅助函数
-
-    #[test]
-    fn test_configure_terminal_invalid_fd() {
-        // 使用无效的 fd，应该返回错误
-        let result = configure_terminal(999);
-        assert!(result.is_err());
-    }
 }

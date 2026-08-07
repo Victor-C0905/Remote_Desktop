@@ -320,10 +320,22 @@ impl Manager {
         cwd: Option<&str>,
         user_session: &crate::auth::session::UserSession,
     ) -> Result<String> {
+        // 如果客户端未指定 shell,使用用户会话中的默认 shell(从 /etc/passwd 读取)
+        let shell = if shell.is_empty() {
+            user_session.shell.to_string_lossy().to_string()
+        } else {
+            shell.to_string()
+        };
+
+        tracing::info!(
+            "创建 PTY 会话: shell={}, uid={}, username={}",
+            shell, user_session.uid, user_session.username
+        );
+
         let request = crate::protocol::generated::CreateSession {
             cols,
             rows,
-            shell: shell.to_string(),
+            shell: shell.clone(),
             working_directory: cwd.unwrap_or("").to_string(),
             uid: user_session.uid,
             gid: user_session.gid,
