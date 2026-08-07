@@ -12,6 +12,57 @@ use anyhow::{Result, Context};
 use nix::unistd::Pid;
 use nix::sys::signal::{kill, Signal};
 use tracing::{info, warn, error};
+use std::path::Path;
+
+/// 解析 Worker 二进制路径
+///
+/// Linux 规范：Worker 与 Manager 是同一个二进制，通过 /proc/self/exe 获取绝对路径。
+/// Manager 启动 Worker 时用 `agent --worker` 参数，所以 Worker 路径 = Manager 路径。
+///
+/// # 解析策略（符合 Linux 规范）
+/// 1. 配置了绝对路径且文件存在 → 使用配置路径
+/// 2. 其他情况（相对路径、文件不存在、默认值）→ /proc/self/exe
+///
+/// # 为什么用 /proc/self/exe
+/// - Linux 内核标准接口，systemd、dockerd 等系统服务均使用此机制
+/// - 不依赖工作目录（systemd 默认 WorkingDirectory=/）
+/// - 开箱即用：用户无需在配置文件中手动指定 worker.agent_binary
+/// - 正确性保证：Manager 和 Worker 必然是同一个二进制
+fn resolve_worker_binary(configured_path: &str) -> String {
+    let path = Path::new(configured_path);
+
+    // 情况 1: 配置了绝对路径且文件存在 → 使用配置路径
+    if path.is_absolute() && path.exists() {
+        return configured_path.to_string();
+    }
+
+    // 情况 2: 回退到 /proc/self/exe（当前进程的可执行文件路径）
+    // 适用于：相对路径(./agent)、文件不存在、默认值
+    match std::env::current_exe()
+        .ok()
+        .and_then(|p| p.canonicalize().ok())
+    {
+        Some(exe_path) => {
+            if path.is_absolute() {
+                // 用户显式配置了绝对路径但文件不存在
+                warn!(
+                    "配置的 agent_binary 不存在: {}, 回退到 /proc/self/exe: {}",
+                    configured_path,
+                    exe_path.display()
+                );
+            }
+            exe_path.to_string_lossy().to_string()
+        }
+        None => {
+            // /proc/self/exe 读取失败（极罕见），返回配置值让 spawn 报错
+            warn!(
+                "无法读取 /proc/self/exe, 使用配置值: {}",
+                configured_path
+            );
+            configured_path.to_string()
+        }
+    }
+}
 
 /// Worker 进程信息
 #[derive(Debug, Clone)]
@@ -123,16 +174,21 @@ impl WorkerManager {
         let mut process_guard = self.worker_process.write().await;
         let mut info_guard = self.worker_info.write().await;
 
+        // 解析 Worker 二进制路径
+        // 优先使用配置的 agent_binary,但如果路径无效(相对路径在工作目录下找不到)
+        // 回退到当前进程的可执行文件路径(确保 Worker 与 Manager 是同一个二进制)
+        let worker_binary = resolve_worker_binary(&self.agent_binary);
+
         // 启动 Worker 进程
-        let child = Command::new(&self.agent_binary)
+        let child = Command::new(&worker_binary)
             .arg("--worker")
             .arg("--ipc-socket")
             .arg(&self.ipc_socket_path)
             .spawn()
-            .context("Failed to spawn worker process")?;
+            .with_context(|| format!("Failed to spawn worker process: binary={}", worker_binary))?;
 
         let pid = child.id();
-        info!("Worker 进程已启动: pid={}, binary={}", pid, self.agent_binary);
+        info!("Worker 进程已启动: pid={}, binary={}", pid, worker_binary);
 
         // 记录进程信息
         let worker_info = WorkerInfo {

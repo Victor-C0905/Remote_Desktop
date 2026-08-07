@@ -187,6 +187,17 @@ cp "$AGENT_DIR/deploy/update.sh" "$PACKAGE_DIR/"
 cp "$AGENT_DIR/deploy/uninstall.sh" "$PACKAGE_DIR/"
 chmod +x "$PACKAGE_DIR"/*.sh
 
+# 复制 systemd service 模板（install.sh 安装时使用）
+# 路径：项目根目录/systemd/gnome-remote-agent.service
+SYSTEMD_TEMPLATE="$AGENT_DIR/../systemd/gnome-remote-agent.service"
+if [ -f "$SYSTEMD_TEMPLATE" ]; then
+    mkdir -p "$PACKAGE_DIR/systemd"
+    cp "$SYSTEMD_TEMPLATE" "$PACKAGE_DIR/systemd/"
+    log_info "  包含 systemd service 模板"
+else
+    log_info "  警告: 未找到 systemd service 模板,install.sh 将使用内联最小配置"
+fi
+
 log_success "打包目录准备完成"
 
 # 3/4 生成 tar.gz

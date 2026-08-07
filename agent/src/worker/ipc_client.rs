@@ -11,6 +11,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use prost::Message;
 use std::os::unix::io::AsRawFd;
 use nix::sys::socket::{sendmsg, ControlMessage, MsgFlags};
+use nix::errno::Errno;
 use std::io::IoSlice;
 
 use crate::protocol::generated::{ManagerRequest, WorkerResponse};
@@ -64,6 +65,8 @@ impl IpcClient {
     /// 将文件描述符从一个进程传递到另一个进程。
     ///
     /// **注意**: 这是一个同步方法，因为底层使用的是同步的 `nix::sys::socket::sendmsg`。
+    /// 在非阻塞 socket 上调用时，如果对端缓冲区满可能返回 EAGAIN，
+    /// 此时需要短暂休眠后重试。
     ///
     /// # Warning
     ///
@@ -86,19 +89,52 @@ impl IpcClient {
         let dummy_data = [1u8];
         let iov = [IoSlice::new(&dummy_data)];
 
-        // 使用 sendmsg 发送控制消息
-        // 显式指定地址类型为 ()（不发送目标地址，因为是已连接 socket）
-        sendmsg::<()>(
-            self.stream.as_raw_fd(),
-            &iov,
-            &[cmsg],
-            MsgFlags::empty(),
-            None,
-        ).context("Failed to send FD via SCM_RIGHTS")?;
+        let raw_fd = self.stream.as_raw_fd();
 
-        tracing::debug!("已发送文件描述符: fd={}", fd);
+        // 同步 sendmsg 重试循环
+        // tokio 的 UnixStream 是非阻塞的，sendmsg 可能返回 EAGAIN
+        // 需要短暂休眠后重试，最多 50 次（约 500ms）
+        const MAX_RETRIES: usize = 50;
+        let mut last_errno = 0i32;
 
-        Ok(())
+        for attempt in 0..MAX_RETRIES {
+            match sendmsg::<()>(
+                raw_fd,
+                &iov,
+                &[cmsg],
+                MsgFlags::empty(),
+                None,
+            ) {
+                Ok(_) => {
+                    tracing::debug!("已发送文件描述符: fd={}, attempts={}", fd, attempt + 1);
+                    return Ok(());
+                }
+                Err(e) => {
+                    // 检查是否为 EAGAIN/EWOULDBLOCK（非阻塞 socket 缓冲区满）
+                    last_errno = e as i32;
+                    let is_eagain = e == Errno::EAGAIN || e == Errno::EWOULDBLOCK;
+
+                    if is_eagain && attempt < MAX_RETRIES - 1 {
+                        // 短暂休眠后重试（10ms）
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        continue;
+                    }
+
+                    // 非 EAGAIN 错误或重试耗尽，返回错误
+                    return Err(anyhow::anyhow!(
+                        "Failed to send FD via SCM_RIGHTS: {} (errno={}, attempts={})",
+                        e,
+                        last_errno,
+                        attempt + 1
+                    ));
+                }
+            }
+        }
+
+        Err(anyhow::anyhow!(
+            "Failed to send FD via SCM_RIGHTS: max retries exceeded (errno={})",
+            last_errno
+        ))
     }
 
     /// 发送 Protobuf 消息
