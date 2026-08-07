@@ -24,7 +24,6 @@ pub struct UserSession {
     /// 用户家目录
     pub home_dir: PathBuf,
     /// 用户Shell
-    #[allow(dead_code)]
     pub shell: PathBuf,
     /// 会话创建时间
     #[allow(dead_code)]
