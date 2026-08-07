@@ -97,10 +97,23 @@ pub async fn run(mut ipc_client: IpcClient) -> Result<()> {
                         ).await;
 
                         // 发送响应
+                        tracing::info!(
+                            "准备发送响应到 Manager: request_id={}, payload_type={}",
+                            response.request_id,
+                            response.payload.as_ref().map(|p| match p {
+                                worker_response::Payload::DirListing(_) => "DirListing",
+                                worker_response::Payload::FileContent(_) => "FileContent",
+                                worker_response::Payload::WriteResult(_) => "WriteResult",
+                                worker_response::Payload::Error(_) => "Error",
+                                worker_response::Payload::SessionCreated(_) => "SessionCreated",
+                                _ => "Other",
+                            }).unwrap_or("None")
+                        );
                         if let Err(e) = ipc_client.send_response(&response).await {
-                            tracing::error!("发送响应失败: {}", e);
+                            tracing::error!("发送响应失败: request_id={}, error={:?}", response.request_id, e);
                             break;
                         }
+                        tracing::info!("响应发送成功: request_id={}", response.request_id);
                     }
                     Err(e) => {
                         tracing::error!("接收消息失败: {}", e);

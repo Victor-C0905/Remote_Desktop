@@ -120,7 +120,7 @@ pub async fn handle_read_dir(req: ReadDir) -> WorkerResponse {
 
     match result {
         Ok(entries) => {
-            tracing::debug!("读取目录完成: path={}, count={}", req.path, entries.len());
+            tracing::info!("读取目录完成: path={}, count={}", req.path, entries.len());
 
             let file_entries = entries
                 .into_iter()

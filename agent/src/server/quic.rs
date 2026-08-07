@@ -1366,12 +1366,13 @@ async fn handle_stream(
                     }
                     Err(e) => {
                         // Worker 路由失败,返回错误响应
-                        tracing::error!("Worker 路由失败: {}", e);
+                        // 使用 {:?} 打印完整错误链,定位底层原因
+                        tracing::error!("Worker 路由失败: {:?}", e);
                         let response = Envelope::new(
                             envelope.request_id,
                             Payload::Error {
                                 code: -1,
-                                message: format!("Worker 路由失败: {}", e),
+                                message: format!("Worker 路由失败: {:?}", e),
                             },
                         );
                         match response.encode() {
