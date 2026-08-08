@@ -22,6 +22,9 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "logg
 rcgen = "0.12"
 rustls-pemfile = "2"
 
+# Socket 选项（设置 SO_REUSEADDR，解决 systemctl restart 端口释放延迟）
+socket2 = "0.6"
+
 # WebSocket 备选协议
 tokio-tungstenite = "0.21"
 futures-util = "0.3"

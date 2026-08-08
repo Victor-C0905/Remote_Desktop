@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
+use tauri_plugin_dialog::DialogExt;
 use tokio::sync::mpsc;
 
 // ── 连接状态 ───────────────────────────────────────
@@ -530,6 +531,7 @@ pub async fn remote_connect(
     host: String,
     port: u16,
     credentials: Option<Credentials>,
+    cert_fingerprint: Option<String>,
     app: tauri::AppHandle,
 ) -> Result<ConnectionInfo, String> {
     let manager = app.state::<ConnectionManager>();
@@ -544,7 +546,7 @@ pub async fn remote_connect(
         Ok(_) => String::new(),
     };
 
-    if let Ok((conn, rtt)) = quic_result {
+    if let Ok((conn, rtt, server_cert_fingerprint)) = quic_result {
         tracing::info!("QUIC 连接成功: {}:{} (RTT={}ms)", host, port, rtt);
         let info = ConnectionInfo {
             server_id: server_id.clone(),
@@ -558,6 +560,69 @@ pub async fn remote_connect(
                 .unwrap_or_default()
                 .as_millis() as u64,
         };
+
+        // ── 证书钉扎校验（SSH known_hosts 模式） ──────────
+        // 1. 已知指纹且匹配 → 跳过确认
+        // 2. 首次连接（无已知指纹）→ 展示指纹，用户确认后存储
+        // 3. 指纹不匹配 → 警告用户（可能服务器重装或 MITM），由用户决定
+        let need_confirm = match &cert_fingerprint {
+            None => true,                                   // 首次连接
+            Some(known) if known == &server_cert_fingerprint => false,  // 指纹匹配
+            Some(_) => true,                                // 指纹不匹配
+        };
+
+        if need_confirm {
+            let is_first = cert_fingerprint.is_none();
+            let fingerprint_display = PinningCertVerifier::format_fingerprint(&server_cert_fingerprint);
+
+            let title = if is_first {
+                "首次连接 - 确认服务器证书"
+            } else {
+                "⚠️ 服务器证书已变更"
+            };
+            let message = if is_first {
+                format!(
+                    "这是首次连接到该服务器。\n\n服务器证书指纹 (SHA-256):\n{}\n\n请确认您信任此服务器。",
+                    fingerprint_display
+                )
+            } else {
+                format!(
+                    "⚠️ 警告：服务器证书与之前记录的不一致！\n可能是服务器重装或存在中间人攻击风险。\n\n新证书指纹 (SHA-256):\n{}\n\n是否信任新证书？",
+                    fingerprint_display
+                )
+            };
+
+            // 使用原生对话框（在独立线程上阻塞，避免阻塞 tokio 运行时）
+            let app_clone = app.clone();
+            let title_clone = title.to_string();
+            let message_clone = message.clone();
+            let kind = if is_first {
+                tauri_plugin_dialog::MessageDialogKind::Info
+            } else {
+                tauri_plugin_dialog::MessageDialogKind::Warning
+            };
+            let accepted = tokio::task::spawn_blocking(move || {
+                app_clone.dialog()
+                    .message(message_clone)
+                    .title(title_clone)
+                    .kind(kind)
+                    .buttons(tauri_plugin_dialog::MessageDialogButtons::YesNo)
+                    .blocking_show()
+            }).await.unwrap_or(false);
+
+            if !accepted {
+                conn.close(0u32.into(), b"cert rejected");
+                return Err("用户拒绝信任服务器证书".to_string());
+            }
+
+            // 通知前端存储证书指纹
+            app.emit("cert-trusted", serde_json::json!({
+                "server_id": &server_id,
+                "fingerprint": &server_cert_fingerprint,
+            })).map_err(|e| format!("发送证书信任事件失败: {}", e))?;
+
+            tracing::info!("[TLS] 证书已信任并存储: server_id={}", server_id);
+        }
 
         // 认证
         let creds = credentials.ok_or_else(|| "缺少认证凭据".to_string())?;
@@ -1358,7 +1423,7 @@ pub async fn unsubscribe(
 
 // ── QUIC 客户端 ───────────────────────────────────────
 
-async fn try_quic_connect(host: &str, port: u16) -> Result<(quinn::Connection, f64), String> {
+async fn try_quic_connect(host: &str, port: u16) -> Result<(quinn::Connection, f64, String), String> {
     // 安装 CryptoProvider
     let _ = rustls::crypto::ring::default_provider().install_default();
 
@@ -1389,8 +1454,9 @@ async fn try_quic_connect(host: &str, port: u16) -> Result<(quinn::Connection, f
             .ok_or_else(|| "DNS 解析无结果".to_string())?
     };
 
-    // 创建客户端配置（跳过证书验证）
-    let client_config = build_quic_client_config()?;
+    // 创建客户端配置（证书钉扎：提取指纹供后续校验）
+    let observed_fingerprint = Arc::new(Mutex::new(None));
+    let client_config = build_quic_client_config(observed_fingerprint.clone())?;
 
     // 创建 Endpoint
     let mut endpoint = quinn::Endpoint::client("0.0.0.0:0".parse().unwrap())
@@ -1423,14 +1489,25 @@ async fn try_quic_connect(host: &str, port: u16) -> Result<(quinn::Connection, f
         format!("QUIC 握手失败: {}", e)
     })?;
 
-    Ok((conn, start.elapsed().as_secs_f64() * 1000.0))
+    // 提取握手过程中观测到的服务器证书指纹
+    let fingerprint = observed_fingerprint
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| "未能获取服务器证书指纹".to_string())?;
+
+    Ok((conn, start.elapsed().as_secs_f64() * 1000.0, fingerprint))
 }
 
-fn build_quic_client_config() -> Result<quinn::ClientConfig, String> {
-    // 跳过证书验证（开发阶段）
+fn build_quic_client_config(
+    observed_fingerprint: Arc<Mutex<Option<String>>>,
+) -> Result<quinn::ClientConfig, String> {
+    // 证书钉扎：提取服务器证书指纹供后续校验（SSH known_hosts 模式）
     let crypto = rustls::ClientConfig::builder()
         .dangerous()
-        .with_custom_certificate_verifier(std::sync::Arc::new(SkipCertVerification))
+        .with_custom_certificate_verifier(std::sync::Arc::new(PinningCertVerifier {
+            observed_fingerprint,
+        }))
         .with_no_client_auth();
 
     // 传输层配置：设置 idle_timeout 以检测死连接
@@ -1457,18 +1534,59 @@ fn build_quic_client_config() -> Result<quinn::ClientConfig, String> {
     Ok(client)
 }
 
+/// 证书钉扎验证器（SSH known_hosts 模式）
+///
+/// 替代无脑跳过证书验证，实现证书指纹提取：
+/// - TLS 握手时提取服务器证书的 SHA-256 指纹
+/// - 总是允许握手通过（真正的指纹校验在 remote_connect 中做）
+/// - remote_connect 根据已知指纹决定是否需要用户确认
+///
+/// 安全模型（与 SSH known_hosts 一致）：
+/// 1. 首次连接：展示指纹给用户确认，确认后存储
+/// 2. 后续连接：自动校验指纹是否匹配
+/// 3. 指纹不匹配：警告用户（可能服务器重装或 MITM），由用户决定
 #[derive(Debug)]
-struct SkipCertVerification;
+struct PinningCertVerifier {
+    /// 回传本次握手获取的服务器证书指纹（SHA-256，纯十六进制小写）
+    observed_fingerprint: Arc<Mutex<Option<String>>>,
+}
 
-impl rustls::client::danger::ServerCertVerifier for SkipCertVerification {
+impl PinningCertVerifier {
+    /// 计算证书 DER 数据的 SHA-256 指纹（纯十六进制小写）
+    fn compute_fingerprint(cert_der: &[u8]) -> String {
+        use sha2::{Sha256, Digest};
+        let mut hasher = Sha256::new();
+        hasher.update(cert_der);
+        let hash = hasher.finalize();
+        hash.iter().map(|b| format!("{:02x}", b)).collect()
+    }
+
+    /// 格式化指纹用于显示（每两位用冒号分隔，便于阅读）
+    fn format_fingerprint(hex: &str) -> String {
+        hex.as_bytes()
+            .chunks(2)
+            .map(|c| std::str::from_utf8(c).unwrap_or("??"))
+            .collect::<Vec<_>>()
+            .join(":")
+    }
+}
+
+impl rustls::client::danger::ServerCertVerifier for PinningCertVerifier {
     fn verify_server_cert(
         &self,
-        _end_entity: &rustls::pki_types::CertificateDer<'_>,
+        end_entity: &rustls::pki_types::CertificateDer<'_>,
         _intermediates: &[rustls::pki_types::CertificateDer<'_>],
         _server_name: &rustls::pki_types::ServerName<'_>,
         _ocsp_response: &[u8],
         _now: rustls::pki_types::UnixTime,
     ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        let fingerprint = Self::compute_fingerprint(end_entity.as_ref());
+        tracing::debug!("[TLS] 服务器证书指纹: {}", Self::format_fingerprint(&fingerprint));
+
+        // 回传指纹供 remote_connect 校验
+        *self.observed_fingerprint.lock().unwrap() = Some(fingerprint);
+
+        // 允许握手通过（指纹校验在 remote_connect 中做，以便获取实际指纹展示给用户）
         Ok(rustls::client::danger::ServerCertVerified::assertion())
     }
 

@@ -17,7 +17,7 @@ Group=root
 WorkingDirectory=/var/lib/gnome-remote
 
 ExecStart=/usr/local/bin/gnome-remote-agent \
-    --config /etc/gnome-remote/agent.toml \
+    --config /etc/gnome-remote-agent/agent.toml \
     --log-dir /var/log/gnome-remote
 
 # ====================================================================

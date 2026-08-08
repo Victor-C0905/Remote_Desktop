@@ -550,15 +550,24 @@ impl IpcServer {
 
     /// 运行 IPC 服务器
     ///
-    /// 监听 Worker 状态变化事件：
+    /// 监听 WorkerManager 状态变化事件：
     /// - Worker 启动时：接受连接并设置 worker_pid
     /// - Worker 崩溃时：清理连接
-    pub async fn run(&self) -> Result<()> {
-        // 启动 IPC 监听
+    ///
+    /// # 参数
+    /// - `ready`: 可选的 oneshot sender，在 IPC bind + subscribe 完成后发送信号
+    ///           调用方（Manager::start）等待此信号后才启动 Worker，避免竞态条件
+    pub async fn run(&self, ready: Option<tokio::sync::oneshot::Sender<()>>) -> Result<()> {
+        // 启动 IPC 监听（bind Unix Socket）
         self.start().await?;
 
-        // 订阅 WorkerManager 事件
+        // 订阅 WorkerManager 事件（必须在 Worker 启动前完成，否则会错过 Worker 启动事件）
         let mut event_rx = self.worker_manager.subscribe();
+
+        // 通知调用方 IPC 已就绪（socket 已 bind + 事件已订阅）
+        if let Some(tx) = ready {
+            let _ = tx.send(());
+        }
 
         info!("IPC 服务器开始监听 Worker 状态变化");
 

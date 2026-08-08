@@ -238,7 +238,61 @@ pub async fn run(
     tracing::info!("⏱️  连接空闲超时: {} 秒", idle_timeout_secs);
 
     let server_config = build_server_config(certs, key)?;
-    let endpoint = quinn::Endpoint::server(server_config, addr.parse()?)?;
+
+    // 手动创建 UDP socket 并设置 SO_REUSEADDR，解决 systemctl restart 时端口释放延迟问题
+    // 旧进程刚被 kill，内核可能还未完全释放 UDP 端口，导致 bind 失败
+    // SO_REUSEADDR 允许 bind 到处于释放过渡期的端口
+    // 同时加重试机制（最多 5 次，每次 1 秒），应对端口暂时被占用的情况
+    let socket = {
+        let sock_addr: std::net::SocketAddr = addr.parse()?;
+        let mut retries = 0;
+        const MAX_RETRIES: u32 = 5;
+        loop {
+            match std::net::UdpSocket::bind(sock_addr) {
+                Ok(s) => {
+                    // 设置 SO_REUSEADDR，允许端口在重启时快速复用
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::io::AsRawFd;
+                        let fd = s.as_raw_fd();
+                        let optval: libc::c_int = 1;
+                        unsafe {
+                            libc::setsockopt(
+                                fd,
+                                libc::SOL_SOCKET,
+                                libc::SO_REUSEADDR,
+                                &optval as *const _ as *const _,
+                                std::mem::size_of_val(&optval) as libc::socklen_t,
+                            );
+                        }
+                    }
+                    break s;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AddrInUse && retries < MAX_RETRIES => {
+                    retries += 1;
+                    tracing::warn!(
+                        "QUIC 端口 {} 被占用，等待重试 ({}/{}): {}",
+                        addr, retries, MAX_RETRIES, e
+                    );
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "QUIC bind {} 失败 (重试 {} 次后放弃): {}",
+                        addr, retries, e
+                    ));
+                }
+            }
+        }
+    };
+
+    tracing::info!("🔵 QUIC socket 已绑定: {}", addr);
+    let endpoint = quinn::Endpoint::new(
+        quinn::EndpointConfig::default(),
+        Some(server_config),
+        socket,
+        Arc::new(quinn::TokioRuntime),
+    )?;
 
     // 创建全局认证速率限制器
     let rate_limiter = Arc::new(AuthRateLimiter::new());
