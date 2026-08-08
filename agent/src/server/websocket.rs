@@ -2,7 +2,6 @@ use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use std::sync::Arc;
-use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 
 use crate::config::AgentConfig;
@@ -14,7 +13,20 @@ pub async fn run(cfg: AgentConfig, certs: Vec<CertificateDer<'static>>, key: Pri
     let tls_config = build_tls_config(certs, key)?;
     let tls_acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(tls_config));
 
-    let listener = TcpListener::bind(&addr).await?;
+    // 手动创建 TCP socket 并设置 SO_REUSEADDR，解决 systemctl restart 时端口释放延迟问题
+    let listener = {
+        let sock_addr: std::net::SocketAddr = addr.parse()?;
+        let socket = socket2::Socket::new(
+            socket2::Domain::for_address(sock_addr),
+            socket2::Type::STREAM,
+            None,
+        )?;
+        socket.set_reuse_address(true)?;
+        socket.set_nonblocking(true)?;
+        socket.bind(&sock_addr.into())?;
+        socket.listen(1024)?;
+        tokio::net::TcpListener::from_std(socket.into())?
+    };
 
     loop {
         let (tcp_stream, remote_addr) = listener.accept().await?;

@@ -60,4 +60,6 @@ export interface ServerConfig {
   error?: string;
   /** 往返时延（毫秒） */
   rttMs?: number;
+  /** 服务器证书指纹（SHA-256，证书钉扎，SSH known_hosts 模式） */
+  certFingerprint?: string;
 }

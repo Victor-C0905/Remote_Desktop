@@ -1,17 +1,20 @@
 #!/bin/bash
 # GNOME Remote Agent 更新脚本
 #
-# 更新流程:
+# 标准更新流程:
 #   1. 备份旧版本
 #   2. rm + cp 替换二进制文件（不需要 stop，rm unlink 不影响运行中进程）
-#   3. systemctl restart（systemd 原子操作，不受 PTY 关闭的 SIGHUP 影响）
+#   3. 重启服务加载新二进制
+#      - SSH 终端：直接 systemctl restart，等待完成并验证
+#      - agent 终端：nohup 后台执行 restart，避免 SIGHUP 杀掉 systemctl
 #
 # 关键原理:
-#   - rm(unlink) 只删除目录项,运行中进程持有的 inode 不受影响
-#   - cp 创建新文件,不会触发 ETXTBSY（因为是新 inode）
-#   - systemctl restart 由 systemd(PID 1)执行 stop + start,
-#     不依赖发起请求的终端是否存活
-#   - 因此可以安全地通过 gnome-remote 终端执行本脚本
+#   - rm(unlink) 只删除目录项，运行中进程持有的 inode 不受影响
+#   - cp 创建新文件（新 inode），不会触发 ETXTBSY
+#   - 通过 agent 终端执行时，systemctl restart 的 stop 会杀掉 agent，
+#     导致 PTY 关闭 → bash 收到 SIGHUP → systemctl 进程被杀 → start 不执行
+#   - 用 nohup 后台执行 restart，systemctl 进程脱离 SIGHUP 影响，
+#     systemd(PID 1) 完成 stop + start 全流程
 #
 # 用法:
 #   sudo bash update.sh                  # 默认更新
@@ -41,14 +44,13 @@ GNOME Remote Agent 更新工具
 更新流程:
     1. 备份旧版本
     2. 替换二进制文件（rm + cp，不需要 stop）
-    3. systemctl restart（systemd 原子操作）
+    3. 重启服务（自动检测运行环境）
     4. 验证服务状态
 
 可通过 gnome-remote 终端安全执行:
-    本脚本不依赖 stop + cp + start 三段式,
-    而是 rm + cp 替换后直接 systemctl restart。
-    systemctl restart 由 systemd 完成 stop + start,
-    不受 PTY 关闭的 SIGHUP 影响。
+    脚本自动检测是否在 agent 管理的终端中运行。
+    如果是，用 nohup 后台执行 restart，避免 SIGHUP 中断。
+    用户需等待几秒后重新连接。
 
 EOF
     exit 0
@@ -113,6 +115,21 @@ if [ ! -f "$OLD_BINARY" ]; then
     exit 1
 fi
 
+# 检测当前是否在 agent 管理的终端中运行
+# 遍历父进程链，检查是否有 gnome-remote-agent
+is_under_agent() {
+    local pid=$$
+    while [ "$pid" != "1" ] && [ -n "$pid" ]; do
+        local cmdline
+        cmdline=$(cat /proc/$pid/cmdline 2>/dev/null | tr '\0' ' ')
+        if echo "$cmdline" | grep -q "$SERVICE_NAME"; then
+            return 0
+        fi
+        pid=$(awk '/^PPid:/{print $2}' /proc/$pid/status 2>/dev/null)
+    done
+    return 1
+}
+
 # 显示更新信息
 echo ""
 echo "================================"
@@ -162,14 +179,30 @@ echo "程序已更新"
 
 # 3/4 重启服务
 echo ">>> [3/4] 重启服务..."
-# systemctl restart 是 systemd 的原子操作:
-# - 由 systemd(PID 1)执行 stop + start
-# - 不依赖当前终端是否存活
-# - 即使 PTY 关闭(bash 收到 SIGHUP 退出),systemd 仍会完成 restart
-# - 通过 gnome-remote 终端执行时,终端会断开,但服务会成功重启
-systemctl restart $SERVICE_NAME
 
-# 4/4 验证状态
+if is_under_agent; then
+    # 通过 agent 终端执行：systemctl restart 的 stop 会杀掉 agent，
+    # 导致 PTY 关闭 → bash 收到 SIGHUP → systemctl 进程被杀 → start 不执行
+    # 解决：用 nohup 后台执行 restart，systemd(PID 1) 完成 stop + start 全流程
+    echo "  检测到当前终端由 $SERVICE_NAME 管理"
+    echo "  后台执行 restart，避免 SIGHUP 中断..."
+    UPDATE_LOG="/tmp/${SERVICE_NAME}-update.log"
+    nohup bash -c "systemctl restart $SERVICE_NAME && echo 'SUCCESS' > /tmp/${SERVICE_NAME}-update-result || echo 'FAILED' > /tmp/${SERVICE_NAME}-update-result" > "$UPDATE_LOG" 2>&1 &
+    disown
+    echo ""
+    echo "  服务正在后台重启，当前终端即将断开"
+    echo "  请等待 5-10 秒后重新连接"
+    echo ""
+    # 脚本退出，agent 被 stop 后 PTY 关闭，但 nohup 的子进程不受影响
+    exit 0
+else
+    # 通过 SSH 终端执行：直接 restart，等待完成并验证
+    echo "  通过 SSH 终端执行，直接 restart..."
+    systemctl reset-failed $SERVICE_NAME 2>/dev/null || true
+    systemctl restart $SERVICE_NAME
+fi
+
+# 4/4 验证状态（仅 SSH 终端路径会执行到这里）
 echo ">>> [4/4] 验证服务..."
 sleep 3
 if systemctl is-active --quiet $SERVICE_NAME; then

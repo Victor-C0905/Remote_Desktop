@@ -106,6 +106,35 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
     };
   }, [activeServerId, setServerStatus, setActiveServerId]);
 
+  // 监听证书信任事件（证书钉扎：存储服务器证书指纹）
+  useEffect(() => {
+    log.info("设置证书信任监听器");
+
+    const setupListener = async () => {
+      const unlisten = await listen<{ server_id: string; fingerprint: string }>(
+        "cert-trusted",
+        (event) => {
+          log.info("收到证书信任事件:", event.payload);
+          updateServer(event.payload.server_id, {
+            certFingerprint: event.payload.fingerprint,
+          });
+        }
+      );
+      return unlisten;
+    };
+
+    let unlistenFn: (() => void) | undefined;
+    setupListener().then((fn) => {
+      unlistenFn = fn;
+    }).catch((e) => log.error('证书信任监听设置失败:', e));
+
+    return () => {
+      if (unlistenFn) {
+        unlistenFn();
+      }
+    };
+  }, [updateServer]);
+
   // 注意：不在这里重置状态，因为会干扰用户连接
   // onRehydrateStorage 已经在 serversStore 中处理了重置逻辑
 
@@ -170,6 +199,7 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
         port: server.port,
         token: server.token || null,
         credentials,
+        certFingerprint: server.certFingerprint || null,
       });
 
       log.info("连接成功:", info);

@@ -200,9 +200,13 @@ fi
 
 # 3/3 启动服务
 echo ">>> [3/3] 启动服务..."
+
+# 清除可能的 failed 状态（StartLimitBurst 触发后需要 reset）
+systemctl reset-failed $SERVICE_NAME 2>/dev/null || true
+
 systemctl daemon-reload
 systemctl enable $SERVICE_NAME
-systemctl start $SERVICE_NAME
+systemctl restart $SERVICE_NAME
 
 # 检查状态
 sleep 2

@@ -152,16 +152,18 @@ impl Manager {
     pub async fn run(&mut self) -> Result<()> {
         #[cfg(unix)]
         {
-            // 启动 IPC 服务器（在后台运行）
+            // 启动 IPC 服务器（在后台运行，等待 bind 完成后再启动 Worker）
+            let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
             let ipc_server = self.ipc_server.clone();
             tokio::spawn(async move {
-                if let Err(e) = ipc_server.run().await {
+                if let Err(e) = ipc_server.run(Some(ready_tx)).await {
                     tracing::error!("IPC 服务器运行失败: {}", e);
                 }
             });
 
-            // 给 IPC 服务器一点时间启动
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            // 等待 IPC 服务器 bind 完成 + subscribe 完成（避免 Worker 启动竞态）
+            ready_rx.await
+                .map_err(|_| anyhow::anyhow!("IPC 服务器启动失败: sender dropped"))?;
 
             // 启动 Worker 进程
             self.worker_manager.start().await?;
@@ -206,23 +208,25 @@ impl Manager {
 
     /// 启动 Manager(非阻塞)
     ///
-    /// 启动 IPC 服务器、Worker 子进程、崩溃检测器,然后立即返回。
-    /// 不等待 ctrl_c 信号,由调用方决定何时调用 `shutdown`。
+    /// 启动 IPC 服务器、Worker 子进程、崩溃检测器、SIGHUP 信号监听和热更新协调器,
+    /// 然后立即返回。不等待 ctrl_c 信号,由调用方决定何时调用 `shutdown`。
     ///
     /// 注意:签名改为 `&self`(阶段 2),通过内部可变性(Mutex)管理 crash_detector,
     /// 以便 Manager 可以被 `Arc` 共享给 quic::run 等多个并发任务。
     #[cfg(unix)]
     pub async fn start(&self) -> Result<()> {
-        // 启动 IPC 服务器(在后台运行)
+        // 启动 IPC 服务器(在后台运行，等待 bind 完成后再启动 Worker)
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
         let ipc_server = self.ipc_server.clone();
         tokio::spawn(async move {
-            if let Err(e) = ipc_server.run().await {
+            if let Err(e) = ipc_server.run(Some(ready_tx)).await {
                 tracing::error!("IPC 服务器运行失败: {}", e);
             }
         });
 
-        // 给 IPC 服务器一点时间启动
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // 等待 IPC 服务器 bind 完成 + subscribe 完成（避免 Worker 启动竞态）
+        ready_rx.await
+            .map_err(|_| anyhow::anyhow!("IPC 服务器启动失败: sender dropped"))?;
 
         // 启动 Worker 进程
         self.worker_manager.start().await?;
@@ -232,7 +236,20 @@ impl Manager {
         crash_detector.start();
         *self.crash_detector.lock().await = Some(crash_detector);
 
-        tracing::info!("Manager 已启动(IPC + Worker + CrashDetector)");
+        // 启动 SIGHUP 信号监听(Phase 4)
+        // 必须在 start() 中启动,否则 systemctl reload 发送的 SIGHUP
+        // 会使用默认行为(终止进程),导致 Manager 退出
+        let (trigger_tx, trigger_rx) = tokio::sync::mpsc::channel(16);
+        let _sighup_handle = crate::manager::signal_handler::watch_sighup(trigger_tx);
+
+        // 启动热更新协调器(Phase 4)
+        let coordinator = crate::manager::hot_update_coordinator::HotUpdateCoordinator::new(
+            self.worker_manager.clone(),
+            trigger_rx,
+        );
+        tokio::spawn(coordinator.run());
+
+        tracing::info!("Manager 已启动(IPC + Worker + CrashDetector + SIGHUP + HotUpdate)");
 
         Ok(())
     }
