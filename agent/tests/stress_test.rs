@@ -32,6 +32,7 @@ async fn stress_concurrent_session_creation_50() {
             mgr.register(
                 format!("stress-session-{}", i),
                 Pid::from_raw(i as i32),
+                format!("socket-stress-session-{}", i),
                 "/bin/bash".to_string(),
             ).await;
         }));
@@ -76,7 +77,13 @@ async fn stress_concurrent_file_operations() {
     for _ in 0..10 {
         let path = dir_path.clone();
         handles.push(tokio::spawn(async move {
-            let req = ReadDir { path };
+            let req = ReadDir {
+                path,
+                uid: 0,
+                gid: 0,
+                username: "test".to_string(),
+                home_dir: "/tmp".to_string(),
+            };
             file::handle_read_dir(req).await
         }));
     }
@@ -88,6 +95,10 @@ async fn stress_concurrent_file_operations() {
             let req = WriteFile {
                 path,
                 content: vec![b'x'; 1024],
+                uid: 0,
+                gid: 0,
+                username: "test".to_string(),
+                home_dir: "/tmp".to_string(),
             };
             file::handle_write_file(req).await
         }));
@@ -116,6 +127,7 @@ async fn stress_rapid_create_destroy_cycle() {
         manager.register(
             session_id.clone(),
             Pid::from_raw(cycle as i32),
+            format!("socket-{}", session_id),
             "/bin/bash".to_string(),
         ).await;
         manager.unregister(&session_id).await;
@@ -175,6 +187,7 @@ async fn stress_long_running_5min() {
             manager.register(
                 session_id.clone(),
                 Pid::from_raw(cycle_count as i32),
+                format!("socket-{}", session_id),
                 "/bin/bash".to_string(),
             ).await;
         }
@@ -248,6 +261,7 @@ async fn test_fd_leak_detection() {
         manager.register(
             session_id.clone(),
             Pid::from_raw(i as i32),
+            format!("socket-{}", session_id),
             "/bin/bash".to_string(),
         ).await;
         manager.unregister(&session_id).await;

@@ -73,6 +73,7 @@ message CreateSession {
 
 message SessionCreated {
     string session_id = 1;
+    string socket_name = 2;  // 新增: abstract socket 名称（Manager 用于连接 Session 进程）
 }
 
 message ResizeWindow {

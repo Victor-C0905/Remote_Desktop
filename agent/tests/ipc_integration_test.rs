@@ -6,8 +6,7 @@
 #![cfg(unix)]
 
 use std::sync::Arc;
-use gnome_remote_agent::manager::{IpcServer, PtyRegistry, WorkerManager, WorkerStatus};
-use gnome_remote_agent::manager::pty_registry::UserInfo;
+use gnome_remote_agent::manager::{IpcServer, PtyRegistry, WorkerManager};
 
 #[tokio::test]
 async fn test_ipc_server_with_pty_registry() {
@@ -81,38 +80,6 @@ async fn test_cleanup_by_worker_pid() {
 }
 
 #[tokio::test]
-async fn test_receive_and_register_fd_invalid_connection() {
-    let registry = Arc::new(PtyRegistry::new());
-    let worker_manager = Arc::new(WorkerManager::new(
-        "/usr/bin/agent".to_string(),
-        "/tmp/test.sock".to_string(),
-        3
-    ));
-    let socket_path = format!("/tmp/test_ipc_fd_{}.sock", uuid::Uuid::new_v4());
-    let server = IpcServer::new(socket_path.clone(), registry.clone(), worker_manager.clone());
-
-    server.start().await.expect("Failed to start IPC server");
-
-    // 尝试使用不存在的 connection_id 注册应该失败
-    let user_info = UserInfo {
-        username: "test".to_string(),
-        uid: 1000,
-        gid: 1000,
-    };
-
-    let result = server.receive_and_register_fd(
-        "non-existent-connection",
-        "test-session".to_string(),
-        user_info,
-    ).await;
-
-    assert!(result.is_err());
-
-    server.stop().await.expect("Failed to stop IPC server");
-    let _ = std::fs::remove_file(&socket_path);
-}
-
-#[tokio::test]
 async fn test_multiple_start_stop_cycles() {
     let registry = Arc::new(PtyRegistry::new());
     let worker_manager = Arc::new(WorkerManager::new(
@@ -154,7 +121,7 @@ async fn test_worker_status_event_integration() {
     server.start().await.expect("Failed to start IPC server");
 
     // 订阅 WorkerManager 事件
-    let mut event_rx = worker_manager.subscribe();
+    let _event_rx = worker_manager.subscribe();
 
     // 启动 Worker（会失败，因为没有真实的二进制文件）
     let _ = worker_manager.start().await;

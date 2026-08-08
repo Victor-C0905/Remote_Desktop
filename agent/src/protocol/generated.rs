@@ -129,6 +129,9 @@ pub struct CreateSession {
 pub struct SessionCreated {
     #[prost(string, tag = "1")]
     pub session_id: ::prost::alloc::string::String,
+    /// abstract socket 名称（Manager 用于连接 Session 进程）
+    #[prost(string, tag = "2")]
+    pub socket_name: ::prost::alloc::string::String,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

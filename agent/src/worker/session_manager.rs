@@ -12,8 +12,8 @@
 //! Manager (Gateway Layer)
 //!     ↓ CreateSession 请求
 //! Worker (Isolation Layer) ← SessionManager 在此运行
-//!     ↓ forkpty
-//! Session (Terminal Process)
+//!     ↓ fork (openpty+fork)
+//! Session 进程 (Terminal Process, 持有 master_fd)
 //!     ↓ 退出
 //! SIGCHLD → SessionManager.cleanup_by_pid()
 //! ```
@@ -33,8 +33,10 @@ use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 pub struct SessionInfo {
     /// 会话唯一标识符（UUID）
     pub session_id: String,
-    /// 子进程 PID
+    /// Session 进程 PID（不是 bash PID）
     pub pid: Pid,
+    /// abstract socket 名称（Manager 用于连接 Session 进程）
+    pub socket_name: String,
     /// Shell 程序路径
     pub shell: String,
     /// 创建时间
@@ -87,19 +89,21 @@ impl SessionManager {
     /// # 参数
     ///
     /// - `session_id`: 会话唯一标识符
-    /// - `pid`: 子进程 PID
+    /// - `pid`: Session 进程 PID
+    /// - `socket_name`: abstract socket 名称
     /// - `shell`: Shell 程序路径
     ///
     /// # 示例
     ///
     /// ```rust,ignore
-    /// manager.register("session-123".to_string(), Pid::from_raw(1234), "/bin/bash".to_string()).await;
+    /// manager.register("session-123".to_string(), Pid::from_raw(1234), "gnome-remote-session-123".to_string(), "/bin/bash".to_string()).await;
     /// ```
-    pub async fn register(&self, session_id: String, pid: Pid, shell: String) {
+    pub async fn register(&self, session_id: String, pid: Pid, socket_name: String, shell: String) {
         let mut sessions = self.sessions.write().await;
         sessions.insert(session_id.clone(), SessionInfo {
             session_id,
             pid,
+            socket_name,
             shell,
             created_at: SystemTime::now(),
         });
@@ -283,7 +287,7 @@ mod tests {
         let manager = SessionManager::new();
 
         // 注册会话
-        manager.register("session-1".to_string(), Pid::from_raw(1234), "/bin/bash".to_string()).await;
+        manager.register("session-1".to_string(), Pid::from_raw(1234), "gnome-remote-session-1".to_string(), "/bin/bash".to_string()).await;
 
         // 查询会话
         let info = manager.get("session-1").await;
@@ -292,6 +296,7 @@ mod tests {
         let info = info.unwrap();
         assert_eq!(info.session_id, "session-1");
         assert_eq!(info.pid, Pid::from_raw(1234));
+        assert_eq!(info.socket_name, "gnome-remote-session-1");
         assert_eq!(info.shell, "/bin/bash");
     }
 
@@ -300,7 +305,7 @@ mod tests {
         let manager = SessionManager::new();
 
         // 注册会话
-        manager.register("session-2".to_string(), Pid::from_raw(5678), "/bin/zsh".to_string()).await;
+        manager.register("session-2".to_string(), Pid::from_raw(5678), "gnome-remote-session-2".to_string(), "/bin/zsh".to_string()).await;
 
         // 验证存在
         assert!(manager.get("session-2").await.is_some());
@@ -317,8 +322,8 @@ mod tests {
         let manager = SessionManager::new();
 
         // 注册多个会话
-        manager.register("session-3".to_string(), Pid::from_raw(1111), "/bin/bash".to_string()).await;
-        manager.register("session-4".to_string(), Pid::from_raw(2222), "/bin/zsh".to_string()).await;
+        manager.register("session-3".to_string(), Pid::from_raw(1111), "gnome-remote-session-3".to_string(), "/bin/bash".to_string()).await;
+        manager.register("session-4".to_string(), Pid::from_raw(2222), "gnome-remote-session-4".to_string(), "/bin/zsh".to_string()).await;
 
         // 列出所有会话
         let sessions = manager.list().await;
@@ -338,6 +343,7 @@ mod tests {
                 manager_clone.register(
                     format!("session-{}", i),
                     Pid::from_raw(i),
+                    format!("gnome-remote-session-{}", i),
                     "/bin/bash".to_string()
                 ).await;
             });

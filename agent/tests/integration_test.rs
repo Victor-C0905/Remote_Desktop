@@ -129,6 +129,10 @@ async fn test_ipc_message_roundtrip() {
         request_id: 42,
         payload: Some(manager_request::Payload::ReadDir(ReadDir {
             path: "/tmp".to_string(),
+            uid: 0,
+            gid: 0,
+            username: "test".to_string(),
+            home_dir: "/tmp".to_string(),
         })),
     };
     let mut buf = Vec::new();

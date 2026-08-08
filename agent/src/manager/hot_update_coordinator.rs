@@ -17,7 +17,9 @@
 //!
 //! - `is_reloading` 原子布尔值防止热更新期间重复触发
 //! - 新旧 Worker 通过不同的 IPC 连接区分
-//! - Sessions 在 Worker 退出后成为孤儿进程，Manager 继续持有 master_fd
+//! - Session 进程独立运行（不依赖 Worker 或 Manager），持有 master_fd
+//! - Worker 退出/重启不影响 Session 进程，PTY 数据流不中断
+//! - Manager 重启后 Session 进程存活 30 秒，超时后自动关闭
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -123,8 +125,8 @@ impl HotUpdateCoordinator {
         self.worker_manager.mark_graceful_shutdown().await;
 
         // 3. 停止旧 Worker（会发送 SIGTERM 并等待退出）
-        // 注意：Sessions 在 Worker 退出后成为孤儿进程
-        // Manager 仍持有 master_fd，PTY 数据流不中断
+        // 注意：Session 进程独立运行（不依赖 Worker），持有 master_fd
+        // Worker 退出不影响 Session 进程，PTY 数据流不中断
         info!("停止旧 Worker 进程");
         if let Err(e) = self.worker_manager.stop().await {
             error!("停止旧 Worker 失败: {}", e);
@@ -188,7 +190,6 @@ impl HotUpdateCoordinator {
 mod tests {
     use super::*;
     use crate::manager::worker_manager::WorkerManager;
-    use crate::manager::pty_registry::PtyRegistry;
 
     #[tokio::test]
     async fn test_coordinator_creation() {

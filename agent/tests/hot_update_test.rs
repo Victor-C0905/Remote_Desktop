@@ -1,7 +1,7 @@
 //! Phase 4 热更新集成测试
 //!
 //! 测试场景：
-//! - OrphanProcessReaper 孤儿进程回收
+//! - OrphanProcessReaper Session 清理（新架构：不再 waitpid，只清理 PtyRegistry）
 //! - WorkerManager 优雅关闭标志
 //! - HotUpdateCoordinator 协调器创建和防重入
 //! - SIGHUP 信号处理
@@ -21,40 +21,17 @@ use tokio::sync::mpsc;
 #[tokio::test]
 async fn test_orphan_reaper_creation() {
     let pty_registry = Arc::new(PtyRegistry::new());
-    let reaper = OrphanProcessReaper::new(pty_registry);
-
-    assert_eq!(reaper.session_count().await, 0);
+    let _reaper = OrphanProcessReaper::new(pty_registry);
 }
 
 #[tokio::test]
-async fn test_orphan_reaper_register_and_lookup() {
+async fn test_orphan_reaper_cleanup_nonexistent() {
+    // 新架构：cleanup_session 清理不存在的会话应返回 Ok
     let pty_registry = Arc::new(PtyRegistry::new());
     let reaper = OrphanProcessReaper::new(pty_registry);
 
-    use nix::unistd::Pid;
-    reaper.register(Pid::from_raw(12345), "session-1".to_string()).await;
-
-    let pid = reaper.get_pid("session-1").await;
-    assert!(pid.is_some());
-    assert_eq!(pid.unwrap(), Pid::from_raw(12345));
-
-    assert_eq!(reaper.session_count().await, 1);
-}
-
-#[tokio::test]
-async fn test_orphan_reaper_reap_nonexistent() {
-    let pty_registry = Arc::new(PtyRegistry::new());
-    let reaper = OrphanProcessReaper::new(pty_registry);
-
-    use nix::unistd::Pid;
-    reaper.register(Pid::from_raw(99999), "ghost".to_string()).await;
-
-    // 回收不存在的进程（应返回 ECHILD 但不 panic）
-    let result = reaper.reap_zombie(Pid::from_raw(99999)).await;
+    let result = reaper.cleanup_session("nonexistent-session").await;
     assert!(result.is_ok());
-
-    // 映射应已清理
-    assert_eq!(reaper.session_count().await, 0);
 }
 
 #[tokio::test]

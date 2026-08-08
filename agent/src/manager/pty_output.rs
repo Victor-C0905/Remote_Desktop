@@ -1,77 +1,57 @@
 //! PTY 输出推送模块
 //!
-//! 负责 PTY 输出读取和推送到客户端的逻辑。
-//! 符合新架构设计：Manager 持有 master_fd 并直接读写。
+//! 从 Session 进程接收 PTY 输出（通过 UnixSocket 帧协议），批量发送给客户端。
 //!
-//! # 迁移指南
+//! # 架构
 //!
-//! ## 旧代码（quic.rs 内联实现）
-//!
-//! ```rust,ignore
-//! // 旧的 PTY 输出读取任务（内联在 quic.rs）
-//! let pty_read_task = tokio::spawn(async move {
-//!     let mut batch_buffer = Vec::with_capacity(1024);
-//!     let mut last_send_time = std::time::Instant::now();
-//!
-//!     loop {
-//!         match pty_manager.read(&session_id).await {
-//!             Ok(data) if !data.is_empty() => {
-//!                 batch_buffer.extend_from_slice(&data);
-//!                 // ... 批量发送逻辑（约80行）
-//!             }
-//!             // ... 其他分支
-//!         }
-//!     }
-//! });
+//! ```text
+//! Session 进程 (持有 master_fd)
+//!     ↓ PTY_OUTPUT 帧 (UnixSocket)
+//! Manager PtyRegistry::read()
+//!     ↓ (msg_type, data) via mpsc channel
+//! pty_output 批量缓冲
+//!     ↓ [4字节长度][数据]
+//! QUIC SendStream → 客户端
 //! ```
 //!
-//! ## 新代码（使用 manager 模块）
+//! # 设计要点
 //!
-//! ```rust,ignore
-//! use crate::manager::{spawn_pty_output_task_v2, PtyOutputConfig};
+//! `recv_frame` 内部使用 `read_exact`（阻塞式，等待完整帧）。
+//! 如果直接用 `tokio::time::timeout` 包装 `recv_frame`，超时时 future 被丢弃，
+//! 已读取的部分帧数据会丢失，导致流损坏。
 //!
-//! // 创建配置（可选，有默认值）
-//! let config = PtyOutputConfig::default();
+//! 解决方案：独立的读任务通过 mpsc channel 传递帧。
+//! 主循环用 `select!` 同时监听 channel 和定时器：
+//! - channel 收到帧 → 加入批量缓冲
+//! - 定时器触发 → 刷新积压的小批量数据（定时器 future 被丢弃不影响读任务）
 //!
-//! // 启动 PTY 输出推送任务
-//! let output_task = spawn_pty_output_task_v2(
-//!     pty_registry,     // Arc<PtyRegistry>
-//!     session_id,       // String
-//!     quic_stream,      // Arc<Mutex<SendStream>>
-//!     Some(stats_manager), // Option<Arc<StatsManager>>
-//!     config,           // PtyOutputConfig
-//!     manager,          // Arc<Manager>
-//! );
+//! # 批处理策略
 //!
-//! // 在 select! 中等待任务完成
-//! tokio::pin!(output_task);
-//! tokio::select! {
-//!     _ = &mut output_task => {
-//!         tracing::info!("PTY 输出任务结束");
-//!     }
-//!     // ... 其他分支
-//! }
-//! ```
+//! 收到 PTY_OUTPUT 帧后加入 batch_buffer，满足以下任一条件时刷新：
+//! - batch_buffer 长度达到 batch_size（大小阈值）
+//! - 距上次刷新超过 batch_interval_ms（时间阈值，保证交互响应性）
+//! - 无新帧且积压超过 batch_interval_ms（定时器触发空闲刷新）
 
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 use tokio::time::{sleep, Duration};
 use quinn::SendStream;
 use anyhow::Result;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use super::pty_registry::PtyRegistry;
+use crate::worker::session_protocol::msg_type;
 
 /// PTY 输出推送配置
 #[derive(Debug, Clone)]
 pub struct PtyOutputConfig {
-    /// 每批最大字节数
+    /// 每批最大字节数（达到后立即刷新）
     pub batch_size: usize,
 
-    /// 最大等待时间（毫秒）
+    /// 最大等待时间（毫秒，超过后触发刷新）
     pub batch_interval_ms: u64,
 
-    /// 轮询间隔（毫秒）
+    /// 空闲检测周期（毫秒，select! 定时器间隔）
     pub poll_interval_ms: u64,
 }
 
@@ -80,26 +60,32 @@ impl Default for PtyOutputConfig {
         Self {
             batch_size: 1024,        // 1KB
             batch_interval_ms: 30,   // 30ms
-            poll_interval_ms: 10,    // 10ms
+            poll_interval_ms: 50,    // 50ms（select! 定时器间隔）
         }
     }
 }
 
-/// 启动 PTY 输出推送任务（阶段 2：使用 PtyRegistry + Manager）
+/// 启动 PTY 输出推送任务
 ///
-/// - 使用 `PtyRegistry`（新架构）管理 PTY 会话
-/// - 通过 `Manager` 获取 `OrphanProcessReaper`，无需调用方手动传入
+/// 从 PtyRegistry 读取 Session 进程的输出，批量发送到 QUIC SendStream。
 ///
 /// # 参数
-/// - `pty_registry`: PTY 注册表（新架构）
-/// - `session_id`: PTY 会话 ID
-/// - `send`: QUIC SendStream（用于发送数据给客户端）
-/// - `stats_manager`: 统计管理器（可选）
+///
+/// - `pty_registry`: PTY 注册表
+/// - `session_id`: 会话 ID
+/// - `send`: QUIC SendStream（发送数据给客户端）
+/// - `stats_manager`: 统计管理器（可选，记录终端输出字节数）
 /// - `config`: 输出推送配置
-/// - `manager`: Manager 引用（用于获取 OrphanProcessReaper）
 ///
 /// # 返回
-/// 返回任务句柄
+///
+/// 返回任务句柄（JoinHandle），任务在 EOF 或连接断开时结束。
+///
+/// # 退出条件
+///
+/// - 收到 EOF 帧（bash 退出）：刷新剩余数据 → 注销会话 → 退出
+/// - 读取错误（连接断开）：刷新剩余数据 → 注销会话 → 退出
+/// - QUIC 发送失败：直接退出（客户端已断开）
 #[cfg(unix)]
 pub async fn spawn_pty_output_task_v2(
     pty_registry: Arc<PtyRegistry>,
@@ -107,150 +93,141 @@ pub async fn spawn_pty_output_task_v2(
     send: Arc<Mutex<SendStream>>,
     stats_manager: Option<Arc<crate::auth::StatsManager>>,
     config: PtyOutputConfig,
-    manager: Arc<super::Manager>,
 ) -> tokio::task::JoinHandle<()> {
-    // 从 Manager 获取 OrphanProcessReaper（用于 PTY EOF 时回收僵尸进程）
-    // OrphanProcessReaper 内部字段均为 Arc,clone 开销很小
-    let orphan_reaper = (**manager.orphan_reaper()).clone();
-    spawn_pty_output_impl(pty_registry, session_id, send, stats_manager, config, Some(orphan_reaper)).await
-}
-
-/// PTY 读取器 Trait（内部抽象）
-/// 注意：trait 中的 async fn 返回的 Future 默认不实现 Send，
-/// 而 tokio::spawn 要求 Future: Send。
-/// 因此手动使用 BoxFuture 替代 async fn in trait，避免引入 async-trait 依赖。
-#[cfg(unix)]
-trait PtyReader: Send + Sync {
-    fn read<'a>(&'a self, session_id: &'a str) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>>> + Send + 'a>>;
-}
-
-// 为 PtyRegistry 实现读取器
-#[cfg(unix)]
-impl PtyReader for PtyRegistry {
-    fn read<'a>(&'a self, session_id: &'a str) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>>> + Send + 'a>> {
-        Box::pin(async move {
-            PtyRegistry::read(self, session_id).await
-        })
-    }
-}
-
-/// 内部实现（泛型版本）
-#[cfg(unix)]
-async fn spawn_pty_output_impl<R>(
-    pty_reader: Arc<R>,
-    session_id: String,
-    send: Arc<Mutex<SendStream>>,
-    stats_manager: Option<Arc<crate::auth::StatsManager>>,
-    config: PtyOutputConfig,
-    orphan_reaper: Option<super::orphan_reaper::OrphanProcessReaper>,
-) -> tokio::task::JoinHandle<()>
-where
-    R: PtyReader + 'static,
-{
     tokio::spawn(async move {
+        // 帧通道：读任务 → 主循环
+        // 容量 32 足够缓冲终端输出突发（读任务在 channel 满时自然背压）
+        let (frame_tx, mut frame_rx) = mpsc::channel::<Result<(u8, Vec<u8>)>>(32);
+
+        // 启动独立读任务（持续从 Session socket 读取帧）
+        // 读任务独立于主循环，即使主循环 select! 丢弃 recv future，
+        // 读任务仍继续运行，不会丢失已读取的部分帧数据
+        let read_registry = Arc::clone(&pty_registry);
+        let read_session_id = session_id.clone();
+        tokio::spawn(async move {
+            loop {
+                let result = read_registry.read(&read_session_id).await;
+                let is_err = result.is_err();
+                // channel 发送失败（主循环已退出）或读取错误 → 停止读任务
+                if frame_tx.send(result).await.is_err() || is_err {
+                    break;
+                }
+            }
+            debug!("PTY 读任务结束: session_id={}", read_session_id);
+        });
+
         let mut batch_buffer = Vec::with_capacity(config.batch_size);
         let mut last_send_time = std::time::Instant::now();
-        let mut eof_detected = false;
 
         loop {
-            // 从 PTY 读取输出
-            match pty_reader.read(&session_id).await {
-                Ok(data) if !data.is_empty() => {
-                    batch_buffer.extend_from_slice(&data);
+            tokio::select! {
+                // 收到帧
+                Some(result) = frame_rx.recv() => {
+                    match result {
+                        Ok((frame_type, data)) if frame_type == msg_type::PTY_OUTPUT => {
+                            // PTY 输出：加入批量缓冲
+                            if !data.is_empty() {
+                                batch_buffer.extend_from_slice(&data);
+                            }
 
-                    // 判断是否需要发送批次
-                    let should_flush = batch_buffer.len() >= config.batch_size
-                        || last_send_time.elapsed().as_millis() >= config.batch_interval_ms as u128;
+                            // 判断是否需要刷新
+                            let should_flush = batch_buffer.len() >= config.batch_size
+                                || last_send_time.elapsed().as_millis()
+                                    >= config.batch_interval_ms as u128;
 
-                    if should_flush && !batch_buffer.is_empty() {
-                        // 发送批量数据
-                        if let Err(e) = send_batch(&send, &batch_buffer).await {
-                            warn!("发送终端数据失败: {}", e);
+                            if should_flush && !batch_buffer.is_empty() {
+                                if let Err(e) = send_batch(&send, &batch_buffer).await {
+                                    warn!("发送终端数据失败: {}", e);
+                                    break;
+                                }
+                                record_bytes(&stats_manager, batch_buffer.len());
+                                debug!(
+                                    "PTY 批量发送: session_id={}, len={}",
+                                    session_id,
+                                    batch_buffer.len()
+                                );
+                                batch_buffer.clear();
+                                last_send_time = std::time::Instant::now();
+                            }
+                        }
+                        Ok((frame_type, _)) if frame_type == msg_type::EOF => {
+                            // bash 退出：刷新剩余数据并退出
+                            info!("Session EOF: session_id={}", session_id);
+                            flush_remaining(&send, &stats_manager, &mut batch_buffer).await;
                             break;
                         }
-
-                        // 记录终端输出字节数
-                        if let Some(ref stats) = stats_manager {
-                            stats.record_terminal_bytes(batch_buffer.len() as u64);
+                        Ok((other_type, _)) => {
+                            // 其他消息类型（Hello 等），忽略
+                            debug!(
+                                "Session 消息忽略: session_id={}, type=0x{:02x}",
+                                session_id, other_type
+                            );
                         }
-
-                        debug!(
-                            "PTY 批量输出发送: session_id={}, batch_len={}",
-                            session_id, batch_buffer.len()
-                        );
-
-                        batch_buffer.clear();
-                        last_send_time = std::time::Instant::now();
+                        Err(e) => {
+                            // 读取错误：连接断开
+                            warn!(
+                                "Session 读取失败: session_id={}, error={}",
+                                session_id, e
+                            );
+                            flush_remaining(&send, &stats_manager, &mut batch_buffer).await;
+                            break;
+                        }
                     }
                 }
-                Ok(_) => {
-                    // 无数据时检查是否有积压数据需要刷新
-                    if !batch_buffer.is_empty()
-                        && last_send_time.elapsed().as_millis() >= config.batch_interval_ms as u128
+                // 定时器：空闲时检查是否有积压需要刷新
+                // 仅当 batch_buffer 非空时启用此分支（避免空转）
+                _ = sleep(Duration::from_millis(config.poll_interval_ms)),
+                    if !batch_buffer.is_empty() =>
+                {
+                    if last_send_time.elapsed().as_millis()
+                        >= config.batch_interval_ms as u128
                     {
                         if let Err(e) = send_batch(&send, &batch_buffer).await {
                             warn!("发送终端数据失败(空闲刷新): {}", e);
                             break;
                         }
-
-                        // 记录终端输出字节数
-                        if let Some(ref stats) = stats_manager {
-                            stats.record_terminal_bytes(batch_buffer.len() as u64);
-                        }
-
+                        record_bytes(&stats_manager, batch_buffer.len());
                         debug!(
-                            "PTY 空闲刷新: session_id={}, batch_len={}",
-                            session_id, batch_buffer.len()
+                            "PTY 空闲刷新: session_id={}, len={}",
+                            session_id,
+                            batch_buffer.len()
                         );
-
                         batch_buffer.clear();
                         last_send_time = std::time::Instant::now();
                     }
-                    // 无数据，短暂等待（降低轮询频率减少 CPU 占用）
-                    sleep(Duration::from_millis(config.poll_interval_ms)).await;
-                }
-                Err(e) => {
-                    // PTY 读取错误通常意味着会话已关闭（EOF）
-                    warn!("PTY 读取失败（可能 EOF）: session_id={}, error={}", session_id, e);
-                    eof_detected = true;
-                    break;
                 }
             }
         }
 
-        // 发送剩余数据
-        if !batch_buffer.is_empty() {
-            let _ = send_batch(&send, &batch_buffer).await;
-
-            // 记录终端输出字节数
-            if let Some(ref stats) = stats_manager {
-                stats.record_terminal_bytes(batch_buffer.len() as u64);
-            }
-        }
-
-        // EOF 处理：回收孤儿进程并清理资源
-        // Phase 4 新增：在 PTY 会话结束时，通过 OrphanProcessReaper 回收僵尸进程
-        if eof_detected {
-            tracing::info!("PTY 会话结束: session_id={}", session_id);
-
-            if let Some(ref reaper) = orphan_reaper {
-                // 获取 session 对应的 PID
-                if let Some(pid) = reaper.get_pid(&session_id).await {
-                    tracing::info!("回收孤儿进程: session_id={}, pid={}", session_id, pid);
-                    let _ = reaper.reap_zombie(pid).await;
-                } else {
-                    tracing::debug!("未找到 session_id 对应的 PID（可能已清理）: {}", session_id);
-                }
-            }
-        }
-
-        debug!("PTY 输出推送任务结束: session_id={}", session_id);
+        // 清理：注销会话（发送 Close 给 Session 进程）
+        let _ = pty_registry.unregister(&session_id).await;
+        debug!("PTY 输出任务结束: session_id={}", session_id);
     })
+}
+
+/// 刷新剩余数据并记录统计
+async fn flush_remaining(
+    send: &Arc<Mutex<SendStream>>,
+    stats_manager: &Option<Arc<crate::auth::StatsManager>>,
+    batch_buffer: &mut Vec<u8>,
+) {
+    if !batch_buffer.is_empty() {
+        let _ = send_batch(send, batch_buffer).await;
+        record_bytes(stats_manager, batch_buffer.len());
+        batch_buffer.clear();
+    }
+}
+
+/// 记录终端输出字节数
+fn record_bytes(stats_manager: &Option<Arc<crate::auth::StatsManager>>, len: usize) {
+    if let Some(ref stats) = stats_manager {
+        stats.record_terminal_bytes(len as u64);
+    }
 }
 
 /// 发送批量数据到客户端
 ///
-/// 数据格式: [4字节长度][数据]
+/// 数据格式: [4字节长度(小端)][数据]
 async fn send_batch(send: &Arc<Mutex<SendStream>>, data: &[u8]) -> Result<()> {
     let len = (data.len() as u32).to_le_bytes();
     let mut send_guard = send.lock().await;
@@ -268,7 +245,7 @@ mod tests {
         let config = PtyOutputConfig::default();
         assert_eq!(config.batch_size, 1024);
         assert_eq!(config.batch_interval_ms, 30);
-        assert_eq!(config.poll_interval_ms, 10);
+        assert_eq!(config.poll_interval_ms, 50);
     }
 
     #[test]
@@ -281,38 +258,5 @@ mod tests {
         assert_eq!(config.batch_size, 2048);
         assert_eq!(config.batch_interval_ms, 50);
         assert_eq!(config.poll_interval_ms, 20);
-    }
-
-    /// 验证 PTY 输出推送接口
-    ///
-    /// 测试目标：
-    /// - spawn_pty_output_task_v2（使用 PtyRegistry + Manager）
-    /// - PtyReader trait 实现正确
-    #[cfg(unix)]
-    mod integration_tests {
-        use super::*;
-
-        #[test]
-        fn test_pty_reader_trait_implementation() {
-            // 验证 PtyReader trait 实现正确
-            // 这个测试确保 PtyRegistry 正确实现接口
-
-            // 注意：由于 PtyRegistry 的构造需要特定环境，
-            // 这里主要验证编译时类型检查通过
-            fn _assert_pty_reader_implemented<T: PtyReader>() {}
-
-            _assert_pty_reader_implemented::<PtyRegistry>();
-        }
-
-        #[test]
-        fn test_batch_logic_consistency() {
-            // 验证批量发送配置一致性
-
-            let config = PtyOutputConfig::default();
-
-            assert_eq!(config.batch_size, 1024);
-            assert_eq!(config.batch_interval_ms, 30);
-            assert_eq!(config.poll_interval_ms, 10);
-        }
     }
 }
