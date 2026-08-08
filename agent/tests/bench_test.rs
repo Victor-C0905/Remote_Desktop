@@ -63,7 +63,13 @@ async fn bench_read_dir() {
     bench("ReadDir (100 files)", 100, || {
         let path = path.clone();
         async move {
-            let req = ReadDir { path };
+            let req = ReadDir {
+                path,
+                uid: 0,
+                gid: 0,
+                username: "test".to_string(),
+                home_dir: "/tmp".to_string(),
+            };
             let _ = file::handle_read_dir(req).await;
         }
     }).await;
@@ -80,6 +86,10 @@ async fn bench_execute_command() {
                 command: "echo".to_string(),
                 args: vec!["hello".to_string()],
                 working_directory: "/tmp".to_string(),
+                uid: 0,
+                gid: 0,
+                username: "test".to_string(),
+                home_dir: "/tmp".to_string(),
             };
             let _ = command::handle_execute_command(req).await;
         }
@@ -101,6 +111,7 @@ async fn bench_session_manager_concurrent() {
                 mgr.register(
                     format!("bench-session-{}", i),
                     Pid::from_raw(i as i32),
+                    format!("socket-bench-session-{}", i),
                     "/bin/bash".to_string(),
                 ).await;
             }

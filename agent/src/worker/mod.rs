@@ -22,6 +22,8 @@ pub mod handlers;
 pub mod ipc_client;
 pub mod pty_factory;
 pub mod session_manager;
+pub mod session_process;
+pub mod session_protocol;
 
 pub use ipc_client::IpcClient;
 pub use pty_factory::PtyFactory;
@@ -93,7 +95,6 @@ pub async fn run(mut ipc_client: IpcClient) -> Result<()> {
                             &pty_factory,
                             &session_manager,
                             &shutdown_notify,
-                            &ipc_client,
                         ).await;
 
                         // 发送响应
@@ -137,7 +138,6 @@ pub async fn run(mut ipc_client: IpcClient) -> Result<()> {
 /// - `pty_factory`: PTY 工厂实例
 /// - `session_manager`: 会话管理器实例
 /// - `shutdown_notify`: 通知主循环退出的 Notify 实例（仅 GracefulShutdown 使用）
-/// - `ipc_client`: IPC 客户端引用，用于 PtyFactory.create 时发送 master_fd
 ///
 /// # 返回
 ///
@@ -147,14 +147,13 @@ pub async fn run(mut ipc_client: IpcClient) -> Result<()> {
 ///
 /// ```rust,ignore
 /// let request = ManagerRequest { request_id: 1, payload: Some(...) };
-/// let response = handle_request(request, &pty_factory, &session_manager, &shutdown_notify, &ipc_client).await;
+/// let response = handle_request(request, &pty_factory, &session_manager, &shutdown_notify).await;
 /// ```
 async fn handle_request(
     request: ManagerRequest,
     pty_factory: &PtyFactory,
     session_manager: &SessionManager,
     shutdown_notify: &Arc<Notify>,
-    ipc_client: &IpcClient,
 ) -> WorkerResponse {
     // 提取 request_id
     let request_id = request.request_id;
@@ -162,10 +161,10 @@ async fn handle_request(
     // 处理请求
     let mut response = match request.payload {
         Some(crate::protocol::generated::manager_request::Payload::CreateSession(req)) => {
-            handlers::session::handle_create_session(pty_factory, ipc_client, session_manager, req).await
+            handlers::session::handle_create_session(pty_factory, session_manager, req).await
         }
         Some(crate::protocol::generated::manager_request::Payload::KillSession(req)) => {
-            handlers::session::handle_kill_session(req).await
+            handlers::session::handle_kill_session(req, session_manager).await
         }
         Some(crate::protocol::generated::manager_request::Payload::ReadDir(req)) => {
             handlers::file::handle_read_dir(req).await

@@ -1,6 +1,7 @@
 //! Manager 模块（网关层）
 //!
-//! 负责监听 QUIC 端口，管理客户端连接，持有 PTY master_fd，直接读写 PTY。
+//! 负责监听 QUIC 端口，管理客户端连接，通过 SessionConnection（UnixSocket 帧协议）
+//! 与独立 Session 进程通信，间接读写 PTY。Manager 不再直接持有 master_fd。
 
 pub mod connection;
 pub mod session;
@@ -30,6 +31,10 @@ pub mod signal_handler;
 
 #[cfg(unix)]
 pub mod hot_update_coordinator;
+
+// Session 进程连接管理（Unix-only：abstract UnixSocket）
+#[cfg(unix)]
+pub mod session_connection;
 
 // 阶段 3 新增:协议适配层(跨平台,纯转换逻辑)
 pub mod protocol_adapter;
@@ -61,6 +66,10 @@ pub use signal_handler::{ReloadTrigger, watch_sighup, watch_sigterm};
 #[cfg(unix)]
 pub use hot_update_coordinator::HotUpdateCoordinator;
 
+// Session 连接管理导出
+#[cfg(unix)]
+pub use session_connection::SessionConnection;
+
 // 阶段 3 新增:协议适配层导出
 pub use protocol_adapter::{UserContext, serde_to_worker_request, worker_response_to_serde};
 
@@ -70,7 +79,7 @@ use crate::config::AgentConfig;
 
 /// Manager 主结构
 pub struct Manager {
-    /// PTY 注册表（管理所有 master_fd）
+    /// PTY 注册表（管理所有 SessionConnection）
     #[cfg(unix)]
     pty_registry: Arc<PtyRegistry>,
 
@@ -78,12 +87,11 @@ pub struct Manager {
     #[cfg(unix)]
     worker_manager: Arc<WorkerManager>,
 
-    /// IPC Server（接收 Worker 的 FD）
+    /// IPC Server（与 Worker 通信，接收 SessionCreated 响应含 socket_name）
     #[cfg(unix)]
     ipc_server: Arc<IpcServer>,
 
-    /// 孤儿进程回收器
-    /// Phase 4 新增：在 PTY EOF 时回收 Session 僵尸进程
+    /// 孤儿进程回收器（简化版：清理已断开的 Session）
     #[cfg(unix)]
     orphan_reaper: Arc<OrphanProcessReaper>,
 
@@ -287,25 +295,13 @@ impl Manager {
     /// 成功返回 Ok(())，失败返回错误
     ///
     /// # 架构说明
-    /// ResizeWindow 需要操作 master_fd（通过 ioctl），
-    /// 而 master_fd 由 Manager 持有（在 PtyRegistry 中），
-    /// 因此由 Manager 直接处理，不通过 Worker。
+    /// 新架构：Manager 通过 SessionConnection 发送 RESIZE 帧给 Session 进程，
+    /// Session 进程在内部调用 ioctl(TIOCSWINSZ) 调整 master_fd 的窗口大小。
+    /// Manager 不再直接操作 master_fd。
     #[cfg(unix)]
     pub async fn handle_resize_window(&self, session_id: &str, cols: u32, rows: u32) -> Result<()> {
         tracing::debug!("ResizeWindow: session_id={}, cols={}, rows={}", session_id, cols, rows);
-
-        // 从 PtyRegistry 获取 master_fd
-        let master_fd = self.pty_registry.get_fd(session_id).await
-            .map_err(|e| {
-                tracing::warn!("获取 master_fd 失败: session_id={}, error={}", session_id, e);
-                e
-            })?;
-
-        // 调用 ioctl 调整终端大小
-        self.set_window_size(master_fd, cols, rows)?;
-
-        tracing::info!("终端窗口大小调整成功: session_id={}, cols={}, rows={}", session_id, cols, rows);
-        Ok(())
+        self.pty_registry.resize(session_id, cols as u16, rows as u16).await
     }
 
     /// 获取 Worker 进程信息(供外部测试和监控使用)
@@ -314,10 +310,12 @@ impl Manager {
         self.worker_manager.get_info().await
     }
 
-    /// 通过 Worker 创建 PTY 会话(阶段 2 新增)
+    /// 通过 Worker 创建 PTY 会话
     ///
-    /// 将 PTY 创建请求发送到 Worker 子进程,Worker forkpty 并通过 SCM_RIGHTS 传递 master_fd。
-    /// 创建成功后,master_fd 自动注册到 PtyRegistry。
+    /// 将 PTY 创建请求发送到 Worker 子进程,Worker 通过 openpty+fork 创建 Session 进程。
+    /// Session 进程持有 master_fd 并 bind abstract UnixSocket。
+    /// Worker 返回 socket_name,Manager 通过 SessionConnection 连接到 Session 进程,
+    /// 注册到 PtyRegistry。不再使用 SCM_RIGHTS 传递 master_fd。
     ///
     /// # 参数
     /// - `shell`: Shell 路径(如 /bin/bash),空字符串则使用用户默认 shell
@@ -420,37 +418,12 @@ impl Manager {
         &self.pty_registry
     }
 
-    /// 获取 OrphanProcessReaper 引用(供 PTY 输出任务在 EOF 时回收僵尸进程)
+    /// 获取 OrphanProcessReaper 引用(供外部清理已断开的 Session)
+    ///
+    /// 新架构：Session 进程独立运行，Manager 不再需要 waitpid 回收僵尸进程。
+    /// OrphanProcessReaper 简化为 PtyRegistry 的轻量包装，提供 cleanup_session 接口。
     #[cfg(unix)]
     pub fn orphan_reaper(&self) -> &Arc<OrphanProcessReaper> {
         &self.orphan_reaper
-    }
-
-    /// 设置终端窗口大小（内部辅助函数）
-    ///
-    /// # 参数
-    /// - `fd`: master_fd
-    /// - `cols`: 列数
-    /// - `rows`: 行数
-    #[cfg(unix)]
-    fn set_window_size(&self, fd: std::os::unix::io::RawFd, cols: u32, rows: u32) -> Result<()> {
-        use nix::libc::{ioctl, winsize, TIOCSWINSZ};
-
-        let ws = winsize {
-            ws_col: cols as u16,
-            ws_row: rows as u16,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
-        };
-
-        let ret = unsafe { ioctl(fd, TIOCSWINSZ, &ws) };
-
-        if ret < 0 {
-            let err = nix::errno::Errno::last();
-            tracing::error!("ioctl(TIOCSWINSZ) 失败: fd={}, error={}", fd, err);
-            return Err(anyhow::anyhow!("Failed to set window size: {}", err));
-        }
-
-        Ok(())
     }
 }

@@ -201,8 +201,6 @@ impl Drop for WorkerCrashDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manager::worker_manager::WorkerStatus;
-    use std::time::SystemTime;
 
     #[tokio::test]
     async fn test_crash_detector_creation() {

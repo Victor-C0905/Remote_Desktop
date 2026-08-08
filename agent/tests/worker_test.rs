@@ -26,6 +26,7 @@ async fn test_session_manager_register_unregister() {
     manager.register(
         "test-session-1".to_string(),
         Pid::from_raw(12345),
+        format!("socket-{}", "test-session-1"),
         "/bin/bash".to_string(),
     ).await;
     assert_eq!(manager.list().await.len(), 1);
@@ -46,6 +47,7 @@ async fn test_session_manager_concurrent_access() {
             manager_clone.register(
                 format!("session-{}", i),
                 Pid::from_raw(i as i32),
+                format!("socket-{}", i),
                 "/bin/bash".to_string(),
             ).await;
         }
@@ -56,6 +58,7 @@ async fn test_session_manager_concurrent_access() {
         manager.register(
             format!("session-{}", i),
             Pid::from_raw(i as i32),
+            format!("socket-{}", i),
             "/bin/bash".to_string(),
         ).await;
     }
@@ -90,6 +93,10 @@ mod file_operation_tests {
         // 调用 handle_read_dir
         let req = ReadDir {
             path: dir_path.to_string_lossy().to_string(),
+            uid: 0,
+            gid: 0,
+            username: "test".to_string(),
+            home_dir: "/tmp".to_string(),
         };
         let response = file::handle_read_dir(req).await;
 
@@ -114,6 +121,10 @@ mod file_operation_tests {
     async fn test_handle_read_dir_not_found() {
         let req = ReadDir {
             path: "/nonexistent/path/12345".to_string(),
+            uid: 0,
+            gid: 0,
+            username: "test".to_string(),
+            home_dir: "/tmp".to_string(),
         };
         let response = file::handle_read_dir(req).await;
 
@@ -134,6 +145,10 @@ mod file_operation_tests {
 
         let req = ReadFile {
             path: file_path.to_string_lossy().to_string(),
+            uid: 0,
+            gid: 0,
+            username: "test".to_string(),
+            home_dir: "/tmp".to_string(),
         };
         let response = file::handle_read_file(req).await;
 
@@ -155,6 +170,10 @@ mod file_operation_tests {
         let req = WriteFile {
             path: file_path.to_string_lossy().to_string(),
             content: test_data.to_vec(),
+            uid: 0,
+            gid: 0,
+            username: "test".to_string(),
+            home_dir: "/tmp".to_string(),
         };
         let response = file::handle_write_file(req).await;
 
@@ -186,6 +205,10 @@ mod command_and_system_tests {
             command: "echo".to_string(),
             args: vec!["hello".to_string()],
             working_directory: "/tmp".to_string(),
+            uid: 0,
+            gid: 0,
+            username: "test".to_string(),
+            home_dir: "/tmp".to_string(),
         };
         let response = command::handle_execute_command(req).await;
 
@@ -206,6 +229,10 @@ mod command_and_system_tests {
             command: "sh".to_string(),
             args: vec!["-c".to_string(), "echo error >&2".to_string()],
             working_directory: "/tmp".to_string(),
+            uid: 0,
+            gid: 0,
+            username: "test".to_string(),
+            home_dir: "/tmp".to_string(),
         };
         let response = command::handle_execute_command(req).await;
 
@@ -225,6 +252,10 @@ mod command_and_system_tests {
             command: "false".to_string(),
             args: vec![],
             working_directory: "/tmp".to_string(),
+            uid: 0,
+            gid: 0,
+            username: "test".to_string(),
+            home_dir: "/tmp".to_string(),
         };
         let response = command::handle_execute_command(req).await;
 

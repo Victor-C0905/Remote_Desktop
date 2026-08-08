@@ -1,22 +1,25 @@
 //! IPC 服务器
 //!
-//! 接收 Worker 发送的 PTY master_fd，并与 WorkerManager 和 PtyRegistry 集成。
-//! 阶段 2:新增双向通信能力(发送请求到 Worker + 接收响应)。
+//! 与 WorkerManager 和 PtyRegistry 集成：
+//! - 接收 Worker 进程的连接
+//! - 发送请求到 Worker（CreateSession/ReadDir 等）并接收响应
+//! - CreateSession 响应包含 socket_name，Manager 通过 SessionConnection 连接到 Session 进程
+//!
+//! 新架构：不再使用 SCM_RIGHTS 传递 master_fd。
+//! master_fd 由 Session 进程持有，Manager 通过 UnixSocket 帧协议与 Session 通信。
 
 use std::collections::HashMap;
-use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::net::UnixListener;
 use tokio::sync::RwLock;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use anyhow::{Result, Context};
-use nix::sys::socket::{recvmsg, ControlMessageOwned, MsgFlags};
 use prost::Message;
-use std::io::IoSliceMut;
 use tracing::{info, warn, error};
 
 use super::pty_registry::{PtyRegistry, PtySession, UserInfo};
+use super::session_connection::SessionConnection;
 use super::worker_manager::{WorkerManager, WorkerStatus};
 use crate::protocol::generated::{
     ManagerRequest, WorkerResponse,
@@ -32,7 +35,7 @@ pub struct IpcConnection {
     /// Worker 进程 ID
     pub worker_pid: Option<u32>,
 
-    /// Unix Stream 连接（用于接收 FD）
+    /// Unix Stream 连接（用于 protobuf 通信）
     stream: Option<tokio::net::UnixStream>,
 }
 
@@ -43,20 +46,6 @@ impl IpcConnection {
             connection_id,
             worker_pid: None,
             stream: Some(stream),
-        }
-    }
-
-    /// 接收文件描述符(异步)
-    ///
-    /// 先等待 stream 可读,再调用 recvmsg 接收 SCM_RIGHTS
-    pub async fn receive_fd(&mut self) -> Result<RawFd> {
-        if let Some(ref mut stream) = self.stream {
-            // 等待数据就绪(非阻塞 socket 需要先 await)
-            stream.readable().await
-                .context("Failed to wait for stream readable")?;
-            receive_fd_from_stream(stream)
-        } else {
-            Err(anyhow::anyhow!("No stream available"))
         }
     }
 
@@ -255,67 +244,16 @@ impl IpcServer {
         Ok(connection_id)
     }
 
-    /// 接收 PTY master_fd 并注册到 PtyRegistry
+    /// 发送 CreateSession 请求到 Worker 并连接 Session 进程(新架构)
     ///
-    /// # 参数
-    /// - `connection_id`: 连接 ID（由 accept 返回）
-    /// - `session_id`: PTY 会话 ID
-    /// - `user_info`: 用户信息
-    ///
-    /// # 返回
-    /// - 注册成功返回 Ok(())
-    pub async fn receive_and_register_fd(
-        &self,
-        connection_id: &str,
-        session_id: String,
-        user_info: UserInfo,
-    ) -> Result<()> {
-        let mut connections = self.connections.write().await;
-
-        if let Some(mut connection) = connections.remove(connection_id) {
-            // 接收 FD
-            let master_fd = connection.receive_fd().await
-                .context("Failed to receive FD from worker")?;
-
-            info!(
-                "收到 PTY master_fd: fd={}, connection_id={}",
-                master_fd, connection_id
-            );
-
-            // 创建 PTY 会话
-            let pty_session = PtySession {
-                session_id: session_id.clone(),
-                master_fd,
-                user_info,
-                created_at: std::time::SystemTime::now(),
-            };
-
-            // 注册到 PtyRegistry（添加错误处理，防止 FD 泄漏）
-            if let Err(e) = self.pty_registry.register(pty_session).await {
-                // 注册失败，关闭 FD 防止泄漏
-                if let Err(close_err) = nix::unistd::close(master_fd) {
-                    error!("注册失败后关闭 FD 失败: fd={}, error={}", master_fd, close_err);
-                } else {
-                    info!("注册失败，已关闭 FD: fd={}", master_fd);
-                }
-                return Err(e.context("Failed to register PTY session"));
-            }
-
-            info!("PTY 会话已注册: session_id={}, fd={}", session_id, master_fd);
-
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!("Connection not found: {}", connection_id))
-        }
-    }
-
-    /// 发送 CreateSession 请求到 Worker 并接收 FD + 响应(阶段 2 新增)
-    ///
-    /// 这是原子的 request-response 操作:
+    /// 新架构流程:
     /// 1. 发送 CreateSession 请求到 Worker
-    /// 2. Worker 创建 PTY,forkpty 子进程(setuid/setgid),通过 SCM_RIGHTS 发送 master_fd
-    /// 3. Worker 发送 SessionCreated 响应(含 session_id)
-    /// 4. Manager 接收 FD + 响应,注册到 PtyRegistry
+    /// 2. Worker 创建 Session 进程（openpty+fork），Session 进程 bind abstract socket
+    /// 3. Worker 返回 SessionCreated 响应（含 session_id 和 socket_name）
+    /// 4. Manager 通过 SessionConnection 连接到 Session 进程的 UnixSocket
+    /// 5. 注册到 PtyRegistry
+    ///
+    /// 不再使用 SCM_RIGHTS 传递 master_fd。master_fd 由 Session 进程持有。
     ///
     /// # 参数
     /// - `request`: CreateSession 请求(含 shell/cols/rows/uid/gid 等)
@@ -338,7 +276,6 @@ impl IpcServer {
         };
 
         // 取出连接（不持有锁整个 await 过程，避免阻塞 IPC server run 循环）
-        // 操作完成后在函数末尾 insert 回去
         let connection_id;
         let mut connection = {
             let mut connections = self.connections.write().await;
@@ -357,82 +294,62 @@ impl IpcServer {
             return Err(e.context("Failed to send CreateSession request to Worker"));
         }
 
-        // 2. 接收 master_fd (SCM_RIGHTS)
-        // 注意:Worker 先 send_fd(1字节dummy + SCM_RIGHTS),再 send_response(4字节长度 + protobuf)
-        // recvmsg 只消费 1 字节普通数据 + 控制消息,不会吞掉后续 send_response 的数据
-        let master_fd = match connection.receive_fd().await {
-            Ok(fd) => fd,
-            Err(e) => {
-                error!("接收 master_fd 失败,清理连接: connection_id={}, error={:?}", connection_id, e);
-                connection.close();
-                return Err(e.context("Failed to receive master_fd from Worker"));
-            }
-        };
-
-        // 3. 接收 WorkerResponse
+        // 2. 接收 WorkerResponse（新架构：不再接收 FD，只接收 protobuf 响应）
         let response = match connection.receive_response().await {
             Ok(resp) => resp,
             Err(e) => {
                 error!("接收 CreateSession 响应失败,清理连接: connection_id={}, error={:?}", connection_id, e);
                 connection.close();
-                // FD 已接收但响应失败,关闭 FD 防止泄漏
-                let _ = nix::unistd::close(master_fd);
                 return Err(e.context("Failed to receive response from Worker"));
             }
         };
 
-        // 4. 解析响应
-        let result = match response.payload {
-            Some(worker_response::Payload::SessionCreated(session_created)) => {
-                let session_id = session_created.session_id;
-
-                // 设置 master_fd 为非阻塞模式
-                let flags = nix::fcntl::OFlag::from_bits_truncate(
-                    nix::fcntl::fcntl(master_fd, nix::fcntl::FcntlArg::F_GETFL)
-                        .unwrap_or(nix::fcntl::OFlag::empty().bits())
-                );
-                let new_flags = flags | nix::fcntl::OFlag::O_NONBLOCK;
-                let _ = nix::fcntl::fcntl(master_fd, nix::fcntl::FcntlArg::F_SETFL(new_flags));
-
-                // 注册到 PtyRegistry
-                let pty_session = PtySession {
-                    session_id: session_id.clone(),
-                    master_fd,
-                    user_info,
-                    created_at: std::time::SystemTime::now(),
-                };
-
-                if let Err(e) = self.pty_registry.register(pty_session).await {
-                    // 注册失败,关闭 FD 防止泄漏
-                    let _ = nix::unistd::close(master_fd);
-                    Err(e.context("Failed to register PTY session"))
-                } else {
-                    info!(
-                        "PTY 会话创建成功(通过 Worker): session_id={}, fd={}",
-                        session_id, master_fd
-                    );
-                    Ok(session_id)
-                }
-            }
-            Some(worker_response::Payload::Error(err)) => {
-                // Worker 返回错误,关闭已接收的 FD
-                let _ = nix::unistd::close(master_fd);
-                Err(anyhow::anyhow!("Worker error: code={}, message={}", err.code, err.message))
-            }
-            _ => {
-                let _ = nix::unistd::close(master_fd);
-                Err(anyhow::anyhow!("Unexpected response from Worker: {:?}", response.payload))
-            }
-        };
-
-        // 将连接放回 connections（无论成功还是失败，连接仍然可用）
-        // 除非上面已经 close 了（错误路径）
+        // 将连接放回 connections（连接仍然可用）
         {
             let mut connections = self.connections.write().await;
             connections.insert(connection_id.clone(), connection);
         }
 
-        result
+        // 3. 解析响应，连接 Session 进程
+        match response.payload {
+            Some(worker_response::Payload::SessionCreated(session_created)) => {
+                let session_id = session_created.session_id;
+                let socket_name = session_created.socket_name;
+
+                info!(
+                    "Worker 创建 Session 成功: session_id={}, socket_name={}",
+                    session_id, socket_name
+                );
+
+                // 4. 连接 Session 进程的 UnixSocket
+                //    SessionConnection::connect 会接收 Hello 帧并验证 session_id
+                let connection = SessionConnection::connect(&socket_name, &session_id)
+                    .await
+                    .context("连接 Session 进程失败")?;
+
+                // 5. 注册到 PtyRegistry
+                let pty_session = PtySession {
+                    session_id: session_id.clone(),
+                    connection: Arc::new(connection),
+                    user_info,
+                    created_at: std::time::SystemTime::now(),
+                };
+
+                if let Err(e) = self.pty_registry.register(pty_session).await {
+                    error!("注册 PTY 会话失败: session_id={}, error={:?}", session_id, e);
+                    return Err(e.context("Failed to register PTY session"));
+                }
+
+                info!("PTY 会话创建成功: session_id={}", session_id);
+                Ok(session_id)
+            }
+            Some(worker_response::Payload::Error(err)) => {
+                Err(anyhow::anyhow!("Worker error: code={}, message={}", err.code, err.message))
+            }
+            _ => {
+                Err(anyhow::anyhow!("Unexpected response from Worker: {:?}", response.payload))
+            }
+        }
     }
 
     /// 发送通用请求到 Worker 并接收响应(阶段 3 新增)
@@ -665,35 +582,6 @@ impl IpcServer {
 
         Ok(())
     }
-}
-
-/// 从 UnixStream 接收文件描述符
-fn receive_fd_from_stream(stream: &tokio::net::UnixStream) -> Result<RawFd> {
-    use std::os::unix::io::AsRawFd;
-
-    let raw_fd = stream.as_raw_fd();
-    let mut buf = [0u8; 1];
-    let mut iov = [IoSliceMut::new(&mut buf)];
-    // nix 0.29 的 recvmsg 要求 cmsg_buffer 为 Option<&mut Vec<u8>>
-    let mut cmsg_buf = vec![0u8; 64];
-
-    let msg = recvmsg::<()>(
-        raw_fd,
-        &mut iov,
-        Some(&mut cmsg_buf),
-        MsgFlags::empty(),
-    ).context("Failed to recvmsg")?;
-
-    for cmsg in msg.cmsgs()
-        .context("Failed to parse control messages")? {
-        if let ControlMessageOwned::ScmRights(fds) = cmsg {
-            if !fds.is_empty() {
-                return Ok(fds[0]);
-            }
-        }
-    }
-
-    Err(anyhow::anyhow!("No FD received"))
 }
 
 impl Drop for IpcServer {

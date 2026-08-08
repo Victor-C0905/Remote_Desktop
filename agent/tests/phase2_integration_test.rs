@@ -68,7 +68,7 @@ async fn test_create_pty_session_via_worker() {
     let registry = manager.pty_registry();
     let session = registry.get(&session_id).await;
     assert!(session.is_some(), "PtyRegistry 中应能找到 session");
-    assert!(session.unwrap().master_fd > 0, "master_fd 应大于 0");
+    assert!(session.unwrap().connection.socket_name().contains("gnome-remote-session"), "应有有效的 socket_name");
 
     // 清理
     let removed = registry.unregister(&session_id).await;
@@ -121,7 +121,7 @@ async fn test_pty_read_write_via_worker() {
     let mut found_hello = false;
     for _ in 0..10 {
         let read_result = registry.read(&session_id).await;
-        if let Ok(data) = read_result {
+        if let Ok((_msg_type, data)) = read_result {
             if !data.is_empty() {
                 let output = String::from_utf8_lossy(&data);
                 if output.contains("hello_phase2") {

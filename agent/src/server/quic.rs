@@ -154,7 +154,7 @@ impl ConnectionContext {
     /// 清理所有关联资源（连接关闭后调用）
     ///
     /// 清理顺序：
-    /// 1. 移除所有 PTY 会话（终止子进程，关闭 master fd）
+    /// 1. 注销所有 PTY 会话（发送 Close 帧给 Session 进程，断开 UnixSocket 连接）
     /// 2. 移除所有订阅（停止数据采集器）
     /// 3. 清理超时的传输会话（安全兜底）
     pub async fn cleanup(
@@ -1207,8 +1207,8 @@ async fn handle_stream(
             tracing::info!("终端创建请求: shell={}, cols={}, rows={}, cwd={:?}, user={}",
                 shell, cols, rows, working_directory, session.username);
 
-            // 阶段 2:通过 Worker 子进程创建 PTY 会话(Worker forkpty 并通过 SCM_RIGHTS 传递 master_fd)
-            // 替代旧的 pty_manager.spawn_as_user(直接在 Manager 进程中 forkpty)
+            // 新架构:通过 Worker 创建 Session 进程(openpty+fork),Session 进程持有 master_fd
+            // Manager 通过 UnixSocket 帧协议与 Session 进程通信(不再使用 SCM_RIGHTS)
             let session_id = manager.create_pty_session(&shell, *cols as u32, *rows as u32, working_directory.as_deref(), session).await?;
 
             // 注册到连接上下文（连接关闭时自动清理 PTY 会话）
@@ -1223,11 +1223,10 @@ async fn handle_stream(
                 session_id.clone(),
                 send,
                 recv,
-                manager.pty_registry().clone(),  // 阶段 2:改用 PtyRegistry
+                manager.pty_registry().clone(),  // PtyRegistry(内部通过 SessionConnection socket 通信)
                 envelope.request_id,  // 传递 request_id 用于发送响应
                 shutdown_rx,          // 传递关闭信号
                 stats_manager.clone(), // 传递统计管理器
-                manager.clone(),  // 阶段 2:传递 Manager 用于 PTY 输出任务
             ).await?;
 
             tracing::info!("终端 Stream 结束: session_id={}", session_id);
@@ -1249,7 +1248,7 @@ async fn handle_stream(
         Payload::TerminalData { session_id, data, is_input } => {
             // 单条终端数据消息（用于非持久连接）
             if *is_input {
-                // 阶段 2:通过 PtyRegistry 写入(替代 pty_manager.write)
+                // 通过 PtyRegistry 写入(内部走 SessionConnection socket)
                 manager.pty_registry().write(&session_id, &data).await?;
             } else {
                 // 输出数据不应该从客户端发送
@@ -1277,8 +1276,7 @@ async fn handle_stream(
 
         #[cfg(unix)]
         Payload::TerminalResizeRequest { session_id, cols, rows } => {
-            // 调整远程 PTY 大小
-            // 阶段 2:通过 PtyRegistry 调整(替代 pty_manager.resize)
+            // 调整远程 PTY 大小(通过 PtyRegistry 发送 RESIZE 帧给 Session 进程)
             match manager.pty_registry().resize(&session_id, *cols, *rows).await {
                 Ok(()) => {
                     tracing::info!("PTY resize 成功: session_id={}, {}x{}", session_id, cols, rows);
@@ -1523,16 +1521,18 @@ async fn send_auth_response(
 }
 
 /// 处理终端持久 Stream（双向数据隧道）
+///
+/// 新架构:PTY 读写通过 PtyRegistry(内部走 SessionConnection UnixSocket 帧协议),
+/// 不再直接操作 master_fd,也不再需要 Manager 引用。
 #[cfg(unix)]
 async fn handle_terminal_stream(
     session_id: String,
     send: SendStream,
     mut recv: RecvStream,
-    pty_registry: Arc<crate::manager::PtyRegistry>,  // 阶段 2:改用 PtyRegistry
-    request_id: u32,  // 新增：用于发送响应
+    pty_registry: Arc<crate::manager::PtyRegistry>,  // PtyRegistry(内部通过 SessionConnection socket 通信)
+    request_id: u32,  // 用于发送响应
     shutdown_rx: broadcast::Receiver<()>,  // 连接关闭信号
-    stats_manager: Arc<StatsManager>,  // 新增：统计管理器
-    manager: Arc<crate::manager::Manager>,  // 阶段 2:传递 Manager 用于 PTY 输出任务
+    stats_manager: Arc<StatsManager>,  // 统计管理器
 ) -> Result<()> {
     tracing::info!("终端双向隧道启动: session_id={}", session_id);
 
@@ -1615,7 +1615,8 @@ async fn handle_terminal_stream(
 
     tracing::info!("终端会话创建成功，响应已发送: session_id={}", session_id);
 
-    // 启动 PTY 输出推送任务（阶段 2:使用 v2 版本,基于 PtyRegistry + Manager）
+    // 启动 PTY 输出推送任务
+    // 新架构:从 Session 进程 UnixSocket 读取 PTY 输出,批量发送到客户端
     let config = PtyOutputConfig::default();
     let pty_read_task = spawn_pty_output_task_v2(
         pty_registry.clone(),
@@ -1623,7 +1624,6 @@ async fn handle_terminal_stream(
         send.clone(),
         Some(stats_manager.clone()),
         config,
-        manager.clone(),
     ).await;
 
     // 订阅连接关闭信号（需要在 select! 之前可变绑定）
@@ -1649,7 +1649,7 @@ async fn handle_terminal_stream(
         }
     }
 
-    // 清理 PTY 会话(阶段 2:通过 PtyRegistry 注销)
+    // 清理 PTY 会话(通过 PtyRegistry 注销,内部发送 Close 帧给 Session 进程)
     pty_registry.unregister(&session_id).await?;
 
     Ok(())
