@@ -97,6 +97,51 @@ sudo cp /var/backups/gnome-remote-agent/gnome-remote-agent_* /usr/local/bin/gnom
 sudo systemctl start gnome-remote-agent
 ```
 
+## 增量部署（按改动范围选择最快路径）
+
+全量打包（`bash build.sh release` + `update.sh`）会备份、替换二进制、重启服务，流程较重。
+如果本次改动**只涉及 agent 二进制**，没有改 deploy 脚本、systemd service、配置文件、proto 等外围资源，可以跳过打包流程，直接上传二进制并重启服务。
+
+### 判断依据
+
+部署前先确认本次改动的范围，对照下表选择部署方式：
+
+| 改动范围 | 部署方式 | 操作 |
+|----------|----------|------|
+| 仅 `agent/src/` 下 Rust 代码 | **增量部署（仅二进制）** | 编译 → 上传二进制 → systemctl restart |
+| `agent/deploy/` 脚本（install.sh/update.sh/uninstall.sh） | 全量部署 | `bash build.sh release` → `update.sh` |
+| `systemd/gnome-remote-agent.service` | 全量部署 | `bash build.sh release` → `update.sh` |
+| `agent/agent.*.toml` 配置模板 | 全量部署 | `bash build.sh release` → `update.sh` |
+| `protocol/agent.proto` 或 `agent/src/protocol/` | 全量部署 | `bash build.sh release` → `update.sh` |
+| 前端 `src/` 或 `src-tauri/` | 与 agent 无关，单独打包客户端 | `npm run tauri build` |
+
+### 增量部署步骤（仅二进制）
+
+适用条件：本次提交只改了 `agent/src/` 下的 Rust 代码，没有动 deploy 脚本、systemd service、配置文件、proto。
+
+```bash
+# 1. 编译 release 二进制（开发机器，WSL 环境，跳过 build.sh 打包流程）
+cd /mnt/e/MyWork/gnome-remote/agent
+cargo build --release
+
+# 2. 直接上传二进制到服务器
+scp target/release/agent user@server:/tmp/gnome-remote-agent
+
+# 3. 在服务器上替换二进制并重启
+ssh user@server << 'EOF'
+sudo cp /tmp/gnome-remote-agent /usr/local/bin/gnome-remote-agent
+sudo chmod +x /usr/local/bin/gnome-remote-agent
+sudo systemctl restart gnome-remote-agent
+sudo systemctl status gnome-remote-agent --no-pager
+EOF
+```
+
+**注意：** 增量部署不会创建版本备份。如果需要保留回滚能力，先用 `update.sh` 全量部署，或手动备份：
+
+```bash
+sudo cp /usr/local/bin/gnome-remote-agent /var/backups/gnome-remote-agent/gnome-remote-agent_$(date +%Y%m%d_%H%M%S)
+```
+
 ## 卸载
 
 ```bash

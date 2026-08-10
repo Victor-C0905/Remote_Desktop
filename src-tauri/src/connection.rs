@@ -744,8 +744,10 @@ pub async fn remote_connect(
                         break;
                     }
                 }
-                // 心跳失败 → 立即通知前端断连（不等主循环清理）
-                tracing::info!("Watchdog 检测到连接丢失，通知前端: {}", heartbeat_server_id);
+                // 心跳失败 → 立即清理传输任务并通知前端断连（不等主循环清理）
+                tracing::info!("Watchdog 检测到连接丢失，清理传输任务并通知前端: {}", heartbeat_server_id);
+                let heartbeat_tm = heartbeat_app.state::<std::sync::Arc<crate::transfer::TransferManager>>();
+                heartbeat_tm.cleanup_by_connection(&heartbeat_server_id).await;
                 let _ = heartbeat_app.emit("connection-lost", &heartbeat_server_id);
             });
             
@@ -756,6 +758,8 @@ pub async fn remote_connect(
             let status_task = tokio::spawn(async move {
                 status_conn.closed().await;
                 tracing::warn!("QUIC 连接已关闭: {}", status_server_id);
+                let status_tm = status_app.state::<std::sync::Arc<crate::transfer::TransferManager>>();
+                status_tm.cleanup_by_connection(&status_server_id).await;
                 let _ = status_app.emit("connection-lost", &status_server_id);
             });
             
@@ -781,6 +785,9 @@ pub async fn remote_connect(
             if let Ok(mut conns) = app_handle.state::<ConnectionManager>().connections.lock() {
                 conns.remove(&server_id_clone);
             }
+            // 清理传输任务（兜底：心跳/状态任务可能已清理，幂等无副作用）
+            let tm = app_handle.state::<std::sync::Arc<crate::transfer::TransferManager>>();
+            tm.cleanup_by_connection(&server_id_clone).await;
             let _ = app_handle.emit("connection-lost", &server_id_clone);
         });
 
