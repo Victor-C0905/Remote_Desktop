@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use futures_util::{SinkExt, StreamExt};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use std::sync::Arc;
@@ -14,18 +14,43 @@ pub async fn run(cfg: AgentConfig, certs: Vec<CertificateDer<'static>>, key: Pri
     let tls_acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(tls_config));
 
     // 手动创建 TCP socket 并设置 SO_REUSEADDR，解决 systemctl restart 时端口释放延迟问题
+    // SO_REUSEADDR 对 TCP 只能复用 TIME_WAIT 端口，不能复用旧进程仍在监听的端口
+    // 因此还需重试机制（最多 5 次，每次 1 秒），等待旧进程退出释放端口
     let listener = {
         let sock_addr: std::net::SocketAddr = addr.parse()?;
-        let socket = socket2::Socket::new(
-            socket2::Domain::for_address(sock_addr),
-            socket2::Type::STREAM,
-            None,
-        )?;
-        socket.set_reuse_address(true)?;
-        socket.set_nonblocking(true)?;
-        socket.bind(&sock_addr.into())?;
-        socket.listen(1024)?;
-        tokio::net::TcpListener::from_std(socket.into())?
+        let mut retries = 0;
+        const MAX_RETRIES: u32 = 5;
+        loop {
+            let socket = socket2::Socket::new(
+                socket2::Domain::for_address(sock_addr),
+                socket2::Type::STREAM,
+                None,
+            )?;
+            socket.set_reuse_address(true)?;
+            socket.set_nonblocking(true)?;
+
+            match socket.bind(&sock_addr.into()) {
+                Ok(()) => {
+                    socket.listen(1024)?;
+                    tracing::info!("🟢 WebSocket socket 已绑定: {}", addr);
+                    break tokio::net::TcpListener::from_std(socket.into())?;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AddrInUse && retries < MAX_RETRIES => {
+                    retries += 1;
+                    tracing::warn!(
+                        "WebSocket 端口 {} 被占用，等待重试 ({}/{}): {}",
+                        addr, retries, MAX_RETRIES, e
+                    );
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                }
+                Err(e) => {
+                    return Err(anyhow!(
+                        "WebSocket bind {} 失败 (重试 {} 次后放弃): {}",
+                        addr, retries, e
+                    ));
+                }
+            }
+        }
     };
 
     loop {
