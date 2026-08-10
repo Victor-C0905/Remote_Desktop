@@ -206,7 +206,7 @@ impl std::fmt::Debug for SessionConnection {
 ///
 /// Session 进程在 fork 后需要时间完成 setuid、bind、fork（孙进程）、listen 等步骤。
 /// Manager 可能在 Session 进程 listen() 之前就尝试 connect，导致 ECONNREFUSED。
-/// 因此在收到 ECONNREFUSED 时重试，最多等待 500ms（50 次 × 10ms）。
+/// 因此在收到 ECONNREFUSED 时重试，最多等待 2 秒（100 次 × 20ms）。
 ///
 /// 使用 nix 创建 socket 并 connect，然后转为 tokio 异步 UnixStream。
 async fn connect_abstract(socket_name: &str) -> Result<UnixStream> {
@@ -214,8 +214,8 @@ async fn connect_abstract(socket_name: &str) -> Result<UnixStream> {
     let addr = UnixAddr::new_abstract(socket_name.as_bytes())
         .map_err(|e| anyhow!("创建 abstract 地址失败: {}", e))?;
 
-    let max_retries = 50;
-    let retry_interval = tokio::time::Duration::from_millis(10);
+    let max_retries = 100;
+    let retry_interval = tokio::time::Duration::from_millis(20);
 
     for attempt in 0..max_retries {
         // 每次重试创建新 socket（旧 socket fd 在 connect 失败后已不可用）
@@ -257,7 +257,7 @@ async fn connect_abstract(socket_name: &str) -> Result<UnixStream> {
 
     Err(anyhow!(
         "连接 Session socket 失败: Session 进程在 {}ms 内未就绪",
-        max_retries * 10
+        max_retries * 20
     ))
 }
 

@@ -241,52 +241,52 @@ pub async fn run(
 
     // 手动创建 UDP socket 并设置 SO_REUSEADDR，解决 systemctl restart 时端口释放延迟问题
     // 旧进程刚被 kill，内核可能还未完全释放 UDP 端口，导致 bind 失败
-    // SO_REUSEADDR 允许 bind 到处于释放过渡期的端口
-    // 同时加重试机制（最多 5 次，每次 1 秒），应对端口暂时被占用的情况
+    // SO_REUSEADDR 必须在 bind 之前设置才能生效（与 WebSocket 侧实现一致）
+    // 同时加重试机制（最多 5 次，每次 1 秒），应对端口被活跃进程暂时占用的情况
     let socket = {
         let sock_addr: std::net::SocketAddr = addr.parse()?;
         let mut retries = 0;
         const MAX_RETRIES: u32 = 5;
         loop {
-            match std::net::UdpSocket::bind(sock_addr) {
-                Ok(s) => {
-                    // 设置 SO_REUSEADDR，允许端口在重启时快速复用
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::io::AsRawFd;
-                        let fd = s.as_raw_fd();
-                        let optval: libc::c_int = 1;
-                        unsafe {
-                            libc::setsockopt(
-                                fd,
-                                libc::SOL_SOCKET,
-                                libc::SO_REUSEADDR,
-                                &optval as *const _ as *const _,
-                                std::mem::size_of_val(&optval) as libc::socklen_t,
+            // 先创建 socket，设置 SO_REUSEADDR，再 bind（顺序很重要）
+            match socket2::Socket::new(
+                socket2::Domain::for_address(sock_addr),
+                socket2::Type::DGRAM,
+                None,
+            ) {
+                Ok(sock) => {
+                    sock.set_reuse_address(true)?;
+                    sock.set_nonblocking(true)?;
+
+                    match sock.bind(&sock_addr.into()) {
+                        Ok(()) => {
+                            tracing::info!("🔵 QUIC socket 已绑定: {}", addr);
+                            break std::net::UdpSocket::from(sock);
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse && retries < MAX_RETRIES => {
+                            retries += 1;
+                            tracing::warn!(
+                                "QUIC 端口 {} 被占用，等待重试 ({}/{}): {}",
+                                addr, retries, MAX_RETRIES, e
                             );
+                            // sock 在此处 drop，释放 fd
+                            tokio::time::sleep(Duration::from_secs(1)).await;
+                        }
+                        Err(e) => {
+                            return Err(anyhow::anyhow!(
+                                "QUIC bind {} 失败 (重试 {} 次后放弃): {}",
+                                addr, retries, e
+                            ));
                         }
                     }
-                    break s;
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::AddrInUse && retries < MAX_RETRIES => {
-                    retries += 1;
-                    tracing::warn!(
-                        "QUIC 端口 {} 被占用，等待重试 ({}/{}): {}",
-                        addr, retries, MAX_RETRIES, e
-                    );
-                    tokio::time::sleep(Duration::from_secs(1)).await;
                 }
                 Err(e) => {
-                    return Err(anyhow::anyhow!(
-                        "QUIC bind {} 失败 (重试 {} 次后放弃): {}",
-                        addr, retries, e
-                    ));
+                    return Err(anyhow::anyhow!("创建 QUIC socket 失败: {}", e));
                 }
             }
         }
     };
 
-    tracing::info!("🔵 QUIC socket 已绑定: {}", addr);
     let endpoint = quinn::Endpoint::new(
         quinn::EndpointConfig::default(),
         Some(server_config),
@@ -1209,7 +1209,27 @@ async fn handle_stream(
 
             // 新架构:通过 Worker 创建 Session 进程(openpty+fork),Session 进程持有 master_fd
             // Manager 通过 UnixSocket 帧协议与 Session 进程通信(不再使用 SCM_RIGHTS)
-            let session_id = manager.create_pty_session(&shell, *cols as u32, *rows as u32, working_directory.as_deref(), session).await?;
+            let session_id = match manager.create_pty_session(
+                &shell, *cols as u32, *rows as u32, working_directory.as_deref(), session
+            ).await {
+                Ok(id) => id,
+                Err(e) => {
+                    // 创建失败时发送错误响应给客户端，避免 stream 被直接关闭
+                    // 导致客户端收到 "stream finished early (0 bytes read)" 错误
+                    tracing::error!("创建 PTY 会话失败: {}", e);
+                    let error_response = Envelope::new(
+                        envelope.request_id,
+                        Payload::Error {
+                            code: -1,
+                            message: format!("创建终端会话失败: {}", e),
+                        },
+                    );
+                    if let Ok(resp_bytes) = error_response.encode() {
+                        let _ = write_message(&mut send, &resp_bytes).await;
+                    }
+                    return Ok(());
+                }
+            };
 
             // 注册到连接上下文（连接关闭时自动清理 PTY 会话）
             ctx.register_pty_session(session_id.clone()).await;
