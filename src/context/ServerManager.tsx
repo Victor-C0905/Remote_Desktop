@@ -1,4 +1,4 @@
-import { createContext, useContext, useCallback, useEffect, ReactNode } from "react";
+import { createContext, useContext, useCallback, useEffect, useRef, ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
@@ -67,25 +67,28 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
 
   const activeServer = servers.find((s) => s.id === activeServerId) || null;
 
+  // 用 ref 持有最新值，避免 useEffect 闭包捕获过时值
+  const activeServerIdRef = useRef(activeServerId);
+  activeServerIdRef.current = activeServerId;
+
   // 监听连接丢失事件
   useEffect(() => {
     log.info("设置连接丢失监听器");
 
     const setupListener = async () => {
       const unlisten = await listen<string>("connection-lost", (event) => {
-        log.info("收到连接丢失事件:", event.payload);
         const lostServerId = event.payload;
+        log.info("收到连接丢失事件:", lostServerId);
 
         // 更新服务器状态为 disconnected
         setServerStatus(lostServerId, "disconnected");
 
-        // 如果是当前活跃服务器，设置 activeServerId 为 null
-        if (activeServerId === lostServerId) {
+        // 通过 ref 读取最新值，而非闭包捕获
+        if (activeServerIdRef.current === lostServerId) {
           log.info("当前活跃服务器断开，清空 activeServerId");
           setActiveServerId(null);
         }
 
-        // TODO: 显示通知提示用户（可以在 UI 中添加通知系统）
         log.warn(`服务器 ${lostServerId} 连接已断开`);
       });
 
@@ -104,7 +107,9 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
         unlistenFn();
       }
     };
-  }, [activeServerId, setServerStatus, setActiveServerId]);
+    // 空依赖：监听器只注册一次，组件生命周期内不变
+    // setServerStatus / setActiveServerId 是 Zustand 的稳定引用
+  }, [setServerStatus, setActiveServerId]);
 
   // 监听证书信任事件（证书钉扎：存储服务器证书指纹）
   useEffect(() => {
@@ -227,15 +232,11 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
   }, [servers, activeServerId, setServerStatus, setActiveServerId]);
 
   const disconnectServer = useCallback(async (id: string) => {
-    // 取消订阅（不阻塞：后台任务的清理由 remote_disconnect 的 abort 接管）
-    invoke('unsubscribe', {
-      serverId: id,
-      types: [{ type: 'metrics', params: { interval_secs: 1 } }]
-    }).catch((e) => {
-      log.warn("取消订阅失败（非关键）:", e);
-    });
+    // 注意：不调用 unsubscribe。
+    // remote_disconnect 的统一清理块会 abort subscription_task 并清理所有子任务，
+    // 先调 unsubscribe 会因连接已断开报"未找到连接"噪音日志。
 
-    // 断开连接（不等待 unsubscribe 完成，后端 Disconnect 会清理所有子任务）
+    // 断开连接（后端清理块会接管所有子任务清理）
     try {
       await invoke("remote_disconnect", { serverId: id });
     } catch (e) {
