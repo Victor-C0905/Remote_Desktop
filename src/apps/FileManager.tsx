@@ -123,6 +123,9 @@ export function FileManager({ preloadData }: FileManagerProps) {
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 权限不足目录：进入目录但内容不可见（空列表+轻微提示）
+  // 存储无权限目录路径，null 表示当前目录可正常访问
+  const [permissionDenied, setPermissionDenied] = useState<string | null>(null);
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
   const [username, setUsername] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("list");
@@ -222,6 +225,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
   const loadDir = useCallback(async (path: string): Promise<boolean> => {
     setLoading(true);
     setError(null);
+    setPermissionDenied(null);
     setSelectedIdx(null);
     setContextMenu(null);
 
@@ -262,8 +266,17 @@ export function FileManager({ preloadData }: FileManagerProps) {
       return true;
     } catch (e: any) {
       log.error('加载目录失败:', e);
-      setError(e.toString());
-      setEntries([]);
+      const errMsg = e?.toString() ?? '';
+      // 权限不足：当作空目录处理（进入目录但内容不可见）
+      // 其他错误（路径不存在等）：显示错误提示，不更新路径
+      if (errMsg.includes('权限不足') || errMsg.includes('Permission denied')) {
+        setEntries([]);
+        setPermissionDenied(path);
+        setCurrentPath(path);
+      } else {
+        setError(errMsg);
+        setEntries([]);
+      }
       return false;
     } finally {
       setLoading(false);
@@ -482,6 +495,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
       // 断连：立即重置为离线状态（不清空侧边栏，保留 UI 结构）
       setEntries([]);
       setError(null);
+      setPermissionDenied(null);
       setLoading(false);
       setSelectedIdx(null);
       setContextMenu(null);
@@ -501,6 +515,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
       // 清空所有本地模式的残留数据
       setEntries([]);
       setError(null);
+      setPermissionDenied(null);
       setLoading(false);
       setSelectedIdx(null);
       setContextMenu(null);
@@ -1485,9 +1500,13 @@ export function FileManager({ preloadData }: FileManagerProps) {
               <div className="fm-empty-text">{error}</div>
             </div>
           ) : entries.length === 0 ? (
-            <div className="fm-empty">
-              <div className="fm-empty-icon">📂</div>
-              <div className="fm-empty-text">空目录</div>
+            <div
+              className="fm-empty"
+              onContextMenu={handleEmptyContextMenu}
+              onClick={handleEmptyClick}
+            >
+              <div className="fm-empty-icon">{permissionDenied ? "🔒" : "📂"}</div>
+              <div className="fm-empty-text">{permissionDenied ? "无权限读取此目录内容" : "空目录"}</div>
             </div>
           ) : viewMode === "list" ? (
             <div className="fm-list">
