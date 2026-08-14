@@ -493,12 +493,38 @@ pub struct ActiveConnection {
     subscription_task: Option<tokio::task::JoinHandle<()>>,
 }
 
+/// 连接丢失的触发源（用于日志区分）
+#[derive(Debug, Clone)]
+pub enum ConnectionLostSource {
+    /// 心跳 Ping 超时
+    Heartbeat,
+    /// QUIC 连接关闭（idle_timeout / 对端 close）
+    QuicClosed,
+    /// 业务请求发送失败
+    SendFailed,
+}
+
+impl std::fmt::Display for ConnectionLostSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConnectionLostSource::Heartbeat => write!(f, "心跳超时"),
+            ConnectionLostSource::QuicClosed => write!(f, "QUIC 连接关闭"),
+            ConnectionLostSource::SendFailed => write!(f, "发送失败"),
+        }
+    }
+}
+
 enum ClientRequest {
     Send {
         envelope: Envelope,
         response_tx: tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>,
     },
     Disconnect,
+    /// 被动检测到连接丢失（由心跳/status/发送失败触发）
+    /// 仅用于通知主循环退出，不携带响应通道
+    ConnectionLost {
+        source: ConnectionLostSource,
+    },
 }
 
 impl ConnectionManager {
@@ -705,64 +731,76 @@ pub async fn remote_connect(
             //   - 最坏延迟：5s(间隔) + 5s(超时) = **10s**
             //   - 最佳延迟：conn.closed() 瞬间触发
             //
-            // 双重保障机制：
-            //   路径 A: 心跳 Ping/Pong → 应用层检测 (5+5=10s)
-            //   路径 B: QUIC idle_timeout(30s) → 传输层自动关闭 → conn.closed()
-            //   哪条路径先触发，哪条先通知前端
+            // 独立通道设计：
+            //   - 心跳直接用 conn.clone() 调用 send_and_receive_quic
+            //   - 不走主循环队列，避免被耗时业务请求阻塞
+            //   - Quinn 支持同一连接上多个并发 stream，互不干扰
+            //
+            // 只通知不清理：
+            //   - 检测到断连后只发 ConnectionLost 给主循环
+            //   - 不执行 cleanup / emit，由主循环统一清理
             let heartbeat_tx = tx.clone();
-            let heartbeat_app = app_handle.clone();
             let heartbeat_server_id = server_id_clone.clone();
+            let heartbeat_conn = conn_clone.clone();
             let heartbeat_task = tokio::spawn(async move {
                 let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
                 loop {
                     interval.tick().await;
+
+                    // 快速退出：连接已关闭
+                    if heartbeat_conn.close_reason().is_some() {
+                        break;
+                    }
+
                     let now = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_millis() as u64;
                     let envelope = Envelope::new(0, Payload::Ping { timestamp: now });
-                    let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-                    if heartbeat_tx.send(ClientRequest::Send { envelope, response_tx }).await.is_ok() {
-                        // 显式超时 5s：等待 Pong 响应，超时即判定连接异常
-                        match tokio::time::timeout(
-                            std::time::Duration::from_secs(5),
-                            response_rx,
-                        ).await {
-                            Ok(Ok(_)) => { /* Pong 正常收到，连接存活 */ }
-                            Ok(Err(e)) => {
-                                tracing::warn!("心跳发送失败，连接可能已断开: {}", e);
-                                break;
-                            }
-                            Err(_) => {
-                                // 超时未收到 Pong → 连接已死（对端无响应）
-                                tracing::warn!("Ping 超时 (5s)，连接无响应: {}", heartbeat_server_id);
-                                break;
-                            }
+
+                    // 独立通道：直接调用 send_and_receive_quic，不走主循环队列
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(5),
+                        send_and_receive_quic(&heartbeat_conn, 0, envelope.payload),
+                    ).await {
+                        Ok(Ok(_)) => { /* Pong 正常收到，连接存活 */ }
+                        Ok(Err(e)) => {
+                            tracing::warn!("心跳发送失败，连接可能已断开: {}", e);
+                            let _ = heartbeat_tx.send(ClientRequest::ConnectionLost {
+                                source: ConnectionLostSource::Heartbeat,
+                            }).await;
+                            break;
                         }
-                    } else {
-                        tracing::warn!("心跳通道已关闭: {}", heartbeat_server_id);
-                        break;
+                        Err(_) => {
+                            tracing::warn!("Ping 超时 (5s)，连接无响应: {}", heartbeat_server_id);
+                            let _ = heartbeat_tx.send(ClientRequest::ConnectionLost {
+                                source: ConnectionLostSource::Heartbeat,
+                            }).await;
+                            break;
+                        }
                     }
                 }
-                // 心跳失败 → 立即清理传输任务并通知前端断连（不等主循环清理）
-                tracing::info!("Watchdog 检测到连接丢失，清理传输任务并通知前端: {}", heartbeat_server_id);
-                let heartbeat_tm = heartbeat_app.state::<std::sync::Arc<crate::transfer::TransferManager>>();
-                heartbeat_tm.cleanup_by_connection(&heartbeat_server_id).await;
-                let _ = heartbeat_app.emit("connection-lost", &heartbeat_server_id);
+                // 心跳任务结束：不执行 cleanup / emit，由主循环统一清理
             });
             
             // 连接状态监听任务
+            // 只通知主循环，不执行 cleanup / emit
+            // 竞态安全：心跳和 status 可能同时检测到断连，都发 ConnectionLost。
+            // 主循环处理第一个后 break，第二个消息随 channel drop 自动丢弃。
             let status_conn = conn_clone.clone();
-            let status_app = app_handle.clone();
+            let status_tx = tx.clone();
             let status_server_id = server_id_clone.clone();
             let status_task = tokio::spawn(async move {
                 status_conn.closed().await;
                 tracing::warn!("QUIC 连接已关闭: {}", status_server_id);
-                let status_tm = status_app.state::<std::sync::Arc<crate::transfer::TransferManager>>();
-                status_tm.cleanup_by_connection(&status_server_id).await;
-                let _ = status_app.emit("connection-lost", &status_server_id);
+                let _ = status_tx.send(ClientRequest::ConnectionLost {
+                    source: ConnectionLostSource::QuicClosed,
+                }).await;
             });
             
+            // 主循环需要 tx clone 用于 SendFailed 时通知自己
+            let main_tx = tx.clone();
+
             // 主消息循环
             while let Some(req) = rx.recv().await {
                 match req {
@@ -773,22 +811,60 @@ pub async fn remote_connect(
                             break;
                         }
                         let result = send_and_receive_quic(&conn_clone, envelope.request_id, envelope.payload).await;
+                        if result.is_err() {
+                            let _ = response_tx.send(Err("连接已断开".into()));
+                            // 通过 ConnectionLost 通知自己退出，清理逻辑只有一个入口
+                            let _ = main_tx.send(ClientRequest::ConnectionLost {
+                                source: ConnectionLostSource::SendFailed,
+                            }).await;
+                            continue;
+                        }
                         let _ = response_tx.send(result);
                     }
                     ClientRequest::Disconnect => break,
+                    ClientRequest::ConnectionLost { source } => {
+                        tracing::info!("连接丢失（{}）: {}", source, server_id_clone);
+                        break;
+                    }
                 }
             }
-            
-            // 清理
+
+            // ════════════════════════════════════════════════════════════
+            // 统一清理块（唯一清理入口）
+            // 退出原因：Disconnect / ConnectionLost / 主循环自然结束
+            // 所有清理集中在此处，保证只执行一次
+            // ════════════════════════════════════════════════════════════
+
+            // 1. 停止检测任务（防止心跳/status 在清理后还发 ConnectionLost）
             heartbeat_task.abort();
             status_task.abort();
-            if let Ok(mut conns) = app_handle.state::<ConnectionManager>().connections.lock() {
-                conns.remove(&server_id_clone);
+
+            // 2. 显式关闭 QUIC 连接（幂等：已关闭则无操作）
+            //    主动断开：确保连接立即关闭，释放资源
+            //    被动断开：close_reason() 已有值，close() 是无操作
+            if conn_clone.close_reason().is_none() {
+                conn_clone.close(0u32.into(), b"client closing");
+                tracing::info!("QUIC 连接已主动关闭: {}", server_id_clone);
             }
-            // 清理传输任务（兜底：心跳/状态任务可能已清理，幂等无副作用）
+
+            // 3. 清理传输任务（取消该连接所有未完成的传输）
             let tm = app_handle.state::<std::sync::Arc<crate::transfer::TransferManager>>();
             tm.cleanup_by_connection(&server_id_clone).await;
+
+            // 4. 从 ConnectionManager 移除连接条目
+            //    同时 abort subscription_task，避免被动断开时的残留读取日志
+            if let Ok(mut conns) = app_handle.state::<ConnectionManager>().connections.lock() {
+                if let Some(active_conn) = conns.remove(&server_id_clone) {
+                    if let Some(task) = active_conn.subscription_task {
+                        task.abort();
+                    }
+                }
+            }
+
+            // 5. 通知前端（只 emit 一次）
             let _ = app_handle.emit("connection-lost", &server_id_clone);
+
+            tracing::info!("连接清理完成: {}", server_id_clone);
         });
 
         return Ok(info);
@@ -801,65 +877,40 @@ pub async fn remote_connect(
 #[tauri::command]
 #[tracing::instrument(skip(app), fields(server_id = %server_id))]
 pub async fn remote_disconnect(server_id: String, app: tauri::AppHandle) -> Result<(), String> {
-    tracing::info!("[Connection] 断开连接: {}", server_id);
+    tracing::info!("[Connection] 主动断开: {}", server_id);
 
-    // 1. 清理传输任务
-    let transfer_manager = app.state::<std::sync::Arc<crate::transfer::TransferManager>>();
-    transfer_manager.cleanup_by_connection(&server_id).await;
-
-    // 2. 发送断开通知给 Agent（让 Agent 清理传输会话等资源）
-    // 注意：必须在移除连接之前发送，因为发送需要通过 tx 通道
+    // 1. 获取连接句柄（quic_conn + tx）
     let manager = app.state::<ConnectionManager>();
-    let disconnect_result = {
+    let conn_info = {
         let conns = manager.connections.lock().unwrap();
-        if let Some(conn) = conns.get(&server_id) {
-            let tx = conn.tx.clone();
-            // 通过消息循环发送 DisconnectRequest 给 Agent
-            let request_id = manager.next_request_id();
-            let envelope = Envelope::new(request_id, Payload::DisconnectRequest {});
-            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-            let send_result = tx.try_send(ClientRequest::Send { envelope, response_tx });
-            Some((send_result, response_rx))
-        } else {
-            None
-        }
+        conns.get(&server_id).map(|c| (c.quic_conn.clone(), c.tx.clone()))
     };
 
-    // 等待 Agent 的响应（带超时，避免因网络问题无限等待）
-    if let Some((send_result, response_rx)) = disconnect_result {
-        if send_result.is_ok() {
-            match tokio::time::timeout(std::time::Duration::from_secs(3), response_rx).await {
-                Ok(Ok(Ok(_))) => {
-                    tracing::info!("[Connection] Agent 已确认断开请求: {}", server_id);
-                }
-                Ok(Ok(Err(e))) => {
-                    tracing::warn!("[Connection] Agent 断开请求发送失败（非致命）: {}", e);
-                }
-                Ok(Err(_)) => {
-                    tracing::warn!("[Connection] Agent 断开请求响应通道关闭（非致命）");
-                }
-                Err(_) => {
-                    tracing::warn!("[Connection] Agent 断开请求超时（3s），继续断开");
-                }
-            }
-        } else {
-            tracing::warn!("[Connection] 发送断开请求失败（消息队列已满，非致命）");
-        }
-    }
-
-    // 3. 移除连接并通知消息循环退出
-    let tx = {
-        let mut conns = manager.connections.lock().unwrap();
-        conns.remove(&server_id).map(|c| c.tx)
+    let (quic_conn, tx) = match conn_info {
+        Some(v) => v,
+        None => return Err("未找到该服务器的连接".into()),
     };
 
-    if let Some(tx) = tx {
-        let _ = tx.send(ClientRequest::Disconnect).await;
-        tracing::info!("[Connection] 连接已断开: {}", server_id);
-        Ok(())
-    } else {
-        Err("未找到该服务器的连接".into())
+    // 2. 发送 DisconnectRequest（fire-and-forget，不等待响应）
+    //    Agent 收到后清理传输会话等资源；收不到则靠 conn.closed() 兜底
+    let request_id = manager.next_request_id();
+    let envelope = Envelope::new(request_id, Payload::DisconnectRequest {});
+    let (response_tx, _response_rx) = tokio::sync::oneshot::channel();
+    let _ = tx.try_send(ClientRequest::Send { envelope, response_tx });
+    // 不等待 response_rx —— 立即关闭连接
+
+    // 3. 立即关闭 QUIC 连接
+    //    主循环会在下次 send 时检测到 close_reason，或 status_task 的
+    //    conn.closed() 触发，任一都会通过统一清理块完成清理
+    if let Some(conn) = quic_conn {
+        conn.close(0u32.into(), b"client disconnect");
     }
+
+    // 4. 发送 Disconnect 通知主循环退出（触发统一清理块）
+    let _ = tx.send(ClientRequest::Disconnect).await;
+
+    tracing::info!("[Connection] 主动断开完成: {}", server_id);
+    Ok(())
 }
 
 #[tauri::command]
