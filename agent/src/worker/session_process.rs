@@ -106,18 +106,68 @@ pub fn create_session(params: SessionParams) -> Result<SessionCreatedInfo> {
     }
 }
 
+/// 加载用户登录环境（对标 GNOME GDM/Xsession 的会话环境加载）
+///
+/// 通过以目标用户身份执行 `<shell> -l -c 'env'` 获取完整登录环境。
+/// 当前进程已通过 setuid 降权为目标用户，子进程会继承该身份。
+///
+/// 获取的环境变量包括：
+/// - PATH（用户自定义的，包含 ~/.local/bin 等）
+/// - HOSTNAME、LANG、LC_*
+/// - 用户在 ~/.bash_profile / ~/.profile 中设置的自定义变量
+///
+/// 后续 fork 的 bash 进程会继承这些环境变量，与非登录 shell 的 ~/.bashrc 读取配合，
+/// 完全复现 GNOME 桌面终端的环境（登录时加载会话环境，终端继承）。
+fn load_login_environment(shell: &str, user: &SessionUserContext) -> Result<Vec<(String, String)>> {
+    use std::process::Command;
+
+    let output = Command::new(shell)
+        .arg("-l")
+        .arg("-c")
+        .arg("env")
+        .env("HOME", &user.home_dir)
+        .env("USER", &user.username)
+        .env("LOGNAME", &user.username)
+        .stdin(std::process::Stdio::null())  // 防止 .bash_profile 中的 read 命令阻塞
+        .output()
+        .context("执行登录 shell 获取环境失败")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow!("登录 shell 执行失败: {}", stderr));
+    }
+
+    // 解析 env 输出（KEY=VALUE 格式，每行一个）
+    let env_str = String::from_utf8_lossy(&output.stdout);
+    let vars: Vec<(String, String)> = env_str
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.splitn(2, '=');
+            let key = parts.next()?.to_string();
+            let value = parts.next()?.to_string();
+            if key.is_empty() {
+                None
+            } else {
+                Some((key, value))
+            }
+        })
+        .collect();
+
+    Ok(vars)
+}
+
 /// Session 进程主逻辑
 ///
 /// 步骤:
 /// 1. 忽略 SIGPIPE（写已关闭的 socket 不应杀进程）
 /// 2. setuid 降权
-/// 3. 设置环境变量和工作目录
+/// 3. 加载用户登录环境（对标 GNOME GDM/Xsession 的会话环境加载）
 /// 4. bind abstract socket
 /// 5. fork 孙进程 execvp(bash)
 /// 6. close slave（只需 master）
 /// 7. listen + session_io_loop
 fn run_session_process(params: SessionParams, master_fd: RawFd, slave_fd: RawFd) -> Result<()> {
-    // 1. 忽略 SIGPIPE（write 到已关闭的 socket 应返回 EPIPE，不是杀进程）
+    // 1. 忽略 SIGPIPE（write 到已关闭的 socket 不应杀进程）
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_IGN);
     }
@@ -137,13 +187,30 @@ fn run_session_process(params: SessionParams, master_fd: RawFd, slave_fd: RawFd)
         }
     }
 
-    // 3. 设置环境变量
+    // 3. 加载用户登录环境（对标 GNOME GDM/Xsession 的会话环境加载）
+    //    通过以目标用户身份执行 `<shell> -l -c 'env'` 获取完整登录环境，
+    //    包括 PATH、HOSTNAME、LANG、用户在 ~/.bash_profile 中设置的自定义变量等。
+    //    后续 fork 的 bash 进程会继承这些环境变量，与非登录 shell 的 ~/.bashrc 读取配合，
+    //    完全复现 GNOME 桌面终端的环境（登录时加载会话环境，终端继承）。
     if let Some(ref user) = params.user {
-        std::env::set_var("HOME", &user.home_dir);
-        std::env::set_var("USER", &user.username);
-        std::env::set_var("LOGNAME", &user.username);
-        std::env::set_var("SHELL", &params.shell);
+        match load_login_environment(&params.shell, user) {
+            Ok(env_vars) => {
+                for (key, value) in &env_vars {
+                    std::env::set_var(key, value);
+                }
+                eprintln!("已加载 {} 个登录环境变量", env_vars.len());
+            }
+            Err(e) => {
+                eprintln!("加载登录环境失败(回退到最小环境): {}", e);
+                // 回退:设置最小环境变量
+                std::env::set_var("HOME", &user.home_dir);
+                std::env::set_var("USER", &user.username);
+                std::env::set_var("LOGNAME", &user.username);
+                std::env::set_var("SHELL", &params.shell);
+            }
+        }
     }
+    // TERM 不在登录环境中，需要显式设置
     std::env::set_var("TERM", "xterm-256color");
 
     // 设置工作目录

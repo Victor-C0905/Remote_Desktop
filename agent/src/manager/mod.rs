@@ -73,6 +73,7 @@ pub use session_connection::SessionConnection;
 // 阶段 3 新增:协议适配层导出
 pub use protocol_adapter::{UserContext, serde_to_worker_request, worker_response_to_serde};
 
+#[cfg(unix)]
 use std::sync::Arc;
 use anyhow::Result;
 use crate::config::AgentConfig;
@@ -144,7 +145,7 @@ impl Manager {
 
     /// 创建新的 Manager（非 Unix 平台）
     #[cfg(not(unix))]
-    pub async fn new(config: &AgentConfig) -> Result<Self> {
+    pub async fn new(_config: &AgentConfig) -> Result<Self> {
         Ok(Self {})
     }
 
