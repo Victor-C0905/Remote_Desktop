@@ -180,6 +180,7 @@ async fn main() -> Result<()> {
 }
 
 /// Worker 模式入口
+#[cfg(unix)]
 async fn run_worker_mode(args: &Args) -> Result<()> {
     let ipc_socket_path = args.ipc_socket.clone()
         .ok_or_else(|| anyhow::anyhow!("Worker 模式必须指定 --ipc-socket 参数"))?;
@@ -198,6 +199,12 @@ async fn run_worker_mode(args: &Args) -> Result<()> {
     tracing::info!("Worker 进程已退出");
 
     Ok(())
+}
+
+/// Worker 模式入口（非 Unix 平台 stub）
+#[cfg(not(unix))]
+async fn run_worker_mode(_args: &Args) -> Result<()> {
+    anyhow::bail!("Worker 模式仅在 Unix 系统上可用")
 }
 
 /// Manager 模式入口（原有的主逻辑）
