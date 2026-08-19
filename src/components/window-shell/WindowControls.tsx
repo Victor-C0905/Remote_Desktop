@@ -22,7 +22,13 @@ export const WindowControls = memo(function WindowControls({
   onMaximize,
 }: WindowControlsProps) {
   return (
-    <div className={styles.windowControls}>
+    // ✅ 阻止 mousedown 冒泡到 HeaderBar:避免点控制按钮时误触发标题栏拖拽(tear-off)。
+    //    根因:HeaderBar 绑了 onMouseDown={handleDragStart},snap/最大化状态下 mousedown 会触发 tear-off,
+    //    导致点最小化/最大化/关闭时窗口被错误还原成 snap/最大化前的尺寸。
+    <div
+      className={styles.windowControls}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
       {/* 最小化按钮 - 黄色 */}
       <button
         className={`${styles.windowControlBtn} ${styles.windowControlBtnMinimize}`}

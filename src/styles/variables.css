@@ -115,6 +115,9 @@
   --z-system-alert:     90;
   --z-system-overlay:   95;
 
+  /* Layer 100: Aero Snap 预览层(最高层,高于所有窗口与系统级遮罩) */
+  --z-snap-preview:    100;
+
   /* 说明：                                                  */
   /* 1. 所有组件必须使用 CSS 变量，不得直接写数字             */
   /* 2. 同层级元素按 DOM 顺序渲染，z-index 相同              */

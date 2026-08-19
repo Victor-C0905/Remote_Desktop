@@ -120,3 +120,18 @@
   overflow: hidden; /* ✅ 裁剪溢出内容,配合 windowShell 的 overflow: hidden 双重保障 */
   /* 束链: windowShell(overflow:hidden) → contentFrame(overflow:hidden) → appLayout(flex:1) → appContent(overflow-y:auto) */
 }
+
+/* ═════════════════════════════════════════════════════════════
+   Aero Snap 预览框(通过 React Portal 渲染到 document.body)
+   ═════════════════════════════════════════════════════════════ */
+
+.snapPreview {
+  position: absolute;
+  pointer-events: none;            /* ✅ 不挡鼠标,避免预览框干扰拖拽 */
+  background: rgba(0, 120, 212, 0.25);
+  border: 1px solid rgba(0, 120, 212, 0.8);
+  border-radius: 4px;
+  z-index: var(--z-snap-preview);  /* ✅ 高于所有窗口 */
+  transition: all 120ms ease-out;   /* ✅ 预览框自身切换 zone 时也有平滑感 */
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.4) inset;
+}
