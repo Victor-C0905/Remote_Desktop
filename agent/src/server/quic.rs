@@ -13,7 +13,7 @@ use crate::config::AgentConfig;
 use crate::subscription::SubscriptionManager;
 use crate::event_bus::EventBus;
 use crate::protocol::{Envelope, Payload};
-use crate::auth::{Authenticator, CompositeAuthenticator, UserSession, ChallengeManager, AuthRateLimiter, StatsManager, ConnectionCloseReason};
+use crate::auth::{Authenticator, CompositeAuthenticator, UserSession, UserExecutor, ChallengeManager, AuthRateLimiter, StatsManager, ConnectionCloseReason};
 use crate::audit::AuditLogger;
 
 // 导入 manager 模块的 PTY 输出任务
@@ -374,11 +374,16 @@ fn build_server_config(
             e
         })?;
     
-    // 配置传输参数，禁用空闲超时
+    // 配置传输参数：Bbr 拥塞控制 + 大窗口 + keep_alive
     let mut transport = quinn::TransportConfig::default();
     transport.max_idle_timeout(None); // 禁用空闲超时，连接不会因无活动而关闭
     transport.keep_alive_interval(Some(std::time::Duration::from_secs(5))); // 每5秒发送保持活跃包
-    
+    // 流控窗口：8MB per-stream / 64MB connection-wide，提升高 BDP 链路吞吐
+    transport.stream_receive_window(quinn::VarInt::from_u32(8 * 1024 * 1024));  // 8MB
+    transport.receive_window(quinn::VarInt::from_u32(64 * 1024 * 1024));         // 64MB
+    // Bbr 拥塞控制：相比默认 Cubic 更适合高带宽高延迟链路，充分发挥设备性能
+    transport.congestion_controller_factory(std::sync::Arc::new(quinn::congestion::BbrConfig::default()));
+
     quic_config.transport_config(std::sync::Arc::new(transport));
     Ok(quic_config)
 }
@@ -1004,6 +1009,7 @@ async fn handle_connection(
         let ctx_inner = ctx.clone();
         let session_inner = session.clone();
         let stats_manager_inner = stats_manager.clone();  // 克隆 stats_manager
+        let audit_log_inner = audit_log.clone();  // 克隆 audit_log
         #[cfg(unix)]
         let manager_inner = manager.clone();
         tokio::spawn(async move {
@@ -1015,6 +1021,7 @@ async fn handle_connection(
                 ctx_inner,
                 &session_inner,
                 stats_manager_inner,  // 传递 stats_manager 参数
+                audit_log_inner,  // 传递 audit_log 参数
                 #[cfg(unix)]
                 manager_inner,
             ).await {
@@ -1051,6 +1058,7 @@ async fn handle_stream(
     ctx: Arc<ConnectionContext>,
     session: &UserSession,
     stats_manager: Arc<StatsManager>,  // 新增参数：统计管理器
+    audit_log: Arc<AuditLogger>,  // 新增参数：审计日志记录器
     #[cfg(unix)]
     manager: Arc<crate::manager::Manager>,
 ) -> Result<()> {
@@ -1319,10 +1327,10 @@ async fn handle_stream(
         }
 
         // 文件传输请求
-        Payload::FileTransferRequest { direction, path, file_size, chunk_size, resume_from } => {
-            tracing::info!("文件传输请求: direction={:?}, path={}, resume_from={:?}", direction, path, resume_from);
+        Payload::FileTransferRequest { direction, path, file_size, chunk_size, resume_from, frame_mode, stream_count } => {
+            tracing::info!("文件传输请求: direction={:?}, path={}, resume_from={:?}, frame_mode={}, stream_count={:?}", direction, path, resume_from, frame_mode, stream_count);
 
-            match crate::handler::handle_file_transfer_request(envelope.request_id, direction, path, *file_size, *chunk_size, *resume_from, cfg, session).await {
+            match crate::handler::handle_file_transfer_request(envelope.request_id, direction, path, *file_size, *chunk_size, *resume_from, cfg, session, audit_log.clone(), frame_mode, *stream_count).await {
                 Ok(response) => {
                     // 注册传输会话到连接上下文（连接关闭时自动清理）
                     if let Payload::FileTransferAccept { ref session_id, .. } = response.payload {
@@ -1345,8 +1353,8 @@ async fn handle_stream(
 
                     // 如果是下载，启动异步发送任务
                     if direction == "download" {
-                        // 获取 session_id
-                        if let Payload::FileTransferAccept { session_id, file_size, chunk_size, .. } = response.payload {
+                        // 获取 session_id 与协商的 frame_mode
+                        if let Payload::FileTransferAccept { session_id, file_size, chunk_size, frame_mode, .. } = response.payload {
                             handle_file_download_stream(
                                 session_id,
                                 send,
@@ -1354,17 +1362,25 @@ async fn handle_stream(
                                 file_size,
                                 chunk_size,
                                 stats_manager.clone(),
+                                audit_log.clone(),
+                                session.username.clone(),
+                                session.uid,
+                                frame_mode,
                             ).await?;
                         }
                     } else {
                         // 上传：等待客户端发送 FileChunk
-                        // 注意：上传需要从 response 中获取 session_id
-                        if let Payload::FileTransferAccept { session_id, file_size, .. } = response.payload {
+                        // 注意：上传需要从 response 中获取 session_id 与 frame_mode
+                        if let Payload::FileTransferAccept { session_id, file_size, frame_mode, .. } = response.payload {
                             handle_file_upload_stream(
                                 recv,
+                                send,
                                 session_id,
                                 path.to_string(),
                                 file_size,
+                                audit_log.clone(),
+                                session,
+                                frame_mode,
                             ).await?;
                         }
                     }
@@ -1409,6 +1425,87 @@ async fn handle_stream(
             }
 
             tracing::info!("客户端断开连接处理完成");
+        }
+
+        // 多流加入握手（非主 stream 的第一个控制帧）
+        // 客户端在主 stream 的 FileTransferAccept 后，为其余 N-1 个 stream 各 open_bi 发送此 payload
+        Payload::MultiStreamJoin { session_id, stream_index, offset_start, offset_end } => {
+            tracing::info!(
+                "多流加入请求: session_id={}, stream_index={}, offset=[{},{}), stream_id={}",
+                session_id, stream_index, offset_start, offset_end, stream_id
+            );
+
+            match crate::handler::handle_multi_stream_join(
+                session_id,
+                *stream_index,
+                *offset_start,
+                *offset_end,
+                session,
+            ).await {
+                Ok((file_size, chunk_size, _frame_mode)) => {
+                    // 发送 ACK（复用 FileTransferAccept，客户端据此确认 join 成功）
+                    let ack = Envelope::new(
+                        envelope.request_id,
+                        Payload::FileTransferAccept {
+                            session_id: session_id.clone(),
+                            file_size,
+                            chunk_size,
+                            mtime: None,
+                            frame_mode: "raw".to_string(),
+                            stream_count: 1, // 非 0 表示此 stream 自己的 stream_count=1（本 stream 独立）
+                        },
+                    );
+                    match ack.encode() {
+                        Ok(resp_bytes) => {
+                            if let Err(e) = write_message(&mut send, &resp_bytes).await {
+                                tracing::warn!("发送多流加入 ACK 失败: {}", e);
+                                return Ok(());
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("编码多流加入 ACK 失败: {}", e);
+                            return Ok(());
+                        }
+                    }
+
+                    // 从全局会话管理器取走 part writer（由 handle_multi_stream_join 注册）
+                    let part_writer = {
+                        let mut sessions = crate::handler::TRANSFER_SESSIONS.lock().await;
+                        match sessions.get_mut(session_id) {
+                            Some(s) => s.part_writers.remove(stream_index)
+                                .ok_or_else(|| anyhow::anyhow!(
+                                    "part writer 不存在: session_id={}, stream_index={}",
+                                    session_id, stream_index
+                                ))?,
+                            None => return Err(anyhow::anyhow!(
+                                "会话不存在: {}", session_id
+                            )),
+                        }
+                    };
+
+                    // 进入 part-upload 循环（接收 chunk → write → finish → mark completed）
+                    handle_multi_stream_part_upload(
+                        recv,
+                        part_writer,
+                        session_id.clone(),
+                        *stream_index,
+                        file_size,
+                        audit_log.clone(),
+                        session.username.clone(),
+                        session.uid,
+                    ).await?;
+                }
+                Err(e) => {
+                    tracing::error!("多流加入失败: session_id={}, stream_index={}, err={}", session_id, stream_index, e);
+                    let response = Envelope::new(
+                        envelope.request_id,
+                        Payload::Error { code: -1, message: e },
+                    );
+                    if let Ok(resp_bytes) = response.encode() {
+                        let _ = write_message(&mut send, &resp_bytes).await;
+                    }
+                }
+            }
         }
 
         _ => {
@@ -1463,7 +1560,7 @@ async fn handle_stream(
             }
 
             // 本地 handler 处理(不经 Worker 的请求,或非 Unix 平台)
-            let response = crate::handler::handle_envelope(&envelope, cfg, session, stats_manager.clone()).await;
+            let response = crate::handler::handle_envelope(&envelope, cfg, session, stats_manager.clone(), audit_log.clone()).await;
             match response.encode() {
                 Ok(resp_bytes) => {
                     if let Err(e) = write_message(&mut send, &resp_bytes).await {
@@ -1685,8 +1782,14 @@ async fn handle_file_download_stream(
     file_size: u64,
     _chunk_size: u32,
     stats_manager: Arc<StatsManager>,
+    audit_log: Arc<AuditLogger>,
+    username: String,
+    uid: u32,
+    frame_mode: String,
 ) -> Result<()> {
-    tracing::info!("开始发送文件: session_id={}, path={}, size={}", session_id, path, file_size);
+    use crate::protocol::raw_frame;
+    let raw_mode = frame_mode == "raw";
+    tracing::info!("开始发送文件: session_id={}, path={}, size={}, frame_mode={}", session_id, path, file_size, frame_mode);
 
     // 从全局会话管理器获取 session 并取出 reader
     let mut sessions = crate::handler::TRANSFER_SESSIONS.lock().await;
@@ -1699,23 +1802,45 @@ async fn handle_file_download_stream(
     drop(sessions);  // 释放锁
 
     let mut seq = 1u32;
+    let mut download_success = true;
 
     // 读取并发送文件块
-    while let Some(chunk) = reader.read_next_chunk().map_err(|e| anyhow::anyhow!("{}", e))? {
-        // 发送 FileChunk
-        let chunk_payload = Payload::FileChunk {
-            session_id: session_id.clone(),
-            seq,
-            data: chunk.clone(),
-            size: chunk.len() as u32,
+    loop {
+        let chunk = match reader.read_next_chunk() {
+            Ok(Some(c)) => c,
+            Ok(None) => break,  // EOF
+            Err(e) => {
+                tracing::error!("读取文件块失败: {}", e);
+                download_success = false;
+                break;
+            }
         };
 
-        let chunk_envelope = Envelope::new(0, chunk_payload);  // request_id 不重要
-        let chunk_bytes = chunk_envelope.encode().map_err(|e| anyhow::anyhow!("{}", e))?;
+        if raw_mode {
+            // ===== 裸帧模式: 直接写二进制数据帧 =====
+            let raw_chunk = raw_frame::RawChunk { seq, data: chunk.clone() };
+            if let Err(e) = raw_frame::write_data_chunk(&mut send, &raw_chunk).await {
+                tracing::error!("发送文件块失败(裸帧): {}", e);
+                download_success = false;
+                break;
+            }
+        } else {
+            // ===== JSON 模式(旧客户端回退) =====
+            let chunk_payload = Payload::FileChunk {
+                session_id: session_id.clone(),
+                seq,
+                data: chunk.clone(),
+                size: chunk.len() as u32,
+            };
 
-        if let Err(e) = write_message(&mut send, &chunk_bytes).await {
-            tracing::error!("发送文件块失败: {}", e);
-            break;
+            let chunk_envelope = Envelope::new(0, chunk_payload);  // request_id 不重要
+            let chunk_bytes = chunk_envelope.encode().map_err(|e| anyhow::anyhow!("{}", e))?;
+
+            if let Err(e) = write_message(&mut send, &chunk_bytes).await {
+                tracing::error!("发送文件块失败: {}", e);
+                download_success = false;
+                break;
+            }
         }
 
         // 记录文件传输字节数
@@ -1726,16 +1851,37 @@ async fn handle_file_download_stream(
     }
 
     // 发送 FileTransferComplete
-    let complete_payload = Payload::FileTransferComplete {
-        session_id: session_id.clone(),
-        success: true,
-        mtime: None,
-        error: None,
-    };
+    if raw_mode {
+        // ===== 裸帧模式: 控制帧承载 JSON Envelope =====
+        let complete_payload = Payload::FileTransferComplete {
+            session_id: session_id.clone(),
+            success: download_success,
+            mtime: None,
+            error: None,
+        };
+        let complete_envelope = Envelope::new(0, complete_payload);
+        let complete_bytes = complete_envelope.encode().map_err(|e| anyhow::anyhow!("{}", e))?;
+        raw_frame::write_control_frame(&mut send, &complete_bytes).await?;
+    } else {
+        // ===== JSON 模式 =====
+        let complete_payload = Payload::FileTransferComplete {
+            session_id: session_id.clone(),
+            success: download_success,
+            mtime: None,
+            error: None,
+        };
 
-    let complete_envelope = Envelope::new(0, complete_payload);
-    let complete_bytes = complete_envelope.encode().map_err(|e| anyhow::anyhow!("{}", e))?;
-    write_message(&mut send, &complete_bytes).await?;
+        let complete_envelope = Envelope::new(0, complete_payload);
+        let complete_bytes = complete_envelope.encode().map_err(|e| anyhow::anyhow!("{}", e))?;
+        write_message(&mut send, &complete_bytes).await?;
+    }
+
+    // 审计日志：记录下载完成/失败
+    if download_success {
+        audit_log.log_file_operation(&username, uid, "download_complete", &path, file_size);
+    } else {
+        audit_log.log_file_operation(&username, uid, "download_failed", &path, file_size);
+    }
 
     tracing::info!("文件发送完成: session_id={}", session_id);
     Ok(())
@@ -1751,11 +1897,17 @@ async fn handle_file_download_stream(
 /// - 会话被移除：从 HashMap 中 remove 后 drop，TransferSession::Drop 自动清理
 async fn handle_file_upload_stream(
     mut recv: RecvStream,
+    mut send: SendStream,
     session_id: String,
     path: String,
     file_size: u64,
+    audit_log: Arc<AuditLogger>,
+    user_session: &UserSession,
+    frame_mode: String,
 ) -> Result<()> {
-    tracing::info!("开始接收文件: session_id={}, path={}, size={}", session_id, path, file_size);
+    use crate::protocol::raw_frame;
+    let raw_mode = frame_mode == "raw";
+    tracing::info!("开始接收文件: session_id={}, path={}, size={}, frame_mode={}", session_id, path, file_size, frame_mode);
 
     // 从全局会话管理器获取 session 并取出 writer
     let mut sessions = crate::handler::TRANSFER_SESSIONS.lock().await;
@@ -1764,6 +1916,7 @@ async fn handle_file_upload_stream(
 
     let mut writer = session.writer.take()
         .ok_or_else(|| anyhow::anyhow!("文件写入器不存在"))?;
+    let is_multi = session.is_multi_stream();
 
     drop(sessions);  // 释放锁
 
@@ -1771,49 +1924,404 @@ async fn handle_file_upload_stream(
 
     // 接收文件块
     loop {
-        let data = read_message(&mut recv).await?;
-        if data.is_none() {
-            // 流中断（客户端断连）— writer 的 Drop impl 会自动清理临时文件
-            tracing::warn!(
-                "文件上传流中断（客户端断连）: session_id={}, path={}, 已传输: {}/{}",
-                session_id, path, writer.transferred(), file_size
-            );
-            break;
-        }
-
-        let data = data.unwrap();
-        let envelope = Envelope::decode(&data).map_err(|e| anyhow::anyhow!("{}", e))?;
-
-        match envelope.payload {
-            Payload::FileChunk { data, .. } => {
-                writer.write_chunk(&data).map_err(|e| anyhow::anyhow!("{}", e))?;
-            }
-            Payload::FileTransferComplete { success, error, .. } => {
-                if success {
-                    writer.finish().map_err(|e| anyhow::anyhow!("{}", e))?;
-                    upload_success = true;
-                    tracing::info!("文件接收完成: session_id={}, path={}", session_id, path);
-                } else {
-                    // 客户端报告失败，abort 删除临时文件
-                    writer.abort();
-                    tracing::error!("文件传输失败（客户端报告）: session_id={}, error={:?}", session_id, error);
+        if raw_mode {
+            // ===== 裸帧模式: [4B len][1B type][body] =====
+            let (type_byte, body_len) = match raw_frame::read_frame(&mut recv).await {
+                Ok(t) => t,
+                Err(e) => {
+                    // 流中断(客户端断连)— writer 的 Drop impl 会自动清理临时文件
+                    tracing::warn!(
+                        "文件上传流中断(裸帧读失败): session_id={}, path={}, 已传输: {}/{}, err: {}",
+                        session_id, path, writer.transferred(), file_size, e
+                    );
+                    break;
                 }
+            };
+            match type_byte {
+                raw_frame::TYPE_DATA => {
+                    let chunk = raw_frame::read_data_chunk_body(&mut recv, body_len).await?;
+                    writer.write_chunk(&chunk.data).map_err(|e| anyhow::anyhow!("{}", e))?;
+                }
+                raw_frame::TYPE_CONTROL => {
+                    let body = raw_frame::read_control_body(&mut recv, body_len).await?;
+                    let env = Envelope::decode(&body).map_err(|e| anyhow::anyhow!("{}", e))?;
+                    match env.payload {
+                        Payload::FileTransferComplete { success, error, .. } => {
+                            if success {
+                                let finish_result = tokio::task::spawn_blocking(move || writer.finish())
+                                    .await
+                                    .map_err(|e| anyhow::anyhow!("finish 任务 panic: {}", e))?;
+                                finish_result.map_err(|e| anyhow::anyhow!("{}", e))?;
+                                upload_success = true;
+                                tracing::info!("文件接收完成(裸帧): session_id={}, path={}", session_id, path);
+                            } else {
+                                tokio::task::spawn_blocking(move || writer.abort())
+                                    .await
+                                    .map_err(|e| anyhow::anyhow!("abort 任务 panic: {}", e))?;
+                                tracing::error!("文件传输失败(客户端报告,裸帧): session_id={}, error={:?}", session_id, error);
+                            }
+                            break;
+                        }
+                        _ => return Err(anyhow::anyhow!("非预期控制帧 payload")),
+                    }
+                }
+                _ => return Err(anyhow::anyhow!("未知帧类型: {}", type_byte)),
+            }
+        } else {
+            // ===== JSON 模式(旧客户端回退) =====
+            let data = read_message(&mut recv).await?;
+            if data.is_none() {
+                // 流中断（客户端断连）— writer 的 Drop impl 会自动清理临时文件
+                tracing::warn!(
+                    "文件上传流中断（客户端断连）: session_id={}, path={}, 已传输: {}/{}",
+                    session_id, path, writer.transferred(), file_size
+                );
                 break;
             }
-            _ => {}
+
+            let data = data.unwrap();
+            let envelope = Envelope::decode(&data).map_err(|e| anyhow::anyhow!("{}", e))?;
+
+            match envelope.payload {
+                Payload::FileChunk { data, .. } => {
+                    writer.write_chunk(&data).map_err(|e| anyhow::anyhow!("{}", e))?;
+                }
+                Payload::FileTransferComplete { success, error, .. } => {
+                    if success {
+                        // spawn_blocking 避免 sync waitpid(flush+sync+rename)阻塞 tokio worker
+                        let finish_result = tokio::task::spawn_blocking(move || writer.finish())
+                            .await
+                            .map_err(|e| anyhow::anyhow!("finish 任务 panic: {}", e))?;
+                        finish_result.map_err(|e| anyhow::anyhow!("{}", e))?;
+                        upload_success = true;
+                        tracing::info!("文件接收完成: session_id={}, path={}", session_id, path);
+                    } else {
+                        // 客户端报告失败，abort 删除临时文件
+                        // spawn_blocking 避免 sync waitpid(kill+waitpid)阻塞 tokio worker
+                        tokio::task::spawn_blocking(move || writer.abort())
+                            .await
+                            .map_err(|e| anyhow::anyhow!("abort 任务 panic: {}", e))?;
+                        tracing::error!("文件传输失败（客户端报告）: session_id={}, error={:?}", session_id, error);
+                    }
+                    break;
+                }
+                _ => {}
+            }
         }
     }
 
-    // 上传完成后，从全局会话管理器中移除会话，防止内存泄漏
-    // 如果流中断，writer 已被 drop（Drop impl 清理临时文件），也需要移除会话
-    let mut sessions = crate::handler::TRANSFER_SESSIONS.lock().await;
-    if let Some(mut removed_session) = sessions.remove(&session_id) {
+    if is_multi {
+        // ===== 多流模式:主 stream 段写入完成 → 轮询等待其他 stream → 合并 → 发送结果 =====
+
         if upload_success {
-            removed_session.mark_completed();
-            tracing::debug!("已移除完成的上传会话: session_id={}", session_id);
+            // 标记主 stream (index=0) 完成
+            let all_done = {
+                let mut sessions = crate::handler::TRANSFER_SESSIONS.lock().await;
+                match sessions.get_mut(&session_id) {
+                    Some(s) => s.mark_stream_completed(),
+                    None => false,
+                }
+            };
+
+            // 如果不是最后一个完成的 stream，轮询等待其他 stream
+            if !all_done {
+                tracing::info!(
+                    "多流主 stream 完成,等待其他 stream: session_id={}",
+                    session_id
+                );
+                loop {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    let sessions = crate::handler::TRANSFER_SESSIONS.lock().await;
+                    match sessions.get(&session_id) {
+                        Some(s) => {
+                            if s.status == crate::transfer_session::TransferStatus::Error {
+                                tracing::warn!(
+                                    "多流其他 stream 失败,中止合并: session_id={}",
+                                    session_id
+                                );
+                                break;
+                            }
+                            if s.completed_streams >= s.stream_count {
+                                tracing::info!(
+                                    "多流所有 stream 完成: session_id={}",
+                                    session_id
+                                );
+                                break;
+                            }
+                        }
+                        None => {
+                            tracing::warn!(
+                                "多流会话不存在(可能被清理): session_id={}",
+                                session_id
+                            );
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // 检查合并条件:所有 stream 完成且无错误
+            let should_merge = {
+                let sessions = crate::handler::TRANSFER_SESSIONS.lock().await;
+                match sessions.get(&session_id) {
+                    Some(s) => s.status != crate::transfer_session::TransferStatus::Error
+                        && s.completed_streams >= s.stream_count,
+                    None => false,
+                }
+            };
+
+            if should_merge {
+                // 获取 part_paths(按 stream_index 顺序)和 final_path
+                let (part_paths, final_path) = {
+                    let sessions = crate::handler::TRANSFER_SESSIONS.lock().await;
+                    match sessions.get(&session_id) {
+                        Some(s) => (s.part_paths.clone(), s.path.clone()),
+                        None => (Vec::new(), String::new()),
+                    }
+                };
+
+                // 创建 executor 并触发合并(spawn_blocking 避免阻塞 tokio worker)
+                let executor = UserExecutor::new(user_session);
+                let merge_result = tokio::task::spawn_blocking(move || {
+                    let child_pid = executor.spawn_isolated_merger(part_paths, &final_path)?;
+                    executor.wait_isolated_child(child_pid)
+                })
+                .await;
+
+                let (merge_success, merge_error) = match merge_result {
+                    Ok(Ok(())) => (true, None),
+                    Ok(Err(e)) => (false, Some(format!("{}", e))),
+                    Err(e) => (false, Some(format!("merge 任务 panic: {}", e))),
+                };
+
+                // 发送 MultiStreamMergeComplete 给客户端(裸帧控制帧)
+                let merge_env = Envelope::new(
+                    0,
+                    Payload::MultiStreamMergeComplete {
+                        session_id: session_id.clone(),
+                        success: merge_success,
+                        error: merge_error,
+                    },
+                );
+                if let Ok(bytes) = merge_env.encode() {
+                    if let Err(e) = raw_frame::write_control_frame(&mut send, &bytes).await {
+                        tracing::warn!("发送 MultiStreamMergeComplete 失败: {}", e);
+                    }
+                }
+
+                // 审计
+                if merge_success {
+                    audit_log.log_file_operation(
+                        &user_session.username, user_session.uid,
+                        "upload_complete", &path, file_size,
+                    );
+                } else {
+                    audit_log.log_file_operation(
+                        &user_session.username, user_session.uid,
+                        "upload_merge_failed", &path, file_size,
+                    );
+                }
+            } else {
+                // 合并条件不满足(有 stream 失败或会话不存在)
+                let merge_env = Envelope::new(
+                    0,
+                    Payload::MultiStreamMergeComplete {
+                        session_id: session_id.clone(),
+                        success: false,
+                        error: Some("部分段上传失败,合并中止".to_string()),
+                    },
+                );
+                if let Ok(bytes) = merge_env.encode() {
+                    let _ = raw_frame::write_control_frame(&mut send, &bytes).await;
+                }
+                audit_log.log_file_operation(
+                    &user_session.username, user_session.uid,
+                    "upload_failed", &path, file_size,
+                );
+            }
+
+            // 移除会话(合并完成后或失败后)
+            let mut sessions = crate::handler::TRANSFER_SESSIONS.lock().await;
+            if let Some(mut removed_session) = sessions.remove(&session_id) {
+                removed_session.mark_completed();
+            }
         } else {
-            tracing::info!("已移除中断的上传会话: session_id={}", session_id);
-            // TransferSession::Drop 会自动清理 writer 中残留的临时文件
+            // 主 stream 上传失败:标记会话为错误,通知客户端
+            {
+                let mut sessions = crate::handler::TRANSFER_SESSIONS.lock().await;
+                if let Some(s) = sessions.get_mut(&session_id) {
+                    s.status = crate::transfer_session::TransferStatus::Error;
+                }
+            }
+
+            let merge_env = Envelope::new(
+                0,
+                Payload::MultiStreamMergeComplete {
+                    session_id: session_id.clone(),
+                    success: false,
+                    error: Some("主 stream 上传失败".to_string()),
+                },
+            );
+            if let Ok(bytes) = merge_env.encode() {
+                let _ = raw_frame::write_control_frame(&mut send, &bytes).await;
+            }
+
+            audit_log.log_file_operation(
+                &user_session.username, user_session.uid,
+                "upload_failed", &path, file_size,
+            );
+
+            let mut sessions = crate::handler::TRANSFER_SESSIONS.lock().await;
+            sessions.remove(&session_id);
+        }
+    } else {
+        // ===== 单流模式(向后兼容) =====
+        // 审计日志：记录上传完成/失败
+        if upload_success {
+            audit_log.log_file_operation(&user_session.username, user_session.uid, "upload_complete", &path, file_size);
+        } else {
+            audit_log.log_file_operation(&user_session.username, user_session.uid, "upload_failed", &path, file_size);
+        }
+
+        // 上传完成后，从全局会话管理器中移除会话，防止内存泄漏
+        // 如果流中断，writer 已被 drop（Drop impl 清理临时文件），也需要移除会话
+        let mut sessions = crate::handler::TRANSFER_SESSIONS.lock().await;
+        if let Some(mut removed_session) = sessions.remove(&session_id) {
+            if upload_success {
+                removed_session.mark_completed();
+                tracing::debug!("已移除完成的上传会话: session_id={}", session_id);
+            } else {
+                tracing::info!("已移除中断的上传会话: session_id={}", session_id);
+                // TransferSession::Drop 会自动清理 writer 中残留的临时文件
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// 处理多流段上传(非主 stream,stream_index 1..N-1)
+///
+/// 接收客户端发送的段数据块,写入 part_writer,完成后标记段完成。
+/// 非主 stream 不负责合并 — 主 stream (handle_file_upload_stream) 负责轮询
+/// 所有段完成状态并触发合并(spawn_isolated_merger)。
+///
+/// # 流程
+/// 1. 循环读取裸帧(TYPE_DATA 数据块 / TYPE_CONTROL 控制帧)
+/// 2. TYPE_DATA: write_chunk → part_writer(经 pipe 传给隔离子进程)
+/// 3. TYPE_CONTROL + FileTransferComplete:
+///    - success=true: spawn_blocking(part_writer.finish()) — 子进程 flush+sync 后 _exit(0)
+///    - success=false: spawn_blocking(part_writer.abort()) — kill 子进程 + 清理临时段文件
+/// 4. 标记段完成(mark_stream_completed)或失败(会话 status=Error)
+///
+/// # 注意
+/// - part_writer 持唯一 pipe FD,不可 Clone,被 move 到 spawn_blocking 内消费
+/// - 段失败时标记会话为 Error,主 stream 轮询检测后中止合并
+async fn handle_multi_stream_part_upload(
+    mut recv: RecvStream,
+    mut part_writer: crate::file_stream::PipeFileStreamWriter,
+    session_id: String,
+    stream_index: u32,
+    file_size: u64,
+    audit_log: Arc<AuditLogger>,
+    username: String,
+    uid: u32,
+) -> Result<()> {
+    use crate::protocol::raw_frame;
+
+    let mut upload_success = false;
+
+    loop {
+        let (type_byte, body_len) = match raw_frame::read_frame(&mut recv).await {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!(
+                    "多流段上传中断: session_id={}, stream={}, err={}",
+                    session_id, stream_index, e
+                );
+                break;
+            }
+        };
+
+        match type_byte {
+            raw_frame::TYPE_DATA => {
+                let chunk = raw_frame::read_data_chunk_body(&mut recv, body_len).await?;
+                part_writer.write_chunk(&chunk.data).map_err(|e| anyhow::anyhow!("{}", e))?;
+            }
+            raw_frame::TYPE_CONTROL => {
+                let body = raw_frame::read_control_body(&mut recv, body_len).await?;
+                let env = Envelope::decode(&body).map_err(|e| anyhow::anyhow!("{}", e))?;
+                match env.payload {
+                    Payload::FileTransferComplete { success, error, .. } => {
+                        if success {
+                            // finish part writer(子进程 flush+sync 后 _exit(0),不 rename)
+                            // 不使用 ? 提前返回,确保 post-loop 标记段完成/失败始终执行
+                            match tokio::task::spawn_blocking(move || part_writer.finish()).await {
+                                Ok(Ok(())) => {
+                                    upload_success = true;
+                                    tracing::info!(
+                                        "多流段完成: session_id={}, stream={}",
+                                        session_id, stream_index
+                                    );
+                                }
+                                Ok(Err(e)) => {
+                                    tracing::error!(
+                                        "多流段 finish 失败: session_id={}, stream={}, err={}",
+                                        session_id, stream_index, e
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        "多流段 finish panic: session_id={}, stream={}, err={}",
+                                        session_id, stream_index, e
+                                    );
+                                }
+                            }
+                        } else {
+                            if let Err(e) = tokio::task::spawn_blocking(move || part_writer.abort()).await {
+                                tracing::error!(
+                                    "多流段 abort panic: session_id={}, stream={}, err={}",
+                                    session_id, stream_index, e
+                                );
+                            }
+                            tracing::error!(
+                                "多流段失败(客户端报告): session_id={}, stream={}, error={:?}",
+                                session_id, stream_index, error
+                            );
+                        }
+                        break;
+                    }
+                    _ => return Err(anyhow::anyhow!("非预期控制帧 payload")),
+                }
+            }
+            _ => return Err(anyhow::anyhow!("未知帧类型: {}", type_byte)),
+        }
+    }
+
+    // 审计日志
+    if upload_success {
+        audit_log.log_file_operation(
+            &username, uid, "upload_part_complete",
+            &format!("stream={}", stream_index), file_size
+        );
+    } else {
+        audit_log.log_file_operation(
+            &username, uid, "upload_part_failed",
+            &format!("stream={}", stream_index), file_size
+        );
+    }
+
+    // 标记段完成或失败
+    // 非主 stream 不负责合并,主 stream 会轮询 completed_streams 并触发合并
+    {
+        let mut sessions = crate::handler::TRANSFER_SESSIONS.lock().await;
+        if let Some(s) = sessions.get_mut(&session_id) {
+            if upload_success {
+                s.mark_stream_completed();
+            } else {
+                // 段失败:标记会话为错误,主 stream 检测后中止合并
+                s.status = crate::transfer_session::TransferStatus::Error;
+            }
         }
     }
 

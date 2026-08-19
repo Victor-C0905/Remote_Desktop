@@ -20,6 +20,7 @@ use std::path::PathBuf;
 use super::UserSession;
 
 /// 用户上下文执行器
+#[derive(Clone)]
 pub struct UserExecutor {
     /// 用户ID (UID)
     uid: u32,
@@ -287,6 +288,613 @@ impl UserExecutor {
         self.uid
     }
 
+    /// 在隔离的子进程中处理文件写入,父进程经 pipe 写 chunk,子进程 read pipe → write file
+    ///
+    /// # 隔离链
+    /// - fork 子进程
+    /// - 子进程 setuid/setgid + UserNamespace::new(uid,gid).create_and_switch() (Linux)
+    /// - 子进程内 open + write 文件(同步 IO)
+    /// - 经 os_pipe 与父进程交换 chunk
+    ///
+    /// # 返回
+    /// - Ok((pipe_writer, child_pid)): 父进程持 pipe_writer 写 chunk,完成后调 wait_isolated_child
+    /// - Err: fork 或 pipe 失败
+    #[cfg(unix)]
+    pub fn spawn_isolated_writer(&self, temp_path: &str, final_path: &str, _file_size: u64) -> Result<(os_pipe::PipeWriter, i32)> {
+        use std::io::{Read as StdRead, Write as StdWrite};
+
+        // 1. 创建 os_pipe
+        let (mut reader, writer) = os_pipe::pipe()
+            .map_err(|e| anyhow::anyhow!("创建管道失败: {}", e))?;
+
+        let uid = self.uid;
+        let gid = self.gid;
+        let temp_path = temp_path.to_string();
+        let final_path = final_path.to_string();
+
+        tracing::debug!("fork 子进程执行隔离写入: uid={}, gid={}", uid, gid);
+
+        // 2. fork 子进程
+        let pid = unsafe { libc::fork() };
+        match pid {
+            -1 => {
+                Err(anyhow::anyhow!("fork 失败: {}", std::io::Error::last_os_error()))
+            }
+            0 => {
+                // ===== 子进程 =====
+                // 关闭 pipe writer 端（子进程只读 pipe）
+                drop(writer);
+
+                // 降权：先 setgid，再 setuid（顺序重要）
+                unsafe {
+                    if libc::setgid(gid) != 0 {
+                        libc::_exit(1);
+                    }
+                    if libc::setuid(uid) != 0 {
+                        libc::_exit(1);
+                    }
+                }
+
+                // 验证降权成功
+                let current_uid = unsafe { libc::getuid() };
+                let current_gid = unsafe { libc::getgid() };
+                if current_uid != uid || current_gid != gid {
+                    unsafe { libc::_exit(1); }
+                }
+
+                // Linux: 创建 User Namespace（防御纵深，失败则继续以 setuid 隔离）
+                #[cfg(target_os = "linux")]
+                {
+                    if uid != 0 {
+                        if let Err(e) = super::namespace::UserNamespace::new(uid, gid).create_and_switch() {
+                            tracing::warn!("User Namespace 创建失败,继续以 setuid 隔离: {}", e);
+                        }
+                    }
+                }
+
+                // 打开临时文件（O_NOFOLLOW 防符号链接劫持，0o600 限属主读写）
+                let file = {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::OpenOptionsExt;
+                        match std::fs::OpenOptions::new()
+                            .create(true)
+                            .write(true)
+                            .truncate(true)
+                            .mode(0o600)
+                            .custom_flags(libc::O_NOFOLLOW)
+                            .open(&temp_path)
+                        {
+                            Ok(f) => f,
+                            Err(_) => {
+                                unsafe { libc::_exit(2); }
+                            }
+                        }
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        match std::fs::File::create(&temp_path) {
+                            Ok(f) => f,
+                            Err(_) => {
+                                unsafe { libc::_exit(2); }
+                            }
+                        }
+                    }
+                };
+                let mut file_writer = std::io::BufWriter::with_capacity(256 * 1024, file);
+
+                // loop: read pipe → write file
+                let mut buf = [0u8; 256 * 1024];
+                loop {
+                    match reader.read(&mut buf) {
+                        Ok(0) => break,  // EOF（父进程关闭了 pipe writer）
+                        Ok(n) => {
+                            if file_writer.write_all(&buf[..n]).is_err() {
+                                unsafe { libc::_exit(3); }
+                            }
+                        }
+                        Err(_) => {
+                            unsafe { libc::_exit(4); }
+                        }
+                    }
+                }
+
+                // flush + sync + rename
+                if file_writer.flush().is_err() {
+                    unsafe { libc::_exit(5); }
+                }
+                if file_writer.get_ref().sync_all().is_err() {
+                    unsafe { libc::_exit(6); }
+                }
+                // 释放文件句柄后再 rename
+                drop(file_writer);
+                if std::fs::rename(&temp_path, &final_path).is_err() {
+                    unsafe { libc::_exit(7); }
+                }
+
+                unsafe { libc::_exit(0); }
+            }
+            child_pid => {
+                // ===== 父进程 =====
+                // 关闭 pipe reader 端（父进程只写 pipe）
+                drop(reader);
+                Ok((writer, child_pid))
+            }
+        }
+    }
+
+    /// 在隔离的子进程中处理文件读取,子进程 read file → write pipe,父进程经 pipe 读 chunk
+    ///
+    /// # 隔离链
+    /// - fork 子进程
+    /// - 子进程 setuid/setgid + UserNamespace::new(uid,gid).create_and_switch() (Linux)
+    /// - 子进程内 open + read 文件(同步 IO),写入 pipe
+    /// - 经 os_pipe 与父进程交换 chunk
+    ///
+    /// # 返回
+    /// - Ok((pipe_reader, child_pid)): 父进程持 pipe_reader 读 chunk
+    /// - Err: fork 或 pipe 失败
+    #[cfg(unix)]
+    pub fn spawn_isolated_reader(&self, path: &str) -> Result<(os_pipe::PipeReader, i32)> {
+        use std::io::{Read as StdRead, Write as StdWrite};
+
+        // 1. 创建 os_pipe
+        let (reader, mut writer) = os_pipe::pipe()
+            .map_err(|e| anyhow::anyhow!("创建管道失败: {}", e))?;
+
+        let uid = self.uid;
+        let gid = self.gid;
+        let path = path.to_string();
+
+        tracing::debug!("fork 子进程执行隔离读取: uid={}, gid={}", uid, gid);
+
+        // 2. fork 子进程
+        let pid = unsafe { libc::fork() };
+        match pid {
+            -1 => {
+                Err(anyhow::anyhow!("fork 失败: {}", std::io::Error::last_os_error()))
+            }
+            0 => {
+                // ===== 子进程 =====
+                // 关闭 pipe reader 端（子进程只写 pipe）
+                drop(reader);
+
+                // 降权：先 setgid，再 setuid（顺序重要）
+                unsafe {
+                    if libc::setgid(gid) != 0 {
+                        libc::_exit(1);
+                    }
+                    if libc::setuid(uid) != 0 {
+                        libc::_exit(1);
+                    }
+                }
+
+                // 验证降权成功
+                let current_uid = unsafe { libc::getuid() };
+                let current_gid = unsafe { libc::getgid() };
+                if current_uid != uid || current_gid != gid {
+                    unsafe { libc::_exit(1); }
+                }
+
+                // Linux: 创建 User Namespace（防御纵深，失败则继续以 setuid 隔离）
+                #[cfg(target_os = "linux")]
+                {
+                    if uid != 0 {
+                        if let Err(e) = super::namespace::UserNamespace::new(uid, gid).create_and_switch() {
+                            tracing::warn!("User Namespace 创建失败,继续以 setuid 隔离: {}", e);
+                        }
+                    }
+                }
+
+                // 打开文件
+                let file = match std::fs::File::open(&path) {
+                    Ok(f) => f,
+                    Err(_) => {
+                        unsafe { libc::_exit(2); }
+                    }
+                };
+                let mut file_reader = std::io::BufReader::with_capacity(256 * 1024, file);
+
+                // loop: read file → write pipe
+                let mut buf = [0u8; 256 * 1024];
+                loop {
+                    match file_reader.read(&mut buf) {
+                        Ok(0) => break,  // 文件读完
+                        Ok(n) => {
+                            if writer.write_all(&buf[..n]).is_err() {
+                                unsafe { libc::_exit(3); }
+                            }
+                        }
+                        Err(_) => {
+                            unsafe { libc::_exit(4); }
+                        }
+                    }
+                }
+
+                // 关闭 pipe writer 让父进程读到 EOF
+                drop(writer);
+                unsafe { libc::_exit(0); }
+            }
+            child_pid => {
+                // ===== 父进程 =====
+                // 关闭 pipe writer 端（父进程只读 pipe）
+                drop(writer);
+                Ok((reader, child_pid))
+            }
+        }
+    }
+
+    /// 在隔离的子进程中处理文件段写入（多流并行，方案 A: 独立段+合并）
+    ///
+    /// 与 `spawn_isolated_writer` 的区别：
+    /// - 仅接受 `part_path`（段文件路径），无 `final_path`，**不执行 rename**
+    /// - 子进程 flush + sync 后直接 _exit(0)，段文件留待后续 `spawn_isolated_merger` 合并
+    ///
+    /// # 隔离链
+    /// - fork 子进程
+    /// - 子进程 setuid/setgid + UserNamespace::new(uid,gid).create_and_switch() (Linux)
+    /// - 子进程内 open part_path + write（同步 IO）
+    /// - 经 os_pipe 与父进程交换 chunk
+    ///
+    /// # 返回
+    /// - Ok((pipe_writer, child_pid)): 父进程持 pipe_writer 写 chunk
+    /// - Err: fork 或 pipe 失败
+    ///
+    /// # 退出码（与 writer 一致，去掉 7=rename）
+    /// - 1: 降权失败 / 2: 打开段文件失败 / 3: 写入段文件失败 / 4: 读取 pipe 失败
+    /// - 5: flush 失败 / 6: sync_all 失败
+    #[cfg(unix)]
+    pub fn spawn_isolated_writer_part(&self, part_path: &str) -> Result<(os_pipe::PipeWriter, i32)> {
+        use std::io::{Read as StdRead, Write as StdWrite};
+
+        // 1. 创建 os_pipe
+        let (mut reader, writer) = os_pipe::pipe()
+            .map_err(|e| anyhow::anyhow!("创建管道失败: {}", e))?;
+
+        let uid = self.uid;
+        let gid = self.gid;
+        let part_path = part_path.to_string();
+
+        tracing::debug!(
+            "fork 子进程执行隔离段写入(多流): uid={}, gid={}, part_path={}",
+            uid, gid, part_path
+        );
+
+        // 2. fork 子进程
+        let pid = unsafe { libc::fork() };
+        match pid {
+            -1 => {
+                Err(anyhow::anyhow!("fork 失败: {}", std::io::Error::last_os_error()))
+            }
+            0 => {
+                // ===== 子进程 =====
+                // 关闭 pipe writer 端（子进程只读 pipe）
+                drop(writer);
+
+                // 降权：先 setgid，再 setuid（顺序重要）
+                unsafe {
+                    if libc::setgid(gid) != 0 {
+                        libc::_exit(1);
+                    }
+                    if libc::setuid(uid) != 0 {
+                        libc::_exit(1);
+                    }
+                }
+
+                // 验证降权成功
+                let current_uid = unsafe { libc::getuid() };
+                let current_gid = unsafe { libc::getgid() };
+                if current_uid != uid || current_gid != gid {
+                    unsafe { libc::_exit(1); }
+                }
+
+                // Linux: 创建 User Namespace（防御纵深，失败则继续以 setuid 隔离）
+                #[cfg(target_os = "linux")]
+                {
+                    if uid != 0 {
+                        if let Err(e) = super::namespace::UserNamespace::new(uid, gid).create_and_switch() {
+                            tracing::warn!("User Namespace 创建失败,继续以 setuid 隔离: {}", e);
+                        }
+                    }
+                }
+
+                // 打开段文件（O_NOFOLLOW 防符号链接劫持，0o600 限属主读写）
+                let file = {
+                    use std::os::unix::fs::OpenOptionsExt;
+                    match std::fs::OpenOptions::new()
+                        .create(true)
+                        .write(true)
+                        .truncate(true)
+                        .mode(0o600)
+                        .custom_flags(libc::O_NOFOLLOW)
+                        .open(&part_path)
+                    {
+                        Ok(f) => f,
+                        Err(_) => {
+                            unsafe { libc::_exit(2); }
+                        }
+                    }
+                };
+                let mut file_writer = std::io::BufWriter::with_capacity(256 * 1024, file);
+
+                // loop: read pipe → write part file
+                let mut buf = [0u8; 256 * 1024];
+                loop {
+                    match reader.read(&mut buf) {
+                        Ok(0) => break,  // EOF（父进程关闭了 pipe writer）
+                        Ok(n) => {
+                            if file_writer.write_all(&buf[..n]).is_err() {
+                                unsafe { libc::_exit(3); }
+                            }
+                        }
+                        Err(_) => {
+                            unsafe { libc::_exit(4); }
+                        }
+                    }
+                }
+
+                // flush + sync（不 rename，段文件留待 merger 合并）
+                if file_writer.flush().is_err() {
+                    unsafe { libc::_exit(5); }
+                }
+                if file_writer.get_ref().sync_all().is_err() {
+                    unsafe { libc::_exit(6); }
+                }
+
+                unsafe { libc::_exit(0); }
+            }
+            child_pid => {
+                // ===== 父进程 =====
+                // 关闭 pipe reader 端（父进程只写 pipe）
+                drop(reader);
+                Ok((writer, child_pid))
+            }
+        }
+    }
+
+    /// 在隔离的子进程中合并段文件为最终文件（多流并行合并阶段）
+    ///
+    /// # 流程
+    /// 1. fork 子进程，setuid/setgid + UserNamespace
+    /// 2. 子进程 open final_path（create/truncate，O_NOFOLLOW，0o600）
+    /// 3. 按 part_paths 顺序逐个 open 段文件 → read → write 到 final_path
+    /// 4. fsync final_path
+    /// 5. 删除所有段文件（清理）
+    /// 6. _exit(0)
+    ///
+    /// # 返回
+    /// - Ok(child_pid): 父进程调 wait_isolated_child 等待合并完成
+    /// - Err: fork 失败
+    ///
+    /// # 退出码（独立段，避免与 writer/reader 混淆）
+    /// - 1: 降权失败 / 10: 打开最终文件失败 / 11: 打开段文件失败
+    /// - 12: 读取段文件失败 / 13: 写入最终文件失败 / 14: sync_all 失败 / 15: 删除段文件失败
+    #[cfg(unix)]
+    pub fn spawn_isolated_merger(&self, part_paths: Vec<String>, final_path: &str) -> Result<i32> {
+        use std::io::{Read as StdRead, Write as StdWrite};
+
+        let uid = self.uid;
+        let gid = self.gid;
+        let final_path = final_path.to_string();
+
+        tracing::debug!(
+            "fork 子进程执行隔离段合并(多流): uid={}, gid={}, parts={}, final={}",
+            uid, gid, part_paths.len(), final_path
+        );
+
+        let pid = unsafe { libc::fork() };
+        match pid {
+            -1 => {
+                Err(anyhow::anyhow!("fork 失败: {}", std::io::Error::last_os_error()))
+            }
+            0 => {
+                // ===== 子进程 =====
+                // 降权：先 setgid，再 setuid（顺序重要）
+                unsafe {
+                    if libc::setgid(gid) != 0 {
+                        libc::_exit(1);
+                    }
+                    if libc::setuid(uid) != 0 {
+                        libc::_exit(1);
+                    }
+                }
+
+                // 验证降权成功
+                let current_uid = unsafe { libc::getuid() };
+                let current_gid = unsafe { libc::getgid() };
+                if current_uid != uid || current_gid != gid {
+                    unsafe { libc::_exit(1); }
+                }
+
+                // Linux: 创建 User Namespace（防御纵深）
+                #[cfg(target_os = "linux")]
+                {
+                    if uid != 0 {
+                        if let Err(e) = super::namespace::UserNamespace::new(uid, gid).create_and_switch() {
+                            tracing::warn!("User Namespace 创建失败,继续以 setuid 隔离: {}", e);
+                        }
+                    }
+                }
+
+                // 打开最终文件（create/truncate，O_NOFOLLOW，0o600）
+                let final_file = {
+                    use std::os::unix::fs::OpenOptionsExt;
+                    match std::fs::OpenOptions::new()
+                        .create(true)
+                        .write(true)
+                        .truncate(true)
+                        .mode(0o600)
+                        .custom_flags(libc::O_NOFOLLOW)
+                        .open(&final_path)
+                    {
+                        Ok(f) => f,
+                        Err(_) => {
+                            unsafe { libc::_exit(10); }
+                        }
+                    }
+                };
+                let mut final_writer = std::io::BufWriter::with_capacity(256 * 1024, final_file);
+
+                // 按 part_paths 顺序合并段文件
+                let mut buf = [0u8; 256 * 1024];
+                for part_path in &part_paths {
+                    let mut part_file = match std::fs::File::open(part_path) {
+                        Ok(f) => f,
+                        Err(_) => {
+                            unsafe { libc::_exit(11); }
+                        }
+                    };
+                    loop {
+                        match part_file.read(&mut buf) {
+                            Ok(0) => break,  // 段文件读完
+                            Ok(n) => {
+                                if final_writer.write_all(&buf[..n]).is_err() {
+                                    unsafe { libc::_exit(13); }
+                                }
+                            }
+                            Err(_) => {
+                                unsafe { libc::_exit(12); }
+                            }
+                        }
+                    }
+                    // 显式关闭段文件（drop 即可，但此处清晰）
+                    drop(part_file);
+                }
+
+                // flush + sync 最终文件
+                if final_writer.flush().is_err() {
+                    unsafe { libc::_exit(13); }
+                }
+                if final_writer.get_ref().sync_all().is_err() {
+                    unsafe { libc::_exit(14); }
+                }
+                drop(final_writer);
+
+                // 删除所有段文件（清理）
+                for part_path in &part_paths {
+                    if std::fs::remove_file(part_path).is_err() {
+                        // 段文件删除失败不致命（最终文件已完整），记录但继续
+                        tracing::warn!("[merger] 删除段文件失败: {}", part_path);
+                    }
+                }
+                // 即使部分段文件删除失败也视为合并成功（最终文件已落盘）
+                unsafe { libc::_exit(0); }
+            }
+            child_pid => {
+                // ===== 父进程 =====
+                Ok(child_pid)
+            }
+        }
+    }
+
+    /// 等待隔离子进程结束,翻译退出码为描述性错误
+    ///
+    /// # 返回
+    /// - Ok(()): 子进程正常退出(exit code 0)
+    /// - Err: 子进程被信号终止、非零退出(翻译为描述性错误)或已被回收(ECHILD)
+    ///
+    /// # 退出码翻译
+    /// 与 spawn_isolated_writer/writer_part/reader/merger 中的 _exit(N) 对应:
+    /// - 1: 降权失败(setgid/setuid)
+    /// - 2: 打开文件失败(writer/writer_part/reader)
+    /// - 3: 写入失败(writer=文件, reader=pipe)
+    /// - 4: 读取失败(writer=pipe, reader=文件)
+    /// - 5: flush 失败(writer/writer_part)
+    /// - 6: sync_all 失败(writer/writer_part)
+    /// - 7: rename 失败(writer)
+    /// - 10: merger 打开最终文件失败
+    /// - 11: merger 打开段文件失败
+    /// - 12: merger 读取段文件失败
+    /// - 13: merger 写入最终文件失败
+    /// - 14: merger sync_all 失败
+    /// - 15: merger 删除段文件失败(不致命,但记录)
+    #[cfg(unix)]
+    pub fn wait_isolated_child(&self, child_pid: i32) -> Result<()> {
+        let mut status = 0i32;
+        let ret = unsafe { libc::waitpid(child_pid, &mut status, 0) };
+        if ret == -1 {
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::ECHILD) {
+                return Err(anyhow::anyhow!(
+                    "隔离子进程(pid={})已被回收,无法确认退出状态(可能数据丢失)",
+                    child_pid
+                ));
+            }
+            return Err(anyhow::anyhow!("waitpid 失败: pid={}, err={}", child_pid, err));
+        }
+
+        // 检查子进程退出状态
+        if libc::WIFSIGNALED(status) {
+            let sig = libc::WTERMSIG(status);
+            tracing::warn!("隔离子进程被信号终止: pid={}, signal={}",
+                child_pid, sig);
+            return Err(anyhow::anyhow!(
+                "隔离子进程被信号终止: pid={}, signal={}", child_pid, sig
+            ));
+        }
+
+        if libc::WIFEXITED(status) {
+            let code = libc::WEXITSTATUS(status);
+            if code != 0 {
+                // 翻译子进程 exit code(与 spawn_isolated_* 中的 _exit(N) 对应)
+                let msg = match code {
+                    1 => "降权失败(setgid/setuid)",
+                    2 => "打开文件失败",
+                    3 => "写入失败(文件/pipe)",
+                    4 => "读取失败(pipe/文件)",
+                    5 => "flush 失败",
+                    6 => "sync_all 失败",
+                    7 => "rename 失败",
+                    10 => "merger 打开最终文件失败",
+                    11 => "merger 打开段文件失败",
+                    12 => "merger 读取段文件失败",
+                    13 => "merger 写入最终文件失败",
+                    14 => "merger sync_all 失败",
+                    15 => "merger 删除段文件失败",
+                    _ => "未知错误",
+                };
+                tracing::warn!("隔离子进程异常退出: pid={}, code={}, 原因={}",
+                    child_pid, code, msg);
+                return Err(anyhow::anyhow!(
+                    "隔离子进程异常退出: pid={}, code={}, 原因={}",
+                    child_pid, code, msg
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// 在隔离的子进程中处理文件写入（非 Unix 平台占位）
+    #[cfg(not(unix))]
+    pub fn spawn_isolated_writer(&self, _temp_path: &str, _final_path: &str, _file_size: u64) -> Result<(os_pipe::PipeWriter, i32)> {
+        anyhow::bail!("用户隔离写入仅支持 Unix 平台")
+    }
+
+    /// 在隔离的子进程中处理文件读取（非 Unix 平台占位）
+    #[cfg(not(unix))]
+    pub fn spawn_isolated_reader(&self, _path: &str) -> Result<(os_pipe::PipeReader, i32)> {
+        anyhow::bail!("用户隔离读取仅支持 Unix 平台")
+    }
+
+    /// 在隔离的子进程中处理文件段写入（非 Unix 平台占位）
+    #[cfg(not(unix))]
+    pub fn spawn_isolated_writer_part(&self, _part_path: &str) -> Result<(os_pipe::PipeWriter, i32)> {
+        anyhow::bail!("用户隔离段写入仅支持 Unix 平台")
+    }
+
+    /// 在隔离的子进程中合并段文件（非 Unix 平台占位）
+    #[cfg(not(unix))]
+    pub fn spawn_isolated_merger(&self, _part_paths: Vec<String>, _final_path: &str) -> Result<i32> {
+        anyhow::bail!("用户隔离段合并仅支持 Unix 平台")
+    }
+
+    /// 等待隔离子进程结束（非 Unix 平台占位）
+    #[cfg(not(unix))]
+    pub fn wait_isolated_child(&self, _child_pid: i32) -> Result<()> {
+        anyhow::bail!("用户隔离仅支持 Unix 平台")
+    }
+
     /// 获取用户 GID
     #[allow(dead_code)]
     pub fn gid(&self) -> u32 {
@@ -517,5 +1125,132 @@ mod tests {
         });
 
         assert!(result.is_err());
+    }
+
+    /// 测试 spawn_isolated_writer 往返:写入数据 → 等待子进程 → 验证文件内容
+    #[cfg(unix)]
+    #[test]
+    fn test_spawn_isolated_writer_round_trip() {
+        use std::io::{Read, Write};
+        use tempfile::tempdir;
+
+        let tmp = tempdir().expect("创建 tempdir 失败");
+        let final_path = tmp.path().join("test_upload.bin");
+        let temp_path = format!("{}.tmp", final_path.to_string_lossy());
+
+        // 创建测试 session(目标 uid = 当前 uid,避免降权复杂度)
+        let current_uid = nix::unistd::getuid().as_raw();
+        let current_gid = nix::unistd::getgid().as_raw();
+        let identity = crate::auth::UserIdentity::new(
+            "testuser".to_string(),
+            current_uid,
+            current_gid,
+            "/tmp".to_string(),
+            "/bin/bash".to_string(),
+        );
+        let session = crate::auth::UserSession::new(identity);
+        let executor = UserExecutor::new(&session);
+
+        let data = vec![0xAA; 1024 * 100]; // 100KB
+        let (mut pipe_writer, child_pid) = executor
+            .spawn_isolated_writer(&temp_path, &final_path.to_string_lossy(), data.len() as u64)
+            .expect("spawn_isolated_writer 失败");
+
+        pipe_writer.write_all(&data).expect("写入 pipe 失败");
+        drop(pipe_writer); // EOF signal
+
+        executor.wait_isolated_child(child_pid).expect("wait 失败");
+
+        // 验证文件内容
+        let mut file = std::fs::File::open(&final_path).expect("打开 final 失败");
+        let mut read_data = Vec::new();
+        file.read_to_end(&mut read_data).expect("读取失败");
+        assert_eq!(read_data, data);
+    }
+
+    /// 测试 spawn_isolated_reader 往返:写入测试文件 → 读取 pipe → 验证内容
+    #[cfg(unix)]
+    #[test]
+    fn test_spawn_isolated_reader_round_trip() {
+        use std::io::Read;
+        use tempfile::tempdir;
+
+        let tmp = tempdir().expect("创建 tempdir 失败");
+        let path = tmp.path().join("test_download.bin");
+        let data = vec![0xBB; 1024 * 100];
+        std::fs::write(&path, &data).expect("写入测试文件失败");
+
+        let current_uid = nix::unistd::getuid().as_raw();
+        let current_gid = nix::unistd::getgid().as_raw();
+        let identity = crate::auth::UserIdentity::new(
+            "testuser".to_string(),
+            current_uid,
+            current_gid,
+            "/tmp".to_string(),
+            "/bin/bash".to_string(),
+        );
+        let session = crate::auth::UserSession::new(identity);
+        let executor = UserExecutor::new(&session);
+
+        let (mut pipe_reader, child_pid) = executor
+            .spawn_isolated_reader(&path.to_string_lossy())
+            .expect("spawn_isolated_reader 失败");
+
+        let mut read_data = Vec::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            match pipe_reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => read_data.extend_from_slice(&buf[..n]),
+                Err(e) => panic!("读取 pipe 失败: {}", e),
+            }
+        }
+        drop(pipe_reader);
+        executor.wait_isolated_child(child_pid).expect("wait 失败");
+        assert_eq!(read_data, data);
+    }
+
+    /// 测试 wait_isolated_child 处理 ECHILD:子进程已被回收时应返回错误
+    #[cfg(unix)]
+    #[test]
+    fn test_wait_isolated_child_echild() {
+        use tempfile::tempdir;
+
+        let tmp = tempdir().unwrap();
+        let final_path = tmp.path().join("final.bin");
+        let temp_path = format!("{}.tmp", final_path.to_string_lossy());
+
+        let current_uid = nix::unistd::getuid().as_raw();
+        let current_gid = nix::unistd::getgid().as_raw();
+        let identity = crate::auth::UserIdentity::new(
+            "testuser".to_string(),
+            current_uid,
+            current_gid,
+            "/tmp".to_string(),
+            "/bin/bash".to_string(),
+        );
+        let session = crate::auth::UserSession::new(identity);
+        let executor = UserExecutor::new(&session);
+
+        // spawn 一个会立即 EOF 的 writer(不写数据,直接 drop pipe_writer)
+        let (_pipe_writer, child_pid) = executor
+            .spawn_isolated_writer(&temp_path, &final_path.to_string_lossy(), 0)
+            .unwrap();
+        drop(_pipe_writer); // child reads EOF, exits 0
+
+        // 主动 waitpid 抢先回收(阻塞等待子进程退出)
+        let mut status = 0i32;
+        unsafe {
+            libc::waitpid(child_pid, &mut status, 0);
+        }
+
+        // 现在调用 wait_isolated_child 应返回 ECHILD Err
+        let result = executor.wait_isolated_child(child_pid);
+        assert!(result.is_err(), "ECHILD 应返回 Err");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("已被回收"),
+            "错误信息应提及已被回收,实际: {}", err_msg
+        );
     }
 }

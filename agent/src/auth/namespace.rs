@@ -18,7 +18,6 @@ use anyhow::{Result, Context};
 ///
 /// 封装User Namespace的创建和管理逻辑
 #[cfg(target_os = "linux")]
-#[allow(dead_code)]
 pub struct UserNamespace {
     /// 容器内的UID
     inner_uid: u32,

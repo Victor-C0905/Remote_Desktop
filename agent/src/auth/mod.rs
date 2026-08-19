@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 pub mod executor;
 pub mod namespace;
+pub mod path_guard;
 pub mod pam;
 pub mod session;
 pub mod ssh;
@@ -27,6 +28,7 @@ pub use executor::UserExecutor;
 #[cfg(target_os = "linux")]
 pub use namespace::UserNamespace;
 pub use session::UserSession;
+pub use path_guard::{SafePath, validate_path};
 pub use challenge::ChallengeManager;
 pub use rate_limiter::AuthRateLimiter;
 pub use stats::{StatsManager, ConnectionCloseReason};

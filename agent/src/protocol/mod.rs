@@ -16,6 +16,12 @@
 // 导入自动生成的 Protobuf 代码
 pub mod generated;
 
+// 裸二进制帧编解码(数据平面)
+pub mod raw_frame;
+
+// TransportFrame 抽象(统一 raw_frame + Envelope,供 PTY/文件传输复用)
+pub mod transport_frame;
+
 // 保留旧的 Serde 实现（向后兼容）
 pub mod serde;
 

@@ -6,25 +6,18 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
-/// 生成确定性临时文件路径
+/// 生成随机临时文件路径
 ///
-/// 使用目标路径的哈希生成临时文件名。
-/// 同一个目标文件总是生成相同的临时文件名，便于：
-/// - 断点续传：无需搜索，直接找到之前的临时文件
-/// - 避免中文/长文件名导致的路径长度问题
+/// 使用随机 UUID 生成临时文件名，避免：
+/// - 可预测的临时文件名被攻击者预创建符号链接劫持（symlink attack）
+/// - 不同会话并发传输同一目标文件时临时文件冲突
 ///
-/// 文件名格式: `gnome_remote_{hash前16位}.tmp`
-fn generate_temp_path(path: &Path) -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    let path_str = path.to_string_lossy();
-    let mut hasher = DefaultHasher::new();
-    path_str.hash(&mut hasher);
-    let hash = hasher.finish();
-
-    let temp_name = format!("gnome_remote_{:016x}.tmp", hash);
-
+/// 注意：随机命名后无法通过目标路径反查临时文件，断点续传需将临时名存入
+/// TransferSession（当前隔离写入模式已禁用断点续传，故此处返回 None）。
+///
+/// 文件名格式: `gnome_remote_{uuid}.tmp`
+pub fn generate_temp_path(path: &Path) -> String {
+    let temp_name = format!("gnome_remote_{}.tmp", uuid::Uuid::new_v4());
     path.parent()
         .unwrap_or(Path::new("."))
         .join(temp_name)
@@ -34,18 +27,15 @@ fn generate_temp_path(path: &Path) -> String {
 
 /// 查找已存在的临时文件（用于断点续传）
 ///
-/// 使用确定性哈希生成临时文件名，直接检查是否存在。
-fn find_existing_temp_file(path: &Path) -> Option<String> {
-    let temp_path = generate_temp_path(path);
-    if Path::new(&temp_path).exists() {
-        Some(temp_path)
-    } else {
-        None
-    }
+/// 随机 UUID 命名后无法通过目标路径确定性反查临时文件。
+/// 当前隔离写入模式已禁用断点续传，故始终返回 None；
+/// 若未来恢复断点续传，需将临时名持久化到 TransferSession 后按 session_id 查找。
+fn find_existing_temp_file(_path: &Path) -> Option<String> {
+    None
 }
 
-/// 默认分块大小 (64KB)
-const DEFAULT_CHUNK_SIZE: u32 = 64 * 1024;
+/// 默认分块大小 (256KB)
+const DEFAULT_CHUNK_SIZE: u32 = 256 * 1024;
 
 /// 文件流读取器（用于下载：分块读取文件）
 #[derive(Debug)]
@@ -450,23 +440,41 @@ impl FileStreamWriter {
     /// - 从头开始传输（resume_from == 0）
     /// - 断点续传降级（临时文件不存在或完整性校验失败）
     fn create_fresh_temp_file(temp_path: &str) -> Result<(BufWriter<File>, u64, bool), String> {
-        let file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(temp_path)
-            .map_err(|e| {
-                tracing::warn!("[FileStreamWriter] 创建临时文件失败: error={}", e);
-                match e.kind() {
-                    io::ErrorKind::PermissionDenied => {
-                        format!("权限不足，无法创建临时文件: {}", temp_path)
-                    }
-                    io::ErrorKind::StorageFull => {
-                        "磁盘空间不足".to_string()
-                    }
-                    _ => format!("无法创建临时文件 {}: {}", temp_path, e),
+        let file = {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                // O_NOFOLLOW: 不跟随符号链接，防御 symlink attack
+                // mode 0o600: 仅属主可读写，避免其他用户窥探/篡改临时文件
+                OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .truncate(true)
+                    .mode(0o600)
+                    .custom_flags(libc::O_NOFOLLOW)
+                    .open(temp_path)
+            }
+            #[cfg(not(unix))]
+            {
+                OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .truncate(true)
+                    .open(temp_path)
+            }
+        }
+        .map_err(|e| {
+            tracing::warn!("[FileStreamWriter] 创建临时文件失败: error={}", e);
+            match e.kind() {
+                io::ErrorKind::PermissionDenied => {
+                    format!("权限不足，无法创建临时文件: {}", temp_path)
                 }
-            })?;
+                io::ErrorKind::StorageFull => {
+                    "磁盘空间不足".to_string()
+                }
+                _ => format!("无法创建临时文件 {}: {}", temp_path, e),
+            }
+        })?;
         Ok((BufWriter::new(file), 0, false))
     }
 
@@ -642,6 +650,351 @@ impl Drop for FileStreamWriter {
     }
 }
 
+// ============================================================================
+// 基于 pipe 的文件流（方案 ii' 隔离读写）
+// ============================================================================
+
+/// 默认分块大小 (64KB) — 与 FileStreamReader 一致
+const PIPE_CHUNK_SIZE: usize = 64 * 1024;
+
+/// 基于 pipe 的文件流写入器(方案 ii' 隔离写入)
+///
+/// 父进程持 pipe_writer 写 chunk,子进程(隔离)read pipe → write file
+///
+/// # 工作流程
+/// 1. `spawn_isolated_writer` fork 子进程,子进程 setuid + namespace 后打开临时文件
+/// 2. 父进程通过 `write_chunk` 向 pipe 写入数据,子进程从 pipe 读取并写入文件
+/// 3. `finish()`: 父进程关闭 pipe(EOF),子进程 flush + sync + rename 后退出,父进程 waitpid
+/// 4. `abort()`: 父进程关闭 pipe + kill 子进程 + 清理临时文件
+pub struct PipeFileStreamWriter {
+    /// pipe 写入端(Option 以便 finish/abort 时 take + drop)
+    pipe_writer: Option<os_pipe::PipeWriter>,
+    /// 子进程 PID
+    child_pid: i32,
+    /// 用户执行器(用于 wait_isolated_child)
+    executor: crate::auth::UserExecutor,
+    /// 临时文件路径(用于 abort 时清理)
+    temp_path: String,
+    /// 已传输字节数
+    transferred: u64,
+    /// 文件总大小
+    file_size: u64,
+    /// 是否已完成(finish 或 abort 后为 true,防止 Drop 重复清理)
+    finished: bool,
+}
+
+impl PipeFileStreamWriter {
+    /// 创建新的 pipe 文件流写入器
+    ///
+    /// # 参数
+    /// - `pipe_writer`: os_pipe 写入端
+    /// - `child_pid`: 隔离子进程 PID
+    /// - `executor`: 用户执行器(用于 wait_isolated_child)
+    /// - `file_size`: 文件总大小
+    /// - `temp_path`: 临时文件路径(用于 abort 清理)
+    pub fn new(
+        pipe_writer: os_pipe::PipeWriter,
+        child_pid: i32,
+        executor: crate::auth::UserExecutor,
+        file_size: u64,
+        temp_path: String,
+    ) -> Self {
+        Self {
+            pipe_writer: Some(pipe_writer),
+            child_pid,
+            executor,
+            temp_path,
+            transferred: 0,
+            file_size,
+            finished: false,
+        }
+    }
+
+    /// 写入数据块(同步 IO,将数据写入 pipe,子进程从 pipe 读取并写入文件)
+    ///
+    /// # 参数
+    /// - `data`: 数据块
+    ///
+    /// # 错误
+    /// - 管道已关闭
+    /// - 写入超出文件大小
+    /// - IO 错误(管道断裂等)
+    pub fn write_chunk(&mut self, data: &[u8]) -> Result<(), String> {
+        use std::io::Write;
+        let writer = self.pipe_writer.as_mut().ok_or("管道已关闭")?;
+
+        // 检查是否会超出预期文件大小
+        let new_transferred = self.transferred + data.len() as u64;
+        if new_transferred > self.file_size {
+            return Err(format!(
+                "写入数据超出预期大小: 已写入 {} + 本次 {} > 总大小 {}",
+                self.transferred, data.len(), self.file_size
+            ));
+        }
+
+        // 写入 pipe
+        writer.write_all(data).map_err(|e| {
+            tracing::warn!("[PipeFileStreamWriter] 写入 pipe 失败: offset={}, error={}", self.transferred, e);
+            format!("写入 pipe 失败: {}", e)
+        })?;
+
+        self.transferred = new_transferred;
+        Ok(())
+    }
+
+    /// 完成写入(关闭 pipe + 等待子进程 flush + sync + rename)
+    ///
+    /// # 流程
+    /// 1. 关闭 pipe writer(让子进程读到 EOF)
+    /// 2. 等待子进程退出(子进程会 flush + sync_all + rename temp→final)
+    /// 3. 检查子进程退出状态
+    pub fn finish(&mut self) -> Result<(), String> {
+        if self.finished {
+            return Ok(());
+        }
+
+        // 关闭 pipe writer,让子进程读到 EOF
+        self.pipe_writer.take();
+
+        // 等待子进程完成(flush + sync + rename)
+        // 注意:不在此处设置 finished=true,等 waitpid 成功后再标记
+        match self.executor.wait_isolated_child(self.child_pid) {
+            Ok(()) => {
+                self.finished = true;
+                tracing::info!(
+                    "文件上传完成(隔离): {} ({}/{} 字节)",
+                    self.temp_path, self.transferred, self.file_size
+                );
+                Ok(())
+            }
+            Err(e) => {
+                // 失败时清理临时文件,防止残留
+                let _ = fs::remove_file(&self.temp_path);
+                self.finished = true; // 标记完成以避免 Drop 二次操作
+                tracing::warn!(
+                    "[PipeFileStreamWriter] finish 失败,已清理临时文件: {}, 错误: {}",
+                    self.temp_path, e
+                );
+                Err(format!("等待隔离子进程失败: {}", e))
+            }
+        }
+    }
+
+    /// 取消写入(关闭 pipe + kill 子进程 + 清理临时文件)
+    ///
+    /// # 说明
+    /// 关闭 pipe 和 kill 子进程,并尝试删除临时文件(忽略错误)
+    pub fn abort(&mut self) {
+        if self.finished {
+            return;
+        }
+        self.finished = true;
+
+        // 关闭 pipe
+        self.pipe_writer.take();
+
+        // kill 子进程并回收(防止僵尸进程)
+        #[cfg(unix)]
+        {
+            unsafe {
+                libc::kill(self.child_pid, libc::SIGTERM);
+            }
+            let mut status = 0i32;
+            unsafe {
+                libc::waitpid(self.child_pid, &mut status, 0);
+            }
+        }
+
+        // 清理临时文件(父进程以 root 运行,可以删除任何文件)
+        if let Err(e) = fs::remove_file(&self.temp_path) {
+            if e.kind() != io::ErrorKind::NotFound {
+                tracing::warn!("[PipeFileStreamWriter] 清理临时文件失败 {}: {}", self.temp_path, e);
+            }
+        } else {
+            tracing::info!("[PipeFileStreamWriter] 已清理临时文件: {}", self.temp_path);
+        }
+    }
+
+    /// 获取已传输字节数
+    pub fn transferred(&self) -> u64 {
+        self.transferred
+    }
+
+    /// 获取文件总大小
+    #[allow(dead_code)]
+    pub fn file_size(&self) -> u64 {
+        self.file_size
+    }
+}
+
+/// Drop 保护:未完成的 writer 被 drop 时自动 abort(kill 子进程 + 清理临时文件)
+impl Drop for PipeFileStreamWriter {
+    fn drop(&mut self) {
+        if !self.finished {
+            tracing::warn!(
+                "[PipeFileStreamWriter] 检测到未完成的文件传输,自动清理: {} (已传输: {}/{})",
+                self.temp_path, self.transferred, self.file_size
+            );
+            self.abort();
+        }
+    }
+}
+
+/// 基于 pipe 的文件流读取器(方案 ii' 隔离读取)
+///
+/// 子进程(隔离)read file → write pipe,父进程经 pipe 读 chunk
+///
+/// # 工作流程
+/// 1. `spawn_isolated_reader` fork 子进程,子进程 setuid + namespace 后打开文件
+/// 2. 子进程循环 read file → write pipe
+/// 3. 父进程通过 `read_next_chunk` 从 pipe 读取数据
+/// 4. Drop 时自动 kill 子进程(如果尚未完成)
+pub struct PipeFileStreamReader {
+    /// pipe 读取端(Option 以便 finish/abort 时 take + drop)
+    pipe_reader: Option<os_pipe::PipeReader>,
+    /// 子进程 PID
+    child_pid: i32,
+    /// 用户执行器(用于 wait_isolated_child)
+    executor: crate::auth::UserExecutor,
+    /// 已传输字节数
+    transferred: u64,
+    /// 文件总大小
+    file_size: u64,
+    /// 是否已完成
+    finished: bool,
+}
+
+impl PipeFileStreamReader {
+    /// 创建新的 pipe 文件流读取器
+    ///
+    /// # 参数
+    /// - `pipe_reader`: os_pipe 读取端
+    /// - `child_pid`: 隔离子进程 PID
+    /// - `executor`: 用户执行器(用于 wait_isolated_child)
+    /// - `file_size`: 文件总大小
+    pub fn new(
+        pipe_reader: os_pipe::PipeReader,
+        child_pid: i32,
+        executor: crate::auth::UserExecutor,
+        file_size: u64,
+    ) -> Self {
+        Self {
+            pipe_reader: Some(pipe_reader),
+            child_pid,
+            executor,
+            transferred: 0,
+            file_size,
+            finished: false,
+        }
+    }
+
+    /// 读取下一个数据块(同步 IO,从 pipe 读取子进程写入的文件数据)
+    ///
+    /// # 返回
+    /// - `Ok(Some(buffer))`: 成功读取数据块
+    /// - `Ok(None)`: 文件已读完(pipe EOF,子进程已关闭写入端)
+    /// - `Err`: 读取错误
+    pub fn read_next_chunk(&mut self) -> Result<Option<Vec<u8>>, String> {
+        use std::io::Read;
+        let reader = self.pipe_reader.as_mut().ok_or("管道已关闭")?;
+
+        let mut buf = vec![0u8; PIPE_CHUNK_SIZE];
+        match reader.read(&mut buf) {
+            Ok(0) => {
+                // EOF — 子进程已关闭 pipe writer
+                Ok(None)
+            }
+            Ok(n) => {
+                buf.truncate(n);
+                self.transferred += n as u64;
+                Ok(Some(buf))
+            }
+            Err(e) => {
+                tracing::warn!("[PipeFileStreamReader] 读取 pipe 失败: error={}", e);
+                Err(format!("读取 pipe 失败: {}", e))
+            }
+        }
+    }
+
+    /// 完成读取(关闭 pipe + 等待子进程退出)
+    ///
+    /// 通常在读取完所有数据后调用,确保子进程被正确回收
+    pub fn finish(&mut self) -> Result<(), String> {
+        if self.finished {
+            return Ok(());
+        }
+
+        // 关闭 pipe reader
+        self.pipe_reader.take();
+
+        // 等待子进程退出
+        // 注意:不在此处设置 finished=true,等 waitpid 成功后再标记
+        match self.executor.wait_isolated_child(self.child_pid) {
+            Ok(()) => {
+                self.finished = true;
+                Ok(())
+            }
+            Err(e) => {
+                // reader 无临时文件,仅标记完成以避免 Drop 二次操作
+                self.finished = true;
+                tracing::warn!(
+                    "[PipeFileStreamReader] finish 失败: pid={}, 错误: {}",
+                    self.child_pid, e
+                );
+                Err(format!("等待隔离子进程失败: {}", e))
+            }
+        }
+    }
+
+    /// 中断读取(关闭 pipe + kill 子进程)
+    pub fn abort(&mut self) {
+        if self.finished {
+            return;
+        }
+        self.finished = true;
+
+        // 关闭 pipe
+        self.pipe_reader.take();
+
+        // kill 子进程并回收
+        #[cfg(unix)]
+        {
+            unsafe {
+                libc::kill(self.child_pid, libc::SIGTERM);
+            }
+            let mut status = 0i32;
+            unsafe {
+                libc::waitpid(self.child_pid, &mut status, 0);
+            }
+        }
+    }
+
+    /// 获取已传输字节数
+    #[allow(dead_code)]
+    pub fn transferred(&self) -> u64 {
+        self.transferred
+    }
+
+    /// 获取文件总大小
+    #[allow(dead_code)]
+    pub fn file_size(&self) -> u64 {
+        self.file_size
+    }
+}
+
+/// Drop 保护:未完成的 reader 被 drop 时自动 abort(kill 子进程)
+impl Drop for PipeFileStreamReader {
+    fn drop(&mut self) {
+        if !self.finished {
+            tracing::warn!(
+                "[PipeFileStreamReader] 检测到未完成的文件读取,自动清理子进程: pid={}",
+                self.child_pid
+            );
+            self.abort();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -778,5 +1131,101 @@ mod tests {
 
         // 验证临时文件已被删除
         assert!(!Path::new(&temp_path).exists());
+    }
+
+    /// 测试 PipeFileStreamWriter::abort 清理临时文件
+    #[cfg(unix)]
+    #[test]
+    fn test_pipe_writer_abort_cleans_temp() {
+        use tempfile::tempdir;
+
+        let tmp = tempdir().unwrap();
+        let final_path = tmp.path().join("aborted.bin");
+        let temp_path = generate_temp_path(&final_path);
+
+        let current_uid = nix::unistd::getuid().as_raw();
+        let current_gid = nix::unistd::getgid().as_raw();
+        let identity = crate::auth::UserIdentity::new(
+            "testuser".to_string(),
+            current_uid,
+            current_gid,
+            "/tmp".to_string(),
+            "/bin/bash".to_string(),
+        );
+        let session = crate::auth::UserSession::new(identity);
+        let executor = crate::auth::UserExecutor::new(&session);
+
+        let (pipe_writer, child_pid) = executor
+            .spawn_isolated_writer(&temp_path, &final_path.to_string_lossy(), 1024)
+            .unwrap();
+        let mut writer = PipeFileStreamWriter::new(
+            pipe_writer,
+            child_pid,
+            executor,
+            1024,
+            temp_path.clone(),
+        );
+        // 不调 finish,直接 abort
+        writer.abort();
+
+        // 验证临时文件已被清理
+        assert!(
+            !std::path::Path::new(&temp_path).exists(),
+            "abort 后临时文件应被清理"
+        );
+    }
+
+    /// 测试 PipeFileStreamWriter 未 finish 直接 drop 时自动清理
+    #[cfg(unix)]
+    #[test]
+    fn test_pipe_writer_drop_when_unfinished() {
+        use tempfile::tempdir;
+
+        let tmp = tempdir().unwrap();
+        let final_path = tmp.path().join("dropped.bin");
+        let temp_path = generate_temp_path(&final_path);
+
+        let current_uid = nix::unistd::getuid().as_raw();
+        let current_gid = nix::unistd::getgid().as_raw();
+        let identity = crate::auth::UserIdentity::new(
+            "testuser".to_string(),
+            current_uid,
+            current_gid,
+            "/tmp".to_string(),
+            "/bin/bash".to_string(),
+        );
+        let session = crate::auth::UserSession::new(identity);
+        let executor = crate::auth::UserExecutor::new(&session);
+
+        let child_pid = {
+            let (pipe_writer, child_pid) = executor
+                .spawn_isolated_writer(&temp_path, &final_path.to_string_lossy(), 1024)
+                .unwrap();
+            let _writer = PipeFileStreamWriter::new(
+                pipe_writer,
+                child_pid,
+                executor,
+                1024,
+                temp_path.clone(),
+            );
+            // _writer drops here → Drop → abort → kill + waitpid + remove temp
+            child_pid
+        };
+
+        // 验证子进程已被回收(Drop 调用 abort → waitpid)
+        // Drop 的 abort 调 waitpid(0) 阻塞回收,这里再 wait 应 ECHILD
+        let mut status = 0i32;
+        let ret = unsafe { libc::waitpid(child_pid, &mut status, libc::WNOHANG) };
+        // 若 Drop 已 waitpid,我们调 WNOHANG 应返回 -1(ECHILD)或 0(还在)
+        assert!(
+            ret == -1 || ret == 0,
+            "Drop 后子进程应已被回收或不可达"
+        );
+
+        // 验证临时文件已清理
+        assert!(
+            !std::path::Path::new(&temp_path).exists(),
+            "Drop 后临时文件应被清理"
+        );
     }
 }
