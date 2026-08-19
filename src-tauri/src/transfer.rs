@@ -15,6 +15,73 @@ use uuid::Uuid;
 
 use crate::connection::{ConnectionManager, Envelope, Payload};
 
+// ── 裸二进制帧(数据平面) ─────────────────────────────────────
+// 帧格式: [4B length LE][1B type][body], length = 1 + body.len()
+//   type = 0x01 控制(JSON Envelope) / 0x02 数据块
+// 数据块 body: [4B seq][4B size][data]
+// 与 agent/src/protocol/raw_frame.rs 格式完全一致
+
+const RAW_TYPE_CONTROL: u8 = 0x01;
+const RAW_TYPE_DATA: u8 = 0x02;
+const RAW_MAX_FRAME_LEN: u32 = 10 * 1024 * 1024;
+
+/// 写数据帧: [4B len][1B type=0x02][4B seq][4B size][data]
+async fn write_data_frame(send: &mut quinn::SendStream, seq: u32, data: &[u8]) -> Result<(), String> {
+    let body_len = 8 + data.len();
+    let total_len = (1 + body_len) as u32;
+    let mut header = Vec::with_capacity(5 + body_len);
+    header.extend_from_slice(&total_len.to_le_bytes());
+    header.push(RAW_TYPE_DATA);
+    header.extend_from_slice(&seq.to_le_bytes());
+    header.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    header.extend_from_slice(data);
+    send.write_all(&header).await.map_err(|e| format!("写数据帧失败: {}", e))
+}
+
+/// 写控制帧: [4B len][1B type=0x01][body]
+async fn write_control_frame(send: &mut quinn::SendStream, body: &[u8]) -> Result<(), String> {
+    let total_len = (1 + body.len()) as u32;
+    let mut header = Vec::with_capacity(5 + body.len());
+    header.extend_from_slice(&total_len.to_le_bytes());
+    header.push(RAW_TYPE_CONTROL);
+    header.extend_from_slice(body);
+    send.write_all(&header).await.map_err(|e| format!("写控制帧失败: {}", e))
+}
+
+/// 读帧头: [4B len][1B type], 返回 (type, body_len)
+async fn read_frame_header(recv: &mut quinn::RecvStream) -> Result<(u8, usize), String> {
+    let mut buf = [0u8; 5];
+    recv.read_exact(&mut buf).await.map_err(|e| format!("读帧头失败: {}", e))?;
+    let len = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
+    if len == 0 || len > RAW_MAX_FRAME_LEN {
+        return Err(format!("帧长度非法: {}", len));
+    }
+    Ok((buf[4], len as usize - 1))
+}
+
+/// 读数据帧 body: [4B seq][4B size][data], 返回 (seq, data)
+async fn read_data_body(recv: &mut quinn::RecvStream, body_len: usize) -> Result<(u32, Vec<u8>), String> {
+    let mut buf = vec![0u8; body_len];
+    recv.read_exact(&mut buf).await.map_err(|e| format!("读数据帧 body 失败: {}", e))?;
+    if buf.len() < 8 {
+        return Err(format!("数据帧 body 过短: {}", buf.len()));
+    }
+    let seq = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
+    let size = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]) as usize;
+    let data = buf[8..].to_vec();
+    if data.len() != size {
+        return Err(format!("数据帧 size 不匹配: 声明 {} 实际 {}", size, data.len()));
+    }
+    Ok((seq, data))
+}
+
+/// 读控制帧 body: 返回原始字节(调用方再 Envelope::decode)
+async fn read_control_body(recv: &mut quinn::RecvStream, body_len: usize) -> Result<Vec<u8>, String> {
+    let mut buf = vec![0u8; body_len];
+    recv.read_exact(&mut buf).await.map_err(|e| format!("读控制帧 body 失败: {}", e))?;
+    Ok(buf)
+}
+
 // ── 传输状态枚举 ─────────────────────────────────────────────
 
 /// 传输任务状态
@@ -542,7 +609,7 @@ impl TransferManager {
                 task_clone.direction.clone(),
                 task_clone.remote_path.clone(),
                 task_clone.local_path.clone(),
-                &manager_clone,
+                Arc::clone(&manager_clone),
                 &task_clone.id,
                 resume_from,  // 传递断点续传位置
             ).await;
@@ -732,8 +799,12 @@ async fn wait_if_paused(
 /* ── 文件流处理 ─────────────────────────────────────────── */
 
 /// 文件读取器（用于上传）
+///
+/// 使用 `Arc<std::sync::Mutex<BufReader<File>>>` 持有底层 reader，
+/// 使得 `read_next_chunk` 可通过 `tokio::task::spawn_blocking` 异步读取，
+/// 避免同步文件 IO 阻塞 tokio worker。
 pub struct FileReader {
-    reader: BufReader<File>,
+    reader: Arc<std::sync::Mutex<BufReader<File>>>,
     file_size: u64,
     pub transferred: u64,
     chunk_size: u32,
@@ -749,15 +820,45 @@ impl FileReader {
         let file_size = metadata.len();
 
         Ok(Self {
-            reader: BufReader::new(file),
+            reader: Arc::new(std::sync::Mutex::new(BufReader::new(file))),
             file_size,
             transferred: 0,
-            chunk_size: 64 * 1024,  // 64KB
+            chunk_size: 256 * 1024,  // 256KB(与服务端一致,减少帧数与 syscall 开销)
         })
     }
 
-    /// 读取下一个数据块
-    pub fn read_next_chunk(&mut self) -> Result<Option<Vec<u8>>, String> {
+    /// 创建文件读取器(指定 offset 范围,用于多流并行上传)
+    ///
+    /// 从 `offset_start` 开始读取,直到 `offset_end`(不含)。
+    /// 内部 `transferred` 从 0 开始计数,`file_size` 设为段长度,
+    /// 使 `read_next_chunk` 无需修改即可只读段内数据。
+    pub fn new_with_range(path: &str, offset_start: u64, offset_end: u64) -> Result<Self, String> {
+        use std::io::{Seek, SeekFrom};
+
+        let file = File::open(path)
+            .map_err(|e| format!("无法打开文件: {}", e))?;
+        let mut reader = BufReader::new(file);
+
+        if offset_start > 0 {
+            reader.seek(SeekFrom::Start(offset_start))
+                .map_err(|e| format!("文件 seek 失败 (offset={}): {}", offset_start, e))?;
+        }
+
+        let segment_size = offset_end.saturating_sub(offset_start);
+
+        Ok(Self {
+            reader: Arc::new(std::sync::Mutex::new(reader)),
+            file_size: segment_size,
+            transferred: 0,
+            chunk_size: 256 * 1024,
+        })
+    }
+
+    /// 异步读取下一个数据块
+    ///
+    /// 使用 `spawn_blocking` 将同步文件读取移出 tokio worker，
+    /// 避免大文件读取阻塞异步运行时。
+    pub async fn read_next_chunk(&mut self) -> Result<Option<Vec<u8>>, String> {
         if self.transferred >= self.file_size {
             return Ok(None);
         }
@@ -765,18 +866,27 @@ impl FileReader {
         let remaining = self.file_size - self.transferred;
         let read_size = std::cmp::min(self.chunk_size as u64, remaining) as usize;
 
-        let mut buffer = vec![0u8; read_size];
-        let bytes_read = self.reader.read(&mut buffer)
-            .map_err(|e| format!("读取文件失败: {}", e))?;
+        let reader = self.reader.clone();
+        let chunk = tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>, std::io::Error> {
+            let mut reader = reader.lock().unwrap();
+            let mut buffer = vec![0u8; read_size];
+            let bytes_read = reader.read(&mut buffer)?;
+            if bytes_read == 0 {
+                Ok(None)
+            } else {
+                buffer.truncate(bytes_read);
+                Ok(Some(buffer))
+            }
+        })
+        .await
+        .map_err(|e| format!("读取任务 panic: {}", e))?
+        .map_err(|e| format!("读取文件失败: {}", e))?;
 
-        if bytes_read == 0 {
-            return Ok(None);
+        if let Some(data) = &chunk {
+            self.transferred += data.len() as u64;
         }
 
-        buffer.truncate(bytes_read);
-        self.transferred += bytes_read as u64;
-
-        Ok(Some(buffer))
+        Ok(chunk)
     }
 
     /// 获取进度百分比 (0-100)
@@ -1229,7 +1339,7 @@ pub async fn transfer_file(
             direction_clone,
             remote_path_clone,
             local_path_clone,
-            &manager_clone,
+            Arc::clone(&manager_clone),
             &task_id_clone,
             None,  // 新任务从头开始传输
         ).await;
@@ -1264,13 +1374,28 @@ const FILE_CHUNK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(6
 /// - `manager`: 传输管理器
 /// - `task_id`: 任务 ID
 /// - `resume_from`: 断点续传位置（可选，从哪个字节开始）
+/// 根据文件大小计算多流并行数
+///
+/// - `< 10MB`: 1 流(单流,避免开销)
+/// - `10MB-100MB`: 2 流
+/// - `≥ 100MB`: 4 流
+fn compute_stream_count(file_size: u64) -> u32 {
+    if file_size >= 100 * 1024 * 1024 {
+        4
+    } else if file_size >= 10 * 1024 * 1024 {
+        2
+    } else {
+        1
+    }
+}
+
 async fn perform_transfer(
     conn: &quinn::Connection,
     request_id: u32,
     direction: String,
     remote_path: String,
     local_path: String,
-    manager: &TransferManager,
+    manager: Arc<TransferManager>,
     task_id: &str,
     resume_from: Option<u64>,
 ) -> Result<(), String> {
@@ -1279,9 +1404,19 @@ async fn perform_transfer(
         "开始执行文件传输"
     );
 
+    // 计算多流并行数(仅上传,基于文件大小)
+    let stream_count = if direction == "upload" {
+        let local_size = std::fs::metadata(&local_path)
+            .map(|m| m.len())
+            .unwrap_or(0);
+        compute_stream_count(local_size)
+    } else {
+        1
+    };
+
     // ── 1. 握手：发送请求 + 接收响应 ──
-    let (session_id, file_size, mut send, mut recv) =
-        handshake_transfer(conn, request_id, &direction, &remote_path, &local_path, resume_from)
+    let (session_id, file_size, frame_mode, mut send, mut recv) =
+        handshake_transfer(conn, request_id, &direction, &remote_path, &local_path, resume_from, stream_count)
             .await?;
 
     // 保存 Agent 端的 session_id
@@ -1294,15 +1429,22 @@ async fn perform_transfer(
 
     // ── 2. 执行传输 ──
     if direction == "upload" {
-        run_upload_loop(&mut send, &session_id, &local_path, manager, task_id).await
+        if stream_count > 1 {
+            run_multi_stream_upload(
+                conn, &session_id, &local_path, file_size, stream_count,
+                Arc::clone(&manager), task_id, send, recv,
+            ).await
+        } else {
+            run_upload_loop(&mut send, &session_id, &local_path, &manager, task_id, &frame_mode, None, None).await
+        }
     } else {
-        run_download_loop(&mut recv, &session_id, &local_path, file_size, resume_from, manager, task_id).await
+        run_download_loop(&mut recv, &session_id, &local_path, file_size, resume_from, &manager, task_id, &frame_mode).await
     }
 }
 
 /// 传输握手：发送 FileTransferRequest + 接收 FileTransferAccept
 ///
-/// 返回 (session_id, file_size, send_stream, recv_stream)
+/// 返回 (session_id, file_size, frame_mode, send_stream, recv_stream)
 async fn handshake_transfer(
     conn: &quinn::Connection,
     request_id: u32,
@@ -1310,7 +1452,8 @@ async fn handshake_transfer(
     remote_path: &str,
     local_path: &str,
     resume_from: Option<u64>,
-) -> Result<(String, u64, quinn::SendStream, quinn::RecvStream), String> {
+    stream_count: u32,
+) -> Result<(String, u64, String, quinn::SendStream, quinn::RecvStream), String> {
     // 获取文件大小（上传时）
     let file_size = if direction == "upload" {
         Some(std::fs::metadata(local_path)
@@ -1324,8 +1467,10 @@ async fn handshake_transfer(
         direction: direction.to_string(),
         path: remote_path.to_string(),
         file_size,
-        chunk_size: Some(64 * 1024),
+        chunk_size: Some(256 * 1024),
         resume_from,
+        frame_mode: "raw".to_string(),
+        stream_count: Some(stream_count),
     };
 
     // 创建 Stream
@@ -1370,12 +1515,12 @@ async fn handshake_transfer(
     let response_envelope = Envelope::decode(&response_buf)?;
 
     match response_envelope.payload {
-        Payload::FileTransferAccept { session_id, file_size, .. } => {
+        Payload::FileTransferAccept { session_id, file_size, frame_mode, .. } => {
             tracing::info!(
-                session_id, file_size,
+                session_id, file_size, frame_mode,
                 "文件传输已接受"
             );
-            Ok((session_id, file_size, send, recv))
+            Ok((session_id, file_size, frame_mode, send, recv))
         }
         Payload::Error { message, .. } => {
             Err(format!("Agent 返回错误: {}", message))
@@ -1386,63 +1531,271 @@ async fn handshake_transfer(
     }
 }
 
-/// 上传循环：读取本地文件 → 发送 FileChunk → 发送 Complete
+/// 上传循环：读取本地文件 → 发送数据帧/块 → 发送 Complete
+///
+/// - `range`: 多流并行时指定段范围 `(offset_start, offset_end)`,`None` 则读整个文件
+/// - `total_transferred`: 多流并行时的共享进度计数器,`None` 则用单流进度
 async fn run_upload_loop(
     send: &mut quinn::SendStream,
     session_id: &str,
     local_path: &str,
     manager: &TransferManager,
     task_id: &str,
+    frame_mode: &str,
+    range: Option<(u64, u64)>,
+    total_transferred: Option<Arc<std::sync::atomic::AtomicU64>>,
 ) -> Result<(), String> {
-    let mut reader = FileReader::new(local_path)?;
+    let raw_mode = frame_mode == "raw";
+    let mut reader = match range {
+        Some((start, end)) => FileReader::new_with_range(local_path, start, end)?,
+        None => FileReader::new(local_path)?,
+    };
     let mut seq = 1u32;
     let start_time = std::time::Instant::now();
 
-    while let Some(chunk) = reader.read_next_chunk()? {
+    while let Some(chunk) = reader.read_next_chunk().await? {
         // 检查任务状态
         if let Err(e) = wait_if_paused(manager, task_id).await {
             return Err(e);
         }
         check_cancelled_or_deleted(manager, task_id).await?;
 
-        // 发送 FileChunk
-        let chunk_payload = Payload::FileChunk {
-            session_id: session_id.to_string(),
-            seq,
-            data: chunk.clone(),
-            size: chunk.len() as u32,
-        };
+        if raw_mode {
+            // ===== 裸帧模式: 直接写二进制数据帧 =====
+            tokio::time::timeout(FILE_CHUNK_TIMEOUT, write_data_frame(send, seq, &chunk))
+                .await
+                .map_err(|_| format!("发送数据块超时 ({}s)", FILE_CHUNK_TIMEOUT.as_secs()))??;
+        } else {
+            // ===== JSON 模式(旧端回退) =====
+            let chunk_payload = Payload::FileChunk {
+                session_id: session_id.to_string(),
+                seq,
+                data: chunk.clone(),
+                size: chunk.len() as u32,
+            };
 
-        let chunk_request_id = uuid::Uuid::new_v4().as_u128() as u32;
-        let chunk_envelope = Envelope::new(chunk_request_id, chunk_payload);
-        let chunk_bytes = chunk_envelope.encode()?;
-        let chunk_len = (chunk_bytes.len() as u32).to_le_bytes();
+            let chunk_request_id = uuid::Uuid::new_v4().as_u128() as u32;
+            let chunk_envelope = Envelope::new(chunk_request_id, chunk_payload);
+            let chunk_bytes = chunk_envelope.encode()?;
+            let chunk_len = (chunk_bytes.len() as u32).to_le_bytes();
 
-        tokio::time::timeout(FILE_CHUNK_TIMEOUT, async {
-            send.write_all(&chunk_len).await
-                .map_err(|e| format!("发送块长度失败: {}", e))?;
-            send.write_all(&chunk_bytes).await
-                .map_err(|e| format!("发送块数据失败: {}", e))?;
-            Ok::<(), String>(())
-        })
-        .await
-        .map_err(|_| format!("发送数据块超时 ({}s)", FILE_CHUNK_TIMEOUT.as_secs()))??;
+            tokio::time::timeout(FILE_CHUNK_TIMEOUT, async {
+                send.write_all(&chunk_len).await
+                    .map_err(|e| format!("发送块长度失败: {}", e))?;
+                send.write_all(&chunk_bytes).await
+                    .map_err(|e| format!("发送块数据失败: {}", e))?;
+                Ok::<(), String>(())
+            })
+            .await
+            .map_err(|_| format!("发送数据块超时 ({}s)", FILE_CHUNK_TIMEOUT.as_secs()))??;
+        }
 
         seq += 1;
 
         // 更新进度
         let elapsed = start_time.elapsed().as_secs();
-        let speed_bps = if elapsed > 0 { reader.transferred / elapsed } else { 0 };
-        manager.update_progress(task_id, reader.transferred, speed_bps).await?;
+        if let Some(ref total) = total_transferred {
+            // 多流模式:累加到共享计数器,报告总和
+            total.fetch_add(chunk.len() as u64, std::sync::atomic::Ordering::Relaxed);
+            let total_val = total.load(std::sync::atomic::Ordering::Relaxed);
+            let speed_bps = if elapsed > 0 { total_val / elapsed } else { 0 };
+            manager.update_progress(task_id, total_val, speed_bps).await?;
+        } else {
+            // 单流模式:用 reader.transferred
+            let speed_bps = if elapsed > 0 { reader.transferred / elapsed } else { 0 };
+            manager.update_progress(task_id, reader.transferred, speed_bps).await?;
+        }
     }
 
     // 发送 FileTransferComplete
-    send_complete_message(send, session_id).await?;
+    send_complete_message(send, session_id, raw_mode).await?;
 
-    manager.mark_completed(task_id).await
+    // 单流模式才标记完成(多流由 run_multi_stream_upload 统一标记)
+    if total_transferred.is_none() {
+        manager.mark_completed(task_id).await?;
+    }
+    Ok(())
 }
 
-/// 下载循环：接收 FileChunk → 写入临时文件 → 收到 Complete 后重命名
+/// 计算多流并行各段 offset 范围(等分 file_size 为 N 段)
+fn compute_part_offsets(file_size: u64, stream_count: u32) -> Vec<(u64, u64)> {
+    let n = stream_count as u64;
+    let part = file_size / n;
+    let mut offsets = Vec::with_capacity(stream_count as usize);
+    let mut cur = 0u64;
+    for i in 0..stream_count as u64 {
+        let start = cur;
+        let end = if i == n - 1 { file_size } else { cur + part };
+        offsets.push((start, end));
+        cur = end;
+    }
+    offsets
+}
+
+/// 多流并行上传
+///
+/// 1. 等分 file_size 为 N 段,计算各段 offset
+/// 2. 主 stream (index 0): 用握手已有的 send/recv,run_upload_loop 上传段 0
+/// 3. 非主 stream (1..N-1): 各开 open_bi → MultiStreamJoin → ACK → run_upload_loop
+/// 4. 所有 stream 并发上传(tokio::spawn)
+/// 5. 等所有段上传完成 → 主 stream recv 等待 MultiStreamMergeComplete
+async fn run_multi_stream_upload(
+    conn: &quinn::Connection,
+    session_id: &str,
+    local_path: &str,
+    file_size: u64,
+    stream_count: u32,
+    manager: Arc<TransferManager>,
+    task_id: &str,
+    mut primary_send: quinn::SendStream,
+    mut primary_recv: quinn::RecvStream,
+) -> Result<(), String> {
+    use std::sync::atomic::AtomicU64;
+    use tokio::io::AsyncWriteExt;
+
+    // 1. 计算各段 offset
+    let part_offsets = compute_part_offsets(file_size, stream_count);
+    tracing::info!(task_id, stream_count, ?part_offsets, "多流上传开始");
+
+    // 2. 共享进度计数器
+    let total_transferred = Arc::new(AtomicU64::new(0));
+
+    // 3. 主 stream (index 0) 上传任务
+    let primary_range = part_offsets[0];
+    let primary_session_id = session_id.to_string();
+    let primary_local_path = local_path.to_string();
+    let primary_task_id = task_id.to_string();
+    let primary_total = Arc::clone(&total_transferred);
+    let primary_manager = Arc::clone(&manager);
+    let primary_handle = tokio::spawn(async move {
+        run_upload_loop(
+            &mut primary_send,
+            &primary_session_id,
+            &primary_local_path,
+            &primary_manager,
+            &primary_task_id,
+            "raw",
+            Some(primary_range),
+            Some(primary_total),
+        ).await
+    });
+
+    // 4. 非主 stream (1..N-1): open_bi → MultiStreamJoin → ACK → spawn upload
+    let mut secondary_handles: Vec<tokio::task::JoinHandle<Result<(), String>>> = Vec::new();
+    for stream_index in 1..stream_count {
+        let range = part_offsets[stream_index as usize];
+
+        // 开新 bi-stream
+        let (mut send, mut recv) = tokio::time::timeout(
+            FILE_TRANSFER_STREAM_TIMEOUT,
+            conn.open_bi(),
+        ).await
+        .map_err(|_| format!("打开 stream {} 超时", stream_index))?
+        .map_err(|e| format!("打开 stream {} 失败: {}", stream_index, e))?;
+
+        // 发送 MultiStreamJoin
+        let join_payload = Payload::MultiStreamJoin {
+            session_id: session_id.to_string(),
+            stream_index,
+            offset_start: range.0,
+            offset_end: range.1,
+        };
+        let join_env = Envelope::new(0, join_payload);
+        let join_bytes = join_env.encode()?;
+        write_control_frame(&mut send, &join_bytes).await?;
+        send.flush().await.map_err(|e| format!("flush join 失败: {}", e))?;
+
+        // 接收 ACK
+        let (type_byte, body_len) = read_frame_header(&mut recv).await?;
+        if type_byte != 1 {
+            return Err(format!("stream {} 期望控制帧(type=1),收到 type={}", stream_index, type_byte));
+        }
+        let ack_body = read_control_body(&mut recv, body_len).await?;
+        let ack_env = Envelope::decode(&ack_body)?;
+        match &ack_env.payload {
+            Payload::FileTransferAccept { .. } => {
+                tracing::info!(stream_index, "多流 stream 加入成功");
+            }
+            Payload::Error { message, .. } => {
+                return Err(format!("stream {} 加入被拒: {}", stream_index, message));
+            }
+            _ => return Err(format!("stream {} 收到意外响应", stream_index)),
+        }
+
+        // 启动段上传任务
+        let sec_session_id = session_id.to_string();
+        let sec_local_path = local_path.to_string();
+        let sec_task_id = task_id.to_string();
+        let sec_total = Arc::clone(&total_transferred);
+        let sec_manager = Arc::clone(&manager);
+        let handle = tokio::spawn(async move {
+            run_upload_loop(
+                &mut send,
+                &sec_session_id,
+                &sec_local_path,
+                &sec_manager,
+                &sec_task_id,
+                "raw",
+                Some(range),
+                Some(sec_total),
+            ).await
+        });
+        secondary_handles.push(handle);
+    }
+
+    // 5. 等待主 stream 上传完成
+    let primary_result = primary_handle.await
+        .map_err(|e| format!("主 stream 任务 panic: {}", e))?;
+
+    // 6. 等待所有非主 stream 完成
+    let mut all_ok = primary_result.is_ok();
+    for handle in secondary_handles {
+        match handle.await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                tracing::error!("非主 stream 上传失败: {}", e);
+                all_ok = false;
+            }
+            Err(e) => {
+                tracing::error!("非主 stream 任务 panic: {}", e);
+                all_ok = false;
+            }
+        }
+    }
+
+    if !all_ok {
+        let _ = manager.mark_failed(task_id, "部分 stream 上传失败".to_string()).await;
+        return Err("部分 stream 上传失败".to_string());
+    }
+
+    // 7. 等待 MultiStreamMergeComplete (主 stream recv)
+    tracing::info!(task_id, "所有段上传完成,等待合并结果");
+    let (type_byte, body_len) = read_frame_header(&mut primary_recv).await
+        .map_err(|e| format!("读取合并结果帧头失败: {}", e))?;
+    if type_byte != 1 {
+        return Err(format!("期望 MultiStreamMergeComplete(type=1),收到 type={}", type_byte));
+    }
+    let merge_body = read_control_body(&mut primary_recv, body_len).await
+        .map_err(|e| format!("读取合并结果数据失败: {}", e))?;
+    let merge_env = Envelope::decode(&merge_body)?;
+
+    match merge_env.payload {
+        Payload::MultiStreamMergeComplete { success, error, .. } => {
+            if success {
+                tracing::info!(task_id, "多流合并完成");
+                manager.mark_completed(task_id).await?;
+                Ok(())
+            } else {
+                let err_msg = error.unwrap_or_else(|| "合并失败".to_string());
+                let _ = manager.mark_failed(task_id, err_msg.clone()).await;
+                Err(err_msg)
+            }
+        }
+        _ => Err("期望 MultiStreamMergeComplete".to_string()),
+    }
+}
+
+/// 下载循环：接收数据帧/块 → 写入临时文件 → 收到 Complete 后重命名
 async fn run_download_loop(
     recv: &mut quinn::RecvStream,
     _session_id: &str,
@@ -1451,13 +1804,16 @@ async fn run_download_loop(
     resume_from: Option<u64>,
     manager: &TransferManager,
     task_id: &str,
+    frame_mode: &str,
 ) -> Result<(), String> {
+    let raw_mode = frame_mode == "raw";
     let resume_pos = resume_from.unwrap_or(0);
     let mut writer = FileWriter::with_resume(local_path, file_size, resume_pos)?;
     tracing::info!(
         temp_path = %writer.temp_path.display(),
         final_path = %writer.path.display(),
         transferred = writer.transferred,
+        frame_mode,
         "FileWriter 创建成功"
     );
 
@@ -1474,60 +1830,124 @@ async fn run_download_loop(
             return Err(e);
         }
 
-        // 读取消息
-        let read_result = tokio::time::timeout(FILE_CHUNK_TIMEOUT, async {
-            let mut chunk_len_buf = [0u8; 4];
-            recv.read_exact(&mut chunk_len_buf).await
-                .map_err(|e| format!("读取块长度失败: {}", e))?;
-            let chunk_len = u32::from_le_bytes(chunk_len_buf) as usize;
-            let mut chunk_buf = vec![0u8; chunk_len];
-            recv.read_exact(&mut chunk_buf).await
-                .map_err(|e| format!("读取块数据失败: {}", e))?;
-            Ok::<Vec<u8>, String>(chunk_buf)
-        })
-        .await;
-
-        let chunk_buf = match read_result {
-            Ok(Ok(buf)) => buf,
-            Ok(Err(e)) => {
-                manager.mark_failed(task_id, format!("读取数据块失败: {}", e)).await?;
-                return Err(format!("读取数据块失败: {}", e));
+        if raw_mode {
+            // ===== 裸帧模式: [4B len][1B type][body] =====
+            // 帧类型枚举: Data(文件数据) | Control(FileTransferComplete) | 其他
+            enum RawFrame {
+                Data(Vec<u8>),
+                Control(Vec<u8>),
             }
-            Err(_) => {
-                manager.mark_failed(task_id, "读取数据块超时".to_string()).await?;
-                return Err("读取数据块超时".to_string());
-            }
-        };
 
-        let chunk_envelope = Envelope::decode(&chunk_buf)?;
-
-        match chunk_envelope.payload {
-            Payload::FileChunk { data, .. } => {
-                writer.write_chunk(&data)?;
-                let elapsed = start_time.elapsed().as_secs();
-                let speed_bps = if elapsed > 0 { writer.transferred / elapsed } else { 0 };
-                manager.update_progress(task_id, writer.transferred, speed_bps).await?;
-            }
-            Payload::FileTransferComplete { success, error, .. } => {
-                if success {
-                    writer.finish()?;
-                    writer.mark_completed();
-                    manager.mark_completed(task_id).await?;
-                    tracing::info!("下载完成并重命名成功");
-                } else {
-                    manager.mark_failed(
-                        task_id,
-                        error.unwrap_or_else(|| "未知错误".to_string())
-                    ).await?;
+            let frame_result = tokio::time::timeout(FILE_CHUNK_TIMEOUT, async {
+                let (type_byte, body_len) = read_frame_header(recv).await?;
+                match type_byte {
+                    RAW_TYPE_DATA => {
+                        let (_seq, data) = read_data_body(recv, body_len).await?;
+                        Ok::<RawFrame, String>(RawFrame::Data(data))
+                    }
+                    RAW_TYPE_CONTROL => {
+                        let body = read_control_body(recv, body_len).await?;
+                        Ok(RawFrame::Control(body))
+                    }
+                    _ => Err(format!("未知帧类型: {}", type_byte)),
                 }
-                break;
+            })
+            .await;
+
+            match frame_result {
+                Ok(Ok(RawFrame::Data(data))) => {
+                    writer.write_chunk(&data)?;
+                    let elapsed = start_time.elapsed().as_secs();
+                    let speed_bps = if elapsed > 0 { writer.transferred / elapsed } else { 0 };
+                    manager.update_progress(task_id, writer.transferred, speed_bps).await?;
+                }
+                Ok(Ok(RawFrame::Control(body))) => {
+                    let envelope = Envelope::decode(&body)?;
+                    match envelope.payload {
+                        Payload::FileTransferComplete { success, error, .. } => {
+                            if success {
+                                writer.finish()?;
+                                writer.mark_completed();
+                                manager.mark_completed(task_id).await?;
+                                tracing::info!("下载完成并重命名成功(裸帧)");
+                            } else {
+                                manager.mark_failed(
+                                    task_id,
+                                    error.unwrap_or_else(|| "未知错误".to_string())
+                                ).await?;
+                            }
+                            break;
+                        }
+                        _ => {
+                            tracing::warn!("收到意外的控制帧 payload");
+                        }
+                    }
+                }
+                Ok(Err(e)) => {
+                    manager.mark_failed(task_id, format!("读取数据帧失败: {}", e)).await?;
+                    return Err(format!("读取数据帧失败: {}", e));
+                }
+                Err(_) => {
+                    manager.mark_failed(task_id, "读取数据帧超时".to_string()).await?;
+                    return Err("读取数据帧超时".to_string());
+                }
             }
-            Payload::Error { message, .. } => {
-                manager.mark_failed(task_id, message).await?;
-                break;
-            }
-            _ => {
-                tracing::warn!("收到意外的消息类型");
+        } else {
+            // ===== JSON 模式(旧端回退) =====
+            let read_result = tokio::time::timeout(FILE_CHUNK_TIMEOUT, async {
+                let mut chunk_len_buf = [0u8; 4];
+                recv.read_exact(&mut chunk_len_buf).await
+                    .map_err(|e| format!("读取块长度失败: {}", e))?;
+                let chunk_len = u32::from_le_bytes(chunk_len_buf) as usize;
+                let mut chunk_buf = vec![0u8; chunk_len];
+                recv.read_exact(&mut chunk_buf).await
+                    .map_err(|e| format!("读取块数据失败: {}", e))?;
+                Ok::<Vec<u8>, String>(chunk_buf)
+            })
+            .await;
+
+            let chunk_buf = match read_result {
+                Ok(Ok(buf)) => buf,
+                Ok(Err(e)) => {
+                    manager.mark_failed(task_id, format!("读取数据块失败: {}", e)).await?;
+                    return Err(format!("读取数据块失败: {}", e));
+                }
+                Err(_) => {
+                    manager.mark_failed(task_id, "读取数据块超时".to_string()).await?;
+                    return Err("读取数据块超时".to_string());
+                }
+            };
+
+            let chunk_envelope = Envelope::decode(&chunk_buf)?;
+
+            match chunk_envelope.payload {
+                Payload::FileChunk { data, .. } => {
+                    writer.write_chunk(&data)?;
+                    let elapsed = start_time.elapsed().as_secs();
+                    let speed_bps = if elapsed > 0 { writer.transferred / elapsed } else { 0 };
+                    manager.update_progress(task_id, writer.transferred, speed_bps).await?;
+                }
+                Payload::FileTransferComplete { success, error, .. } => {
+                    if success {
+                        writer.finish()?;
+                        writer.mark_completed();
+                        manager.mark_completed(task_id).await?;
+                        tracing::info!("下载完成并重命名成功");
+                    } else {
+                        manager.mark_failed(
+                            task_id,
+                            error.unwrap_or_else(|| "未知错误".to_string())
+                        ).await?;
+                    }
+                    break;
+                }
+                Payload::Error { message, .. } => {
+                    manager.mark_failed(task_id, message).await?;
+                    break;
+                }
+                _ => {
+                    tracing::warn!("收到意外的消息类型");
+                }
             }
         }
     }
@@ -1566,6 +1986,7 @@ async fn check_cancelled_or_deleted(
 async fn send_complete_message(
     send: &mut quinn::SendStream,
     session_id: &str,
+    raw_mode: bool,
 ) -> Result<(), String> {
     use tokio::io::AsyncWriteExt;
 
@@ -1579,19 +2000,28 @@ async fn send_complete_message(
     let complete_request_id = uuid::Uuid::new_v4().as_u128() as u32;
     let complete_envelope = Envelope::new(complete_request_id, complete_payload);
     let complete_bytes = complete_envelope.encode()?;
-    let complete_len = (complete_bytes.len() as u32).to_le_bytes();
 
-    tokio::time::timeout(FILE_CHUNK_TIMEOUT, async {
-        send.write_all(&complete_len).await
-            .map_err(|e| format!("发送完成消息失败: {}", e))?;
-        send.write_all(&complete_bytes).await
-            .map_err(|e| format!("发送完成数据失败: {}", e))?;
-        send.flush().await
-            .map_err(|e| format!("刷新发送流失败: {}", e))?;
-        Ok::<(), String>(())
-    })
-    .await
-    .map_err(|_| "发送传输完成消息超时".to_string())??;
+    if raw_mode {
+        // 裸帧模式: 控制帧承载 JSON Envelope
+        tokio::time::timeout(FILE_CHUNK_TIMEOUT, write_control_frame(send, &complete_bytes))
+            .await
+            .map_err(|_| "发送传输完成消息超时".to_string())??;
+        send.flush().await.map_err(|e| format!("刷新发送流失败: {}", e))?;
+    } else {
+        // JSON 模式: [4B len][JSON bytes]
+        let complete_len = (complete_bytes.len() as u32).to_le_bytes();
+        tokio::time::timeout(FILE_CHUNK_TIMEOUT, async {
+            send.write_all(&complete_len).await
+                .map_err(|e| format!("发送完成消息失败: {}", e))?;
+            send.write_all(&complete_bytes).await
+                .map_err(|e| format!("发送完成数据失败: {}", e))?;
+            send.flush().await
+                .map_err(|e| format!("刷新发送流失败: {}", e))?;
+            Ok::<(), String>(())
+        })
+        .await
+        .map_err(|_| "发送传输完成消息超时".to_string())??;
+    }
 
     Ok(())
 }

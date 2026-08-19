@@ -6,6 +6,11 @@ use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 use tokio::sync::mpsc;
 
+/// frame_mode 默认值: 旧服务端不带该字段时回退到 "json" 帧模式
+fn default_frame_mode() -> String {
+    "json".to_string()
+}
+
 // ── 连接状态 ───────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -175,6 +180,13 @@ pub enum Payload {
         file_size: Option<u64>,   // 文件大小（上传时提供）
         chunk_size: Option<u32>,  // 建议的分块大小（可选）
         resume_from: Option<u64>, // 断点续传：从哪个字节开始（可选）
+        /// 帧模式: "raw"(裸二进制帧) | "json"(旧端回退)
+        #[serde(default = "default_frame_mode")]
+        frame_mode: String,
+        /// 多流并行数(大文件加速,方案 A 独立段+合并)
+        /// None 或 1 = 单流(默认);>1 = 客户端期望开 N 个 stream 并行
+        #[serde(default)]
+        stream_count: Option<u32>,
     },
 
     /// 文件传输接受响应（Agent → 客户端）
@@ -184,6 +196,12 @@ pub enum Payload {
         file_size: u64,           // 文件总大小
         chunk_size: u32,          // 确认的分块大小
         mtime: Option<u64>,       // 文件修改时间
+        /// 帧模式: "raw" | "json"(旧端回退)
+        #[serde(default = "default_frame_mode")]
+        frame_mode: String,
+        /// 确认的多流并行数(1=单流,>1=服务端确认多流)
+        #[serde(default)]
+        stream_count: u32,
     },
 
     /// 文件数据块（双向传输）
@@ -226,6 +244,23 @@ pub enum Payload {
     CancelFileTransferResponse {
         session_id: String,       // 传输会话 ID
         success: bool,            // 是否成功取消
+    },
+
+    /// 多流加入握手(客户端 → Agent,后续 stream 的第一帧,方案 A)
+    #[serde(rename = "multi_stream_join")]
+    MultiStreamJoin {
+        session_id: String,       // 关联的传输会话 ID
+        stream_index: u32,        // 本 stream 索引(0..N-1)
+        offset_start: u64,         // 本 stream 负责的起始偏移
+        offset_end: u64,           // 本 stream 负责的结束偏移(-exclusive)
+    },
+
+    /// 多流合并完成(Agent → 客户端,所有段写入完成后)
+    #[serde(rename = "multi_stream_merge_complete")]
+    MultiStreamMergeComplete {
+        session_id: String,       // 传输会话 ID
+        success: bool,            // 合并是否成功
+        error: Option<String>,    // 失败原因
     },
 
     /// 检查文件是否存在（客户端 → Agent）
@@ -1568,7 +1603,7 @@ fn build_quic_client_config(
         }))
         .with_no_client_auth();
 
-    // 传输层配置：设置 idle_timeout 以检测死连接
+    // 传输层配置：Bbr 拥塞控制 + 大窗口 + keep_alive + idle_timeout
     // idle_timeout: 30 秒无数据收发 → QUIC 自动关闭连接
     // 配合心跳(2s)使用：心跳每 2s 发一次，若连续超时说明连接异常
     // 30s 空闲超时给予网络波动足够的恢复时间，同时不会让僵死连接长期占用资源
@@ -1576,9 +1611,12 @@ fn build_quic_client_config(
     if let Ok(timeout) = quinn::IdleTimeout::try_from(std::time::Duration::from_secs(30)) {
         transport.max_idle_timeout(Some(timeout));
     }
-    // 流控制窗口：1MB，防止慢速接收端导致发送端阻塞
-    transport.stream_receive_window(quinn::VarInt::from_u32(1024 * 1024)); // 1MB per-stream
-    transport.receive_window(quinn::VarInt::from_u32(1024 * 1024));         // 1MB connection-wide
+    transport.keep_alive_interval(Some(std::time::Duration::from_secs(5))); // 每5秒发送保持活跃包
+    // 流控窗口：8MB per-stream / 64MB connection-wide，与服务端对称
+    transport.stream_receive_window(quinn::VarInt::from_u32(8 * 1024 * 1024));  // 8MB
+    transport.receive_window(quinn::VarInt::from_u32(64 * 1024 * 1024));         // 64MB
+    // Bbr 拥塞控制：相比默认 Cubic 更适合高带宽高延迟链路
+    transport.congestion_controller_factory(std::sync::Arc::new(quinn::congestion::BbrConfig::default()));
 
     let mut client = quinn::ClientConfig::new(std::sync::Arc::new(
         quinn::crypto::rustls::QuicClientConfig::try_from(crypto)

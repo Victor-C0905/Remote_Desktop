@@ -65,12 +65,24 @@ pub async fn handle_read_dir(req: ReadDir) -> WorkerResponse {
 
     // 构造用户会话
     let session = build_user_session(req.uid, req.gid, &req.username, &req.home_dir);
+    // 路径安全校验：防目录穿越、限制用户家目录、防符号链接攻击
+    let safe_path = match crate::auth::validate_path(&req.path, session.home_dir.as_path(), session.uid) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("路径校验失败: path={}, error={}", req.path, e);
+            let (code, message) = error_to_code_message(&e);
+            return WorkerResponse {
+                payload: Some(worker_response::Payload::Error(Error { code, message })),
+                ..Default::default()
+            };
+        }
+    };
     let executor = UserExecutor::new(&session);
 
     // 序列化中间结果类型:(name, is_dir, size, mtime_rfc3339, permissions)
     type DirEntry = (String, bool, u64, String, String);
 
-    let path = req.path.clone();
+    let path = safe_path.as_str().to_string();
     let result: AnyhowResult<Vec<DirEntry>> = executor.execute_as_user(move || {
         let p = Path::new(&path);
 
@@ -163,12 +175,24 @@ pub async fn handle_read_file(req: ReadFile) -> WorkerResponse {
     tracing::info!("处理 ReadFile 请求: path={}, uid={}", req.path, req.uid);
 
     let session = build_user_session(req.uid, req.gid, &req.username, &req.home_dir);
+    // 路径安全校验：防目录穿越、限制用户家目录、防符号链接攻击
+    let safe_path = match crate::auth::validate_path(&req.path, session.home_dir.as_path(), session.uid) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("路径校验失败: path={}, error={}", req.path, e);
+            let (code, message) = error_to_code_message(&e);
+            return WorkerResponse {
+                payload: Some(worker_response::Payload::Error(Error { code, message })),
+                ..Default::default()
+            };
+        }
+    };
     let executor = UserExecutor::new(&session);
 
     // 序列化中间结果类型:(content_bytes, mtime_secs, size)
     type FileData = (Vec<u8>, u64, u64);
 
-    let path = req.path.clone();
+    let path = safe_path.as_str().to_string();
     let result: AnyhowResult<FileData> = executor.execute_as_user(move || {
         let p = Path::new(&path);
 
@@ -240,12 +264,24 @@ pub async fn handle_write_file(req: WriteFile) -> WorkerResponse {
     tracing::info!("处理 WriteFile 请求: path={}, size={}, uid={}", req.path, req.content.len(), req.uid);
 
     let session = build_user_session(req.uid, req.gid, &req.username, &req.home_dir);
+    // 路径安全校验：防目录穿越、限制用户家目录、防符号链接攻击
+    let safe_path = match crate::auth::validate_path(&req.path, session.home_dir.as_path(), session.uid) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("路径校验失败: path={}, error={}", req.path, e);
+            let (code, message) = error_to_code_message(&e);
+            return WorkerResponse {
+                payload: Some(worker_response::Payload::Error(Error { code, message })),
+                ..Default::default()
+            };
+        }
+    };
     let executor = UserExecutor::new(&session);
 
     // 序列化中间结果类型:(mtime_secs, size)
     type WriteOutcome = (u64, u64);
 
-    let path = req.path.clone();
+    let path = safe_path.as_str().to_string();
     let content = req.content.clone();
     let result: AnyhowResult<WriteOutcome> = executor.execute_as_user(move || {
         let p = Path::new(&path);
@@ -316,9 +352,21 @@ pub async fn handle_delete(req: Delete) -> WorkerResponse {
     tracing::info!("处理 Delete 请求: path={}, uid={}", req.path, req.uid);
 
     let session = build_user_session(req.uid, req.gid, &req.username, &req.home_dir);
+    // 路径安全校验：防目录穿越、限制用户家目录、防符号链接攻击
+    let safe_path = match crate::auth::validate_path(&req.path, session.home_dir.as_path(), session.uid) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("路径校验失败: path={}, error={}", req.path, e);
+            let (code, message) = error_to_code_message(&e);
+            return WorkerResponse {
+                payload: Some(worker_response::Payload::Error(Error { code, message })),
+                ..Default::default()
+            };
+        }
+    };
     let executor = UserExecutor::new(&session);
 
-    let path = req.path.clone();
+    let path = safe_path.as_str().to_string();
     let result: AnyhowResult<()> = executor.execute_as_user(move || {
         let p = Path::new(&path);
         let metadata = fs::metadata(p).map_err(|e| {
@@ -360,9 +408,21 @@ pub async fn handle_mkdir(req: Mkdir) -> WorkerResponse {
     tracing::info!("处理 Mkdir 请求: path={}, uid={}", req.path, req.uid);
 
     let session = build_user_session(req.uid, req.gid, &req.username, &req.home_dir);
+    // 路径安全校验：防目录穿越、限制用户家目录、防符号链接攻击
+    let safe_path = match crate::auth::validate_path(&req.path, session.home_dir.as_path(), session.uid) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("路径校验失败: path={}, error={}", req.path, e);
+            let (code, message) = error_to_code_message(&e);
+            return WorkerResponse {
+                payload: Some(worker_response::Payload::Error(Error { code, message })),
+                ..Default::default()
+            };
+        }
+    };
     let executor = UserExecutor::new(&session);
 
-    let path = req.path.clone();
+    let path = safe_path.as_str().to_string();
     let result: AnyhowResult<String> = executor.execute_as_user(move || {
         fs::create_dir_all(&path).map_err(|e| {
             let msg = e.to_string();
@@ -402,10 +462,33 @@ pub async fn handle_rename(req: Rename) -> WorkerResponse {
     tracing::info!("处理 Rename 请求: {} -> {}, uid={}", req.old_path, req.new_path, req.uid);
 
     let session = build_user_session(req.uid, req.gid, &req.username, &req.home_dir);
+    // 路径安全校验：验证 old_path 和 new_path（防目录穿越、限制家目录、防符号链接）
+    let safe_old = match crate::auth::validate_path(&req.old_path, session.home_dir.as_path(), session.uid) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("路径校验失败: path={}, error={}", req.old_path, e);
+            let (code, message) = error_to_code_message(&e);
+            return WorkerResponse {
+                payload: Some(worker_response::Payload::Error(Error { code, message })),
+                ..Default::default()
+            };
+        }
+    };
+    let safe_new = match crate::auth::validate_path(&req.new_path, session.home_dir.as_path(), session.uid) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("路径校验失败: path={}, error={}", req.new_path, e);
+            let (code, message) = error_to_code_message(&e);
+            return WorkerResponse {
+                payload: Some(worker_response::Payload::Error(Error { code, message })),
+                ..Default::default()
+            };
+        }
+    };
     let executor = UserExecutor::new(&session);
 
-    let old_path = req.old_path.clone();
-    let new_path = req.new_path.clone();
+    let old_path = safe_old.as_str().to_string();
+    let new_path = safe_new.as_str().to_string();
     let result: AnyhowResult<(String, String)> = executor.execute_as_user(move || {
         fs::rename(&old_path, &new_path).map_err(|e| {
             let msg = e.to_string();
@@ -448,10 +531,33 @@ pub async fn handle_copy(req: Copy) -> WorkerResponse {
     tracing::info!("处理 Copy 请求: {} -> {}, uid={}", req.src, req.dst, req.uid);
 
     let session = build_user_session(req.uid, req.gid, &req.username, &req.home_dir);
+    // 路径安全校验：验证 src 和 dst（防目录穿越、限制家目录、防符号链接）
+    let safe_src = match crate::auth::validate_path(&req.src, session.home_dir.as_path(), session.uid) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("路径校验失败: path={}, error={}", req.src, e);
+            let (code, message) = error_to_code_message(&e);
+            return WorkerResponse {
+                payload: Some(worker_response::Payload::Error(Error { code, message })),
+                ..Default::default()
+            };
+        }
+    };
+    let safe_dst = match crate::auth::validate_path(&req.dst, session.home_dir.as_path(), session.uid) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("路径校验失败: path={}, error={}", req.dst, e);
+            let (code, message) = error_to_code_message(&e);
+            return WorkerResponse {
+                payload: Some(worker_response::Payload::Error(Error { code, message })),
+                ..Default::default()
+            };
+        }
+    };
     let executor = UserExecutor::new(&session);
 
-    let src = req.src.clone();
-    let dst = req.dst.clone();
+    let src = safe_src.as_str().to_string();
+    let dst = safe_dst.as_str().to_string();
     let result: AnyhowResult<(String, String)> = executor.execute_as_user(move || {
         let metadata = fs::metadata(&src).map_err(|e| {
             let msg = e.to_string();
@@ -505,6 +611,25 @@ pub async fn handle_copy(req: Copy) -> WorkerResponse {
 pub async fn handle_move(req: Move) -> WorkerResponse {
     tracing::info!("处理 Move 请求: {} -> {}, uid={}", req.src, req.dst, req.uid);
 
+    // 路径安全校验：验证 src 和 dst（Move 委托给 Rename，在此提前校验）
+    let session = build_user_session(req.uid, req.gid, &req.username, &req.home_dir);
+    if let Err(e) = crate::auth::validate_path(&req.src, session.home_dir.as_path(), session.uid) {
+        tracing::error!("路径校验失败: path={}, error={}", req.src, e);
+        let (code, message) = error_to_code_message(&e);
+        return WorkerResponse {
+            payload: Some(worker_response::Payload::Error(Error { code, message })),
+            ..Default::default()
+        };
+    }
+    if let Err(e) = crate::auth::validate_path(&req.dst, session.home_dir.as_path(), session.uid) {
+        tracing::error!("路径校验失败: path={}, error={}", req.dst, e);
+        let (code, message) = error_to_code_message(&e);
+        return WorkerResponse {
+            payload: Some(worker_response::Payload::Error(Error { code, message })),
+            ..Default::default()
+        };
+    }
+
     // Move 本质上是 Rename
     let rename_req = Rename {
         old_path: req.src,
@@ -537,9 +662,21 @@ pub async fn handle_file_exists(req: FileExistsReq) -> WorkerResponse {
     tracing::info!("处理 FileExists 请求: path={}, uid={}", req.path, req.uid);
 
     let session = build_user_session(req.uid, req.gid, &req.username, &req.home_dir);
+    // 路径安全校验：防目录穿越、限制用户家目录、防符号链接攻击
+    let safe_path = match crate::auth::validate_path(&req.path, session.home_dir.as_path(), session.uid) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("路径校验失败: path={}, error={}", req.path, e);
+            let (code, message) = error_to_code_message(&e);
+            return WorkerResponse {
+                payload: Some(worker_response::Payload::Error(Error { code, message })),
+                ..Default::default()
+            };
+        }
+    };
     let executor = UserExecutor::new(&session);
 
-    let path = req.path.clone();
+    let path = safe_path.as_str().to_string();
     let result: AnyhowResult<Option<(u64, u64)>> = executor.execute_as_user(move || {
         match fs::metadata(&path) {
             Ok(meta) => {
@@ -599,6 +736,18 @@ pub async fn handle_apply_diff(req: ApplyDiffReq) -> WorkerResponse {
         req.path, req.base_mtime, req.diffs.len(), req.uid);
 
     let session = build_user_session(req.uid, req.gid, &req.username, &req.home_dir);
+    // 路径安全校验：防目录穿越、限制用户家目录、防符号链接攻击
+    let safe_path = match crate::auth::validate_path(&req.path, session.home_dir.as_path(), session.uid) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("路径校验失败: path={}, error={}", req.path, e);
+            let (code, message) = error_to_code_message(&e);
+            return WorkerResponse {
+                payload: Some(worker_response::Payload::Error(Error { code, message })),
+                ..Default::default()
+            };
+        }
+    };
     let executor = UserExecutor::new(&session);
 
     // 转换 protobuf FileDiff 为内部 FileDiff
@@ -614,7 +763,7 @@ pub async fn handle_apply_diff(req: ApplyDiffReq) -> WorkerResponse {
         new_content: if d.new_content.is_empty() { None } else { Some(d.new_content.clone()) },
     }).collect();
 
-    let path = req.path.clone();
+    let path = safe_path.as_str().to_string();
     let base_mtime = req.base_mtime;
     let result: AnyhowResult<u64> = executor.execute_as_user(move || {
         // 获取文件当前 mtime

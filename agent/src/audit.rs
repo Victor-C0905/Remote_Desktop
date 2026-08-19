@@ -152,7 +152,10 @@ impl AuditLogger {
     /// logger.log_file_operation("alice", 1000, "read", "/etc/passwd", 1234);
     /// logger.log_file_operation("root", 0, "write", "/etc/nginx/nginx.conf", 5678);
     /// 记录文件操作
-    #[allow(dead_code)]
+    ///
+    /// 已在文件传输流程的入口/完成/中断处调用:
+    /// - handler.rs: handle_file_transfer_request 记录 upload_start/download_start
+    /// - quic.rs: handle_file_upload_stream / handle_file_download_stream 记录 complete/failed
     pub fn log_file_operation(&self, user: &str, uid: u32, operation: &str, path: &str, size: u64) {
         self.log_operation(user, uid, &format!("file_{}", operation), &format!("path={} size={}", path, size));
     }

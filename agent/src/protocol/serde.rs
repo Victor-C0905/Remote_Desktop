@@ -3,6 +3,11 @@ use serde::{Deserialize, Serialize};
 use crate::diff::FileDiff; // 导入差异类型
 use crate::auth::stats::{AuthStatsSnapshot, ConnectionStatsSnapshot, PerformanceStatsSnapshot}; // 导入统计快照类型
 
+/// frame_mode 默认值: 旧客户端不带该字段时回退到 "json" 帧模式
+fn default_frame_mode() -> String {
+    "json".to_string()
+}
+
 /// 文件传输方向
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -268,6 +273,15 @@ pub enum Payload {
         file_size: Option<u64>,        // 文件大小（上传时提供）
         chunk_size: Option<u32>,       // 建议的分块大小（可选，默认 64KB）
         resume_from: Option<u64>,      // 断点续传：从哪个字节开始（可选）
+        /// 帧模式: "raw"(裸二进制帧,新客户端) | "json"(旧客户端回退)
+        /// 旧客户端不带该字段,反序列化时取 default "json" 保持兼容
+        #[serde(default = "default_frame_mode")]
+        frame_mode: String,
+        /// 多流并行数(大文件加速,方案 A 独立段+合并)
+        /// None 或 1 = 单流(默认,向后兼容);>1 = 客户端期望开 N 个 stream 并行
+        /// 服务端在 Accept 中回填确认的 stream_count(可能小于请求值)
+        #[serde(default)]
+        stream_count: Option<u32>,
     },
 
     /// 文件传输接受响应（Agent → 客户端）
@@ -277,6 +291,15 @@ pub enum Payload {
         file_size: u64,           // 文件总大小
         chunk_size: u32,          // 确认的分块大小（字节）
         mtime: Option<u64>,       // 文件修改时间（下载时提供）
+        /// 帧模式: "raw" | "json"(旧端回退)
+        /// 服务端按客户端请求的 frame_mode 回填,旧客户端不带该字段时取 default "json"
+        #[serde(default = "default_frame_mode")]
+        frame_mode: String,
+        /// 确认的多流并行数(方案 A)
+        /// 1 = 单流(默认,向后兼容);>1 = 服务端确认开 N 个 stream
+        /// 客户端按此值开 N 个 bi-stream,每 stream 各发一段 offset
+        #[serde(default)]
+        stream_count: u32,
     },
 
     /// 文件数据块（双向传输）
@@ -333,6 +356,30 @@ pub enum Payload {
     CancelFileTransferResponse {
         session_id: String,       // 传输会话 ID
         success: bool,            // 是否成功取消
+    },
+
+    /// 多流加入握手(客户端 → Agent,后续 stream 的第一帧)
+    ///
+    /// 方案 A(独立段+合并):主 stream 走 FileTransferRequest/Accept 握手,
+    /// 后续 N-1 个 stream 各自 open_bi 后发送此 payload 加入同一 session,
+    /// 声明本 stream 负责的 offset 段。
+    #[serde(rename = "multi_stream_join")]
+    MultiStreamJoin {
+        session_id: String,       // 关联的传输会话 ID(主 stream Accept 返回的)
+        stream_index: u32,        // 本 stream 索引(0..N-1,主 stream 隐式为 0)
+        offset_start: u64,         // 本 stream 负责的起始偏移
+        offset_end: u64,           // 本 stream 负责的结束偏移(-exclusive)
+    },
+
+    /// 多流合并完成(Agent → 客户端,主 stream 收到所有段完成后的结果)
+    ///
+    /// 服务端在所有 N 个 stream 的段文件写入完成后,合并段文件 → 最终文件,
+    /// 然后通过主 stream 发送此 payload 通知客户端最终结果。
+    #[serde(rename = "multi_stream_merge_complete")]
+    MultiStreamMergeComplete {
+        session_id: String,       // 传输会话 ID
+        success: bool,            // 合并是否成功
+        error: Option<String>,    // 失败原因
     },
 
     // 新增：通用订阅
@@ -462,6 +509,8 @@ impl Payload {
             Payload::FileExistsResponse { .. } => "FileExistsResponse",
             Payload::CancelFileTransfer { .. } => "CancelFileTransfer",
             Payload::CancelFileTransferResponse { .. } => "CancelFileTransferResponse",
+            Payload::MultiStreamJoin { .. } => "MultiStreamJoin",
+            Payload::MultiStreamMergeComplete { .. } => "MultiStreamMergeComplete",
             Payload::Subscribe { .. } => "Subscribe",
             Payload::Unsubscribe { .. } => "Unsubscribe",
             Payload::Event { .. } => "Event",

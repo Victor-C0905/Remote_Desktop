@@ -1,9 +1,10 @@
 use crate::config::AgentConfig;
 use crate::protocol::{Envelope, MetricsSnapshot, MountInfo, Payload};
 use crate::transfer_session::{TransferSession, TransferStatus};
-use crate::file_stream::{FileStreamReader, FileStreamWriter};
+use crate::file_stream::{PipeFileStreamReader, PipeFileStreamWriter, generate_temp_path};
 use crate::auth::{UserSession, UserExecutor, StatsManager}; // 新增：用户会话、执行器和统计管理器
 use crate::auth::stats::ConnectionStatsSnapshot; // 新增：连接统计快照类型
+use crate::audit::AuditLogger; // 新增：审计日志记录器
 use std::fs;
 
 use std::time::{SystemTime, UNIX_EPOCH, Instant};
@@ -18,8 +19,8 @@ lazy_static::lazy_static! {
         Arc::new(Mutex::new(HashMap::new()));
 }
 
-#[tracing::instrument(skip(envelope, cfg, session, stats_manager), fields(request_id = envelope.request_id, payload_type = envelope.payload.type_name()))]
-pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &UserSession, stats_manager: Arc<StatsManager>) -> Envelope {
+#[tracing::instrument(skip(envelope, cfg, session, stats_manager, audit_log), fields(request_id = envelope.request_id, payload_type = envelope.payload.type_name()))]
+pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &UserSession, stats_manager: Arc<StatsManager>, audit_log: Arc<AuditLogger>) -> Envelope {
     // 记录请求开始时间
     let start = Instant::now();
 
@@ -103,10 +104,10 @@ pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &U
         // ===== 文件传输处理 =====
 
         // 文件传输请求
-        Payload::FileTransferRequest { direction, path, file_size, chunk_size, resume_from } => {
-            tracing::info!("文件传输请求: direction={:?}, path={}, resume_from={:?}", direction, path, resume_from);
+        Payload::FileTransferRequest { direction, path, file_size, chunk_size, resume_from, frame_mode, stream_count } => {
+            tracing::info!("文件传输请求: direction={:?}, path={}, resume_from={:?}, frame_mode={}, stream_count={:?}", direction, path, resume_from, frame_mode, stream_count);
 
-            match handle_file_transfer_request(envelope.request_id, direction, path, *file_size, *chunk_size, *resume_from, cfg, session).await {
+            match handle_file_transfer_request(envelope.request_id, direction, path, *file_size, *chunk_size, *resume_from, cfg, session, audit_log.clone(), frame_mode, *stream_count).await {
                 Ok(response) => response,
                 Err(e) => {
                     tracing::error!("文件传输请求失败: {}", e);
@@ -353,9 +354,17 @@ pub async fn handle_file_transfer_request(
     resume_from: Option<u64>,
     cfg: &AgentConfig,
     session: &UserSession,
+    audit_log: Arc<AuditLogger>,
+    frame_mode: &str,
+    stream_count: Option<u32>,
 ) -> Result<Envelope, String> {
     // 1. 生成 session_id
     let session_id = format!("transfer-{}", Uuid::new_v4());
+
+    // 路径安全校验：防目录穿越、限制用户家目录、防符号链接攻击
+    let safe_path = crate::auth::validate_path(path, session.home_dir.as_path(), session.uid)
+        .map_err(|e| e.to_string())?;
+    let path = safe_path.as_str();
 
     // 2. 根据方向处理
     match direction {
@@ -374,79 +383,140 @@ pub async fn handle_file_transfer_request(
                 ));
             }
 
-            // 默认分块大小 64KB
-            let chunk_size = chunk_size.unwrap_or(64 * 1024);
+            // 默认分块大小 256KB
+            let chunk_size = chunk_size.unwrap_or(256 * 1024);
 
-            // 使用 UserExecutor 在用户上下文中执行操作
+            // 协商 stream_count（None/0/1 视为单流，向后兼容）
+            let stream_count = stream_count.unwrap_or(1).max(1);
+
+            // 使用 UserExecutor 在隔离子进程中执行文件写入（方案 ii'）
             let executor = UserExecutor::new(session);
-            let path_str = path.to_string();
-            let session_id_clone = session_id.clone();
-            let writer = executor.execute_as_user_unchecked(move || {
-                // 尝试断点续传
-                let writer = if let Some(resume_from) = resume_from {
-                    // 尝试从断点续传
-                    match FileStreamWriter::with_resume(&path_str, file_size, resume_from) {
-                        Ok(writer) => {
-                            tracing::info!(
-                                "上传断点续传: session_id={}, path={}, resume_from={}",
-                                session_id_clone,
-                                path_str,
-                                resume_from
-                            );
-                            writer
-                        }
-                        Err(e) => {
-                            // 断点续传失败，降级为重新传输
-                            tracing::warn!(
-                                "断点续传失败，降级为重新传输: {}",
-                                e
-                            );
-                            FileStreamWriter::new(&path_str, file_size).map_err(|e| anyhow::anyhow!("{}", e))?
-                        }
-                    }
-                } else {
-                    // 从头开始传输
-                    FileStreamWriter::new(&path_str, file_size).map_err(|e| anyhow::anyhow!("{}", e))?
-                };
-                Ok(writer)
-            }).map_err(|e| e.to_string())?;
 
-            // 创建传输会话
-            let mut transfer_session = TransferSession::new(
-                session_id.clone(),
-                direction.to_string(),
-                path.to_string(),
-                file_size,
-                chunk_size,
-            );
-            transfer_session.writer = Some(writer);
+            // 断点续传暂不支持隔离写入模式
+            if resume_from.is_some() {
+                tracing::warn!("断点续传暂不支持隔离写入模式,将从头开始传输");
+            }
 
-            // 保存到全局会话管理器
-            let mut sessions = TRANSFER_SESSIONS.lock().await;
-            sessions.insert(session_id.clone(), transfer_session);
+            if stream_count > 1 {
+                // ===== 多流并行模式（方案 A: 独立段+合并） =====
+                //
+                // 主 stream (index=0) 在此创建 part writer（spawn_isolated_writer_part，无 rename）。
+                // 其余 N-1 个 stream 通过 MultiStreamJoin 握手后各自创建 part writer（见 handle_multi_stream_join）。
+                // 全部 N 个 stream 完成 → spawn_isolated_merger 合并段文件 → 最终文件。
+                //
+                // part_offsets 由服务端计算（等分 file_size），客户端按 Accept 中的 stream_count
+                // 自行计算对应 offset 段并在 MultiStreamJoin 中声明，服务端校验匹配。
 
-            tracing::info!("创建上传会话: session_id={}, path={}, size={}", session_id, path, file_size);
+                // 计算 part_offsets：等分 file_size 为 N 段
+                let part_offsets = compute_part_offsets(file_size, stream_count);
 
-            // 返回接受响应
-            Ok(Envelope::new(
-                request_id,
-                Payload::FileTransferAccept {
-                    session_id,
+                // 主 stream (index=0) 的段文件路径
+                let part_path = generate_temp_path(std::path::Path::new(path));
+
+                // fork 子进程:子进程 setuid + namespace 后打开段文件,父进程经 pipe 写 chunk（无 rename）
+                let (pipe_writer, child_pid) = executor
+                    .spawn_isolated_writer_part(&part_path)
+                    .map_err(|e| e.to_string())?;
+                let writer = PipeFileStreamWriter::new(
+                    pipe_writer, child_pid, executor.clone(), file_size, part_path.clone(),
+                );
+
+                // 创建多流传输会话
+                let mut transfer_session = TransferSession::new_multi_stream(
+                    session_id.clone(),
+                    direction.to_string(),
+                    path.to_string(),
                     file_size,
                     chunk_size,
-                    mtime: None,
-                },
-            ))
+                    stream_count,
+                    part_offsets.clone(),
+                );
+                transfer_session.writer = Some(writer);
+                transfer_session.part_paths[0] = part_path;
+
+                // 保存到全局会话管理器
+                let mut sessions = TRANSFER_SESSIONS.lock().await;
+                sessions.insert(session_id.clone(), transfer_session);
+
+                tracing::info!(
+                    "创建多流上传会话: session_id={}, path={}, size={}, streams={}",
+                    session_id, path, file_size, stream_count
+                );
+
+                // 审计日志：记录上传开始
+                audit_log.log_file_operation(&session.username, session.uid, "upload_start", path, file_size);
+
+                // 返回接受响应（stream_count 确认 N，客户端据此开 N 个 bi-stream）
+                Ok(Envelope::new(
+                    request_id,
+                    Payload::FileTransferAccept {
+                        session_id,
+                        file_size,
+                        chunk_size,
+                        mtime: None,
+                        frame_mode: frame_mode.to_string(),
+                        stream_count,
+                    },
+                ))
+            } else {
+                // ===== 单流模式（向后兼容，spawn_isolated_writer 含 rename） =====
+
+                // 生成临时文件路径
+                let temp_path = generate_temp_path(std::path::Path::new(path));
+
+                // fork 子进程:子进程 setuid + namespace 后打开临时文件,父进程经 pipe 写 chunk
+                let (pipe_writer, child_pid) = executor
+                    .spawn_isolated_writer(&temp_path, path, file_size)
+                    .map_err(|e| e.to_string())?;
+                let writer = PipeFileStreamWriter::new(pipe_writer, child_pid, executor.clone(), file_size, temp_path);
+
+                // 创建传输会话
+                let mut transfer_session = TransferSession::new(
+                    session_id.clone(),
+                    direction.to_string(),
+                    path.to_string(),
+                    file_size,
+                    chunk_size,
+                );
+                transfer_session.writer = Some(writer);
+
+                // 保存到全局会话管理器
+                let mut sessions = TRANSFER_SESSIONS.lock().await;
+                sessions.insert(session_id.clone(), transfer_session);
+
+                tracing::info!("创建上传会话: session_id={}, path={}, size={}", session_id, path, file_size);
+
+                // 审计日志：记录上传开始
+                audit_log.log_file_operation(&session.username, session.uid, "upload_start", path, file_size);
+
+                // 返回接受响应
+                Ok(Envelope::new(
+                    request_id,
+                    Payload::FileTransferAccept {
+                        session_id,
+                        file_size,
+                        chunk_size,
+                        mtime: None,
+                        frame_mode: frame_mode.to_string(),
+                        stream_count: 1,
+                    },
+                ))
+            }
         }
 
         "download" => {
             // 下载：Agent 发送文件到客户端
-            // 使用 UserExecutor 在用户上下文中执行操作
+            // 使用 UserExecutor 在隔离子进程中执行文件读取（方案 ii'）
             let executor = UserExecutor::new(session);
             let path_str = path.to_string();
-            let session_id_clone = session_id.clone();
-            let _chunk_size_value = chunk_size.unwrap_or(64 * 1024);
-            let (file_size, mtime, reader) = executor.execute_as_user_unchecked(move || {
+
+            // 断点续传暂不支持隔离读取模式
+            if resume_from.is_some() {
+                tracing::warn!("断点续传暂不支持隔离读取模式,将从头开始传输");
+            }
+
+            // 获取文件元数据（以目标用户身份,验证读取权限）
+            let (file_size, mtime) = executor.execute_as_user(move || {
                 // 获取文件元数据
                 let metadata = fs::metadata(&path_str)
                     .map_err(|e| {
@@ -472,38 +542,17 @@ pub async fn handle_file_transfer_request(
                     .map_err(|e| anyhow::anyhow!("时间转换失败: {}", e))?
                     .as_secs();
 
-                // 尝试断点续传
-                let reader = if let Some(resume_from) = resume_from {
-                    // 尝试从断点续传
-                    match FileStreamReader::with_resume(&path_str, file_size, resume_from) {
-                        Ok(reader) => {
-                            tracing::info!(
-                                "下载断点续传: session_id={}, path={}, resume_from={}",
-                                session_id_clone,
-                                path_str,
-                                resume_from
-                            );
-                            reader
-                        }
-                        Err(e) => {
-                            // 断点续传失败，降级为重新传输
-                            tracing::warn!(
-                                "断点续传失败，降级为重新传输: {}",
-                                e
-                            );
-                            FileStreamReader::new(&path_str, file_size).map_err(|e| anyhow::anyhow!("{}", e))?
-                        }
-                    }
-                } else {
-                    // 从头开始传输
-                    FileStreamReader::new(&path_str, file_size).map_err(|e| anyhow::anyhow!("{}", e))?
-                };
-
-                Ok((file_size, mtime, reader))
+                Ok((file_size, mtime))
             }).map_err(|e| e.to_string())?;
 
-            // 默认分块大小 64KB
-            let chunk_size = chunk_size.unwrap_or(64 * 1024);
+            // fork 子进程:子进程 setuid + namespace 后打开文件,父进程经 pipe 读 chunk
+            let (pipe_reader, child_pid) = executor
+                .spawn_isolated_reader(path)
+                .map_err(|e| e.to_string())?;
+            let reader = PipeFileStreamReader::new(pipe_reader, child_pid, executor.clone(), file_size);
+
+            // 默认分块大小 256KB(与上传一致,减少帧数与 syscall 开销)
+            let chunk_size = chunk_size.unwrap_or(256 * 1024);
 
             // 创建传输会话
             let mut transfer_session = TransferSession::new(
@@ -521,6 +570,9 @@ pub async fn handle_file_transfer_request(
 
             tracing::info!("创建下载会话: session_id={}, path={}, size={}", session_id, path, file_size);
 
+            // 审计日志：记录下载开始
+            audit_log.log_file_operation(&session.username, session.uid, "download_start", path, file_size);
+
             // 返回接受响应
             Ok(Envelope::new(
                 request_id,
@@ -529,6 +581,8 @@ pub async fn handle_file_transfer_request(
                     file_size,
                     chunk_size,
                     mtime: Some(mtime),
+                    frame_mode: frame_mode.to_string(),
+                    stream_count: 1,  // 下载暂不多流(下载读盘已快,瓶颈在上行)
                 },
             ))
         }
@@ -537,6 +591,127 @@ pub async fn handle_file_transfer_request(
             Err(format!("无效的传输方向: {}", direction))
         }
     }
+}
+
+/// 计算多流并行的各段 offset 范围（等分 file_size 为 N 段）
+///
+/// 返回 `Vec<(offset_start, offset_end)>`，长度 == stream_count。
+/// 最后一段负责剩余全部字节（处理 file_size 不能被 N 整除的情况）。
+///
+/// 例：file_size=1024, stream_count=4 → [(0,256),(256,512),(512,768),(768,1024)]
+///     file_size=1000, stream_count=4 → [(0,250),(250,500),(500,750),(750,1000)]
+fn compute_part_offsets(file_size: u64, stream_count: u32) -> Vec<(u64, u64)> {
+    let n = stream_count as u64;
+    let part = file_size / n;
+    let mut offsets = Vec::with_capacity(stream_count as usize);
+    let mut cur = 0u64;
+    for i in 0..stream_count as u64 {
+        let start = cur;
+        // 最后一段负责剩余全部字节（处理整除余数）
+        let end = if i == n - 1 {
+            file_size
+        } else {
+            cur + part
+        };
+        offsets.push((start, end));
+        cur = end;
+    }
+    offsets
+}
+
+/// 处理多流加入握手（非主 stream 的第一个控制帧，Payload::MultiStreamJoin）
+///
+/// 在 TransferSession 中为指定 stream_index 创建 part writer（spawn_isolated_writer_part，
+/// 无 rename），存入 `part_writers`，并将 part_path 存入 `part_paths[stream_index]`。
+///
+/// 调用方（quic.rs `handle_stream` 的 `Payload::MultiStreamJoin` 分支）随后从 session
+/// 取走 writer（`part_writers.remove(&stream_index)`），进入 part-upload 循环
+/// （接收 chunk → write → finish → mark_stream_completed）。
+///
+/// 注意：writer 不从此函数返回（`PipeFileStreamWriter` 持唯一 pipe FD，不可 Clone），
+/// 而是存入 session 后由调用方 take，与主 stream 的 `session.writer.take()` 模式一致。
+///
+/// # 参数
+/// - `session_id`: 关联的传输会话 ID（主 stream Accept 返回的）
+/// - `stream_index`: 本 stream 索引（1..N-1，主 stream 隐式为 0 不经此函数）
+/// - `offset_start` / `offset_end`: 客户端声明的本 stream offset 段（-exclusive）
+/// - `session`: 用户会话（用于创建 UserExecutor）
+///
+/// # 返回
+/// - `Ok((file_size, chunk_size, frame_mode))`: 调用方持此信息 + take writer 接收 chunk
+/// - `Err(String)`: 会话不存在、非多流会话、stream_index 越界、offset 不匹配、spawn 失败
+pub async fn handle_multi_stream_join(
+    session_id: &str,
+    stream_index: u32,
+    offset_start: u64,
+    offset_end: u64,
+    session: &UserSession,
+) -> Result<(u64, u32, String), String> {
+    let mut sessions = TRANSFER_SESSIONS.lock().await;
+    let transfer_session = sessions.get_mut(session_id)
+        .ok_or_else(|| format!("多流加入失败: 会话不存在: {}", session_id))?;
+
+    // 校验为多流会话
+    if !transfer_session.is_multi_stream() {
+        return Err(format!(
+            "多流加入失败: 会话非多流模式 (stream_count={}): {}",
+            transfer_session.stream_count, session_id
+        ));
+    }
+
+    // 校验 stream_index 范围（1..N-1，主 stream 为 0 不经此函数）
+    if stream_index == 0 || stream_index >= transfer_session.stream_count {
+        return Err(format!(
+            "多流加入失败: stream_index={} 越界 (有效范围 1..{}): {}",
+            stream_index, transfer_session.stream_count - 1, session_id
+        ));
+    }
+
+    // 校验 offset 段匹配服务端计算的 part_offsets
+    let expected = transfer_session.part_offsets.get(stream_index as usize)
+        .ok_or_else(|| format!("多流加入失败: part_offsets[{}] 不存在", stream_index))?;
+    if offset_start != expected.0 || offset_end != expected.1 {
+        return Err(format!(
+            "多流加入失败: offset 段不匹配 (客户端 [{},{}) vs 服务端 [{},{})): {}",
+            offset_start, offset_end, expected.0, expected.1, session_id
+        ));
+    }
+
+    // 防重复加入（同一 stream_index 已有 writer）
+    if transfer_session.part_writers.contains_key(&stream_index) {
+        return Err(format!(
+            "多流加入失败: stream_index={} 已加入 (重复): {}", stream_index, session_id
+        ));
+    }
+
+    // 生成段文件路径
+    let part_path = generate_temp_path(std::path::Path::new(&transfer_session.path));
+
+    // 提取会话参数（释放锁前 clone 出来）
+    let file_size = transfer_session.file_size;
+    let chunk_size = transfer_session.chunk_size;
+    // 多流仅支持 raw 帧模式（JSON 模式旧客户端不走多流）
+    let frame_mode = "raw".to_string();
+
+    // 创建 executor + fork 子进程写段文件（无 rename）
+    let executor = UserExecutor::new(session);
+    let (pipe_writer, child_pid) = executor
+        .spawn_isolated_writer_part(&part_path)
+        .map_err(|e| format!("spawn_isolated_writer_part 失败: {}", e))?;
+    let writer = PipeFileStreamWriter::new(
+        pipe_writer, child_pid, executor, file_size, part_path.clone(),
+    );
+
+    // 注册到 session（调用方后续 take 出来用）
+    transfer_session.part_paths[stream_index as usize] = part_path.clone();
+    transfer_session.part_writers.insert(stream_index, writer);
+
+    tracing::info!(
+        "多流加入成功: session_id={}, stream_index={}, offset=[{},{}), part_path={}",
+        session_id, stream_index, offset_start, offset_end, part_path
+    );
+
+    Ok((file_size, chunk_size, frame_mode))
 }
 
 /// 处理文件数据块（上传时使用）
@@ -560,39 +735,53 @@ async fn handle_file_chunk(
     _cfg: &AgentConfig,
     stats_manager: Arc<StatsManager>,
 ) -> Result<Envelope, String> {
-    // 1. 从 TRANSFER_SESSIONS 获取会话
-    let mut sessions = TRANSFER_SESSIONS.lock().await;
+    // 1. 从 TRANSFER_SESSIONS 取出 writer,立即释放锁(避免在 sync pipe 写期间持有 tokio Mutex)
+    let mut writer = {
+        let mut sessions = TRANSFER_SESSIONS.lock().await;
+        let session = sessions
+            .get_mut(session_id)
+            .ok_or_else(|| format!("传输会话不存在: {}", session_id))?;
+        // 检查会话状态是否为 Active
+        if session.status != TransferStatus::Active {
+            return Err(format!("传输会话状态异常: {:?}", session.status));
+        }
+        session.writer.take()
+            .ok_or_else(|| "传输会话没有 writer".to_string())?
+    };
 
-    let session = sessions
-        .get_mut(session_id)
-        .ok_or_else(|| format!("传输会话不存在: {}", session_id))?;
+    // 2. spawn_blocking 写 pipe,不阻塞 tokio worker(pipe 缓冲区满时子进程读慢会阻塞)
+    let data_owned = data.to_vec();
+    let (writer, write_result) = tokio::task::spawn_blocking(move || {
+        let result = writer.write_chunk(&data_owned);
+        (writer, result)
+    })
+    .await
+    .map_err(|e| format!("写入任务 panic: {}", e))?;
 
-    // 2. 检查会话状态是否为 Active
-    if session.status != TransferStatus::Active {
-        return Err(format!("传输会话状态异常: {:?}", session.status));
+    // 3. 重新拿锁放回 writer + 更新 transferred
+    let transferred = writer.transferred();
+    {
+        let mut sessions = TRANSFER_SESSIONS.lock().await;
+        if let Some(session) = sessions.get_mut(session_id) {
+            session.transferred = transferred;
+            session.writer = Some(writer);
+        }
+        // 若 session 已不存在(被并发清理),writer drop 时自动 abort(子进程 SIGTERM + 临时文件清理)
     }
 
-    // 3. 写入数据块到文件
-    if let Some(writer) = session.writer.as_mut() {
-        writer.write_chunk(data)?;
+    // 4. 检查写入结果(失败则返回错误,不记录统计)
+    write_result?;
 
-        // 记录文件传输字节数
-        stats_manager.record_file_transfer_bytes(data.len() as u64);
+    // 记录文件传输字节数(仅在写入成功后)
+    stats_manager.record_file_transfer_bytes(data.len() as u64);
 
-        // 4. 更新 transferred 字段
-        session.transferred = writer.transferred();
-
-        tracing::debug!(
-            "写入数据块: session_id={}, seq={}, size={}, transferred={}/{}",
-            session_id,
-            seq,
-            data.len(),
-            session.transferred,
-            session.file_size
-        );
-    } else {
-        return Err("传输会话没有 writer".to_string());
-    }
+    tracing::debug!(
+        "写入数据块: session_id={}, seq={}, size={}, transferred={}",
+        session_id,
+        seq,
+        data.len(),
+        transferred
+    );
 
     // 5. 返回 FileChunk 响应（确认）
     Ok(Envelope::new(
