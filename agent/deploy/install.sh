@@ -68,21 +68,24 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 # 检查文件（支持打包部署和源码部署两种方式）
+# SCRIPT_DIR = deploy/ 目录;PARENT_DIR = agent/ 根目录(源码部署时二进制在 ../target/release/)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PARENT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# 打包部署：agent 和 agent.toml 在同目录
-# 源码部署：agent 在 target/release/ 或 target/debug/，agent.toml 在上级目录
+# 打包部署：agent 和 agent.toml 在 deploy/ 同目录
+# 源码部署：agent 在 ../target/release/ 或 ../target/debug/，agent.*.toml 在上级目录
 if [ -f "$SCRIPT_DIR/agent" ] && [ -f "$SCRIPT_DIR/agent.toml" ]; then
     BINARY_FILE="$SCRIPT_DIR/agent"
     CONFIG_FILE="$SCRIPT_DIR/agent.toml"
-elif [ -f "$SCRIPT_DIR/target/release/agent" ]; then
-    BINARY_FILE="$SCRIPT_DIR/target/release/agent"
-    CONFIG_FILE="$SCRIPT_DIR/agent.prod.toml"
-elif [ -f "$SCRIPT_DIR/target/debug/agent" ]; then
-    BINARY_FILE="$SCRIPT_DIR/target/debug/agent"
-    CONFIG_FILE="$SCRIPT_DIR/agent.dev.toml"
+elif [ -f "$PARENT_DIR/target/release/agent" ]; then
+    BINARY_FILE="$PARENT_DIR/target/release/agent"
+    CONFIG_FILE="$PARENT_DIR/agent.prod.toml"
+elif [ -f "$PARENT_DIR/target/debug/agent" ]; then
+    BINARY_FILE="$PARENT_DIR/target/debug/agent"
+    CONFIG_FILE="$PARENT_DIR/agent.dev.toml"
 else
     echo "错误: 未找到 agent 二进制文件"
+    echo "已查找: $SCRIPT_DIR/agent, $PARENT_DIR/target/release/agent, $PARENT_DIR/target/debug/agent"
     echo "请先运行: bash build.sh release"
     echo "或手动编译: cargo build --release"
     exit 1

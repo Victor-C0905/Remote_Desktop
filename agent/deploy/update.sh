@@ -83,19 +83,24 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 # 检查文件（支持打包部署和源码部署两种方式）
+# SCRIPT_DIR = deploy/ 目录;PARENT_DIR = agent/ 根目录(源码部署时二进制在 ../target/release/)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PARENT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-if [ -f "$SCRIPT_DIR/agent" ] && [ -f "$SCRIPT_DIR/agent.toml" ]; then
+# 打包部署: agent 二进制在 deploy/ 同目录(用户上传覆盖);agent.toml 可选(仅首次安装用)
+# 源码部署: agent 在 ../target/release/ 或 ../target/debug/,agent.*.toml 在上级
+if [ -f "$SCRIPT_DIR/agent" ]; then
     NEW_BINARY="$SCRIPT_DIR/agent"
     NEW_CONFIG="$SCRIPT_DIR/agent.toml"
-elif [ -f "$SCRIPT_DIR/target/release/agent" ]; then
-    NEW_BINARY="$SCRIPT_DIR/target/release/agent"
-    NEW_CONFIG="$SCRIPT_DIR/agent.prod.toml"
-elif [ -f "$SCRIPT_DIR/target/debug/agent" ]; then
-    NEW_BINARY="$SCRIPT_DIR/target/debug/agent"
-    NEW_CONFIG="$SCRIPT_DIR/agent.dev.toml"
+elif [ -f "$PARENT_DIR/target/release/agent" ]; then
+    NEW_BINARY="$PARENT_DIR/target/release/agent"
+    NEW_CONFIG="$PARENT_DIR/agent.prod.toml"
+elif [ -f "$PARENT_DIR/target/debug/agent" ]; then
+    NEW_BINARY="$PARENT_DIR/target/debug/agent"
+    NEW_CONFIG="$PARENT_DIR/agent.dev.toml"
 else
     echo "错误: 未找到新版本二进制文件"
+    echo "已查找: $SCRIPT_DIR/agent, $PARENT_DIR/target/release/agent, $PARENT_DIR/target/debug/agent"
     echo "请先运行: bash build.sh release"
     exit 1
 fi
@@ -166,14 +171,21 @@ echo ">>> [2/4] 替换二进制文件..."
 rm -f "$OLD_BINARY"
 cp "$NEW_BINARY" "$OLD_BINARY"
 chmod +x "$OLD_BINARY"
-# 更新生产配置（备份旧配置，但不覆盖用户修改）
+# 配置策略:用户传了 agent.toml 则覆盖(备份旧配置),未传则保留远程配置
+# 这样用户改了配置后,传 agent.toml + 二进制一起更新;只传二进制则配置不变
+CONFIG_PATH="/etc/$SERVICE_NAME/agent.toml"
 if [ -f "$NEW_CONFIG" ]; then
-    CONFIG_PATH="/etc/$SERVICE_NAME/agent.toml"
     if [ -f "$CONFIG_PATH" ]; then
         cp "$CONFIG_PATH" "$CONFIG_PATH.bak"
     fi
     cp "$NEW_CONFIG" "$CONFIG_PATH"
-    echo "  配置已更新（旧配置备份为 agent.toml.bak）"
+    echo "  配置已更新(旧配置备份为 agent.toml.bak)"
+else
+    if [ -f "$CONFIG_PATH" ]; then
+        echo "  配置已保留(未传新配置)"
+    else
+        echo "  警告: 无配置文件,服务可能启动失败"
+    fi
 fi
 echo "程序已更新"
 

@@ -1693,7 +1693,8 @@ async fn run_multi_stream_upload(
         .map_err(|_| format!("打开 stream {} 超时", stream_index))?
         .map_err(|e| format!("打开 stream {} 失败: {}", stream_index, e))?;
 
-        // 发送 MultiStreamJoin
+        // 发送 MultiStreamJoin (握手用 4字节len + JSON,和单流 handshake_transfer 一致)
+        // 不能用 write_control_frame(5字节 raw 帧),agent 端 read_message 期望 4字节len + JSON
         let join_payload = Payload::MultiStreamJoin {
             session_id: session_id.to_string(),
             stream_index,
@@ -1702,15 +1703,19 @@ async fn run_multi_stream_upload(
         };
         let join_env = Envelope::new(0, join_payload);
         let join_bytes = join_env.encode()?;
-        write_control_frame(&mut send, &join_bytes).await?;
-        send.flush().await.map_err(|e| format!("flush join 失败: {}", e))?;
+        let join_len = (join_bytes.len() as u32).to_le_bytes();
+        send.write_all(&join_len).await.map_err(|e| format!("stream {} 发送 join 长度失败: {}", stream_index, e))?;
+        send.write_all(&join_bytes).await.map_err(|e| format!("stream {} 发送 join 数据失败: {}", stream_index, e))?;
+        send.flush().await.map_err(|e| format!("stream {} flush join 失败: {}", stream_index, e))?;
 
-        // 接收 ACK
-        let (type_byte, body_len) = read_frame_header(&mut recv).await?;
-        if type_byte != 1 {
-            return Err(format!("stream {} 期望控制帧(type=1),收到 type={}", stream_index, type_byte));
-        }
-        let ack_body = read_control_body(&mut recv, body_len).await?;
+        // 接收 ACK (4字节len + JSON,和 agent write_message 一致)
+        let mut ack_len_buf = [0u8; 4];
+        recv.read_exact(&mut ack_len_buf).await
+            .map_err(|e| format!("stream {} 读 ACK 长度失败: {}", stream_index, e))?;
+        let ack_len = u32::from_le_bytes(ack_len_buf) as usize;
+        let mut ack_body = vec![0u8; ack_len];
+        recv.read_exact(&mut ack_body).await
+            .map_err(|e| format!("stream {} 读 ACK 数据失败: {}", stream_index, e))?;
         let ack_env = Envelope::decode(&ack_body)?;
         match &ack_env.payload {
             Payload::FileTransferAccept { .. } => {
@@ -1770,12 +1775,13 @@ async fn run_multi_stream_upload(
 
     // 7. 等待 MultiStreamMergeComplete (主 stream recv)
     tracing::info!(task_id, "所有段上传完成,等待合并结果");
-    let (type_byte, body_len) = read_frame_header(&mut primary_recv).await
-        .map_err(|e| format!("读取合并结果帧头失败: {}", e))?;
-    if type_byte != 1 {
-        return Err(format!("期望 MultiStreamMergeComplete(type=1),收到 type={}", type_byte));
-    }
-    let merge_body = read_control_body(&mut primary_recv, body_len).await
+    // 合并结果用 4字节len + JSON(和 agent write_message 一致,不是 raw 帧)
+    let mut merge_len_buf = [0u8; 4];
+    primary_recv.read_exact(&mut merge_len_buf).await
+        .map_err(|e| format!("读取合并结果长度失败: {}", e))?;
+    let merge_len = u32::from_le_bytes(merge_len_buf) as usize;
+    let mut merge_body = vec![0u8; merge_len];
+    primary_recv.read_exact(&mut merge_body).await
         .map_err(|e| format!("读取合并结果数据失败: {}", e))?;
     let merge_env = Envelope::decode(&merge_body)?;
 
