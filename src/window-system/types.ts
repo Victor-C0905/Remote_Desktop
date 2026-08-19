@@ -5,6 +5,7 @@
  */
 
 import { Window as AppWindow } from './core/Window';
+import type { SnapZone } from '../components/window-shell/aeroSnap';
 
 // Persistable window data (stored in localStorage)
 export interface PersistedWindowData {
@@ -72,7 +73,9 @@ export type WindowEventType =
   | 'window:moved'
   | 'window:layout-changed'
   | 'window:maximized'      // ✅ 新增：窗口最大化事件
-  | 'window:unmaximized';   // ✅ 新增：窗口取消最大化事件
+  | 'window:unmaximized'   // ✅ 新增：窗口取消最大化事件
+  | 'window:snapped'        // ✅ 新增：窗口 snap(半屏/四分之一屏)事件
+  | 'window:unsnapped';    // ✅ 新增：窗口取消 snap 事件
 
 // Window event structure
 export interface WindowEvent {
@@ -111,6 +114,8 @@ export interface IWindowManager {
   restore(windowId: string): void;
   maximize(windowId: string, maxPosition: { x: number; y: number }, maxSize: { width: number; height: number }): void;
   unmaximize(windowId: string): void;
+  snap(windowId: string, zone: SnapZone, rect: { x: number; y: number; width: number; height: number }): void;
+  unsnap(windowId: string): void;
   getById(windowId: string): AppWindow | undefined;
   getByAppId(appId: string): AppWindow[];
   getAll(): AppWindow[];

@@ -327,6 +327,8 @@ export function initWindowEventBridge(manager: WindowManager) {
     'window:restored',
     'window:maximized',
     'window:unmaximized',
+    'window:snapped',      // ✅ 新增
+    'window:unsnapped',    // ✅ 新增
   ];
 
   LIST_EVENTS.forEach(eventType => {

@@ -87,6 +87,10 @@ const DesktopWindow = memo(function DesktopWindow({
       mode="standard"
       position={windowState.position}
       size={windowState.size}
+      // ✅ Aero Snap 新增 props
+      snapZone={win.snapZone}
+      preMaximizeState={win.preMaximizeState ?? null}
+      preSnapState={win.preSnapState ?? null}
       onClose={() => manager.close(windowId)}
       onMinimize={() => manager.minimize(windowId)}
       onMaximize={() => {
@@ -96,6 +100,9 @@ const DesktopWindow = memo(function DesktopWindow({
           manager.maximize(windowId, maxWindowPosition, maxWindowSize);
         }
       }}
+      // ✅ Aero Snap 新增回调
+      onSnap={(zone, rect) => manager.snap(windowId, zone, rect)}
+      onUnsnap={() => manager.unsnap(windowId)}
       onFocus={() => manager.focus(windowId)}
       onPositionChange={(pos) => {
         const window = manager.getById(windowId);

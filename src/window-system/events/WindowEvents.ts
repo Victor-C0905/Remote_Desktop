@@ -14,4 +14,6 @@ export const WINDOW_EVENTS: Record<WindowEventType, WindowEventType> = {
   'window:layout-changed': 'window:layout-changed',
   'window:maximized': 'window:maximized',       // ✅ 新增
   'window:unmaximized': 'window:unmaximized',   // ✅ 新增
+  'window:snapped': 'window:snapped',            // ✅ 新增
+  'window:unsnapped': 'window:unsnapped',        // ✅ 新增
 };

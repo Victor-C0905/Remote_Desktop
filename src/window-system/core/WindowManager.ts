@@ -13,6 +13,7 @@ import {
   PersistedWindowData,
 } from '../types';
 import { createLogger } from '../../utils/logger';
+import type { SnapZone } from '../../components/window-shell/aeroSnap';
 
 const log = createLogger('WindowManager');
 
@@ -305,6 +306,39 @@ export class WindowManager implements IWindowManager {
     // Emit unmaximized event
     this.eventBus.emit({
       type: 'window:unmaximized',
+      windowId,
+      timestamp: Date.now(),
+    });
+  }
+
+  /**
+   * ✅ Snap 窗口(半屏/四分之一屏,非 maximize)
+   * 保存当前位置/尺寸,应用目标 rect
+   */
+  snap(windowId: string, zone: SnapZone, rect: { x: number; y: number; width: number; height: number }): void {
+    const window = this.windows.get(windowId);
+    if (!window) return;
+
+    window.setSnap(zone, rect);
+
+    this.eventBus.emit({
+      type: 'window:snapped',
+      windowId,
+      timestamp: Date.now(),
+    });
+  }
+
+  /**
+   * ✅ 取消 snap,恢复保存的位置/尺寸
+   */
+  unsnap(windowId: string): void {
+    const window = this.windows.get(windowId);
+    if (!window) return;
+
+    window.unsetSnap();
+
+    this.eventBus.emit({
+      type: 'window:unsnapped',
       windowId,
       timestamp: Date.now(),
     });
