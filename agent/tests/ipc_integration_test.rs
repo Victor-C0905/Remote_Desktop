@@ -22,13 +22,12 @@ async fn test_ipc_server_with_pty_registry() {
 
     // 创建 IpcServer（集成 WorkerManager）
     let socket_path = format!("/tmp/test_ipc_{}.sock", uuid::Uuid::new_v4());
-    let server = IpcServer::new(socket_path.clone(), registry.clone(), worker_manager.clone());
+    let server = IpcServer::new(socket_path.clone(), registry.clone(), worker_manager.clone(), 128);
 
     // 启动服务器
     server.start().await.expect("Failed to start IPC server");
 
-    // 验证启动后没有活动连接
-    assert_eq!(server.active_connection_count().await, 0);
+    // 新架构：active_connection_count 已移除，验证 start/stop 正常即可
 
     // 停止服务器
     server.stop().await.expect("Failed to stop IPC server");
@@ -37,47 +36,11 @@ async fn test_ipc_server_with_pty_registry() {
     let _ = std::fs::remove_file(&socket_path);
 }
 
-#[tokio::test]
-async fn test_cleanup_connection() {
-    let registry = Arc::new(PtyRegistry::new());
-    let worker_manager = Arc::new(WorkerManager::new(
-        "/usr/bin/agent".to_string(),
-        "/tmp/test.sock".to_string(),
-        3
-    ));
-    let socket_path = format!("/tmp/test_ipc_cleanup_{}.sock", uuid::Uuid::new_v4());
-    let server = IpcServer::new(socket_path.clone(), registry.clone(), worker_manager.clone());
+// test_cleanup_connection 已移除：cleanup_connection 方法已删除
+// （新架构中 dispatcher 断开自动清理，不再需要显式 cleanup）
 
-    server.start().await.expect("Failed to start IPC server");
-
-    // 清理不存在的连接应该成功
-    let result = server.cleanup_connection("non-existent-id").await;
-    assert!(result.is_ok());
-
-    server.stop().await.expect("Failed to stop IPC server");
-    let _ = std::fs::remove_file(&socket_path);
-}
-
-#[tokio::test]
-async fn test_cleanup_by_worker_pid() {
-    let registry = Arc::new(PtyRegistry::new());
-    let worker_manager = Arc::new(WorkerManager::new(
-        "/usr/bin/agent".to_string(),
-        "/tmp/test.sock".to_string(),
-        3
-    ));
-    let socket_path = format!("/tmp/test_ipc_pid_{}.sock", uuid::Uuid::new_v4());
-    let server = IpcServer::new(socket_path.clone(), registry.clone(), worker_manager.clone());
-
-    server.start().await.expect("Failed to start IPC server");
-
-    // 清理不存在的 worker_pid 应该成功
-    let result = server.cleanup_by_worker_pid(12345).await;
-    assert!(result.is_ok());
-
-    server.stop().await.expect("Failed to stop IPC server");
-    let _ = std::fs::remove_file(&socket_path);
-}
+// test_cleanup_by_worker_pid 已移除：cleanup_by_worker_pid 方法已删除
+// （新架构中 dispatcher 断开自动清理，不再需要显式 cleanup）
 
 #[tokio::test]
 async fn test_multiple_start_stop_cycles() {
@@ -91,14 +54,14 @@ async fn test_multiple_start_stop_cycles() {
 
     // 第一次启动-停止循环
     {
-        let server = IpcServer::new(socket_path.clone(), registry.clone(), worker_manager.clone());
+        let server = IpcServer::new(socket_path.clone(), registry.clone(), worker_manager.clone(), 128);
         server.start().await.expect("Failed to start IPC server (1st cycle)");
         server.stop().await.expect("Failed to stop IPC server (1st cycle)");
     }
 
     // 第二次启动-停止循环（验证 Socket 文件正确清理）
     {
-        let server = IpcServer::new(socket_path.clone(), registry.clone(), worker_manager.clone());
+        let server = IpcServer::new(socket_path.clone(), registry.clone(), worker_manager.clone(), 128);
         server.start().await.expect("Failed to start IPC server (2nd cycle)");
         server.stop().await.expect("Failed to stop IPC server (2nd cycle)");
     }
@@ -116,7 +79,7 @@ async fn test_worker_status_event_integration() {
         3
     ));
     let socket_path = format!("/tmp/test_worker_integration_{}.sock", uuid::Uuid::new_v4());
-    let server = IpcServer::new(socket_path.clone(), registry.clone(), worker_manager.clone());
+    let server = IpcServer::new(socket_path.clone(), registry.clone(), worker_manager.clone(), 128);
 
     server.start().await.expect("Failed to start IPC server");
 

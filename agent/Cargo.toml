@@ -48,7 +48,7 @@ anyhow = "1"
 thiserror = "1"
 clap = { version = "4", features = ["derive"] }
 rand = "0.8"
-os_pipe = "1"
+dashmap = "6"
 
 # 配置热重载（禁用 macOS 特性）
 notify = { version = "6", default-features = false, features = ["crossbeam-channel"] }

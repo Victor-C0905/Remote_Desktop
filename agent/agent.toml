@@ -44,3 +44,6 @@ agent_binary = "./target/release/agent"
 ipc_socket_path = "/tmp/gnome-remote-worker.sock"
 # 最大重启次数
 max_restarts = 3
+# IPC 请求 channel 容量（Manager 侧 dispatcher 的 mpsc channel 大小）
+# 满时 send().await 会等待，提供背压；默认 128 足够
+ipc_channel_capacity = 128

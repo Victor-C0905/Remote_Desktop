@@ -1,541 +1,651 @@
-# 并发 IPC 模型设计
+# 并发 IPC 与 fork 安全设计（路径 C 最终版）
 
 ## 1. 背景与问题
 
-### 1.1 问题描述
+### 1.1 报告问题
+- **症状**：打开终端有一定概率失败，报错 `创建终端会话失败: No active Worker connection`
+- **根因**：[ipc_server.rs:278-311](file:///e:\MyWork\gnome-remote\agent\src\manager\ipc_server.rs) 的 `send_request` / `create_pty_session` 采用"取出 → await → 放回"模式。并发请求时，连接被请求1 取走后，请求2 发现 HashMap 为空，直接报错
 
-打开终端时有一定概率触发错误：
+### 1.2 发现的潜在隐患（代码审查）
+- **Manager 进程的 fork 隐患**：5 处 `fork()` 调用（4 个 `spawn_isolated_*` + 1 个 `execute_as_user`）在多线程 tokio runtime 中执行，fork 时其他 task 可能持有 runtime 内部锁（malloc arena 锁、IO driver 锁），子进程可能死锁
+- **Worker 进程的 fork 隐患**：11 处 `fork()`（10 个 `execute_as_user` + 1 个 `create_session`），当前串行模式下 runtime 静止、fork 时无并发 task，隐患被掩盖
 
-```
-❌ 初始化失败: 创建终端会话失败: No active Worker connection
-```
-
-该问题为旧问题，在并发请求场景下间歇性出现。
-
-### 1.2 根本原因：连接取出-放回竞态
-
-当前 `IpcServer` 维护单一 Worker 连接，采用 "取出 → await → 放回" 模式访问：
-
-```rust
-// ipc_server.rs:278-311
-let mut connection = {
-    let mut connections = self.connections.write().await;
-    connection_id = connections.keys().next().cloned()
-        .ok_or_else(|| anyhow!("No active Worker connection"))?;  // ← 竞态点
-    connections.remove(&connection_id)
-};
-// 漫长的 await（发送请求 + 接收响应）
-connection.send_request(...).await;
-connection.receive_response().await;
-// 放回连接
-connections.insert(connection_id, connection);
-```
-
-并发请求场景下存在竞态窗口：
-
-```
-T0: connections = {conn_A}
-T1: 请求1 取出 conn_A → connections = {}（空）
-T2: 请求2 尝试取出 → keys().next() = None → "No active Worker connection"
-T3: 请求1 完成，放回 conn_A
-```
-
-终端创建是耗时操作（openpty + fork + Session 进程 bind abstract socket + Hello 校验），`await` 时间长，竞态窗口大；前端打开终端时常同时发起多个请求（创建会话 + 列目录 + 读配置），竞态触发概率高。
-
-### 1.3 次要问题：Worker 串行瓶颈
-
-Worker 当前是 `receive → handle → send` 串行循环（[worker/mod.rs:75-126](../../../agent/src/worker/mod.rs#L75)），使用 `&mut ipc_client`，无法在处理一个请求时接收下一个。单个慢请求（大文件 I/O、exec 命令、Session 创建）阻塞所有后续请求。
-
-### 1.4 方案选择过程
-
-已评估三个方案：
-
-| 方案 | 描述 | 结论 |
-|---|---|---|
-| A. 多 Worker 进程 | Manager 启动 N 个 Worker，进程池调度 | 否决：引入调度器职责违反单一职责，N 倍内存，路由复杂度 |
-| B. 单 Worker + 并发 dispatch | Worker 用 tokio::spawn 并发处理，Manager 用 mpsc + request_id 路由 | **采用** |
-| C. 单 Worker + 多 IPC 连接 | Worker 仍串行，仅多连接 | 否决：伪解决方案，无并行收益 |
-
-方案 B 选择理由：
-- 符合 Rust + Tokio 生态标准做法（tokio runtime 提供并发，对应 GMainLoop 角色）
-- Worker 保持纯业务逻辑，并发由 runtime 提供（单一职责）
-- Manager 只做路由（网关固有职责），不引入调度器
-- 单进程，无路由复杂度（解耦、开箱即用）
-- tokio multi-thread runtime 已跨核并行（项目已启用 `rt-multi-thread`），性能不劣于多进程方案
+### 1.3 不在本次范围
+- Worker 侧并发 dispatch（会暴露 fork 隐患，需等 posix_spawn 完全替代后再做）
+- Worker 的 `execute_as_user` / `create_session` 改造（串行模式下已安全，本次不改）
+- 热更新流程改造
+- IPC 协议变更
 
 ## 2. 设计目标
 
-1. **消除竞态**：并发请求不再因连接取出-放回失败
-2. **并发处理**：Worker 并发 dispatch 请求，慢请求不阻塞快请求
-3. **符合架构原则**：业务逻辑与底层实现分离、单一职责、解耦、开箱即用
-4. **零 Worker 业务改动**：handler 逻辑不变，仅共享状态包装调整
-5. **故障兼容**：热更新、Worker 崩溃场景下的正确错误处理
+1. **消除竞态**：消除 `IpcServer` 的"取出-放回"竞态
+2. **消除 Manager fork 隐患**：Manager 侧所有 fork 改用 posix_spawn
+3. **不引入新隐患**：不引入 fd 管理复杂度，不破坏旧功能
+4. **旧功能完全不变**：所有对外接口（WorkerResponse、IPC 协议、CLI）保持不变
+5. **部署结构不变**：不增加新二进制，沿用 `agent` 单二进制 + clap 子命令模式
+6. **Worker 侧零改动**：保持串行 run() 循环，不暴露 fork 隐患
 
 ## 3. 架构设计
 
-### 3.1 核心模型：消息驱动 + request_id 路由
+### 3.1 总体方案
 
-从"连接池 + 取出-放回"改为"mpsc + oneshot + request_id 路由"的消息驱动模型。
+```
+路径 A + ForkGuard + Manager posix_spawn
+├── Manager 侧
+│   ├── mpsc + request_id + dispatcher（消除竞态）
+│   ├── 5 个 fork 点改 posix_spawn（消除 Manager fork 隐患）
+│   └── ForkGuard（tokio::sync::Mutex，额外保险）
+├── Worker 侧
+│   ├── 保持串行 run()（不改，runtime 静止保证 fork 安全）
+│   └── ForkGuard（额外保险）
+└── agent 子命令
+    ├── --isolated-writer（替代 spawn_isolated_writer 的 fork）
+    ├── --isolated-reader（替代 spawn_isolated_reader 的 fork）
+    ├── --isolated-writer-part（替代 spawn_isolated_writer_part 的 fork）
+    ├── --isolated-merger（替代 spawn_isolated_merger 的 fork）
+    └── --metadata（替代 handler.rs:519 的 execute_as_user fork）
+```
 
-**请求路径**：
-```
-QUIC Task → oneshot::channel + request_tx.send() → dispatcher → write_half → Worker recv → tokio::spawn(handle)
-```
-
-**响应路径**：
-```
-Worker spawn done → response_tx.send() → Worker send_response → read_half → pending[id] → oneshot → QUIC Task
-```
-
-### 3.2 关键设计决策
+### 3.2 关键决策
 
 | 决策点 | 选择 | 理由 |
 |---|---|---|
-| 并发 dispatch 机制 | spawn + mpsc 收集响应（B2） | 无锁、背压自然、复杂度适中 |
-| UnixStream 访问 | `into_split()` 拆分 read/write | 读端独立 task 路由响应，写端串行化 |
-| channel 容量 | 可配置，默认 128 | 开箱即用，极端场景可调 |
-| 热更新在途请求 | 立即失败 | 简单可预测，客户端可重试 |
-| pending 表 | `Arc<DashMap<u64, oneshot::Sender>>` | 并发读写无锁 |
+| 二进制拆分方式 | agent clap 子命令 | 不改部署结构，install.sh 不需更新 |
+| Worker 是否并发 | **否**，保持串行 | 串行模式下 fork 安全，不引入新隐患 |
+| Manager fork 替代 | posix_spawn（Command::new + spawn） | 消除 fork+多线程死锁风险 |
+| Worker fork 替代 | **否** | 串行模式下已安全，改造成本过高 |
+| execute_as_user 处理 | Manager 侧改 posix_spawn，Worker 侧不改 | Manager 多线程需消除，Worker 串行已安全 |
+| ForkGuard | 引入，作为额外保险 | 防御未来意外引入的并发 fork |
 
-## 4. Manager 侧 IpcServer 重构
+### 3.3 为什么 Worker 不并发
 
-### 4.1 结构变化
+- Worker 串行模式下，fork 时 tokio runtime 处于静止状态（无并发 task 持有锁），fork 安全
+- 若引入并发 dispatch，fork 时其他 task 可能持有 runtime 锁，**暴露 fork 隐患**
+- 当前用户报告的问题（竞态）在 Manager 侧，与 Worker 并发无关
+- Worker 并发需先完成所有 fork 点的 posix_spawn 改造，属于未来工作
+
+## 4. Manager 侧重构
+
+### 4.1 IpcServer 结构变化
 
 ```rust
-// 当前（问题根源）
+// 旧结构（竞态根源）
 pub struct IpcServer {
-    listener: Arc<RwLock<Option<UnixListener>>>,
-    socket_path: String,
-    pty_registry: Arc<PtyRegistry>,
-    worker_manager: Arc<WorkerManager>,
-    connections: Arc<RwLock<HashMap<String, IpcConnection>>>,  // ← 竞态根源
-    request_id_counter: AtomicU64,
+    connections: Arc<RwLock<HashMap<u64, IpcConnection>>>,
+    // ...
 }
 
-// 新设计
+// 新结构（消除竞态）
 pub struct IpcServer {
-    listener: Arc<RwLock<Option<UnixListener>>>,
-    socket_path: String,
-    pty_registry: Arc<PtyRegistry>,
-    worker_manager: Arc<WorkerManager>,
-
-    /// 请求通道：多个 QUIC task → dispatcher（无锁提交）
+    // 请求入口：dispatcher task 从此 channel 取请求转发给 Worker
     request_tx: mpsc::Sender<RequestItem>,
-
-    /// 响应路由表：dispatcher → 对应 QUIC task
-    pending: Arc<DashMap<u64, oneshot::Sender<Result<WorkerResponse>>>>,
-
-    /// channel 容量（可配置，默认 128）
-    channel_capacity: usize,
-
-    request_id_counter: AtomicU64,
-
-    /// dispatcher task 句柄（用于停机）
-    dispatcher_handle: tokio::sync::Mutex<Option<JoinHandle<()>>>,
+    // 等待中的请求：request_id → oneshot::Sender
+    pending: Arc<DashMap<u64, oneshot::Sender<WorkerResponse>>>,
+    // dispatcher task 的 JoinHandle（用于 stop 时 abort）
+    dispatcher_handle: Mutex<Option<JoinHandle<()>>>,
+    // 其他不变字段
+    socket_path: PathBuf,
+    // ...
 }
 
-/// 请求项（通过 mpsc 提交给 dispatcher）
-struct RequestItem {
-    request_id: u64,
-    payload: manager_request::Payload,
-    response_tx: oneshot::Sender<Result<WorkerResponse>>,
+pub struct RequestItem {
+    pub request_id: u64,
+    pub payload: ClientRequest,
+    pub response_tx: oneshot::Sender<WorkerResponse>,
 }
 ```
 
-### 4.2 公共 API（调用方无感知）
-
-```rust
-impl IpcServer {
-    /// 发送通用请求到 Worker 并接收响应
-    pub async fn send_request(
-        &self,
-        payload: manager_request::Payload,
-    ) -> Result<WorkerResponse> {
-        let request_id = self.request_id_counter.fetch_add(1, Ordering::Relaxed);
-        let (tx, rx) = oneshot::channel();
-        self.request_tx.send(RequestItem {
-            request_id,
-            payload,
-            response_tx: tx,
-        }).await.map_err(|_| anyhow!("IPC dispatcher dropped"))?;
-        rx.await.map_err(|_| anyhow!("IPC dispatcher dropped"))?
-    }
-
-    /// 创建 PTY 会话
-    pub async fn create_pty_session(
-        &self,
-        request: CreateSession,
-        user_info: UserInfo,
-    ) -> Result<String> {
-        let request_id = self.request_id_counter.fetch_add(1, Ordering::Relaxed);
-        let (tx, rx) = oneshot::channel();
-        let payload = manager_request::Payload::CreateSession(request);
-        self.request_tx.send(RequestItem {
-            request_id,
-            payload,
-            response_tx: tx,
-        }).await.map_err(|_| anyhow!("IPC dispatcher dropped"))?;
-
-        let response = rx.await
-            .map_err(|_| anyhow!("IPC dispatcher dropped"))??;
-
-        // 解析响应，连接 Session 进程（逻辑不变）
-        match response.payload {
-            Some(worker_response::Payload::SessionCreated(session_created)) => {
-                // ... 原有 SessionConnection::connect + PtyRegistry::register 逻辑不变
-            }
-            Some(worker_response::Payload::Error(err)) => {
-                Err(anyhow!("Worker error: code={}, message={}", err.code, err.message))
-            }
-            _ => Err(anyhow!("Unexpected response from Worker")),
-        }
-    }
-}
-```
-
-### 4.3 dispatcher task
-
-Worker 连接建立后（`accept_and_set_pid`），启动 dispatcher task：
+### 4.2 dispatcher task
 
 ```rust
 async fn run_dispatcher(
-    mut request_rx: mpsc::Receiver<RequestItem>,
-    stream: UnixStream,
-    pending: Arc<DashMap<u64, oneshot::Sender<Result<WorkerResponse>>>>,
+    mut rx: mpsc::Receiver<RequestItem>,
+    pending: Arc<DashMap<u64, oneshot::Sender<WorkerResponse>>>,
+    mut write_half: OwnedWriteHalf,
+    mut read_half: OwnedReadHalf,
 ) {
-    let (mut read_half, mut write_half) = stream.into_split();
+    let (response_tx, mut response_rx) = mpsc::channel::<(u64, WorkerResponse)>(128);
 
-    loop {
-        tokio::select! {
-            // 新请求：注册 pending + 写入 stream
-            Some(item) = request_rx.recv() => {
-                pending.insert(item.request_id, item.response_tx);
-                let manager_request = ManagerRequest {
-                    request_id: item.request_id,
-                    payload: Some(item.payload),
-                };
-                if let Err(e) = write_request(&mut write_half, &manager_request).await {
-                    tracing::error!("IPC 写失败，清理所有等待者: {:?}", e);
-                    cleanup_pending(&pending);
+    // 响应路由 task：从 IPC read，按 request_id 路由到对应 oneshot
+    let response_router = tokio::spawn(async move {
+        loop {
+            match read_response(&mut read_half).await {
+                Ok((request_id, response)) => {
+                    if let Some((_, sender)) = pending.remove(&request_id) {
+                        let _ = sender.send(response);
+                    }
+                }
+                Err(_) => {
+                    // 连接断开，通知所有等待者
+                    pending.clear();
                     break;
                 }
             }
-            // Worker 响应：路由到对应 oneshot
-            response = read_response(&mut read_half) => {
-                match response {
-                    Ok(resp) => {
-                        if let Some((_, tx)) = pending.remove(&resp.request_id) {
-                            let _ = tx.send(Ok(resp));
-                        } else {
-                            tracing::warn!("收到未知 request_id 的响应: {}", resp.request_id);
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!("IPC 读失败，清理所有等待者: {:?}", e);
-                        cleanup_pending(&pending);
-                        break;
-                    }
-                }
-            }
+        }
+    });
+
+    // 请求转发循环
+    while let Some(item) = rx.recv().await {
+        pending.insert(item.request_id, item.response_tx);
+        if write_request(&mut write_half, item.request_id, item.payload).await.is_err() {
+            pending.remove(&item.request_id);
+            break;
         }
     }
+
+    // 清理所有等待者
+    pending.clear();
+    response_router.await.ok();
+}
+```
+
+### 4.3 send_request / create_pty_session 重写
+
+```rust
+pub async fn send_request(
+    &self,
+    payload: ClientRequest,
+) -> Result<WorkerResponse> {
+    let request_id = next_request_id();
+    let (tx, rx) = oneshot::channel();
+    let item = RequestItem { request_id, payload, response_tx: tx };
+
+    self.request_tx.send(item).await
+        .map_err(|_| anyhow!("dispatcher dropped"))?;
+
+    rx.await.map_err(|_| anyhow!("response dropped"))
 }
 
-/// 清理所有 pending 等待者（连接断开时调用）
-///
-/// 设计说明：
-/// - oneshot::Sender 被 drop 时，对应的 rx.await 返回 Err(RecvError)
-/// - 调用方（send_request）统一将 RecvError 映射为 "IPC dispatcher dropped"
-/// - 不传递具体错误原因（如 EOF/write error），保持简单
-/// - 若未来需区分错误原因，可改用 mpsc 替代 oneshot（代价是管理 mpsc 生命周期）
-fn cleanup_pending(pending: &Arc<DashMap<u64, oneshot::Sender<Result<WorkerResponse>>>>) {
-    pending.clear();
+pub async fn create_pty_session(
+    &self,
+    req: CreatePtySessionRequest,
+) -> Result<WorkerResponse> {
+    self.send_request(ClientRequest::CreatePtySession(req)).await
 }
 ```
 
 ### 4.4 连接生命周期
 
-`accept_and_set_pid` 仍由 `run()` 中的 Worker 事件循环调用。建立连接后：
+- `accept_and_set_pid`：Worker 连接到达时，split UnixStream，启动 dispatcher task，替换旧 dispatcher（abort 旧的）
+- `stop`：abort dispatcher，清理 pending，关闭 socket
+- 热更新：`WorkerStatus::Starting` 事件触发 `accept_and_set_pid`，旧 dispatcher 被 abort，pending 中的等待者收到"dispatcher dropped"错误
 
-1. 创建 `mpsc::channel(channel_capacity)`，保留 `request_tx`
-2. 启动 dispatcher task，传入 `request_rx` + `UnixStream` + `pending`
-3. 旧 dispatcher（若有，热更新场景）通过 drop `request_tx` 自然终止
+## 5. Manager fork 改造（posix_spawn）
 
-### 4.5 热更新兼容
+### 5.1 ForkGuard
 
-`HotUpdateCoordinator` 的 `stop → start` 流程不变。热更新期间：
+`FORK_GUARD` 用于串行化所有 `spawn_isolated_*` 调用（posix_spawn 后子进程是独立新程序不继承 runtime 状态，ForkGuard 仅作为防止并发 spawn 带来 fd 资源竞争的额外保险）。
 
-- 旧 Worker 退出 → dispatcher 读端 EOF → `cleanup_pending` 清理所有等待者
-- 等待中的 QUIC task 收到 `Err`（oneshot sender dropped）→ 返回 Error 给客户端
-- 新 Worker 启动 → 新连接 → 新 dispatcher → 后续请求正常
-
-配置在途请求策略为"立即失败"：客户端收到 Error 后可重试（新 Worker 已就绪）。
-
-## 5. Worker 侧并发 dispatch
-
-### 5.1 run() 重写
+由于 `spawn_isolated_*` 是同步函数（保持原签名不变），ForkGuard 用 `std::sync::Mutex`：
 
 ```rust
-pub async fn run(mut ipc_client: IpcClient) -> Result<()> {
-    tracing::info!("Worker 消息处理循环启动（并发 dispatch 模型）");
+// executor.rs
+use std::sync::Mutex;
 
-    let pty_factory = Arc::new(PtyFactory::new());
-    let session_manager = SessionManager::new();  // 内部已是 Arc<RwLock>
+static FORK_GUARD: Mutex<()> = Mutex::new(());
 
-    // 子进程监控任务（逻辑不变）
-    let session_manager_clone = session_manager.clone();
-    tokio::spawn(async move {
-        if let Err(e) = session_manager_clone.monitor_child_processes().await {
-            tracing::error!("子进程监控任务异常退出: {}", e);
+/// 串行化所有 spawn_isolated_* 调用
+/// 在 posix_spawn 方案下，子进程是独立新程序不继承 runtime 状态，
+/// ForkGuard 仅作为防止并发 spawn 带来 fd 资源竞争的额外保险
+fn with_fork_guard() -> std::sync::MutexGuard<'static, ()> {
+    FORK_GUARD.lock().unwrap()
+}
+```
+
+**为什么用 `std::sync::Mutex` 而非 `tokio::sync::Mutex`**：
+- `spawn_isolated_*` 保持同步签名不变（不破坏调用方）
+- `posix_spawn` + pipe 建立过程是毫秒级，阻塞 tokio worker thread 可接受
+- 若用 `tokio::sync::Mutex`，则 `spawn_isolated_*` 必须改 async，破坏所有调用方
+
+**使用方式**：
+```rust
+pub fn spawn_isolated_writer(&self, ...) -> Result<(ChildStdin, i32)> {
+    let _guard = with_fork_guard();  // 短暂持有，spawn 完成即释放
+    // ... posix_spawn ...
+}
+```
+
+**注意**：Worker 的 `execute_as_user`（10 处）仍用 fork，但 Worker 串行模式下无需 ForkGuard 保护（runtime 静止）。ForkGuard 仅保护 Manager 侧的 `spawn_isolated_*` 系列。
+
+### 5.2 子命令分发（main.rs）
+
+子命令采用 clap 互斥分组：同一时间只执行一个子命令，避免参数混乱。
+
+```rust
+#[derive(Parser, Debug)]
+struct Args {
+    // ── 现有参数 ──
+    #[arg(short, long, default_value = "agent.toml")]
+    config: String,
+    #[arg(long, default_value = "logs")]
+    log_dir: String,
+    #[arg(long, default_value = "info")]
+    log_level: String,
+    #[arg(long, hide = true)]
+    worker: bool,
+    #[arg(long, hide = true)]
+    ipc_socket: Option<String>,
+
+    // ── 新增子命令（替代 Manager 侧 fork，互斥）──
+    /// 启动隔离 writer 子进程（参数: temp_path）
+    #[arg(long, hide = true)]
+    isolated_writer: Option<String>,
+    /// 启动隔离 reader 子进程（参数: path）
+    #[arg(long, hide = true)]
+    isolated_reader: Option<String>,
+    /// 启动隔离 writer_part 子进程（参数: part_path）
+    #[arg(long, hide = true)]
+    isolated_writer_part: Option<String>,
+    /// 启动隔离 merger 子进程（part_paths 通过 --part-paths 传递）
+    #[arg(long, hide = true)]
+    isolated_merger: bool,
+    /// 启动 metadata 查询子进程（参数: path）
+    #[arg(long, hide = true)]
+    metadata: Option<String>,
+
+    // ── 子命令通用参数 ──
+    #[arg(long, hide = true)]
+    uid: Option<u32>,
+    #[arg(long, hide = true)]
+    gid: Option<u32>,
+    /// writer 的 final_path
+    #[arg(long, hide = true)]
+    final_path: Option<String>,
+    /// merger 的 part_paths（逗号分隔）
+    #[arg(long, hide = true)]
+    part_paths: Option<String>,
+}
+
+/// 子命令分发入口：返回 true 表示已处理子命令，main 应直接退出
+async fn dispatch_isolated_command(args: &Args) -> Result<bool> {
+    // 互斥检查：最多一个子命令被激活
+    let active: Vec<&str> = [
+        args.isolated_writer.as_ref().map(|_| "writer"),
+        args.isolated_reader.as_ref().map(|_| "reader"),
+        args.isolated_writer_part.as_ref().map(|_| "writer_part"),
+        args.isolated_merger.then(|| "merger"),
+        args.metadata.as_ref().map(|_| "metadata"),
+    ].into_iter().flatten().collect();
+
+    match active.len() {
+        0 => Ok(false),  // 无子命令激活，正常启动
+        1 => {
+            let uid = args.uid.unwrap_or(0);
+            let gid = args.gid.unwrap_or(0);
+            // 降权（setgid 先于 setuid，顺序重要）
+            unsafe {
+                if libc::setgid(gid) != 0 {
+                    std::process::exit(1);
+                }
+                if libc::setuid(uid) != 0 {
+                    std::process::exit(1);
+                }
+            }
+            // 验证降权成功
+            if unsafe { libc::getuid() } != uid || unsafe { libc::getgid() } != gid {
+                std::process::exit(1);
+            }
+
+            // 按激活的子命令分发
+            if let Some(temp_path) = &args.isolated_writer {
+                run_isolated_writer(temp_path, args.final_path.as_ref().unwrap()).await?;
+            } else if let Some(path) = &args.isolated_reader {
+                run_isolated_reader(path).await?;
+            } else if let Some(part_path) = &args.isolated_writer_part {
+                run_isolated_writer_part(part_path).await?;
+            } else if args.isolated_merger {
+                let parts: Vec<String> = args.part_paths.as_ref().unwrap()
+                    .split(',').map(String::from).collect();
+                run_isolated_merger(&parts, args.final_path.as_ref().unwrap()).await?;
+            } else if let Some(path) = &args.metadata {
+                run_metadata(path).await?;
+            }
+            Ok(true)
         }
-    });
+        _ => Err(anyhow!("只能指定一个隔离子命令")),
+    }
+}
 
-    let shutdown_notify = Arc::new(Notify::new());
-
-    // 响应收集通道（容量由 Manager 启动时通过 --ipc-channel-capacity 传递）
-    let (response_tx, mut response_rx) = mpsc::channel(channel_capacity);
-
+async fn run_isolated_writer(temp_path: &str, final_path: &str) -> Result<()> {
+    use std::io::{Read, Write};
+    // 打开临时文件（O_NOFOLLOW 防符号链接劫持，0o600 限属主读写）
+    let file = std::fs::OpenOptions::new()
+        .create(true).write(true).truncate(true)
+        .mode(0o600).custom_flags(libc::O_NOFOLLOW)
+        .open(temp_path)?;
+    let mut buf_writer = std::io::BufWriter::with_capacity(256 * 1024, file);
+    let mut stdin = std::io::stdin();
+    let mut buf = [0u8; 256 * 1024];
     loop {
-        tokio::select! {
-            // 收到 shutdown 信号
-            _ = shutdown_notify.notified() => {
-                tracing::info!("收到 shutdown 信号，Worker 主循环退出");
-                break;
-            }
-            // 接收 Manager 请求 → spawn 独立处理（并发）
-            request_result = ipc_client.receive_request() => {
-                match request_result {
-                    Ok(request) => {
-                        let tx = response_tx.clone();
-                        let (pty, sm, shutdown) = (
-                            pty_factory.clone(),
-                            session_manager.clone(),
-                            shutdown_notify.clone(),
-                        );
-                        tokio::spawn(async move {
-                            let response = handle_request(
-                                request, &pty, &sm, &shutdown,
-                            ).await;
-                            // channel 满时 send().await 自动背压
-                            if let Err(e) = tx.send(response).await {
-                                tracing::error!("发送响应到 channel 失败: {:?}", e);
-                            }
-                        });
-                    }
-                    Err(e) => {
-                        tracing::error!("接收消息失败: {}", e);
-                        break;
-                    }
-                }
-            }
-            // 处理完成的响应 → 串行化发回 Manager
-            Some(response) = response_rx.recv() => {
-                if let Err(e) = ipc_client.send_response(&response).await {
-                    tracing::error!("发送响应失败: request_id={}, error={:?}",
-                        response.request_id, e);
-                    break;
-                }
-                tracing::debug!("响应发送成功: request_id={}", response.request_id);
-            }
-        }
+        let n = stdin.read(&mut buf)?;
+        if n == 0 { break; }
+        buf_writer.write_all(&buf[..n])?;
+    }
+    buf_writer.flush()?;
+    buf_writer.get_ref().sync_all()?;
+    drop(buf_writer);
+    std::fs::rename(temp_path, final_path)?;
+    std::process::exit(0);
+}
+
+// run_isolated_reader / run_isolated_writer_part / run_isolated_merger / run_metadata 类似实现
+// 全部使用 std::io（同步 I/O），不用 tokio（子进程不需要 async runtime）
+```
+
+**关键设计**：
+- 子进程**不启动 tokio runtime**（避免引入不必要的 runtime 状态）
+- 全部使用 `std::io` 同步 I/O（与原 fork 子进程行为一致）
+- 降权逻辑集中在 `dispatch_isolated_command` 中（子命令实现不重复降权代码）
+- 退出码与原 `_exit(N)` 保持一致（见 executor.rs:796-810 注释）
+
+### 5.3 executor.rs 改造
+
+**关键约束**：file_stream.rs 的 `PipeFileStreamWriter.write_chunk` 和 `PipeFileStreamReader.read_chunk` 使用**同步 I/O**（`std::io::Write/Read`）。因此新方案必须返回实现同步 I/O 的类型。
+
+使用 `std::process::Command`（而非 `tokio::process::Command`），因为：
+1. `std::process::ChildStdin` 实现 `std::io::Write`（与 `os_pipe::PipeWriter` 接口兼容）
+2. `std::process::ChildStdout` 实现 `std::io::Read`（与 `os_pipe::PipeReader` 接口兼容）
+3. file_stream.rs 的同步 API 无需改动
+
+```rust
+use std::process::{Command, ChildStdin, ChildStdout};
+
+impl UserExecutor {
+    /// 隔离写入：替代原 fork + os_pipe::PipeWriter
+    /// 返回 (ChildStdin, child_pid) — ChildStdin 实现 std::io::Write
+    pub fn spawn_isolated_writer(
+        &self,
+        temp_path: &str,
+        final_path: &str,
+        _file_size: u64,
+    ) -> Result<(ChildStdin, i32)> {
+        let current_exe = std::env::current_exe()?;
+        let mut cmd = Command::new(current_exe);
+        cmd.arg("--isolated-writer").arg(temp_path)
+           .arg("--final-path").arg(final_path)
+           .arg("--uid").arg(self.uid.to_string())
+           .arg("--gid").arg(self.gid.to_string())
+           .stdin(std::process::Stdio::piped())
+           .stdout(std::process::Stdio::null())
+           .stderr(std::process::Stdio::null());
+        let child = cmd.spawn()?;
+        let pid = child.id() as i32;
+        let stdin = child.stdin.take().unwrap();
+        Ok((stdin, pid))
     }
 
-    tracing::info!("Worker 消息处理循环结束");
-    Ok(())
+    /// 隔离读取：替代原 fork + os_pipe::PipeReader
+    /// 返回 (ChildStdout, child_pid) — ChildStdout 实现 std::io::Read
+    pub fn spawn_isolated_reader(&self, path: &str) -> Result<(ChildStdout, i32)> {
+        let current_exe = std::env::current_exe()?;
+        let mut cmd = Command::new(current_exe);
+        cmd.arg("--isolated-reader").arg(path)
+           .arg("--uid").arg(self.uid.to_string())
+           .arg("--gid").arg(self.gid.to_string())
+           .stdin(std::process::Stdio::null())
+           .stdout(std::process::Stdio::piped())  // 子进程 stdout → 父进程读取
+           .stderr(std::process::Stdio::null());
+        let child = cmd.spawn()?;
+        let pid = child.id() as i32;
+        let stdout = child.stdout.take().unwrap();
+        Ok((stdout, pid))
+    }
+
+    // spawn_isolated_writer_part / merger 类似改造（返回类型与 writer 一致）
+
+    /// 获取文件元数据：替代原 handler.rs:519 的 execute_as_user + fs::metadata
+    /// 在 Manager 异步上下文中用 spawn_blocking 包装同步 Command
+    pub async fn get_metadata_async(&self, path: &str) -> Result<(u64, u64)> {
+        let path = path.to_string();
+        let uid = self.uid;
+        let gid = self.gid;
+        tokio::task::spawn_blocking(move || {
+            let current_exe = std::env::current_exe()?;
+            let output = Command::new(current_exe)
+                .arg("--metadata").arg(&path)
+                .arg("--uid").arg(uid.to_string())
+                .arg("--gid").arg(gid.to_string())
+                .output()?;
+            if !output.status.success() {
+                return Err(anyhow!("metadata 子进程失败: exit={}", output.status));
+            }
+            #[derive(serde::Deserialize)]
+            struct MetadataResult { size: u64, mtime: u64 }
+            let meta: MetadataResult = serde_json::from_slice(&output.stdout)?;
+            Ok((meta.size, meta.mtime))
+        }).await?
+    }
 }
 ```
 
-### 5.2 handle_request 签名调整
+**关键点**：
+- `spawn_isolated_writer` 返回 `std::process::ChildStdin`（实现 `std::io::Write`），与 `os_pipe::PipeWriter` 接口兼容
+- `spawn_isolated_reader` 返回 `std::process::ChildStdout`（实现 `std::io::Read`），与 `os_pipe::PipeReader` 接口兼容
+- file_stream.rs 的 `write_chunk` / `read_chunk` / `finish` / `abort` **代码逻辑完全不变**，仅类型标注从 `os_pipe::PipeWriter` → `std::process::ChildStdin`
+- `spawn_isolated_*` 仍为同步函数（与原签名一致），不改变调用方的 `.await` 模式
+- `get_metadata_async` 是新方法，用 `spawn_blocking` 包装同步 `Command::output()`（避免阻塞 tokio worker thread）
+- Rust 1.65+ 的 `std::process::Command` 自动用 `posix_spawn`（当不配置 pre_exec 时）
 
-`handle_request` 现接收 `Arc` 共享状态而非 `&`：
+**ForkGuard 的使用**：见 5.1 节，`spawn_isolated_*` 内部调用 `with_fork_guard()` 串行化。
+
+### 5.4 handler.rs 改造
 
 ```rust
-// 当前签名
-async fn handle_request(
-    request: ManagerRequest,
-    pty_factory: &PtyFactory,
-    session_manager: &SessionManager,
-    shutdown_notify: &Arc<Notify>,
-) -> WorkerResponse
+// handler.rs:519 改造前
+let (file_size, mtime) = executor.execute_as_user(move || {
+    let metadata = fs::metadata(&path_str)?;
+    // ...
+}).map_err(|e| e.to_string())?;
 
-// 新签名
-async fn handle_request(
-    request: ManagerRequest,
-    pty_factory: &Arc<PtyFactory>,        // PtyFactory 是空结构体，Send+Sync
-    session_manager: &SessionManager,      // 内部 Arc<RwLock>，已 Send+Sync
-    shutdown_notify: &Arc<Notify>,
-) -> WorkerResponse
+// 改造后
+let (file_size, mtime) = executor.get_metadata_async(&path_str).await
+    .map_err(|e| e.to_string())?;
+
+// executor.rs 新增
+impl UserExecutor {
+    pub async fn get_metadata_async(&self, path: &str) -> Result<(u64, u64)> {
+        let _guard = with_fork_guard(...).await;
+        let current_exe = std::env::current_exe()?;
+        let output = Command::new(current_exe)
+            .arg("--metadata").arg(path)
+            .arg("--uid").arg(self.uid.to_string())
+            .arg("--gid").arg(self.gid.to_string())
+            .output().await?;
+        // 解析 stdout JSON: {"size": 123, "mtime": 456}
+        let meta: MetadataResult = serde_json::from_slice(&output.stdout)?;
+        Ok((meta.size, meta.mtime))
+    }
+}
 ```
 
-各 handler 签名同步调整。handler 业务逻辑不变。
+### 5.5 改造覆盖表
 
-### 5.3 共享状态分析
-
-| 组件 | 当前类型 | 并发安全性 | 改动 |
+| fork 点 | 旧实现 | 新实现 | 接口变化 |
 |---|---|---|---|
-| `PtyFactory` | `pub struct PtyFactory;`（空结构体） | Send+Sync | 包装为 `Arc<PtyFactory>`，无锁 |
-| `SessionManager` | 内部 `Arc<RwLock<HashMap>>` | Send+Sync | 零改动，clone Arc |
-| `shutdown_notify` | `Arc<Notify>` | Send+Sync | clone Arc |
-| `IpcClient` | 持有 `UnixStream` | 仅主循环持有 `&mut` | 不共享，select! 中串行访问 |
+| spawn_isolated_writer | fork + pipe | posix_spawn + stdin pipe | 返回 `(ChildStdin, i32)` 替代 `(PipeWriter, i32)` |
+| spawn_isolated_reader | fork + pipe | posix_spawn + stdout pipe | 返回 `(ChildStdout, i32)` 替代 `(PipeReader, i32)` |
+| spawn_isolated_writer_part | fork + pipe | posix_spawn + stdin pipe | 同 writer |
+| spawn_isolated_merger | fork | posix_spawn | 不变 |
+| handler.rs:519 execute_as_user | fork + 闭包 | posix_spawn + --metadata | `get_metadata_async` 替代 |
 
-### 5.4 阻塞操作处理
+### 5.6 调用方适配
 
-以下 handler 含阻塞操作，需用 `spawn_blocking` 包装以避免占用 async worker thread：
+- [handler.rs:418](file:///e:\MyWork\gnome-remote\agent\src\handler.rs): `spawn_isolated_writer_part` 调用点，`pipe_writer` 类型从 `os_pipe::PipeWriter` → `std::process::ChildStdin`
+- [handler.rs:469](file:///e:\MyWork\gnome-remote\agent\src\handler.rs): `spawn_isolated_writer` 调用点，同上
+- [handler.rs:550](file:///e:\MyWork\gnome-remote\agent\src\handler.rs): `spawn_isolated_reader` 调用点，`pipe_reader` 类型从 `os_pipe::PipeReader` → `std::process::ChildStdout`
+- [handler.rs:699](file:///e:\MyWork\gnome-remote\agent\src\handler.rs): `spawn_isolated_writer_part` 调用点，同 writer
+- [quic.rs:2086](file:///e:\MyWork\gnome-remote\agent\src\server\quic.rs): `spawn_isolated_merger` 调用点，接口不变
 
-| Handler | 阻塞操作 | 处理方式 |
-|---|---|---|
-| `handle_create_session` | `PtyFactory::create()`（openpty + fork） | `tokio::task::spawn_blocking` |
-| `handle_read_file` | 大文件磁盘 I/O | `tokio::fs` 异步 API 或 `spawn_blocking` |
-| `handle_write_file` | 大文件磁盘 I/O | `tokio::fs` 异步 API 或 `spawn_blocking` |
-| `handle_execute_command` | `exec` 子进程 | `tokio::process::Command` 异步 API |
-| `handle_apply_diff` | CPU 密集 diff 计算 | `spawn_blocking` |
-| 其他 file handler | 小文件 I/O | 评估，必要时 `spawn_blocking` |
+### 5.7 file_stream.rs 改造
 
-`spawn_blocking` 在独立阻塞线程池执行，不占用 tokio async worker thread，保证并发性能。
-
-## 6. 错误处理与故障恢复
-
-| 场景 | 处理 | 影响 |
-|---|---|---|
-| Manager 写失败 | dispatcher `cleanup_pending`，所有等待者收到 Err | QUIC task 返回 Error 给客户端 |
-| Worker 连接断开 | dispatcher 读端 EOF，`cleanup_pending` | 同上 |
-| Worker 崩溃 | CrashDetector 重启 → 新连接 → 新 dispatcher | 旧 pending 已清理，新请求正常 |
-| 单个 handler 失败 | 返回 Error payload | 不影响其他请求 |
-| 单个 handler panic | `tokio::spawn` 的 JoinHandle 捕获，response_tx 发 Error | 不影响其他请求 |
-| Worker `receive_request` EOF | 主循环 break，Worker 退出 | CrashDetector 接管 |
-| mpsc channel 满 | `send_request().await` 等待 | 自然背压，不丢请求 |
-| 热更新期间在途请求 | 旧 dispatcher 清理 pending，客户端收到 Err | 客户端可重试 |
-
-### 6.1 panic 防护
-
-`tokio::spawn` 的任务若 panic，默认会打印 panic 但不影响其他任务。为防止单个 handler panic 导致响应丢失：
+file_stream.rs 中的 `PipeFileStreamWriter` 和 `PipeFileStreamReader` 直接使用 `os_pipe::PipeWriter/PipeReader` 作为字段类型。改造仅涉及类型替换，逻辑完全不变：
 
 ```rust
-tokio::spawn(async move {
-    let response = std::panic::AssertUnwindSafe(
-        handle_request(request, &pty, &sm, &shutdown).await
-    ).catch_unwind()
-     .await
-     .map_err(|_| {
-        tracing::error!("handler panic: request_id={}", request.request_id);
-        WorkerResponse {
-            request_id: request.request_id,
-            payload: Some(worker_response::Payload::Error(Error {
-                code: 500,
-                message: "Internal handler error".to_string(),
-            })),
-        }
-     })
-     .into_ok_or_err();  // 简化：panic 时返回 Error response
-    let _ = tx.send(response).await;
-});
-```
+// 改造前
+pub struct PipeFileStreamWriter {
+    pipe_writer: Option<os_pipe::PipeWriter>,
+    // ...
+}
+impl PipeFileStreamWriter {
+    pub fn new(
+        pipe_writer: os_pipe::PipeWriter,
+        // ...
+    ) -> Self { ... }
 
-注：需评估 `catch_unwind` 对 `Future` 的 `UnwindSafe` 约束。若复杂度过高，备选方案为依赖 `tokio::spawn` 默认隔离 + handler 内部自检。
-
-## 7. 配置项
-
-`WorkerConfig` 新增 `ipc_channel_capacity`：
-
-```rust
-// config.rs
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct WorkerConfig {
-    #[serde(default = "default_agent_binary")]
-    pub agent_binary: String,
-
-    #[serde(default = "default_ipc_socket_path")]
-    pub ipc_socket_path: String,
-
-    #[serde(default = "default_max_restarts")]
-    pub max_restarts: u32,
-
-    /// IPC channel 容量（mpsc）
-    /// 控制 Manager→Worker 请求通道和 Worker 内部响应通道的缓冲大小
-    /// 默认 128，极端高并发场景可调大
-    #[serde(default = "default_ipc_channel_capacity")]
-    pub ipc_channel_capacity: usize,
+    pub fn write_chunk(&mut self, data: &[u8]) -> Result<(), String> {
+        use std::io::Write;
+        let writer = self.pipe_writer.as_mut().ok_or("管道已关闭")?;
+        writer.write_all(data).map_err(...)?;  // std::io::Write::write_all
+        // ...
+    }
 }
 
-fn default_ipc_channel_capacity() -> usize { 128 }
+// 改造后（仅类型替换）
+pub struct PipeFileStreamWriter {
+    pipe_writer: Option<std::process::ChildStdin>,  // os_pipe::PipeWriter → ChildStdin
+    // ...
+}
+impl PipeFileStreamWriter {
+    pub fn new(
+        pipe_writer: std::process::ChildStdin,  // 类型变更
+        // ...
+    ) -> Self { ... }
+
+    pub fn write_chunk(&mut self, data: &[u8]) -> Result<(), String> {
+        use std::io::Write;
+        let writer = self.pipe_writer.as_mut().ok_or("管道已关闭")?;
+        writer.write_all(data).map_err(...)?;  // 逻辑不变（ChildStdin 实现 std::io::Write）
+        // ...
+    }
+}
 ```
 
-配置文件示例：
+**关键**：
+- `os_pipe::PipeWriter` 和 `std::process::ChildStdin` 都实现 `std::io::Write`
+- `os_pipe::PipeReader` 和 `std::process::ChildStdout` 都实现 `std::io::Read`
+- file_stream.rs 的所有方法（`write_chunk` / `read_chunk` / `finish` / `abort`）逻辑完全不变
+- 仅字段类型和构造函数参数类型变更
+
+### 5.8 wait_isolated_child 保持不变
+
+`wait_isolated_child` 仍用 `libc::waitpid(child_pid, ...)`，**无需改造**：
+- `spawn_isolated_*` 返回的 `child_pid` 仍可用 `waitpid` 等待（POSIX 语义，任何子进程都可用 pid wait）
+- `std::process::Child` 的 `id()` 返回的 pid 与 `fork` 返回的 pid 语义一致
+- 退出码翻译逻辑完全不变
+
+### 5.9 os_pipe 依赖移除
+
+改造完成后，`os_pipe` 不再使用，从 Cargo.toml 移除依赖：
+
+```toml
+# Cargo.toml 移除
+- os_pipe = "1"
+```
+
+## 6. Worker 侧 ForkGuard
+
+### 6.1 不改 run() 循环
+
+Worker 保持现有串行循环，不引入并发 dispatch。fork 时 runtime 静止，fork 安全。
+
+### 6.2 ForkGuard 保护
+
+```rust
+// executor.rs（Worker 和 Manager 共享同一份 executor.rs）
+// Worker 进程内 FORK_GUARD 与 Manager 进程内 FORK_GUARD 是独立的（各自进程的 static）
+// Worker 串行模式下 FORK_GUARD 永远不会争用（单线程访问）
+```
+
+## 7. 错误处理
+
+### 7.1 故障场景
+
+| 场景 | 行为 | 影响 |
+|---|---|---|
+| dispatcher task panic | pending 中所有等待者收到 `response dropped` | 客户端收到错误，可重试 |
+| Worker 连接断开 | dispatcher 的 read_half 返回 Err，清理 pending | 所有在途请求失败，客户端收到错误 |
+| 热更新期间在途请求 | 旧 dispatcher abort，pending 清理 | 在途请求失败，客户端重试后连新 Worker |
+| posix_spawn 失败 | 返回 Err，调用方按原 fork 失败逻辑处理 | 与原行为一致 |
+| 子命令子进程崩溃 | 退出码非 0，wait_isolated_child 翻译为描述性错误 | 与原行为一致 |
+
+### 7.2 退出码兼容
+
+子命令子进程的退出码与原 fork 子进程保持一致（见 executor.rs:796-810 注释），`wait_isolated_child` 逻辑不变。
+
+## 8. 配置项
+
+新增 `ipc_channel_capacity`（默认 128）：
+
 ```toml
 [worker]
 ipc_channel_capacity = 128
 ```
 
-Manager 和 Worker 使用同一配置值（Worker 通过 `--ipc-channel-capacity` 参数接收，或 Manager 在 spawn 时传递）。
+- Manager 的 `request_tx` channel 容量
+- 满时 `send().await` 等待，提供背压
+- 无需用户调整，默认值足够
 
-## 8. 向后兼容
+## 9. 向后兼容
 
-- **IPC 协议不变**：仍是 `[4字节长度 big-endian] + [protobuf 内容]`，无需版本协商
-- **Manager/Worker 接口不变**：`send_request` / `create_pty_session` 签名不变，仅内部实现重构
-- **配置项有默认值**：`ipc_channel_capacity` 默认 128，开箱即用
-- **热更新流程不变**：`HotUpdateCoordinator` 的 `stop → start` 逻辑无需改动
+- IPC 协议：不变
+- WorkerResponse / ClientRequest：不变
+- Worker run() 循环：不变
+- install.sh：不变（仍只拷贝一个 `agent` 二进制）
+- systemd service：不变
+- 客户端：完全无感知
 
-## 9. 测试策略
+## 10. 测试策略
 
-### 9.1 关键回归测试
+### 10.1 回归测试
 
-**并发 send_request 不再竞态**（核心回归）：
+**核心回归测试**：10 个并发请求同时到达 IpcServer，全部成功响应（验证竞态消除）
 
 ```rust
 #[tokio::test]
-async fn test_concurrent_send_request_no_race() {
-    // 启动 mock Worker，模拟 receive → handle → send
-    let ipc_server = setup_ipc_server_with_mock_worker().await;
-
-    // 并发发起 N 个请求
-    let mut handles = vec![];
-    for i in 0..10 {
-        let server = ipc_server.clone();
-        handles.push(tokio::spawn(async move {
-            server.send_request(payload::ReadDir { ... }).await
-        }));
-    }
-
-    // 全部应成功（当前实现会因竞态部分失败）
+async fn test_concurrent_requests_no_race() {
+    let server = IpcServer::new(...);
+    let handles: Vec<_> = (0..10).map(|i| {
+        let server = server.clone();
+        tokio::spawn(async move {
+            server.send_request(ClientRequest::Ping(i)).await
+        })
+    }).collect();
     for handle in handles {
         assert!(handle.await.unwrap().is_ok());
     }
 }
 ```
 
-### 9.2 单元测试
+### 10.2 单元测试
 
-- `request_id` 路由正确性：N 个请求的响应正确配对
-- `pending` 清理逻辑：连接断开后所有等待者收到 Err
-- `mpsc` 背压：channel 满时 `send_request` 等待而非失败
+- `run_dispatcher`：mock write/read half，验证 request_id 路由正确
+- `spawn_isolated_writer` 子命令：写入测试数据，验证文件内容正确
+- `get_metadata_async`：验证返回正确的 size/mtime
 
-### 9.3 集成测试
+### 10.3 集成测试
 
-- Worker 崩溃后请求失败而非 hang（dispatcher 清理 pending）
-- 热更新期间在途请求收到 Error
-- 新 Worker 就绪后请求恢复正常
+- 端到端文件上传（单流 + 多流）
+- 端到端文件下载
+- 热更新期间文件传输
+- 子命令子进程崩溃后错误码翻译
 
-### 9.4 压力测试
+## 11. 不在范围内（明确排除）
 
-- 100 个并发请求全部成功
-- 大文件 SFTP 传输期间，终端创建请求不被阻塞
-- `handle_execute_command` 长时间执行期间，其他请求正常处理
+- Worker 侧并发 dispatch（未来工作，需先完成所有 fork 点 posix_spawn 替代）
+- Worker 的 `execute_as_user`（10 处）和 `create_session` 改造（串行模式下已安全）
+- 客户端代码改动
+- IPC 协议变更
+- 热更新流程改造（保持现有 HotUpdateCoordinator 逻辑）
 
-## 10. 不在范围内
+## 12. 实现顺序（高层）
 
-以下内容本设计不涉及，留待后续：
-
-- 多 Worker 进程（方案 A，已否决）
-- 完全 reader/writer 独立 task（方案 B3，过度工程）
-- IPC 协议升级（如多路复用流、QUIC stream 复用）
-- Worker 间负载均衡（单 Worker 无此需求）
-- DashMap vs RwLock<HashMap> 性能基准（DashMap 并发读写更优，直接采用）
-
-## 11. 实现顺序建议
-
-1. **Manager 侧 IpcServer 重构**（核心）：结构改造 + dispatcher + send_request/create_pty_session 重写
-2. **Worker 侧 run() 重写**：select! 结构 + spawn dispatch
-3. **handler 签名调整**：`&PtyFactory` → `&Arc<PtyFactory>`，阻塞操作 `spawn_blocking`
-4. **配置项**：`ipc_channel_capacity` 添加
-5. **测试**：回归测试 + 集成测试
-6. **验证**：`cargo build` 零错误，手动并发场景验证
+1. 基础设施：dashmap 依赖、ipc_channel_capacity 配置
+2. Manager IpcServer 重构：mpsc + request_id + dispatcher
+3. ForkGuard 引入（executor.rs）
+4. 子命令实现（main.rs）：5 个子命令分发 + 子命令逻辑
+5. executor.rs 改造：spawn_isolated_* 改 posix_spawn、get_metadata_async 新增
+6. file_stream.rs 适配：字段类型从 os_pipe::Pipe* → std::process::ChildStd*
+7. handler.rs 适配：handler.rs:519 改 get_metadata_async
+8. 测试：回归 + 单元 + 集成
+9. 编译验证 + 零警告检查
+10. os_pipe 依赖移除（Cargo.toml）

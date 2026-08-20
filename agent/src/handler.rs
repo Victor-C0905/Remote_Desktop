@@ -508,7 +508,6 @@ pub async fn handle_file_transfer_request(
             // 下载：Agent 发送文件到客户端
             // 使用 UserExecutor 在隔离子进程中执行文件读取（方案 ii'）
             let executor = UserExecutor::new(session);
-            let path_str = path.to_string();
 
             // 断点续传暂不支持隔离读取模式
             if resume_from.is_some() {
@@ -516,34 +515,11 @@ pub async fn handle_file_transfer_request(
             }
 
             // 获取文件元数据（以目标用户身份,验证读取权限）
-            let (file_size, mtime) = executor.execute_as_user(move || {
-                // 获取文件元数据
-                let metadata = fs::metadata(&path_str)
-                    .map_err(|e| {
-                        let error_msg = e.to_string();
-                        if error_msg.contains("Permission denied") {
-                            anyhow::anyhow!("权限不足: 无法访问文件 '{}' (需要相应的 Linux 用户权限)", path_str)
-                        } else if error_msg.contains("No such file") {
-                            anyhow::anyhow!("文件 '{}' 不存在", path_str)
-                        } else {
-                            anyhow::anyhow!("无法访问文件 '{}': {}", path_str, e)
-                        }
-                    })?;
-
-                if metadata.is_dir() {
-                    anyhow::bail!("路径是目录，不能下载");
-                }
-
-                let file_size = metadata.len();
-                let mtime = metadata
-                    .modified()
-                    .map_err(|e| anyhow::anyhow!("无法获取修改时间: {}", e))?
-                    .duration_since(UNIX_EPOCH)
-                    .map_err(|e| anyhow::anyhow!("时间转换失败: {}", e))?
-                    .as_secs();
-
-                Ok((file_size, mtime))
-            }).map_err(|e| e.to_string())?;
+            // 注意：原为 execute_as_user + fs::metadata 闭包（fork+pipe 回收结果），
+            // 现改用 posix_spawn 方案的 get_metadata_async 子进程，避免 fork 拷贝 runtime 状态
+            let (file_size, mtime) = executor.get_metadata_async(path)
+                .await
+                .map_err(|e| e.to_string())?;
 
             // fork 子进程:子进程 setuid + namespace 后打开文件,父进程经 pipe 读 chunk
             let (pipe_reader, child_pid) = executor
