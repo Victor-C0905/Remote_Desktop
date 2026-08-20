@@ -69,6 +69,9 @@ function TerminalInstance({
   const searchAddonRef = useRef<SearchAddon | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const unlistenRefs = useRef<UnlistenFn[]>([]);
+  // IME 合成状态跟踪：防止合成期间焦点切换导致 compositionEnd 丢失，进而卡死输入
+  const isComposingRef = useRef(false);
+  const composingTimerRef = useRef<number | null>(null);
   const [initializationStatus, setInitializationStatus] = useState<string>('等待容器挂载...');
 
   // ── 创建 xterm 实例并连接远程 PTY ──────────
@@ -111,6 +114,84 @@ function TerminalInstance({
       // 4. 挂载到 DOM
       terminal.open(container);
       log.debug('✅ xterm 已挂载到 DOM');
+
+      // 4.1 IME 合成保护：监听 textarea 的 composition 事件
+      // 防止合成期间焦点切换导致 compositionEnd 丢失，进而卡死输入
+      // 根因：xterm.js 内部 isComposing 标志若未随 compositionEnd 重置，
+      //       后续所有键盘输入被当作合成文本吞掉，onData 永不触发
+      const imeTextarea = (terminal as any).textarea as HTMLTextAreaElement | null;
+      if (imeTextarea) {
+        const onCompositionStart = () => {
+          isComposingRef.current = true;
+          (terminal as any).__isComposing = true;
+          log.debug('IME 合成开始');
+          // 卡死检测：30 秒后若仍在合成，疑似 compositionEnd 丢失，强制重置
+          if (composingTimerRef.current) {
+            clearTimeout(composingTimerRef.current);
+          }
+          composingTimerRef.current = window.setTimeout(() => {
+            if (isComposingRef.current) {
+              log.warn('IME 合成超时（30s），疑似卡死，强制重置 isComposing');
+              isComposingRef.current = false;
+              (terminal as any).__isComposing = false;
+              // 派发合成结束事件，清理 xterm 内部状态
+              try {
+                imeTextarea.dispatchEvent(new CompositionEvent('compositionend', { data: '' }));
+              } catch (e) {
+                log.warn('强制 compositionend 派发失败:', e);
+              }
+            }
+          }, 30000);
+        };
+
+        const onCompositionEnd = () => {
+          isComposingRef.current = false;
+          (terminal as any).__isComposing = false;
+          log.debug('IME 合成结束');
+          if (composingTimerRef.current) {
+            clearTimeout(composingTimerRef.current);
+            composingTimerRef.current = null;
+          }
+        };
+
+        // 合成期间 textarea 失焦时，compositionEnd 可能不触发
+        // （焦点被其他 terminal.focus() 或 window:focused 回调抢走）
+        // 延迟检查：若失焦后仍在合成状态，强制重置
+        const onBlur = () => {
+          if (isComposingRef.current) {
+            log.warn('IME 合成期间 textarea 失焦，延迟检查是否卡死');
+            window.setTimeout(() => {
+              if (isComposingRef.current) {
+                log.warn('失焦后仍在合成状态，强制重置 isComposing');
+                isComposingRef.current = false;
+                (terminal as any).__isComposing = false;
+                try {
+                  imeTextarea.dispatchEvent(new CompositionEvent('compositionend', { data: '' }));
+                } catch (e) {
+                  log.warn('强制 compositionend 派发失败:', e);
+                }
+              }
+            }, 100);
+          }
+        };
+
+        imeTextarea.addEventListener('compositionstart', onCompositionStart);
+        imeTextarea.addEventListener('compositionend', onCompositionEnd);
+        imeTextarea.addEventListener('blur', onBlur);
+
+        // 存储清理函数
+        unlistenRefs.current.push(() => {
+          imeTextarea.removeEventListener('compositionstart', onCompositionStart);
+          imeTextarea.removeEventListener('compositionend', onCompositionEnd);
+          imeTextarea.removeEventListener('blur', onBlur);
+          if (composingTimerRef.current) {
+            clearTimeout(composingTimerRef.current);
+            composingTimerRef.current = null;
+          }
+        });
+      } else {
+        log.warn('无法获取 xterm textarea，IME 保护未启用');
+      }
 
       // 5. 等待下一帧，让浏览器完成 flex 布局后再 fit()
       requestAnimationFrame(async () => {
@@ -673,10 +754,16 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
 
   // ── 窗口事件监听（窗口系统集成）───────────────────────────────────────
   // 监听窗口获得焦点事件：自动聚焦活动的终端
+  // 注意：若活动终端正在 IME 合成中，跳过 focus() 以避免 compositionEnd 丢失导致输入卡死
   useWindowEvent('window:focused', (event) => {
     if (event.windowId === windowId) {
+      const terminal = activeTerminalRef.current;
+      if (terminal && (terminal as any).__isComposing) {
+        log.debug('窗口获得焦点，但终端正在 IME 合成，跳过 focus()');
+        return;
+      }
       log.debug('窗口获得焦点，自动聚焦终端');
-      activeTerminalRef.current?.focus();
+      terminal?.focus();
     }
   });
 
