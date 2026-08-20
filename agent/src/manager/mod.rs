@@ -128,6 +128,7 @@ impl Manager {
             config.worker.ipc_socket_path.clone(),
             pty_registry.clone(),
             worker_manager.clone(),
+            config.worker.ipc_channel_capacity,
         ));
 
         // 创建孤儿进程回收器

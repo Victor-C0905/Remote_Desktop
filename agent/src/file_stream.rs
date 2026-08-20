@@ -668,7 +668,7 @@ const PIPE_CHUNK_SIZE: usize = 64 * 1024;
 /// 4. `abort()`: 父进程关闭 pipe + kill 子进程 + 清理临时文件
 pub struct PipeFileStreamWriter {
     /// pipe 写入端(Option 以便 finish/abort 时 take + drop)
-    pipe_writer: Option<os_pipe::PipeWriter>,
+    pipe_writer: Option<std::process::ChildStdin>,
     /// 子进程 PID
     child_pid: i32,
     /// 用户执行器(用于 wait_isolated_child)
@@ -687,13 +687,13 @@ impl PipeFileStreamWriter {
     /// 创建新的 pipe 文件流写入器
     ///
     /// # 参数
-    /// - `pipe_writer`: os_pipe 写入端
+    /// - `pipe_writer`: 子进程 stdin 写入端
     /// - `child_pid`: 隔离子进程 PID
     /// - `executor`: 用户执行器(用于 wait_isolated_child)
     /// - `file_size`: 文件总大小
     /// - `temp_path`: 临时文件路径(用于 abort 清理)
     pub fn new(
-        pipe_writer: os_pipe::PipeWriter,
+        pipe_writer: std::process::ChildStdin,
         child_pid: i32,
         executor: crate::auth::UserExecutor,
         file_size: u64,
@@ -851,7 +851,7 @@ impl Drop for PipeFileStreamWriter {
 /// 4. Drop 时自动 kill 子进程(如果尚未完成)
 pub struct PipeFileStreamReader {
     /// pipe 读取端(Option 以便 finish/abort 时 take + drop)
-    pipe_reader: Option<os_pipe::PipeReader>,
+    pipe_reader: Option<std::process::ChildStdout>,
     /// 子进程 PID
     child_pid: i32,
     /// 用户执行器(用于 wait_isolated_child)
@@ -868,12 +868,12 @@ impl PipeFileStreamReader {
     /// 创建新的 pipe 文件流读取器
     ///
     /// # 参数
-    /// - `pipe_reader`: os_pipe 读取端
+    /// - `pipe_reader`: 子进程 stdout 读取端
     /// - `child_pid`: 隔离子进程 PID
     /// - `executor`: 用户执行器(用于 wait_isolated_child)
     /// - `file_size`: 文件总大小
     pub fn new(
-        pipe_reader: os_pipe::PipeReader,
+        pipe_reader: std::process::ChildStdout,
         child_pid: i32,
         executor: crate::auth::UserExecutor,
         file_size: u64,

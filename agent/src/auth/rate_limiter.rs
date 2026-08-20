@@ -334,7 +334,7 @@ mod tests {
         let limiter = AuthRateLimiter::new();
 
         // 模拟10次请求（达到限制）
-        for i in 0..10 {
+        for _ in 0..10 {
             assert!(limiter.is_ip_allowed("192.168.1.1").await.unwrap());
         }
 

@@ -44,6 +44,7 @@ impl TestEnv {
             socket_path.clone(),
             registry,
             worker_manager,
+            128,
         ));
         server.start().await.expect("Failed to start IPC server");
 
@@ -78,16 +79,8 @@ impl TestEnv {
         }
     }
 
-    /// 接受 Worker 连接
-    async fn accept_worker(&self) -> String {
-        tokio::time::timeout(
-            Duration::from_secs(5),
-            self.server.accept(),
-        )
-        .await
-        .expect("Timeout waiting for worker connection")
-        .expect("Failed to accept worker connection")
-    }
+    // accept_worker 方法已移除：新架构使用 accept_and_set_pid（内部启动 dispatcher）
+    // 调用 accept_and_set_pid 需要 worker_pid 且会启动 dispatcher task，不适合此处测试辅助
 }
 
 impl Drop for TestEnv {
@@ -98,18 +91,12 @@ impl Drop for TestEnv {
     }
 }
 
-#[tokio::test]
-async fn test_worker_connects_to_manager() {
-    let env = TestEnv::new().await;
-    let connection_id = env.accept_worker().await;
-    assert!(!connection_id.is_empty(), "Connection ID should not be empty");
-    assert_eq!(env.server.active_connection_count().await, 1);
-}
+// test_worker_connects_to_manager 已移除：
+// 依赖已删除的 accept() 和 active_connection_count() 方法
 
 #[tokio::test]
 async fn test_ipc_message_roundtrip() {
     let env = TestEnv::new().await;
-    let _connection_id = env.accept_worker().await;
 
     // 接受连接后，使用 IpcConnection 接收/发送消息
     // 注意：当前架构中，Manager 通过 IpcServer.accept() 获取连接，

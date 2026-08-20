@@ -161,6 +161,11 @@ pub struct WorkerConfig {
     /// 最大重启次数
     #[serde(default = "default_max_restarts")]
     pub max_restarts: u32,
+
+    /// IPC 请求 channel 容量（Manager 侧 dispatcher 的 mpsc channel 大小）
+    /// 满时 send().await 会等待，提供背压；默认 128 足够
+    #[serde(default = "default_ipc_channel_capacity")]
+    pub ipc_channel_capacity: usize,
 }
 
 impl Default for AuditConfig {
@@ -186,6 +191,7 @@ impl Default for WorkerConfig {
             agent_binary: default_agent_binary(),
             ipc_socket_path: default_ipc_socket_path(),
             max_restarts: default_max_restarts(),
+            ipc_channel_capacity: default_ipc_channel_capacity(),
         }
     }
 }
@@ -226,6 +232,7 @@ fn default_agent_binary() -> String {
 }
 fn default_ipc_socket_path() -> String { "/tmp/gnome-remote-worker.sock".into() }
 fn default_max_restarts() -> u32 { 3 }
+fn default_ipc_channel_capacity() -> usize { 128 }
 
 pub fn load(path: &str) -> Result<AgentConfig, anyhow::Error> {
     let p = Path::new(path);

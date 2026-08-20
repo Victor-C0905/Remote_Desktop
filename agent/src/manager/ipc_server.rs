@@ -7,16 +7,22 @@
 //!
 //! 新架构：不再使用 SCM_RIGHTS 传递 master_fd。
 //! master_fd 由 Session 进程持有，Manager 通过 UnixSocket 帧协议与 Session 通信。
+//!
+//! 并发模型重构：消除"取出-await-放回"竞态，改为 mpsc + request_id + dispatcher 模型。
+//! - 调用方通过 send_request / create_pty_session 将请求发到 mpsc channel
+//! - dispatcher task 从 channel 读取请求，写入 UnixStream，并在 pending 表中注册 oneshot sender
+//! - response_router task 从 UnixStream 读取响应，按 request_id 路由到对应 oneshot sender
+//! - 等待方通过 oneshot receiver 收到响应
 
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::net::UnixListener;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use anyhow::{Result, Context};
 use prost::Message;
 use tracing::{info, warn, error};
+use dashmap::DashMap;
 
 use super::pty_registry::{PtyRegistry, PtySession, UserInfo};
 use super::session_connection::SessionConnection;
@@ -26,89 +32,31 @@ use crate::protocol::generated::{
     manager_request, worker_response,
 };
 
-/// IPC 连接信息
-#[derive(Debug)]
-pub struct IpcConnection {
-    /// 连接 ID
-    pub connection_id: String,
-
-    /// Worker 进程 ID
-    pub worker_pid: Option<u32>,
-
-    /// Unix Stream 连接（用于 protobuf 通信）
-    stream: Option<tokio::net::UnixStream>,
-}
-
-impl IpcConnection {
-    /// 创建新连接
-    fn new(connection_id: String, stream: tokio::net::UnixStream) -> Self {
-        Self {
-            connection_id,
-            worker_pid: None,
-            stream: Some(stream),
-        }
-    }
-
-    /// 发送 ManagerRequest 到 Worker(异步)
-    ///
-    /// 消息格式:[4字节长度(big-endian)] + [protobuf 内容]
-    pub async fn send_request(&mut self, request: &ManagerRequest) -> Result<()> {
-        if let Some(ref mut stream) = self.stream {
-            let mut buf = Vec::new();
-            request.encode(&mut buf)
-                .context("Failed to encode ManagerRequest")?;
-            let len = buf.len() as u32;
-            stream.write_all(&len.to_be_bytes()).await
-                .context("Failed to write request length")?;
-            stream.write_all(&buf).await
-                .context("Failed to write request content")?;
-            tracing::debug!("已发送请求到 Worker: request_id={}, len={}", request.request_id, buf.len());
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!("No stream available"))
-        }
-    }
-
-    /// 接收 WorkerResponse(异步,不含 FD)
-    ///
-    /// 消息格式:[4字节长度(big-endian)] + [protobuf 内容]
-    pub async fn receive_response(&mut self) -> Result<WorkerResponse> {
-        if let Some(ref mut stream) = self.stream {
-            let mut len_buf = [0u8; 4];
-            stream.read_exact(&mut len_buf).await
-                .context("Failed to read response length")?;
-            let len = u32::from_be_bytes(len_buf) as usize;
-
-            const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
-            if len > MAX_MESSAGE_SIZE {
-                anyhow::bail!("Response too large: {} bytes", len);
-            }
-
-            let mut msg_buf = vec![0u8; len];
-            stream.read_exact(&mut msg_buf).await
-                .context("Failed to read response content")?;
-
-            let msg = WorkerResponse::decode(&msg_buf[..])
-                .context("Failed to decode WorkerResponse")?;
-            tracing::debug!("已接收 Worker 响应: len={}", len);
-            Ok(msg)
-        } else {
-            Err(anyhow::anyhow!("No stream available"))
-        }
-    }
-
-    /// 关闭连接
-    pub fn close(&mut self) {
-        self.stream = None;
-    }
+/// 请求入口 channel 的载荷项
+///
+/// 调用方（send_request / create_pty_session）构造此项，
+/// 通过 mpsc channel 发送给 dispatcher task。
+/// dispatcher 将其写入 UnixStream，并在 pending 表中注册 response_tx。
+pub struct RequestItem {
+    /// 请求 ID（用于响应路由配对）
+    pub request_id: u64,
+    /// protobuf 请求载荷
+    pub payload: manager_request::Payload,
+    /// 响应回传的 oneshot sender（由 response_router 填充）
+    pub response_tx: oneshot::Sender<WorkerResponse>,
 }
 
 /// IPC 服务器
 ///
 /// 与 WorkerManager 和 PtyRegistry 集成：
 /// - 接收 Worker 进程的连接
-/// - 接收 Worker 发送的 PTY master_fd
-/// - 将 FD 注册到 PtyRegistry
+/// - 通过 dispatcher task 转发请求到 Worker，并按 request_id 路由响应
+/// - CreateSession 响应包含 socket_name，Manager 通过 SessionConnection 连接到 Session 进程
+///
+/// 并发模型：mpsc + request_id + dispatcher
+/// - 单一 dispatcher task 拥有 UnixStream 的写半部，串行写入请求
+/// - response_router task 拥有读半部，按 request_id 分发响应到等待者
+/// - 消除"取出-await-放回"竞态
 pub struct IpcServer {
     /// Unix Socket 监听器
     listener: Arc<RwLock<Option<UnixListener>>>,
@@ -122,11 +70,22 @@ pub struct IpcServer {
     /// Worker 管理器（用于监听 Worker 状态）
     worker_manager: Arc<WorkerManager>,
 
-    /// 活动的连接（connection_id -> IpcConnection）
-    connections: Arc<RwLock<HashMap<String, IpcConnection>>>,
+    /// 请求入口 channel（dispatcher task 从此读取请求转发给 Worker）
+    /// 使用 Mutex 包装以支持 accept_and_set_pid 中的原子替换
+    request_tx: tokio::sync::Mutex<mpsc::Sender<RequestItem>>,
 
-    /// 请求 ID 计数器(阶段 2 新增,用于生成唯一的 request_id)
+    /// 等待响应的请求表（request_id -> oneshot::Sender）
+    /// dispatcher 写入请求前注册 sender，response_router 收到响应后取出并发送
+    pending: Arc<DashMap<u64, oneshot::Sender<WorkerResponse>>>,
+
+    /// dispatcher task 的 JoinHandle（stop 时 abort）
+    dispatcher_handle: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+
+    /// request_id 计数器(阶段 2 新增,用于生成唯一的 request_id)
     request_id_counter: AtomicU64,
+
+    /// mpsc channel 容量（accept_and_set_pid 创建新 channel 时使用）
+    channel_capacity: usize,
 }
 
 impl IpcServer {
@@ -136,18 +95,28 @@ impl IpcServer {
     /// - `socket_path`: Unix Socket 路径
     /// - `pty_registry`: PTY 注册表
     /// - `worker_manager`: Worker 管理器（用于监听 Worker 状态变化）
+    /// - `channel_capacity`: mpsc channel 容量（dispatcher 的请求队列大小）
     pub fn new(
         socket_path: String,
         pty_registry: Arc<PtyRegistry>,
         worker_manager: Arc<WorkerManager>,
+        channel_capacity: usize,
     ) -> Self {
+        // 创建初始 channel，receiver 立即 drop
+        // 此时 request_tx 处于"无接收者"状态，send_request 会立即返回 Err("dispatcher dropped")
+        // accept_and_set_pid 时会创建新 channel 并替换
+        let (request_tx, _request_rx) = mpsc::channel(channel_capacity);
+
         Self {
             listener: Arc::new(RwLock::new(None)),
             socket_path,
             pty_registry,
             worker_manager,
-            connections: Arc::new(RwLock::new(HashMap::new())),
+            request_tx: tokio::sync::Mutex::new(request_tx),
+            pending: Arc::new(DashMap::new()),
+            dispatcher_handle: tokio::sync::Mutex::new(None),
             request_id_counter: AtomicU64::new(1),
+            channel_capacity,
         }
     }
 
@@ -171,89 +140,79 @@ impl IpcServer {
         Ok(())
     }
 
-    /// 接收 Worker 连接
-    ///
-    /// # 返回
-    /// - 连接 ID（用于后续接收 FD）
-    pub async fn accept(&self) -> Result<String> {
-        let listener_guard = self.listener.read().await;
-
-        if let Some(ref listener) = *listener_guard {
-            let (stream, _addr) = listener.accept().await
-                .context("Failed to accept connection")?;
-
-            let connection_id = uuid::Uuid::new_v4().to_string();
-            let connection = IpcConnection::new(connection_id.clone(), stream);
-
-            // 添加到活动连接列表
-            let mut connections = self.connections.write().await;
-            connections.insert(connection_id.clone(), connection);
-
-            info!("Worker 连接已建立: connection_id={}", connection_id);
-
-            Ok(connection_id)
-        } else {
-            Err(anyhow::anyhow!("IPC server not started"))
-        }
-    }
-
     /// 接收 Worker 连接并设置 worker_pid
     ///
     /// 当 Worker 启动后自动调用。
+    ///
+    /// 新架构（mpsc + dispatcher 模型）：
+    /// 1. accept 新 UnixStream
+    /// 2. 创建新 mpsc channel (request_tx, request_rx)
+    /// 3. abort 旧 dispatcher（如有）
+    /// 4. 启动新 dispatcher task，传入 request_rx + pending + stream
+    /// 5. 更新 self.request_tx 为新 channel 的 sender
     ///
     /// # 热更新连接清理
     ///
     /// 热更新流程中,旧 Worker 优雅退出时不会触发 Crashed 事件
     /// (因为 is_graceful_shutdown=true),导致旧连接残留在 connections 中。
-    /// 新 Worker 连接时,必须清理所有不同 PID 的旧连接,防止
-    /// send_request 取到已断开的旧连接导致 receive_response EOF。
-    pub async fn accept_and_set_pid(&self, worker_pid: u32) -> Result<String> {
-        let connection_id = self.accept().await?;
+    /// 新架构中，abort 旧 dispatcher 会自动触发 pending.clear()，
+    /// 所有等待响应的调用方会收到 "response dropped" 错误，
+    /// 不再需要显式清理旧连接。
+    pub async fn accept_and_set_pid(&self, worker_pid: u32) -> Result<()> {
+        // 1. accept 新 UnixStream
+        let stream = {
+            let listener_guard = self.listener.read().await;
+            let listener = listener_guard.as_ref()
+                .ok_or_else(|| anyhow::anyhow!("IPC server not started"))?;
+            let (stream, _addr) = listener.accept().await
+                .context("Failed to accept connection")?;
+            stream
+        };
 
-        let mut connections = self.connections.write().await;
+        // 2. 创建新 mpsc channel
+        let (request_tx, request_rx) = mpsc::channel(self.channel_capacity);
 
-        // 设置新连接的 worker_pid
-        if let Some(conn) = connections.get_mut(&connection_id) {
-            conn.worker_pid = Some(worker_pid);
-            info!(
-                "Worker 连接已建立并设置 PID: connection_id={}, worker_pid={}",
-                connection_id, worker_pid
-            );
+        // 3. abort 旧 dispatcher（热更新时旧 dispatcher 自动清理 pending）
+        if let Some(handle) = self.dispatcher_handle.lock().await.take() {
+            handle.abort();
+            info!("已中止旧 dispatcher task（热更新/重连）");
         }
 
-        // 清理所有不同 PID 的旧连接（热更新后旧连接残留防护）
-        let stale_ids: Vec<String> = connections
-            .iter()
-            .filter(|(id, conn)| {
-                *id != &connection_id && conn.worker_pid != Some(worker_pid)
-            })
-            .map(|(id, _)| id.clone())
-            .collect();
+        // 4. 启动新 dispatcher task，传入 request_rx + pending + stream
+        let handle = tokio::spawn(run_dispatcher(
+            request_rx,
+            self.pending.clone(),
+            stream,
+        ));
 
-        for id in stale_ids {
-            if let Some(mut conn) = connections.remove(&id) {
-                let old_pid = conn.worker_pid;
-                conn.close();
-                info!(
-                    "清理旧 Worker 残留连接（热更新）: connection_id={}, old_pid={:?}, new_pid={}",
-                    id, old_pid, worker_pid
-                );
-            }
+        // 5. 存储 dispatcher handle 并更新 request_tx
+        {
+            let mut handle_guard = self.dispatcher_handle.lock().await;
+            *handle_guard = Some(handle);
+            let mut tx_guard = self.request_tx.lock().await;
+            *tx_guard = request_tx;
         }
 
-        Ok(connection_id)
+        info!(
+            "Worker 连接已建立并设置 PID: worker_pid={}, channel_capacity={}",
+            worker_pid, self.channel_capacity
+        );
+
+        Ok(())
     }
 
     /// 发送 CreateSession 请求到 Worker 并连接 Session 进程(新架构)
     ///
     /// 新架构流程:
-    /// 1. 发送 CreateSession 请求到 Worker
+    /// 1. 发送 CreateSession 请求到 Worker（通过 mpsc channel 转发给 dispatcher）
     /// 2. Worker 创建 Session 进程（openpty+fork），Session 进程 bind abstract socket
     /// 3. Worker 返回 SessionCreated 响应（含 session_id 和 socket_name）
     /// 4. Manager 通过 SessionConnection 连接到 Session 进程的 UnixSocket
     /// 5. 注册到 PtyRegistry
     ///
     /// 不再使用 SCM_RIGHTS 传递 master_fd。master_fd 由 Session 进程持有。
+    ///
+    /// 并发模型：通过 mpsc + request_id + dispatcher，消除"取出-await-放回"竞态。
     ///
     /// # 参数
     /// - `request`: CreateSession 请求(含 shell/cols/rows/uid/gid 等)
@@ -269,48 +228,26 @@ impl IpcServer {
         // 生成唯一 request_id
         let request_id = self.request_id_counter.fetch_add(1, Ordering::Relaxed);
 
-        // 构造 ManagerRequest
-        let manager_request = ManagerRequest {
+        // 构造 oneshot channel 用于接收响应
+        let (tx, rx) = oneshot::channel();
+        let item = RequestItem {
             request_id,
-            payload: Some(manager_request::Payload::CreateSession(request)),
-        };
-
-        // 取出连接（不持有锁整个 await 过程，避免阻塞 IPC server run 循环）
-        let connection_id;
-        let mut connection = {
-            let mut connections = self.connections.write().await;
-            connection_id = connections.keys().next().cloned()
-                .ok_or_else(|| anyhow::anyhow!("No active Worker connection"))?;
-            connections.remove(&connection_id)
-                .expect("connection must exist after keys().next()")
+            payload: manager_request::Payload::CreateSession(request),
+            response_tx: tx,
         };
 
         info!("发送 CreateSession 请求到 Worker: request_id={}", request_id);
 
-        // 1. 发送请求
-        if let Err(e) = connection.send_request(&manager_request).await {
-            error!("发送 CreateSession 请求失败,清理连接: connection_id={}, error={:?}", connection_id, e);
-            connection.close();
-            return Err(e.context("Failed to send CreateSession request to Worker"));
-        }
+        // 通过 mpsc channel 发送给 dispatcher task（克隆 sender 避免长时间持有锁）
+        let sender = self.request_tx.lock().await.clone();
+        sender.send(item).await
+            .map_err(|_| anyhow::anyhow!("dispatcher dropped"))?;
 
-        // 2. 接收 WorkerResponse（新架构：不再接收 FD，只接收 protobuf 响应）
-        let response = match connection.receive_response().await {
-            Ok(resp) => resp,
-            Err(e) => {
-                error!("接收 CreateSession 响应失败,清理连接: connection_id={}, error={:?}", connection_id, e);
-                connection.close();
-                return Err(e.context("Failed to receive response from Worker"));
-            }
-        };
+        // 等待 dispatcher 路由回来的响应
+        let response = rx.await
+            .map_err(|_| anyhow::anyhow!("response dropped"))?;
 
-        // 将连接放回 connections（连接仍然可用）
-        {
-            let mut connections = self.connections.write().await;
-            connections.insert(connection_id.clone(), connection);
-        }
-
-        // 3. 解析响应，连接 Session 进程
+        // 解析响应，连接 Session 进程
         match response.payload {
             Some(worker_response::Payload::SessionCreated(session_created)) => {
                 let session_id = session_created.session_id;
@@ -321,13 +258,13 @@ impl IpcServer {
                     session_id, socket_name
                 );
 
-                // 4. 连接 Session 进程的 UnixSocket
+                // 连接 Session 进程的 UnixSocket
                 //    SessionConnection::connect 会接收 Hello 帧并验证 session_id
                 let connection = SessionConnection::connect(&socket_name, &session_id)
                     .await
                     .context("连接 Session 进程失败")?;
 
-                // 5. 注册到 PtyRegistry
+                // 注册到 PtyRegistry
                 let pty_session = PtySession {
                     session_id: session_id.clone(),
                     connection: Arc::new(connection),
@@ -357,8 +294,11 @@ impl IpcServer {
     /// 适用于不需要 FD 传递的业务操作(ReadDir/ReadFile/WriteFile 等)。
     /// 这是原子的 request-response 操作:
     /// 1. 生成唯一 request_id
-    /// 2. 发送 ManagerRequest 到 Worker
-    /// 3. 接收 WorkerResponse
+    /// 2. 通过 mpsc channel 发送 ManagerRequest 到 dispatcher
+    /// 3. dispatcher 写入 UnixStream 并在 pending 表注册 oneshot sender
+    /// 4. response_router 收到响应后按 request_id 路由回来
+    ///
+    /// 并发模型：mpsc + request_id + dispatcher，消除"取出-await-放回"竞态。
     ///
     /// # 参数
     /// - `payload`: manager_request::Payload(具体的请求类型)
@@ -372,104 +312,35 @@ impl IpcServer {
         // 生成唯一 request_id
         let request_id = self.request_id_counter.fetch_add(1, Ordering::Relaxed);
 
-        // 构造 ManagerRequest
-        let manager_request = ManagerRequest {
+        // 构造 oneshot channel 用于接收响应
+        let (tx, rx) = oneshot::channel();
+        let item = RequestItem {
             request_id,
-            payload: Some(payload),
-        };
-
-        // 取出连接（不持有锁整个 await 过程，避免阻塞 IPC server run 循环）
-        let connection_id;
-        let mut connection = {
-            let mut connections = self.connections.write().await;
-            connection_id = connections.keys().next().cloned()
-                .ok_or_else(|| anyhow::anyhow!("No active Worker connection"))?;
-            connections.remove(&connection_id)
-                .expect("connection must exist after keys().next()")
+            payload,
+            response_tx: tx,
         };
 
         tracing::debug!("发送业务请求到 Worker: request_id={}", request_id);
 
-        // 1. 发送请求
-        if let Err(e) = connection.send_request(&manager_request).await {
-            // 发送失败,连接可能已断开,清理坏连接
-            error!("发送请求到 Worker 失败,清理连接: connection_id={}, error={:?}", connection_id, e);
-            connection.close();
-            return Err(e.context("Failed to send request to Worker"));
-        }
+        // 通过 mpsc channel 发送给 dispatcher task（克隆 sender 避免长时间持有锁）
+        let sender = self.request_tx.lock().await.clone();
+        sender.send(item).await
+            .map_err(|_| anyhow::anyhow!("dispatcher dropped"))?;
 
-        // 2. 接收响应(不含 FD)
-        let response = match connection.receive_response().await {
-            Ok(resp) => resp,
-            Err(e) => {
-                // receive_response 失败(EOF/解码失败等),连接已不可用
-                error!(
-                    "接收 Worker 响应失败,清理连接: connection_id={}, request_id={}, error={:?}",
-                    connection_id, request_id, e
-                );
-                connection.close();
-                return Err(e.context("Failed to receive response from Worker"));
-            }
-        };
+        // 等待 dispatcher 路由回来的响应
+        let response = rx.await
+            .map_err(|_| anyhow::anyhow!("response dropped"))?;
 
         tracing::debug!("收到 Worker 响应: request_id={}", request_id);
 
-        // 将连接放回 connections
-        {
-            let mut connections = self.connections.write().await;
-            connections.insert(connection_id, connection);
-        }
-
         Ok(response)
-    }
-
-    /// 清理指定 Worker 的连接
-    ///
-    /// 当 Worker 进程崩溃时调用
-    pub async fn cleanup_connection(&self, connection_id: &str) -> Result<()> {
-        let mut connections = self.connections.write().await;
-
-        if let Some(mut connection) = connections.remove(connection_id) {
-            connection.close();
-            info!("连接已清理: connection_id={}", connection_id);
-        }
-
-        Ok(())
-    }
-
-    /// 根据 worker_pid 清理所有连接
-    ///
-    /// 当 Worker 进程崩溃时调用
-    pub async fn cleanup_by_worker_pid(&self, worker_pid: u32) -> Result<()> {
-        let mut connections = self.connections.write().await;
-
-        let to_remove: Vec<String> = connections
-            .iter()
-            .filter(|(_, conn)| conn.worker_pid == Some(worker_pid))
-            .map(|(id, _)| id.clone())
-            .collect();
-
-        for id in to_remove {
-            if let Some(mut conn) = connections.remove(&id) {
-                conn.close();
-                info!("已清理 Worker 连接: worker_pid={}, connection_id={}", worker_pid, id);
-            }
-        }
-
-        Ok(())
-    }
-
-    /// 获取活动连接数
-    pub async fn active_connection_count(&self) -> usize {
-        let connections = self.connections.read().await;
-        connections.len()
     }
 
     /// 运行 IPC 服务器
     ///
     /// 监听 WorkerManager 状态变化事件：
-    /// - Worker 启动时：接受连接并设置 worker_pid
-    /// - Worker 崩溃时：清理连接
+    /// - Worker 启动时：接受连接并设置 worker_pid（启动 dispatcher）
+    /// - Worker 崩溃时：dispatcher 自动断开清理（无需显式 cleanup）
     ///
     /// # 参数
     /// - `ready`: 可选的 oneshot sender，在 IPC bind + subscribe 完成后发送信号
@@ -497,7 +368,7 @@ impl IpcServer {
                         Ok(worker_event) => {
                             match worker_event.status {
                                 WorkerStatus::Starting => {
-                                    // Worker 启动，接受连接
+                                    // Worker 启动，接受连接（启动 dispatcher）
                                     info!(
                                         "检测到 Worker 启动事件，准备接受连接: pid={}",
                                         worker_event.pid
@@ -508,10 +379,10 @@ impl IpcServer {
                                         std::time::Duration::from_secs(5),
                                         self.accept_and_set_pid(worker_event.pid)
                                     ).await {
-                                        Ok(Ok(connection_id)) => {
+                                        Ok(Ok(())) => {
                                             info!(
-                                                "Worker 连接建立成功: pid={}, connection_id={}",
-                                                worker_event.pid, connection_id
+                                                "Worker 连接建立成功: pid={}",
+                                                worker_event.pid
                                             );
                                         }
                                         Ok(Err(e)) => {
@@ -530,12 +401,11 @@ impl IpcServer {
                                 }
 
                                 WorkerStatus::Crashed => {
-                                    // Worker 崩溃，清理连接
+                                    // Worker 崩溃，dispatcher 断开自动清理（无需显式 cleanup）
                                     warn!(
-                                        "检测到 Worker 崩溃事件，清理连接: pid={}",
+                                        "检测到 Worker 崩溃事件: pid={}",
                                         worker_event.pid
                                     );
-                                    self.cleanup_by_worker_pid(worker_event.pid).await?;
                                 }
 
                                 _ => {
@@ -557,14 +427,19 @@ impl IpcServer {
     }
 
     /// 停止 IPC 服务器
+    ///
+    /// 1. abort dispatcher task
+    /// 2. 清理 pending（所有等待者会收到 "response dropped"）
+    /// 3. 关闭 listener
+    /// 4. 删除 socket 文件
     pub async fn stop(&self) -> Result<()> {
-        // 清理所有连接
-        {
-            let mut connections = self.connections.write().await;
-            for (_, mut conn) in connections.drain() {
-                conn.close();
-            }
+        // abort dispatcher task
+        if let Some(handle) = self.dispatcher_handle.lock().await.take() {
+            handle.abort();
         }
+
+        // 清理所有等待响应的调用方（onesot sender drop 后 rx.await 返回 Err）
+        self.pending.clear();
 
         // 关闭监听器
         {
@@ -593,6 +468,112 @@ impl Drop for IpcServer {
     }
 }
 
+/// dispatcher task：从 mpsc channel 读取请求，转发到 Worker UnixStream
+///
+/// 内部启动 response_router 子 task：
+/// - response_router 从读半部读取响应，按 request_id 路由到 pending 表中的 oneshot sender
+///
+/// 请求转发循环：
+/// - 从 mpsc channel 接收 RequestItem
+/// - 在 pending 表注册 response_tx
+/// - 将请求写入 UnixStream 写半部
+/// - 写入失败则从 pending 移除并退出循环
+///
+/// 退出时清理 pending（所有等待者收到 "response dropped"）
+async fn run_dispatcher(
+    mut rx: mpsc::Receiver<RequestItem>,
+    pending: Arc<DashMap<u64, oneshot::Sender<WorkerResponse>>>,
+    stream: tokio::net::UnixStream,
+) {
+    // split UnixStream 为 read_half 和 write_half
+    let (read_half, mut write_half) = stream.into_split();
+
+    // 响应路由 task：从 read_half 读响应，按 request_id 路由到对应 oneshot
+    let pending_clone = pending.clone();
+    let response_router = tokio::spawn(async move {
+        let mut read_half = read_half;
+        loop {
+            match read_response(&mut read_half).await {
+                Ok((request_id, response)) => {
+                    if let Some((_, sender)) = pending_clone.remove(&request_id) {
+                        let _ = sender.send(response);
+                    }
+                }
+                Err(_) => {
+                    // 读取失败（EOF/解码错误等），清理所有等待者
+                    pending_clone.clear();
+                    break;
+                }
+            }
+        }
+    });
+
+    // 请求转发循环
+    while let Some(item) = rx.recv().await {
+        pending.insert(item.request_id, item.response_tx);
+        if write_request(&mut write_half, item.request_id, item.payload).await.is_err() {
+            // 写入失败，从 pending 移除该请求
+            pending.remove(&item.request_id);
+            break;
+        }
+    }
+
+    // 清理所有等待者（oneshot sender drop 后调用方 rx.await 返回 Err）
+    pending.clear();
+    let _ = response_router.await;
+}
+
+/// 写入 ManagerRequest 到 UnixStream 写半部
+///
+/// 消息格式:[4字节长度(big-endian)] + [protobuf 内容]
+async fn write_request(
+    write_half: &mut tokio::net::unix::OwnedWriteHalf,
+    request_id: u64,
+    payload: manager_request::Payload,
+) -> Result<()> {
+    let manager_request = ManagerRequest {
+        request_id,
+        payload: Some(payload),
+    };
+    let mut buf = Vec::new();
+    manager_request.encode(&mut buf)
+        .context("Failed to encode ManagerRequest")?;
+    let len = buf.len() as u32;
+    write_half.write_all(&len.to_be_bytes()).await
+        .context("Failed to write request length")?;
+    write_half.write_all(&buf).await
+        .context("Failed to write request content")?;
+    Ok(())
+}
+
+/// 从 UnixStream 读半部读取 WorkerResponse
+///
+/// 消息格式:[4字节长度(big-endian)] + [protobuf 内容]
+///
+/// # 返回
+/// (request_id, WorkerResponse) — request_id 用于路由配对
+async fn read_response(
+    read_half: &mut tokio::net::unix::OwnedReadHalf,
+) -> Result<(u64, WorkerResponse)> {
+    let mut len_buf = [0u8; 4];
+    read_half.read_exact(&mut len_buf).await
+        .context("Failed to read response length")?;
+    let len = u32::from_be_bytes(len_buf) as usize;
+
+    const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
+    if len > MAX_MESSAGE_SIZE {
+        anyhow::bail!("Response too large: {} bytes", len);
+    }
+
+    let mut msg_buf = vec![0u8; len];
+    read_half.read_exact(&mut msg_buf).await
+        .context("Failed to read response content")?;
+
+    let response = WorkerResponse::decode(&msg_buf[..])
+        .context("Failed to decode WorkerResponse")?;
+    Ok((response.request_id, response))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -606,10 +587,11 @@ mod tests {
             "/tmp/test.sock".to_string(),
             3
         ));
-        let server = IpcServer::new("/tmp/test_ipc.sock".to_string(), registry, worker_manager);
+        let server = IpcServer::new("/tmp/test_ipc.sock".to_string(), registry, worker_manager, 128);
 
         assert!(server.listener.read().await.is_none());
-        assert_eq!(server.active_connection_count().await, 0);
+        // 新架构：验证 pending 表初始为空
+        assert!(server.pending.is_empty());
     }
 
     #[tokio::test]
@@ -620,7 +602,7 @@ mod tests {
             "/tmp/test.sock".to_string(),
             3
         ));
-        let server = IpcServer::new("/tmp/test_ipc_start.sock".to_string(), registry.clone(), worker_manager);
+        let server = IpcServer::new("/tmp/test_ipc_start.sock".to_string(), registry.clone(), worker_manager, 128);
 
         // 启动
         let result = server.start().await;
@@ -639,7 +621,7 @@ mod tests {
             "/tmp/test_worker.sock".to_string(),
             3
         ));
-        let server = IpcServer::new("/tmp/test_worker_event.sock".to_string(), registry, worker_manager.clone());
+        let server = IpcServer::new("/tmp/test_worker_event.sock".to_string(), registry, worker_manager.clone(), 128);
 
         // 启动 IPC 服务器
         server.start().await.unwrap();
@@ -651,7 +633,7 @@ mod tests {
         worker_manager.update_status(WorkerStatus::Starting).await;
 
         // 接收事件（添加超时避免死锁：没有真实 Worker 时不会发送事件）
-        let event = tokio::time::timeout(
+        let _event = tokio::time::timeout(
             std::time::Duration::from_millis(500),
             event_rx.recv()
         ).await;
@@ -661,5 +643,153 @@ mod tests {
 
         // 清理
         server.stop().await.unwrap();
+    }
+
+    /// 并发回归测试：验证 10 个并发请求同时到达 IpcServer 时无竞态错误
+    ///
+    /// 场景：模拟旧的"取出-await-放回"竞态条件已被消除
+    /// - 启动 dispatcher task 处理真实 UnixStream
+    /// - mock Worker 端按 request_id 回复 Error 响应
+    /// - 10 个 send_request 并发发起
+    /// - 验证所有响应正确收到，且 request_id 无错乱
+    ///
+    /// 该测试回归验证 "No active Worker connection" 错误已消除
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_concurrent_requests_no_race_condition() {
+        use crate::protocol::generated::{Error, GetSystemInfo};
+
+        // 1. 创建 UnixStream pair（manager_side 给 dispatcher，worker_side 给 mock Worker）
+        let (manager_side, worker_side) = tokio::net::UnixStream::pair()
+            .expect("创建 UnixStream pair 失败");
+
+        // 2. 创建 IpcServer 实例（不调用 start/accept_and_set_pid，手动初始化内部状态）
+        let registry = Arc::new(PtyRegistry::new());
+        let worker_manager = Arc::new(WorkerManager::new(
+            "/usr/bin/agent".to_string(),
+            "/tmp/test.sock".to_string(),
+            3,
+        ));
+        let server = Arc::new(IpcServer::new(
+            "/tmp/test_concurrent.sock".to_string(),
+            registry,
+            worker_manager,
+            128,
+        ));
+
+        // 3. 手动创建 mpsc channel 并启动 dispatcher（绕过 accept_and_set_pid）
+        let (request_tx, request_rx) = mpsc::channel(128);
+        let pending = server.pending.clone();
+        let dispatcher_handle = tokio::spawn(run_dispatcher(request_rx, pending, manager_side));
+
+        // 替换 IpcServer 的 request_tx 和 dispatcher_handle
+        {
+            let mut tx_guard = server.request_tx.lock().await;
+            *tx_guard = request_tx;
+            let mut handle_guard = server.dispatcher_handle.lock().await;
+            *handle_guard = Some(dispatcher_handle);
+        }
+
+        // 4. 启动 mock Worker task：读取 10 个请求，按 request_id 回复 Error 响应
+        let worker_handle = tokio::spawn(async move {
+            let (mut read_half, mut write_half) = worker_side.into_split();
+            for _ in 0..10 {
+                // 读取 4 字节长度
+                let mut len_buf = [0u8; 4];
+                if read_half.read_exact(&mut len_buf).await.is_err() {
+                    break;
+                }
+                let len = u32::from_be_bytes(len_buf) as usize;
+
+                // 读取 protobuf 内容
+                let mut msg_buf = vec![0u8; len];
+                if read_half.read_exact(&mut msg_buf).await.is_err() {
+                    break;
+                }
+
+                // 解析 request_id
+                let req = match ManagerRequest::decode(&msg_buf[..]) {
+                    Ok(r) => r,
+                    Err(_) => break,
+                };
+                let request_id = req.request_id;
+
+                // 构造 Error 响应（带 request_id，用于路由配对）
+                let response = WorkerResponse {
+                    request_id,
+                    payload: Some(worker_response::Payload::Error(Error {
+                        code: 0,
+                        message: format!("mock-{}", request_id),
+                    })),
+                };
+                let mut resp_buf = Vec::new();
+                if response.encode(&mut resp_buf).is_err() {
+                    break;
+                }
+                let resp_len = resp_buf.len() as u32;
+                if write_half.write_all(&resp_len.to_be_bytes()).await.is_err() {
+                    break;
+                }
+                if write_half.write_all(&resp_buf).await.is_err() {
+                    break;
+                }
+            }
+            // mock Worker 退出时关闭两端，response_router 读 EOF 后 clear pending
+        });
+
+        // 5. 并发发起 10 个 send_request
+        let mut handles = Vec::new();
+        for _ in 0..10 {
+            let server_clone = Arc::clone(&server);
+            let handle = tokio::spawn(async move {
+                let payload = manager_request::Payload::GetSystemInfo(GetSystemInfo {});
+                server_clone.send_request(payload).await
+            });
+            handles.push(handle);
+        }
+
+        // 6. 等待所有响应并验证
+        let mut success_count = 0;
+        let mut request_ids = Vec::new();
+        for handle in handles {
+            match handle.await {
+                Ok(Ok(response)) => {
+                    success_count += 1;
+                    request_ids.push(response.request_id);
+                    // 验证响应是 Error 类型
+                    assert!(
+                        matches!(response.payload, Some(worker_response::Payload::Error(_))),
+                        "响应应为 Error 类型"
+                    );
+                    // 验证 request_id 与响应中的 message 配对（无错乱）
+                    if let Some(worker_response::Payload::Error(e)) = response.payload {
+                        assert_eq!(
+                            e.message, format!("mock-{}", response.request_id),
+                            "request_id 与响应 message 应配对，无错乱"
+                        );
+                    }
+                }
+                Ok(Err(e)) => {
+                    panic!("send_request 失败（竞态错误未消除）: {}", e);
+                }
+                Err(e) => {
+                    panic!("task panicked: {}", e);
+                }
+            }
+        }
+
+        // 验证所有 10 个请求都成功（核心断言：无 "No active Worker connection"）
+        assert_eq!(success_count, 10, "所有 10 个并发请求应成功完成，无竞态错误");
+
+        // 验证 request_id 唯一性（无错乱/重复）
+        request_ids.sort();
+        request_ids.dedup();
+        assert_eq!(request_ids.len(), 10, "所有 request_id 应唯一，无错乱");
+
+        // 等待 mock Worker 完成
+        let _ = worker_handle.await;
+
+        // 清理
+        server.stop().await.ok();
     }
 }
