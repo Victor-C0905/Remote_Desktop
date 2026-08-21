@@ -264,22 +264,22 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
       role="listitem"
       aria-label={`${task.direction === 'upload' ? '上传' : '下载'} ${task.file_name}`}
     >
-      {/* 第一行：图标 + 文件名 + 文件大小 */}
-      <div className="tc-left">
-        <span className="tc-icon">
-          {task.direction === 'upload' ? <UploadIcon /> : <DownloadIcon />}
+      {/* 区域 1：方向图标（垂直居中，跨两行） */}
+      <span className="tc-icon">
+        {task.direction === 'upload' ? <UploadIcon /> : <DownloadIcon />}
+      </span>
+
+      {/* 区域 2a：文件信息（第一行：文件名 + 大小） */}
+      <div className="tc-file-info">
+        <span className="tc-filename" title={task.file_name || '未知文件'}>
+          {task.file_name || '未知文件'}
         </span>
-        <div className="tc-file-info">
-          <span className="tc-filename" title={task.file_name || '未知文件'}>
-            {task.file_name || '未知文件'}
-          </span>
-          <span className="tc-file-size">
-            {formatFileSize(task.file_size)}
-          </span>
-        </div>
+        <span className="tc-file-size">
+          {formatFileSize(task.file_size)}
+        </span>
       </div>
 
-      {/* 第二行：进度条 + 百分比 + 速度 */}
+      {/* 区域 2b：进度信息（第二行：进度条 + 百分比 + 速度 + 剩余时间） */}
       <div className="tc-middle">
         <div
           className="tc-progress-bar"
@@ -309,7 +309,7 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
         )}
       </div>
 
-      {/* 右侧：控制按钮（跨两行，垂直居中） */}
+      {/* 区域 3：控制按钮（垂直居中，跨两行） */}
       <div className="tc-actions">
         {/* 活动任务：暂停 + 关闭 */}
         {task.status === 'active' && (
