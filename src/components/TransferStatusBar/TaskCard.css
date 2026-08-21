@@ -1,27 +1,32 @@
 /**
  * TaskCard 样式
  *
- * 对齐浏览器（Chrome/Edge）下载列表设计
- * 布局：[图标 文件名 (状态信息)] [进度条 百分比] [按钮]
- * 特点：
- * - 文件名弹性宽度，自动适应面板
- * - 进度条固定宽度，始终可见
- * - 按钮始终可见，不依赖悬停
+ * 三区域 grid 布局，防长文件名错乱：
+ *   ┌──────┬─────────────────────────────┬────────┐
+ *   │      │ 文件名（省略）    文件大小  │        │
+ *   │ 图标 │─────────────────────────────│ 按钮   │
+ *   │      │ [====进度条====] 45% 2.3MB/s│        │
+ *   └──────┴─────────────────────────────┴────────┘
+ * 列：[图标 20px] [信息 minmax(0,1fr)] [按钮 auto]
+ * 行：[第一行 文件信息] [第二行 进度信息]
+ * 图标和按钮均跨两行垂直居中
  */
 
-/* ── 任务卡片容器（两行布局）─────────────────────────────── */
+/* ── 任务卡片容器（三列两行 grid）────────────────────────── */
 
 .task-card {
   display: grid;
-  grid-template-columns: 1fr auto; /* 左侧（文件信息）自适应，右侧（按钮）固定 */
-  grid-template-rows: auto auto; /* 两行 */
-  gap: 4px 12px; /* 行间距 4px，列间距 12px */
+  grid-template-columns: 20px minmax(0, 1fr) auto; /* 图标固定 | 信息弹性收缩 | 按钮自适应 */
+  grid-template-rows: 1fr 1fr; /* 两行等高 */
+  gap: 2px 8px; /* 行间距 2px，列间距 8px */
   align-items: center; /* 垂直居中 */
   width: 100%;
-  padding: 8px 12px;
+  height: 48px; /* 固定卡片高度 */
+  padding: 0 12px;
   background: transparent;
   border-radius: 0;
   border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+  box-sizing: border-box;
 }
 
 .task-card:hover {
@@ -32,78 +37,78 @@
   border-bottom: none;
 }
 
-/* ── 左侧区域：图标 + 文件信息（第一行）──────────────────── */
-
-.tc-left {
-  grid-column: 1; /* 第一列 */
-  grid-row: 1; /* 第一行 */
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0; /* 允许收缩 */
-}
+/* ── 区域 1：方向图标（跨两行垂直居中）──────────────────── */
 
 .tc-icon {
+  grid-column: 1;
+  grid-row: 1 / 3; /* 跨两行 */
   display: flex;
   align-items: center;
   justify-content: center;
   color: var(--ovelis-text-secondary);
-  flex-shrink: 0; /* 图标不收缩 */
+  flex-shrink: 0;
 }
 
-/* 文件信息容器（文件名 + 文件大小，水平排列） */
+/* ── 区域 2a：文件信息（第一行第二列）────────────────────── */
+
 .tc-file-info {
+  grid-column: 2;
+  grid-row: 1;
   display: flex;
-  align-items: baseline; /* 基线对齐，文件名和文件大小在同一水平线 */
-  gap: 8px; /* 文件名和文件大小之间的间距 */
-  min-width: 0; /* 允许收缩 */
-  flex: 1;
+  align-items: baseline; /* 文件名和文件大小基线对齐 */
+  gap: 8px;
+  min-width: 0; /* 关键：允许在 grid cell 中收缩 */
   overflow: hidden;
 }
 
 .tc-filename {
-  font-size: 13px; /* 浏览器标准字体大小 */
+  font-size: 13px;
   color: var(--ovelis-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  line-height: 1.4; /* 确保文本可见 */
-  flex-shrink: 1; /* 文件名可以收缩 */
+  line-height: 1.4;
+  flex: 0 1 auto; /* 弹性收缩：优先被截断 */
+  min-width: 0; /* 配合 text-overflow 生效 */
 }
 
 .tc-file-size {
-  font-size: 11px; /* 文件大小字号 */
+  font-size: 11px;
   color: var(--ovelis-text-secondary);
   line-height: 1.4;
   font-variant-numeric: tabular-nums; /* 数字等宽 */
-  flex-shrink: 0; /* 文件大小不收缩 */
+  flex-shrink: 0; /* 文件大小不收缩，始终可见 */
+  white-space: nowrap;
 }
 
-/* ── 中间区域：进度条 + 百分比 + 速度（第二行）────────────── */
+/* ── 区域 2b：进度信息（第二行第二列）────────────────────── */
 
 .tc-middle {
-  grid-column: 1; /* 第一列 */
-  grid-row: 2; /* 第二行 */
+  grid-column: 2;
+  grid-row: 2;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding-left: 24px; /* 与文件名对齐（图标宽度 16px + gap 8px） */
+  min-width: 0; /* 允许在 grid cell 中收缩 */
+  overflow: hidden;
 }
 
 .tc-progress-bar {
-  flex: 1;
-  height: 3px; /* 浏览器进度条更细（2-3px） */
+  flex: 1 1 200px; /* 理想 200px，可弹性收缩 */
+  min-width: 60px; /* 最小宽度保证可见 */
+  max-width: 200px; /* 不超过 200px */
+  height: 3px; /* 细进度条 */
   background: rgba(0, 0, 0, 0.1);
   border-radius: 1.5px;
   overflow: hidden;
-  min-width: 60px; /* 确保进度条有最小宽度 */
+  flex-shrink: 1;
 }
 
 .tc-progress-fill {
   height: 100%;
   background: var(--ovelis-accent-bg);
   border-radius: 1.5px;
-  transition: width 0.15s cubic-bezier(0.4, 0, 0.2, 1); /* 使用 Material Design 缓动函数 */
+  transition: width 0.15s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* 活动任务的进度条脉动动画 */
@@ -112,12 +117,8 @@
 }
 
 @keyframes pulse {
-  0%, 100% {
-    opacity: 0.85;
-  }
-  50% {
-    opacity: 1;
-  }
+  0%, 100% { opacity: 0.85; }
+  50% { opacity: 1; }
 }
 
 /* 失败任务的进度条样式 */
@@ -137,18 +138,9 @@
 }
 
 @keyframes progress-complete {
-  0% {
-    opacity: 0.6;
-    transform: scaleY(1);
-  }
-  50% {
-    opacity: 1;
-    transform: scaleY(1.5);
-  }
-  100% {
-    opacity: 1;
-    transform: scaleY(1);
-  }
+  0% { opacity: 0.6; transform: scaleY(1); }
+  50% { opacity: 1; transform: scaleY(1.5); }
+  100% { opacity: 1; transform: scaleY(1); }
 }
 
 /* 已取消任务的整体样式 */
@@ -165,19 +157,21 @@
   font-size: 12px;
   color: var(--ovelis-text-secondary);
   flex-shrink: 0;
-  min-width: 36px; /* 确保百分比有足够空间 */
+  min-width: 36px;
   text-align: right;
-  font-variant-numeric: tabular-nums; /* 数字等宽，防止抖动 */
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 /* 下载/上传速度 */
 .tc-speed {
-  font-size: 11px; /* 速度字号 */
+  font-size: 11px;
   color: var(--ovelis-text-secondary);
   flex-shrink: 0;
-  min-width: 56px; /* 确保速度有足够空间 */
+  min-width: 56px;
   text-align: left;
-  font-variant-numeric: tabular-nums; /* 数字等宽 */
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 /* 传输耗时 */
@@ -188,6 +182,7 @@
   min-width: 40px;
   text-align: left;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 /* 剩余时间 */
@@ -196,6 +191,7 @@
   color: var(--ovelis-accent-bg);
   flex-shrink: 0;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 /* 错误信息 */
@@ -206,19 +202,19 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 160px;
-  flex-shrink: 1;
+  flex: 0 1 auto;
   min-width: 0;
 }
 
-/* ── 右侧区域：控制按钮（跨两行，垂直居中）──────────────── */
+/* ── 区域 3：控制按钮（跨两行垂直居中）────────────────────── */
 
 .tc-actions {
-  grid-column: 2; /* 第二列 */
+  grid-column: 3;
   grid-row: 1 / 3; /* 跨两行 */
   display: flex;
-  align-items: center; /* 水平排列 */
-  gap: 4px; /* 按钮间距 */
-  flex-shrink: 0; /* 不收缩 */
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0; /* 按钮区域不收缩 */
 }
 
 /* ── 控制按钮样式 ─────────────────────────────────────────────── */
@@ -227,7 +223,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px; /* 浏览器按钮大小 */
+  width: 28px;
   height: 28px;
   padding: 0;
   background: transparent;
@@ -236,6 +232,7 @@
   color: var(--ovelis-text-secondary);
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
+  flex-shrink: 0;
 }
 
 .tc-action-btn:hover {
@@ -245,7 +242,7 @@
 
 .tc-action-btn:active {
   background: rgba(0, 0, 0, 0.12);
-  transform: scale(0.95); /* 轻微缩放反馈 */
+  transform: scale(0.95);
 }
 
 .tc-action-btn:focus {
@@ -301,11 +298,12 @@
 
 @media (max-width: 600px) {
   .task-card {
-    padding: 6px 8px;
+    padding: 0 8px;
   }
 
-  .tc-middle {
-    padding-left: 20px; /* 减小对齐距离 */
+  .tc-progress-bar {
+    flex: 1 1 120px; /* 窄屏减小理想宽度 */
+    max-width: 120px;
   }
 
   .tc-action-btn {
@@ -313,7 +311,7 @@
     height: 26px;
   }
 
-  /* 隐藏速度显示，节省空间 */
+  /* 窄屏隐藏速度，节省空间 */
   .tc-speed {
     display: none;
   }
