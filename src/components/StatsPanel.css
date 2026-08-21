@@ -9,7 +9,7 @@
 .stats-panel h2 {
   font-size: var(--font-title);
   font-weight: 600;
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
   margin-bottom: 20px;
 }
 
@@ -20,7 +20,7 @@
 .stats-section h3 {
   font-size: var(--font-body);
   font-weight: 600;
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
   margin-bottom: 15px;
 }
 
@@ -34,48 +34,48 @@
   display: flex;
   flex-direction: column;
   padding: 15px;
-  background: var(--ovelis-card-bg);
+  background: var(--quirel-card-bg);
   border-radius: var(--radius-sm);
-  border: 1px solid var(--ovelis-border-color);
+  border: 1px solid var(--quirel-border-color);
   transition: background var(--duration-fast) var(--ease-out),
               box-shadow var(--duration-fast) var(--ease-out);
 }
 
 .stat-item:hover {
-  background: var(--ovelis-card-hover);
+  background: var(--quirel-card-hover);
   box-shadow: var(--shadow-card);
 }
 
 .stat-item .label {
   font-size: var(--font-small);
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   margin-bottom: 5px;
 }
 
 .stat-item .value {
   font-size: 18px;
   font-weight: bold;
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
 }
 
 /* 状态颜色 */
 .value.success {
-  color: var(--ovelis-success-color);
+  color: var(--quirel-success-color);
 }
 
 .value.warning {
-  color: var(--ovelis-warning-color);
+  color: var(--quirel-warning-color);
 }
 
 .value.error {
-  color: var(--ovelis-error-color);
+  color: var(--quirel-error-color);
 }
 
 /* 刷新按钮 */
 .refresh-button {
   padding: 10px 20px;
-  background: var(--ovelis-accent-bg);
-  color: var(--ovelis-text-on-accent);
+  background: var(--quirel-accent-bg);
+  color: var(--quirel-text-on-accent);
   border: none;
   border-radius: var(--radius-xs);
   cursor: pointer;
@@ -85,19 +85,19 @@
 }
 
 .refresh-button:hover {
-  background: var(--ovelis-accent-hover);
+  background: var(--quirel-accent-hover);
 }
 
 .refresh-button:active {
-  background: var(--ovelis-accent-active);
+  background: var(--quirel-accent-active);
 }
 
 /* 错误提示 */
 .error {
-  color: var(--ovelis-error-color);
+  color: var(--quirel-error-color);
   padding: 10px;
   background: rgba(224, 27, 36, 0.1);
-  border: 1px solid var(--ovelis-error-color);
+  border: 1px solid var(--quirel-error-color);
   border-radius: var(--radius-xs);
   margin-bottom: 10px;
 }

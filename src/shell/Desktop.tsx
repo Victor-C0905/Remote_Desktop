@@ -154,7 +154,7 @@ function DesktopContent() {
   const dockRef = useRef<HTMLDivElement>(null);
 
   // ✅ 根据 dock 背景色自动选择高对比度文本颜色
-  // ✅ 使用主题的文本颜色 (--ovelis-text-primary)
+  // ✅ 使用主题的文本颜色 (--quirel-text-primary)
   const { textColor, actualColor } = useContrastColor(dockRef, {
     interval: 500,
     useThemeText: true,  // ✅ 使用主题文本颜色

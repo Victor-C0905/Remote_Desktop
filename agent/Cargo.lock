@@ -758,53 +758,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
-name = "gnome-remote-agent"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64",
- "bytes",
- "chrono",
- "clap",
- "dashmap",
- "ed25519-dalek",
- "futures-util",
- "lazy_static",
- "libc",
- "nix",
- "notify",
- "pam",
- "prost",
- "prost-build",
- "prost-types",
- "quinn",
- "rand 0.8.7",
- "rcgen",
- "rsa",
- "rustls",
- "rustls-pemfile",
- "serde",
- "serde_json",
- "sha2",
- "signature",
- "socket2",
- "ssh-key",
- "sysinfo",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tokio-rustls",
- "tokio-tungstenite",
- "toml",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "uuid",
- "which",
- "whoami",
-]
-
-[[package]]
 name = "group"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1695,6 +1648,53 @@ dependencies = [
  "socket2",
  "tracing",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "quireld"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "bytes",
+ "chrono",
+ "clap",
+ "dashmap",
+ "ed25519-dalek",
+ "futures-util",
+ "lazy_static",
+ "libc",
+ "nix",
+ "notify",
+ "pam",
+ "prost",
+ "prost-build",
+ "prost-types",
+ "quinn",
+ "rand 0.8.7",
+ "rcgen",
+ "rsa",
+ "rustls",
+ "rustls-pemfile",
+ "serde",
+ "serde_json",
+ "sha2",
+ "signature",
+ "socket2",
+ "ssh-key",
+ "sysinfo",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-rustls",
+ "tokio-tungstenite",
+ "toml",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "uuid",
+ "which",
+ "whoami",
 ]
 
 [[package]]

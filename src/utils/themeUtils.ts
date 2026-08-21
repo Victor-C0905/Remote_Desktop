@@ -53,7 +53,7 @@ function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
 }
 
 /**
- * 应用主题颜色到CSS变量（统一设置ovelis前缀变量）
+ * 应用主题颜色到CSS变量（统一设置quirel前缀变量）
  * @param themeId 主题ID
  * @param accentColorId 强调色ID（可选）
  */
@@ -66,54 +66,54 @@ export function applyThemeColors(
     const colors = theme.lightColors; // dark主题的lightColors已包含暗色配置
     const root = document.documentElement;
 
-    // 设置基础颜色变量（ovelis前缀）
-    root.style.setProperty('--ovelis-window-bg', colors.windowBg);
-    root.style.setProperty('--ovelis-view-bg', colors.viewBg);
-    root.style.setProperty('--ovelis-card-bg', colors.cardBg);
-    root.style.setProperty('--ovelis-card-hover', colors.cardHover);
-    root.style.setProperty('--ovelis-headerbar-bg', colors.headerbarBg);
-    root.style.setProperty('--ovelis-sidebar-bg', colors.sidebarBg);
-    root.style.setProperty('--ovelis-sidebar-border', colors.sidebarBorder);
+    // 设置基础颜色变量（quirel前缀）
+    root.style.setProperty('--quirel-window-bg', colors.windowBg);
+    root.style.setProperty('--quirel-view-bg', colors.viewBg);
+    root.style.setProperty('--quirel-card-bg', colors.cardBg);
+    root.style.setProperty('--quirel-card-hover', colors.cardHover);
+    root.style.setProperty('--quirel-headerbar-bg', colors.headerbarBg);
+    root.style.setProperty('--quirel-sidebar-bg', colors.sidebarBg);
+    root.style.setProperty('--quirel-sidebar-border', colors.sidebarBorder);
 
     // 设置毛玻璃颜色（跟随主题的 headerbarBg，透明度 80%）
     const headerbarRgb = hexToRgb(colors.headerbarBg);
     if (headerbarRgb) {
       // ✅ 设置 RGB 分离值,供 dock 等组件使用
-      root.style.setProperty('--ovelis-headerbar-bg-rgb', `${headerbarRgb.r}, ${headerbarRgb.g}, ${headerbarRgb.b}`);
+      root.style.setProperty('--quirel-headerbar-bg-rgb', `${headerbarRgb.r}, ${headerbarRgb.g}, ${headerbarRgb.b}`);
       // ✅ 设置毛玻璃背景色 (rgba 格式)
-      root.style.setProperty('--ovelis-frosted-bg', `rgba(${headerbarRgb.r}, ${headerbarRgb.g}, ${headerbarRgb.b}, 0.80)`);
+      root.style.setProperty('--quirel-frosted-bg', `rgba(${headerbarRgb.r}, ${headerbarRgb.g}, ${headerbarRgb.b}, 0.80)`);
     }
 
-    // 设置滑块颜色（ovelis前缀）
-    root.style.setProperty('--ovelis-slider-track-bg', colors.sliderTrackBg);
-    root.style.setProperty('--ovelis-slider-thumb-bg', colors.sliderThumbBg);
-    root.style.setProperty('--ovelis-slider-active-bg', colors.sliderActiveBg);
+    // 设置滑块颜色（quirel前缀）
+    root.style.setProperty('--quirel-slider-track-bg', colors.sliderTrackBg);
+    root.style.setProperty('--quirel-slider-thumb-bg', colors.sliderThumbBg);
+    root.style.setProperty('--quirel-slider-active-bg', colors.sliderActiveBg);
 
-    // 设置强调色（ovelis前缀）
+    // 设置强调色（quirel前缀）
     if (theme.accentColorOptions && accentColorId) {
       const accentColor = accentColors[accentColorId];
       if (accentColor) {
         const accent = accentColor.light; // 直接使用light版本
-        root.style.setProperty('--ovelis-accent-bg', accent);
-        root.style.setProperty('--ovelis-accent-hover', adjustBrightness(accent, -10));
-        root.style.setProperty('--ovelis-accent-active', adjustBrightness(accent, -20));
+        root.style.setProperty('--quirel-accent-bg', accent);
+        root.style.setProperty('--quirel-accent-hover', adjustBrightness(accent, -10));
+        root.style.setProperty('--quirel-accent-active', adjustBrightness(accent, -20));
       } else {
         // 如果强调色ID无效，使用主题默认强调色
-        root.style.setProperty('--ovelis-accent-bg', colors.accentBg);
-        root.style.setProperty('--ovelis-accent-hover', colors.accentHover);
-        root.style.setProperty('--ovelis-accent-active', colors.accentActive);
+        root.style.setProperty('--quirel-accent-bg', colors.accentBg);
+        root.style.setProperty('--quirel-accent-hover', colors.accentHover);
+        root.style.setProperty('--quirel-accent-active', colors.accentActive);
       }
     } else {
-      root.style.setProperty('--ovelis-accent-bg', colors.accentBg);
-      root.style.setProperty('--ovelis-accent-hover', colors.accentHover);
-      root.style.setProperty('--ovelis-accent-active', colors.accentActive);
+      root.style.setProperty('--quirel-accent-bg', colors.accentBg);
+      root.style.setProperty('--quirel-accent-hover', colors.accentHover);
+      root.style.setProperty('--quirel-accent-active', colors.accentActive);
     }
 
-    // 设置字体颜色和边框颜色（ovelis前缀）
-    root.style.setProperty('--ovelis-text-primary', colors.textPrimary);
-    root.style.setProperty('--ovelis-text-secondary', colors.textSecondary);
-    root.style.setProperty('--ovelis-text-disabled', colors.textDisabled);
-    root.style.setProperty('--ovelis-border-color', colors.borderColor);
+    // 设置字体颜色和边框颜色（quirel前缀）
+    root.style.setProperty('--quirel-text-primary', colors.textPrimary);
+    root.style.setProperty('--quirel-text-secondary', colors.textSecondary);
+    root.style.setProperty('--quirel-text-disabled', colors.textDisabled);
+    root.style.setProperty('--quirel-border-color', colors.borderColor);
   } catch (error) {
     log.error('应用主题颜色失败:', error);
   }

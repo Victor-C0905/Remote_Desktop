@@ -1,7 +1,7 @@
-# gnome-remote-agent 体积分析最终报告
+# quireld 体积分析最终报告
 
 > 分析日期：2026-07-19
-> 项目：gnome-remote-agent v0.1.0
+> 项目：quireld v0.1.0
 > 源码规模：3,760 行 Rust（16 个文件）
 
 ---
@@ -165,7 +165,7 @@ libc = "0.2"
 agent              3.8 MB  (优化后二进制)
 cert.pem           1.5 KB
 key.pem            3.2 KB
-agent.toml         0.8 KB
+quireld.toml         0.8 KB
 ─────────────────────────
 总计               ~3.8 MB
 ```

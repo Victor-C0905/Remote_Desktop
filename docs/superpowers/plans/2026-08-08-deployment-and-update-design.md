@@ -2,7 +2,7 @@
 
 **创建日期**: 2026-08-08
 **状态**: 设计文档（当前阶段已实现权宜方案，apt 标准发布为未来目标）
-**关联文件**: [install.sh](file:///e:/MyWork/gnome-remote/agent/deploy/install.sh), [update.sh](file:///e:/MyWork/gnome-remote/agent/deploy/update.sh), [uninstall.sh](file:///e:/MyWork/gnome-remote/agent/deploy/uninstall.sh), [systemd/gnome-remote-agent.service](file:///e:/MyWork/gnome-remote/systemd/gnome-remote-agent.service)
+**关联文件**: [install.sh](file:///e:/MyWork/quirel/agent/deploy/install.sh), [update.sh](file:///e:/MyWork/quirel/agent/deploy/update.sh), [uninstall.sh](file:///e:/MyWork/quirel/agent/deploy/uninstall.sh), [systemd/quireld.service](file:///e:/MyWork/quirel/systemd/quireld.service)
 
 ## 1. 设计目标
 
@@ -32,23 +32,23 @@
 
 | 能力 | 实现位置 | 说明 |
 |------|---------|------|
-| 证书自动生成 | [cert.rs](file:///e:/MyWork/gnome-remote/agent/src/cert.rs) | 启动时自签证书，无需用户配置 |
-| 配置文件自动生成 | [config.rs:230-243](file:///e:/MyWork/gnome-remote/agent/src/config.rs#L230-L243) | 首次启动生成默认配置 |
-| 端口占用重试 | [quic.rs:242-295](file:///e:/MyWork/gnome-remote/agent/src/server/quic.rs#L242-L295) | SO_REUSEADDR + 5 次重试（每次 1 秒） |
-| TCP SO_REUSEADDR | [websocket.rs:17-30](file:///e:/MyWork/gnome-remote/agent/src/server/websocket.rs#L17-L30) | TCP 端口快速复用 |
-| IPC 就绪同步 | [mod.rs:218-229](file:///e:/MyWork/gnome-remote/agent/src/manager/mod.rs#L218-L229) | oneshot 信号确保 bind 完成后再启动 Worker |
+| 证书自动生成 | [cert.rs](file:///e:/MyWork/quirel/agent/src/cert.rs) | 启动时自签证书，无需用户配置 |
+| 配置文件自动生成 | [config.rs:230-243](file:///e:/MyWork/quirel/agent/src/config.rs#L230-L243) | 首次启动生成默认配置 |
+| 端口占用重试 | [quic.rs:242-295](file:///e:/MyWork/quirel/agent/src/server/quic.rs#L242-L295) | SO_REUSEADDR + 5 次重试（每次 1 秒） |
+| TCP SO_REUSEADDR | [websocket.rs:17-30](file:///e:/MyWork/quirel/agent/src/server/websocket.rs#L17-L30) | TCP 端口快速复用 |
+| IPC 就绪同步 | [mod.rs:218-229](file:///e:/MyWork/quirel/agent/src/manager/mod.rs#L218-L229) | oneshot 信号确保 bind 完成后再启动 Worker |
 | Worker 崩溃自动重启 | worker_manager | 崩溃检测器自动重启 |
 | 热更新（SIGHUP） | hot_update_coordinator | `systemctl reload` 触发 Worker 优雅重启 |
-| Worker 路径自动检测 | [config.rs:220-226](file:///e:/MyWork/gnome-remote/agent/src/config.rs#L220-L226) | 通过 `/proc/self/exe` 获取，无需配置 |
+| Worker 路径自动检测 | [config.rs:220-226](file:///e:/MyWork/quirel/agent/src/config.rs#L220-L226) | 通过 `/proc/self/exe` 获取，无需配置 |
 
 ### 2.2 脚本层职责（未来由 apt 接管）
 
 | 工作 | install.sh | update.sh | uninstall.sh | 未来 apt 机制 |
 |------|-----------|-----------|--------------|--------------|
 | 二进制安装到 `/usr/local/bin/` | ✓ | ✓（rm+cp） | ✓（rm） | dpkg 自动 |
-| 配置文件到 `/etc/gnome-remote-agent/` | ✓ | ✓（备份+覆盖） | ✓（rm） | conffiles 机制 |
-| 创建 `/var/log/gnome-remote/` | ✓ | - | ✓ | dpkg 自动 |
-| 创建 `/var/lib/gnome-remote/` | ✓ | - | ✓ | dpkg 自动 |
+| 配置文件到 `/etc/quireld/` | ✓ | ✓（备份+覆盖） | ✓（rm） | conffiles 机制 |
+| 创建 `/var/log/quireld/` | ✓ | - | ✓ | dpkg 自动 |
+| 创建 `/var/lib/quireld/` | ✓ | - | ✓ | dpkg 自动 |
 | 注册 systemd service | ✓ | - | ✓ | systemctl daemon-reload 自动 |
 | 启动/重启服务 | ✓（restart） | ✓（环境感知） | ✓（stop） | postinst/prerm 脚本 |
 | 备份旧版本 | - | ✓ | - | apt 不备份（用户需手动） |
@@ -63,7 +63,7 @@
 **流程**：
 1. 检查 root 权限
 2. 检测二进制文件位置（打包部署 / 源码部署）
-3. 创建目录：`/usr/local/bin`、`/etc/gnome-remote-agent`、`/var/log/gnome-remote`、`/var/lib/gnome-remote`
+3. 创建目录：`/usr/local/bin`、`/etc/quireld`、`/var/log/quireld`、`/var/lib/quireld`
 4. **rm + cp 替换二进制**（避免 ETXTBSY）
 5. 安装配置文件（已存在则跳过）
 6. 安装 systemd service 文件（支持 sed 替换路径和服务名）
@@ -140,14 +140,14 @@ disown
 **一次性准备**：
 - 维护 `build.sh`（打包脚本）
 - 维护 `agent.prod.toml`（生产配置模板）
-- 维护 `systemd/gnome-remote-agent.service`（服务模板）
+- 维护 `systemd/quireld.service`（服务模板）
 - 维护 `deploy/install.sh`、`update.sh`、`uninstall.sh`（权宜脚本）
 
 **每次发布**：
 ```bash
 cd agent
 bash build.sh release
-# 生成 dist/gnome-remote-agent-{version}-release-linux-amd64.tar.gz
+# 生成 dist/quireld-{version}-release-linux-amd64.tar.gz
 # 分发给用户（scp / 网盘 / 下载链接）
 ```
 
@@ -155,20 +155,20 @@ bash build.sh release
 
 **首次安装**（通过 SSH）：
 ```bash
-scp gnome-remote-agent-*.tar.gz user@server:/tmp/
+scp quireld-*.tar.gz user@server:/tmp/
 ssh user@server
-cd /tmp && tar xzf gnome-remote-agent-*.tar.gz
-cd gnome-remote-agent-*
+cd /tmp && tar xzf quireld-*.tar.gz
+cd quireld-*
 sudo bash install.sh
 ```
 
 **升级更新**：
 ```bash
 # 方式 A：通过 SSH（推荐，可看到验证结果）
-scp gnome-remote-agent-*.tar.gz user@server:/tmp/
+scp quireld-*.tar.gz user@server:/tmp/
 ssh user@server
-cd /tmp && tar xzf gnome-remote-agent-*.tar.gz
-cd gnome-remote-agent-*
+cd /tmp && tar xzf quireld-*.tar.gz
+cd quireld-*
 sudo bash update.sh
 
 # 方式 B：通过 agent 终端（脚本自动检测，nohup 后台 restart）
@@ -217,7 +217,7 @@ sudo bash uninstall.sh
 
 1. **`.deb` 包结构**：
    ```
-   gnome-remote-agent_{version}_amd64.deb
+   quireld_{version}_amd64.deb
    ├── DEBIAN/
    │   ├── control          # 包元数据（依赖、版本、描述）
    │   ├── conffiles        # 配置文件列表（升级时保留）
@@ -226,13 +226,13 @@ sudo bash uninstall.sh
    │   ├── postrm           # 卸载后脚本（daemon-reload）
    │   └── maintainer_scripts
    ├── usr/local/bin/
-   │   └── gnome-remote-agent
-   ├── etc/gnome-remote-agent/
-   │   └── agent.toml
+   │   └── quireld
+   ├── etc/quireld/
+   │   └── quireld.toml
    ├── etc/systemd/system/
-   │   └── gnome-remote-agent.service
-   ├── var/log/gnome-remote/
-   └── var/lib/gnome-remote/
+   │   └── quireld.service
+   ├── var/log/quirel/
+   └── var/lib/quirel/
    ```
 
 2. **CI/CD 流水线**（GitHub Actions）：
@@ -248,9 +248,9 @@ sudo bash uninstall.sh
 
 | 操作 | 当前（权宜脚本） | 未来（apt） |
 |------|----------------|------------|
-| 安装 | `sudo bash install.sh` | `sudo apt install gnome-remote-agent` |
-| 更新 | `sudo bash update.sh` | `sudo apt update && sudo apt upgrade gnome-remote-agent` |
-| 卸载 | `sudo bash uninstall.sh` | `sudo apt remove gnome-remote-agent` |
+| 安装 | `sudo bash install.sh` | `sudo apt install quireld` |
+| 更新 | `sudo bash update.sh` | `sudo apt update && sudo apt upgrade quireld` |
+| 卸载 | `sudo bash uninstall.sh` | `sudo apt remove quireld` |
 | 配置保留 | 脚本备份 `.bak` | apt conffiles 机制自动提示 |
 
 ### 6.3 过渡策略

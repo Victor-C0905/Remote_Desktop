@@ -16,7 +16,7 @@
   max-width: 100%; /* 确保不超过父容器 */
   max-height: calc(40vh - 32px);
   min-width: 360px; /* 最小宽度，确保可用性 */
-  background: var(--ovelis-window-bg);
+  background: var(--quirel-window-bg);
   border: 1px solid rgba(0, 0, 0, 0.08);
   border-radius: 8px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
@@ -54,7 +54,7 @@
   align-items: center;
   justify-content: center;
   height: 120px;
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   font-size: 10pt;
 }
 
@@ -68,12 +68,12 @@
 }
 
 .tp-list::-webkit-scrollbar-thumb {
-  background: var(--ovelis-border-color);
+  background: var(--quirel-border-color);
   border-radius: 4px;
 }
 
 .tp-list::-webkit-scrollbar-thumb:hover {
-  background: var(--ovelis-text-secondary);
+  background: var(--quirel-text-secondary);
 }
 
 /* ── 空状态提示 ───────────────────────────────────────────── */
@@ -84,7 +84,7 @@
   align-items: center;
   justify-content: center;
   padding: 40px 20px;
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
 }
 
 .tp-empty-icon {
@@ -94,21 +94,21 @@
   width: 48px;
   height: 48px;
   margin-bottom: 16px;
-  background: var(--ovelis-card-bg);
+  background: var(--quirel-card-bg);
   border-radius: 50%;
-  color: var(--ovelis-text-disabled);
+  color: var(--quirel-text-disabled);
 }
 
 .tp-empty-text {
   font-size: 14px;
   margin: 0 0 8px 0;
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
 }
 
 .tp-empty-hint {
   font-size: 12px;
   margin: 0;
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   text-align: center;
   max-width: 250px;
 }
@@ -121,8 +121,8 @@
   justify-content: space-between;
   padding: 8px 12px;
   height: 32px;
-  border-top: 1px solid var(--ovelis-border-color);
-  background: var(--ovelis-sidebar-bg);
+  border-top: 1px solid var(--quirel-border-color);
+  background: var(--quirel-sidebar-bg);
 }
 
 /* ── 统计信息 ───────────────────────────────────────────────── */
@@ -142,24 +142,24 @@
 }
 
 .tp-stat-label {
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
 }
 
 .tp-stat-value {
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
   font-weight: 500;
 }
 
 .tp-stat-value.success {
-  color: var(--ovelis-success-color);
+  color: var(--quirel-success-color);
 }
 
 .tp-stat-value.error {
-  color: var(--ovelis-error-color);
+  color: var(--quirel-error-color);
 }
 
 .tp-stat-value.cancelled {
-  color: var(--ovelis-text-disabled);
+  color: var(--quirel-text-disabled);
 }
 
 /* ── 操作按钮 ───────────────────────────────────────────────── */
@@ -182,39 +182,39 @@
 
 .tp-action-btn.cancel {
   background: transparent;
-  color: var(--ovelis-error-color);
+  color: var(--quirel-error-color);
 }
 
 .tp-action-btn.cancel:hover {
-  background: var(--ovelis-card-bg);
+  background: var(--quirel-card-bg);
 }
 
 .tp-action-btn.pause {
   background: transparent;
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
 }
 
 .tp-action-btn.pause:hover {
-  background: var(--ovelis-card-bg);
-  color: var(--ovelis-text-primary);
+  background: var(--quirel-card-bg);
+  color: var(--quirel-text-primary);
 }
 
 .tp-action-btn.resume {
   background: transparent;
-  color: var(--ovelis-accent-bg);
+  color: var(--quirel-accent-bg);
 }
 
 .tp-action-btn.resume:hover {
-  background: var(--ovelis-card-bg);
+  background: var(--quirel-card-bg);
 }
 
 .tp-action-btn.close {
-  background: var(--ovelis-accent-bg);
-  color: var(--ovelis-accent-fg);
+  background: var(--quirel-accent-bg);
+  color: var(--quirel-accent-fg);
 }
 
 .tp-action-btn.close:hover {
-  background: var(--ovelis-accent-hover);
+  background: var(--quirel-accent-hover);
 }
 
 .tp-action-btn:active {
@@ -222,7 +222,7 @@
 }
 
 .tp-action-btn:focus {
-  outline: 2px solid var(--ovelis-accent-bg);
+  outline: 2px solid var(--quirel-accent-bg);
   outline-offset: 1px;
 }
 

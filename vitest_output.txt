@@ -1,5 +1,5 @@
-﻿
-[1m[30m[46m RUN [49m[39m[22m [36mv4.1.9 [39m[90mE:/MyWork/gnome-remote[39m
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.9 [39m[90mE:/MyWork/quirel[39m
 
  [32m✓[39m src/components/window-shell/aeroSnap.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 20[2mms[22m[39m
  [32m✓[39m src/window-system/core/Window.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 16[2mms[22m[39m

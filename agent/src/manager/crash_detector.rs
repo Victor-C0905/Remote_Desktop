@@ -205,7 +205,7 @@ mod tests {
     #[tokio::test]
     async fn test_crash_detector_creation() {
         let worker_manager = Arc::new(WorkerManager::new(
-            "/usr/bin/agent".to_string(),
+            "/usr/bin/quireld".to_string(),
             "/tmp/test.sock".to_string(),
             3,
         ));

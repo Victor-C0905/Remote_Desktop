@@ -113,7 +113,7 @@ agent/
 **执行步骤**:
 ```bash
 # 1. 创建 Manager 模块目录
-cd e:\MyWork\gnome-remote\agent
+cd e:\MyWork\quirel\agent
 mkdir -p src/manager
 mkdir -p src/worker/handlers
 mkdir -p src/protocol
@@ -492,7 +492,7 @@ message SystemInfo {
 **执行步骤**:
 ```bash
 # 1. 编译项目（会自动触发 build.rs）
-cd e:\MyWork\gnome-remote\agent
+cd e:\MyWork\quirel\agent
 cargo build
 
 # 2. 查看生成的代码
@@ -980,7 +980,7 @@ impl PtyRegistry {
 
 **输入**:
 - `agent/src/main.rs` 中的 worker 子命令
-- 配置文件 `agent.toml`
+- 配置文件 `quireld.toml`
 
 **输出**:
 - `agent/src/worker/mod.rs`（Worker 模块入口）
@@ -1448,12 +1448,12 @@ impl PtyRegistry {
 
 **输出**:
 - 修改 `agent/src/manager/mod.rs`
-- 修改 `systemd/gnome-remote-agent.service`
+- 修改 `systemd/quireld.service`
 
 **验证标准**:
 - ✅ `cargo check` 通过
 - ✅ Manager 启动后所有 Phase 4 组件运行
-- ✅ systemd 支持 `systemctl reload gnome-remote-agent` 触发热更新
+- ✅ systemd 支持 `systemctl reload quireld` 触发热更新
 - ✅ 集成测试通过（test_sighup_signal_handling、test_crash_detector_start_stop 等）
 
 **完成记录**:
@@ -1606,7 +1606,7 @@ impl PtyRegistry {
 
 **任务描述**:
 - install.sh 内联生成的 service 缺少 Phase 4 热更新配置
-- 改为优先复制项目根目录的 systemd/gnome-remote-agent.service 模板
+- 改为优先复制项目根目录的 systemd/quireld.service 模板
 - 找不到模板时使用包含完整配置的内联 fallback
 
 **验证标准**:

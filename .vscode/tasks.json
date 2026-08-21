@@ -19,7 +19,7 @@
                 "clear": false
             },
             "problemMatcher": "$rustc",
-            "detail": "构建 GNOME Remote Agent"
+            "detail": "构建 Quireld"
         },
         {
             "label": "run-agent",
@@ -52,7 +52,7 @@
                     "endsPattern": "^\\s*(Finished|error)"
                 }
             },
-            "detail": "运行 GNOME Remote Agent"
+            "detail": "运行 Quireld"
         },
         {
             "label": "run-agent-detached",
@@ -60,7 +60,7 @@
             "command": "powershell",
             "args": [
                 "-Command",
-                "Start-Process -FilePath 'cargo' -ArgumentList 'run' -WorkingDirectory '${workspaceFolder}/agent' -RedirectStandardOutput 'agent.log' -RedirectStandardError 'agent.log'"
+                "Start-Process -FilePath 'cargo' -ArgumentList 'run' -WorkingDirectory '${workspaceFolder}/agent' -RedirectStandardOutput 'quireld.log' -RedirectStandardError 'quireld.log'"
             ],
             "group": "build",
             "presentation": {
@@ -71,13 +71,13 @@
                 "showReuseMessage": true,
                 "clear": false
             },
-            "detail": "后台运行 GNOME Remote Agent"
+            "detail": "后台运行 Quireld"
         },
         {
             "label": "kill-agent",
             "type": "shell",
             "command": "taskkill",
-            "args": ["/F", "/IM", "agent.exe"],
+            "args": ["/F", "/IM", "quireld.exe"],
             "options": {
                 "cwd": "${workspaceFolder}/agent"
             },
@@ -90,7 +90,7 @@
                 "showReuseMessage": true,
                 "clear": false
             },
-            "detail": "终止 Agent 进程"
+            "detail": "终止 Quireld 进程"
         },
         {
             "label": "run-tauri-dev",
@@ -183,7 +183,7 @@
                 "clear": false
             },
             "problemMatcher": "$rustc",
-            "detail": "重新构建 Agent",
+            "detail": "重新构建 Quireld",
             "dependsOn": ["clean-build"],
             "dependsOrder": "sequence"
         }

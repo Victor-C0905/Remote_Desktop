@@ -89,7 +89,7 @@ pub const MAX_FRAME_DATA_SIZE: usize = 64 * 1024;
 pub const RECONNECT_TIMEOUT_SECS: u32 = 30;
 
 /// Abstract socket 名称前缀
-pub const SOCKET_PREFIX: &str = "\0gnome-remote-session-";
+pub const SOCKET_PREFIX: &str = "\0quirel-session-";
 
 /// 生成 abstract socket 名称
 pub fn generate_socket_name(session_id: &str) -> String {
@@ -1564,8 +1564,8 @@ git commit -m "refactor: simplify orphan_reaper, update hot_update comments"
 ```rust
 //! Session 进程单元测试
 
-use gnome_remote_agent::worker::session_protocol::{generate_socket_name, msg_type, FRAME_HEADER_SIZE};
-use gnome_remote_agent::worker::session_process::{create_session, SessionParams, SessionUserContext};
+use quireld::worker::session_protocol::{generate_socket_name, msg_type, FRAME_HEADER_SIZE};
+use quireld::worker::session_process::{create_session, SessionParams, SessionUserContext};
 
 #[test]
 fn test_generate_socket_name() {
@@ -1706,7 +1706,7 @@ sudo bash install.sh
 
 ```bash
 # 在客户端终端中执行命令
-sudo systemctl restart gnome-remote-agent
+sudo systemctl restart quireld
 ```
 
 预期：
@@ -1718,7 +1718,7 @@ sudo systemctl restart gnome-remote-agent
 
 ```bash
 # 在客户端终端中执行命令
-sudo systemctl reload gnome-remote-agent
+sudo systemctl reload quireld
 ```
 
 预期：

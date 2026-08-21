@@ -26,8 +26,8 @@ export interface TerminalTheme {
 }
 
 export const TERMINAL_THEMES: Record<string, TerminalTheme> = {
-  'gnome-dark': {
-    name: 'GNOME Dark',
+  'adwaita-dark': {
+    name: 'Adwaita Dark',
     background: '#1e1e1e',
     foreground: '#ffffff',
     cursor: '#4ec9b0',
@@ -51,8 +51,8 @@ export const TERMINAL_THEMES: Record<string, TerminalTheme> = {
     brightCyan: '#34e2e2',
     brightWhite: '#eeeeec',
   },
-  'gnome-light': {
-    name: 'GNOME Light',
+  'adwaita-light': {
+    name: 'Adwaita Light',
     background: '#ffffff',
     foreground: '#000000',
     cursor: '#000000',
@@ -76,8 +76,8 @@ export const TERMINAL_THEMES: Record<string, TerminalTheme> = {
     brightCyan: '#34e2e2',
     brightWhite: '#eeeeec',
   },
-  'gnome-white': {
-    name: 'GNOME White',
+  'adwaita-white': {
+    name: 'Adwaita White',
     background: '#ffffff',
     foreground: '#000000',
     cursor: '#000000',
@@ -104,5 +104,5 @@ export const TERMINAL_THEMES: Record<string, TerminalTheme> = {
 };
 
 export function getTheme(name: string): TerminalTheme {
-  return TERMINAL_THEMES[name] || TERMINAL_THEMES['gnome-dark'];
+  return TERMINAL_THEMES[name] || TERMINAL_THEMES['adwaita-dark'];
 }

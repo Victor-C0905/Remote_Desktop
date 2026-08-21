@@ -4,7 +4,7 @@
 
 ### 1.1 报告问题
 - **症状**：打开终端有一定概率失败，报错 `创建终端会话失败: No active Worker connection`
-- **根因**：[ipc_server.rs:278-311](file:///e:\MyWork\gnome-remote\agent\src\manager\ipc_server.rs) 的 `send_request` / `create_pty_session` 采用"取出 → await → 放回"模式。并发请求时，连接被请求1 取走后，请求2 发现 HashMap 为空，直接报错
+- **根因**：[ipc_server.rs:278-311](file:///e:\MyWork\quirel\agent\src\manager\ipc_server.rs) 的 `send_request` / `create_pty_session` 采用"取出 → await → 放回"模式。并发请求时，连接被请求1 取走后，请求2 发现 HashMap 为空，直接报错
 
 ### 1.2 发现的潜在隐患（代码审查）
 - **Manager 进程的 fork 隐患**：5 处 `fork()` 调用（4 个 `spawn_isolated_*` + 1 个 `execute_as_user`）在多线程 tokio runtime 中执行，fork 时其他 task 可能持有 runtime 内部锁（malloc arena 锁、IO driver 锁），子进程可能死锁
@@ -215,7 +215,7 @@ pub fn spawn_isolated_writer(&self, ...) -> Result<(ChildStdin, i32)> {
 #[derive(Parser, Debug)]
 struct Args {
     // ── 现有参数 ──
-    #[arg(short, long, default_value = "agent.toml")]
+    #[arg(short, long, default_value = "quireld.toml")]
     config: String,
     #[arg(long, default_value = "logs")]
     log_dir: String,
@@ -470,11 +470,11 @@ impl UserExecutor {
 
 ### 5.6 调用方适配
 
-- [handler.rs:418](file:///e:\MyWork\gnome-remote\agent\src\handler.rs): `spawn_isolated_writer_part` 调用点，`pipe_writer` 类型从 `os_pipe::PipeWriter` → `std::process::ChildStdin`
-- [handler.rs:469](file:///e:\MyWork\gnome-remote\agent\src\handler.rs): `spawn_isolated_writer` 调用点，同上
-- [handler.rs:550](file:///e:\MyWork\gnome-remote\agent\src\handler.rs): `spawn_isolated_reader` 调用点，`pipe_reader` 类型从 `os_pipe::PipeReader` → `std::process::ChildStdout`
-- [handler.rs:699](file:///e:\MyWork\gnome-remote\agent\src\handler.rs): `spawn_isolated_writer_part` 调用点，同 writer
-- [quic.rs:2086](file:///e:\MyWork\gnome-remote\agent\src\server\quic.rs): `spawn_isolated_merger` 调用点，接口不变
+- [handler.rs:418](file:///e:\MyWork\quirel\agent\src\handler.rs): `spawn_isolated_writer_part` 调用点，`pipe_writer` 类型从 `os_pipe::PipeWriter` → `std::process::ChildStdin`
+- [handler.rs:469](file:///e:\MyWork\quirel\agent\src\handler.rs): `spawn_isolated_writer` 调用点，同上
+- [handler.rs:550](file:///e:\MyWork\quirel\agent\src\handler.rs): `spawn_isolated_reader` 调用点，`pipe_reader` 类型从 `os_pipe::PipeReader` → `std::process::ChildStdout`
+- [handler.rs:699](file:///e:\MyWork\quirel\agent\src\handler.rs): `spawn_isolated_writer_part` 调用点，同 writer
+- [quic.rs:2086](file:///e:\MyWork\quirel\agent\src\server\quic.rs): `spawn_isolated_merger` 调用点，接口不变
 
 ### 5.7 file_stream.rs 改造
 

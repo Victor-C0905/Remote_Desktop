@@ -1,4 +1,4 @@
-//! GNOME Remote Agent 库
+//! Quireld 库
 //!
 //! 提供远程 Agent 服务端功能。
 

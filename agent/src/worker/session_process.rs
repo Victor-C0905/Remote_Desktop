@@ -106,7 +106,7 @@ pub fn create_session(params: SessionParams) -> Result<SessionCreatedInfo> {
     }
 }
 
-/// 加载用户登录环境（对标 GNOME GDM/Xsession 的会话环境加载）
+/// 加载用户登录环境（对标 Adwaita GDM/Xsession 的会话环境加载）
 ///
 /// 通过以目标用户身份执行 `<shell> -l -c 'env'` 获取完整登录环境。
 /// 当前进程已通过 setuid 降权为目标用户，子进程会继承该身份。
@@ -117,7 +117,7 @@ pub fn create_session(params: SessionParams) -> Result<SessionCreatedInfo> {
 /// - 用户在 ~/.bash_profile / ~/.profile 中设置的自定义变量
 ///
 /// 后续 fork 的 bash 进程会继承这些环境变量，与非登录 shell 的 ~/.bashrc 读取配合，
-/// 完全复现 GNOME 桌面终端的环境（登录时加载会话环境，终端继承）。
+/// 完全复现 Adwaita 桌面终端的环境（登录时加载会话环境，终端继承）。
 fn load_login_environment(shell: &str, user: &SessionUserContext) -> Result<Vec<(String, String)>> {
     use std::process::Command;
 
@@ -161,7 +161,7 @@ fn load_login_environment(shell: &str, user: &SessionUserContext) -> Result<Vec<
 /// 步骤:
 /// 1. 忽略 SIGPIPE（写已关闭的 socket 不应杀进程）
 /// 2. setuid 降权
-/// 3. 加载用户登录环境（对标 GNOME GDM/Xsession 的会话环境加载）
+/// 3. 加载用户登录环境（对标 Adwaita GDM/Xsession 的会话环境加载）
 /// 4. bind abstract socket
 /// 5. fork 孙进程 execvp(bash)
 /// 6. close slave（只需 master）
@@ -187,11 +187,11 @@ fn run_session_process(params: SessionParams, master_fd: RawFd, slave_fd: RawFd)
         }
     }
 
-    // 3. 加载用户登录环境（对标 GNOME GDM/Xsession 的会话环境加载）
+    // 3. 加载用户登录环境（对标 Adwaita GDM/Xsession 的会话环境加载）
     //    通过以目标用户身份执行 `<shell> -l -c 'env'` 获取完整登录环境，
     //    包括 PATH、HOSTNAME、LANG、用户在 ~/.bash_profile 中设置的自定义变量等。
     //    后续 fork 的 bash 进程会继承这些环境变量，与非登录 shell 的 ~/.bashrc 读取配合，
-    //    完全复现 GNOME 桌面终端的环境（登录时加载会话环境，终端继承）。
+    //    完全复现 Adwaita 桌面终端的环境（登录时加载会话环境，终端继承）。
     if let Some(ref user) = params.user {
         match load_login_environment(&params.shell, user) {
             Ok(env_vars) => {

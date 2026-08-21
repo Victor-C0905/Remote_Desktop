@@ -89,9 +89,9 @@
       rgba(255, 255, 255, 0.04) 50%,
       rgba(0, 0, 0, 0.02) 100%
     ),
-    rgba(var(--ovelis-headerbar-bg-rgb), 0.15);
-  backdrop-filter: var(--ovelis-frosted-blur);
-  -webkit-backdrop-filter: var(--ovelis-frosted-blur);
+    rgba(var(--quirel-headerbar-bg-rgb), 0.15);
+  backdrop-filter: var(--quirel-frosted-blur);
+  -webkit-backdrop-filter: var(--quirel-frosted-blur);
   border-radius: var(--radius-lg);
   /* 双层边框: 外层深色 + 内层浅色 */
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -250,10 +250,10 @@
 .overview-search {
   width: 400px;
   padding: 10px 16px;
-  border: 2px solid var(--ovelis-border-color);
+  border: 2px solid var(--quirel-border-color);
   border-radius: var(--radius-lg);
   background: rgba(255, 255, 255, 0.95);
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
   font-family: var(--font-ui);
   font-size: var(--font-body);
   outline: none;
@@ -261,11 +261,11 @@
 }
 
 .overview-search:focus {
-  border-color: var(--ovelis-accent-bg);
+  border-color: var(--quirel-accent-bg);
 }
 
 .overview-search::placeholder {
-  color: var(--ovelis-text-disabled);
+  color: var(--quirel-text-disabled);
 }
 
 .overview-apps {
@@ -314,7 +314,7 @@
   position: absolute;
   top: 0;
   left: 0;
-  background: var(--ovelis-window-bg);
+  background: var(--quirel-window-bg);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-popup);
   display: flex;
@@ -351,8 +351,8 @@
 
 .app-window-titlebar {
   height: var(--headerbar-height);
-  background: var(--ovelis-headerbar-bg);
-  border-bottom: 1px solid var(--ovelis-border-color);
+  background: var(--quirel-headerbar-bg);
+  border-bottom: 1px solid var(--quirel-border-color);
   display: flex;
   align-items: center;
   padding: 0 12px;
@@ -409,7 +409,7 @@
 .awt-title {
   font-size: var(--font-small);
   font-weight: 600;
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
   flex: 1;
   text-align: center;
 }
@@ -430,7 +430,7 @@
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: var(--ovelis-text-disabled);
+  color: var(--quirel-text-disabled);
   gap: 12px;
 }
 

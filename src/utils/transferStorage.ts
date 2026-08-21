@@ -3,7 +3,7 @@ import { createLogger } from './logger';
 
 const log = createLogger('TransferStorage');
 
-const STORAGE_KEY = 'gnome-remote-transfers';
+const STORAGE_KEY = 'quirel-transfers';
 
 /**
  * 传输状态持久化工具

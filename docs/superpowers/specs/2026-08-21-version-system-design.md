@@ -10,22 +10,22 @@
 
 | 位置 | 用途 | 是否被运行时使用 |
 |---|---|---|
-| [agent/Cargo.toml](file:///e:/MyWork/gnome-remote/agent/Cargo.toml#L3) `version = "0.1.0"` | Agent 包版本 | 否(env! 未被引用) |
-| [src-tauri/Cargo.toml](file:///e:/MyWork/gnome-remote/src-tauri/Cargo.toml#L3) `version = "0.1.0"` | Client Rust crate 版本 | 否 |
-| [src-tauri/tauri.conf.json](file:///e:/MyWork/gnome-remote/src-tauri/tauri.conf.json#L4) `"version": "0.1.0"` | Tauri 打包元数据 | 仅打包元数据,运行时未读取 |
-| [package.json](file:///e:/MyWork/gnome-remote/package.json#L4) `"version": "0.1.0"` | npm 元数据 | 否 |
+| [agent/Cargo.toml](file:///e:/MyWork/quirel/agent/Cargo.toml#L3) `version = "0.1.0"` | Agent 包版本 | 否(env! 未被引用) |
+| [src-tauri/Cargo.toml](file:///e:/MyWork/quirel/src-tauri/Cargo.toml#L3) `version = "0.1.0"` | Client Rust crate 版本 | 否 |
+| [src-tauri/tauri.conf.json](file:///e:/MyWork/quirel/src-tauri/tauri.conf.json#L4) `"version": "0.1.0"` | Tauri 打包元数据 | 仅打包元数据,运行时未读取 |
+| [package.json](file:///e:/MyWork/quirel/package.json#L4) `"version": "0.1.0"` | npm 元数据 | 否 |
 
 **Agent 侧完全没有版本暴露:**
-- [agent/src/main.rs](file:///e:/MyWork/gnome-remote/agent/src/main.rs#L13-L15) 的 clap 定义只有 `#[command(name, about)]`,没有 `version`,因此 `agent --version` / `agent -V` 不可用。
+- [agent/src/main.rs](file:///e:/MyWork/quirel/agent/src/main.rs#L13-L15) 的 clap 定义只有 `#[command(name, about)]`,没有 `version`,因此 `agent --version` / `agent -V` 不可用。
 - 启动时不打印版本号。
-- [agent/src/protocol/serde.rs](file:///e:/MyWork/gnome-remote/agent/src/protocol/serde.rs) 的 `Payload` enum(Client↔Agent 协议)不携带版本信息,Client 连接后无法得知所连 Agent 的版本。
+- [agent/src/protocol/serde.rs](file:///e:/MyWork/quirel/agent/src/protocol/serde.rs) 的 `Payload` enum(Client↔Agent 协议)不携带版本信息,Client 连接后无法得知所连 Agent 的版本。
 
 **Client 侧版本硬编码:**
-- [src/apps/Settings.tsx](file:///e:/MyWork/gnome-remote/src/apps/Settings.tsx#L1032) 关于页写死 `版本 0.1.0`,不从任何动态源读取。
+- [src/apps/Settings.tsx](file:///e:/MyWork/quirel/src/apps/Settings.tsx#L1032) 关于页写死 `版本 0.1.0`,不从任何动态源读取。
 
 **无版本号修改纪律:** 修复 bug 或新增功能后,没有标准流程同步更新版本号,导致部署后无法从版本号判断当前运行的代码状态。
 
-**协议层结构澄清:** `protocol/agent.proto` 是 **Manager↔Worker 内部 IPC 协议**(Protobuf),与 Client↔Agent 无关。Client↔Agent 使用 [agent/src/protocol/serde.rs](file:///e:/MyWork/gnome-remote/agent/src/protocol/serde.rs) 中基于 serde JSON 的 `Payload` enum,认证响应为 `AuthResponse { success, error, session_id }`。本设计的版本信息交换在此 enum 内完成。
+**协议层结构澄清:** `protocol/agent.proto` 是 **Manager↔Worker 内部 IPC 协议**(Protobuf),与 Client↔Agent 无关。Client↔Agent 使用 [agent/src/protocol/serde.rs](file:///e:/MyWork/quirel/agent/src/protocol/serde.rs) 中基于 serde JSON 的 `Payload` enum,认证响应为 `AuthResponse { success, error, session_id }`。本设计的版本信息交换在此 enum 内完成。
 
 ## 2. 目标
 
@@ -50,8 +50,8 @@
 
 ### 4.1 真相源:各自 Cargo.toml
 
-- **Agent 真相源:** [agent/Cargo.toml](file:///e:/MyWork/gnome-remote/agent/Cargo.toml#L3) 的 `version` 字段。
-- **Client 真相源:** [src-tauri/Cargo.toml](file:///e:/MyWork/gnome-remote/src-tauri/Cargo.toml#L3) 的 `version` 字段。
+- **Agent 真相源:** [agent/Cargo.toml](file:///e:/MyWork/quirel/agent/Cargo.toml#L3) 的 `version` 字段。
+- **Client 真相源:** [src-tauri/Cargo.toml](file:///e:/MyWork/quirel/src-tauri/Cargo.toml#L3) 的 `version` 字段。
 
 **理由:** Rust 生态惯例,`env!("CARGO_PKG_VERSION")` 编译时直接注入,零额外文件、零运行时读取开销。`build.rs` 运行时通过 `std::env::var("CARGO_PKG_VERSION")` 读取同一来源用于同步其他配置。
 
@@ -79,24 +79,24 @@
 
 ### 4.3 Agent 版本暴露
 
-**命令行参数:** [agent/src/main.rs](file:///e:/MyWork/gnome-remote/agent/src/main.rs#L13-L15) 的 clap derive 增加 `version`:
+**命令行参数:** [agent/src/main.rs](file:///e:/MyWork/quirel/agent/src/main.rs#L13-L15) 的 clap derive 增加 `version`:
 
 ```rust
 #[derive(Parser, Debug)]
-#[command(name = "gnome-remote-agent")]
-#[command(version, about = "GNOME Remote Control — 远程 Agent 服务端")]
+#[command(name = "quireld")]
+#[command(version, about = "Quirel Control — 远程 Agent 服务端")]
 struct Args { /* ... */ }
 ```
 
-`#[command(version)]` 自动从 `CARGO_PKG_VERSION` 读取并生成 `--version` / `-V` 参数。执行 `agent --version` 输出 `gnome-remote-agent 0.2.0`(clap 默认用 bin name + version)。
+`#[command(version)]` 自动从 `CARGO_PKG_VERSION` 读取并生成 `--version` / `-V` 参数。执行 `agent --version` 输出 `quireld 0.2.0`(clap 默认用 bin name + version)。
 
-**启动日志:** [main.rs](file:///e:/MyWork/gnome-remote/agent/src/main.rs) 日志初始化后、进入业务逻辑前:
+**启动日志:** [main.rs](file:///e:/MyWork/quirel/agent/src/main.rs) 日志初始化后、进入业务逻辑前:
 
 ```rust
-tracing::info!(version = env!("CARGO_PKG_VERSION"), "gnome-remote-agent starting");
+tracing::info!(version = env!("CARGO_PKG_VERSION"), "quireld starting");
 ```
 
-**协议层版本交换:** [agent/src/protocol/serde.rs](file:///e:/MyWork/gnome-remote/agent/src/protocol/serde.rs#L142-L151) 的 `AuthResponse` 增加 `agent_version` 字段(向后兼容——serde 默认忽略未知字段,旧客户端忽略新字段;新客户端连旧 Agent 时为 None):
+**协议层版本交换:** [agent/src/protocol/serde.rs](file:///e:/MyWork/quirel/agent/src/protocol/serde.rs#L142-L151) 的 `AuthResponse` 增加 `agent_version` 字段(向后兼容——serde 默认忽略未知字段,旧客户端忽略新字段;新客户端连旧 Agent 时为 None):
 
 ```rust
 #[serde(rename = "auth_response")]
@@ -110,11 +110,11 @@ AuthResponse {
 },
 ```
 
-Agent 在认证成功构造 `AuthResponse` 时填入 `env!("CARGO_PKG_VERSION").to_string()`。实现时定位具体构造位置(候选 [agent/src/manager/auth.rs](file:///e:/MyWork/gnome-remote/agent/src/manager/auth.rs) 或 [agent/src/handler.rs](file:///e:/MyWork/gnome-remote/agent/src/handler.rs))。
+Agent 在认证成功构造 `AuthResponse` 时填入 `env!("CARGO_PKG_VERSION").to_string()`。实现时定位具体构造位置(候选 [agent/src/manager/auth.rs](file:///e:/MyWork/quirel/agent/src/manager/auth.rs) 或 [agent/src/handler.rs](file:///e:/MyWork/quirel/agent/src/handler.rs))。
 
 ### 4.4 Client 版本暴露
 
-**[src-tauri/build.rs](file:///e:/MyWork/gnome-remote/src-tauri/build.rs) 增强(当前仅一行 `tauri_build::build()`):**
+**[src-tauri/build.rs](file:///e:/MyWork/quirel/src-tauri/build.rs) 增强(当前仅一行 `tauri_build::build()`):**
 
 1. 调用 `tauri_build::build()`(保留)。
 2. 读取 `CARGO_PKG_VERSION`(build.rs 运行时 `std::env::var("CARGO_PKG_VERSION")`)。
@@ -130,7 +130,7 @@ export const CLIENT_VERSION = "0.2.0";
 
 6. `println!("cargo:rerun-if-changed=Cargo.toml");` 保证 Cargo.toml 版本变更时重跑 build.rs。
 
-**前端关于页:** [src/apps/Settings.tsx](file:///e:/MyWork/gnome-remote/src/apps/Settings.tsx#L1025-L1041) 关于页改为:
+**前端关于页:** [src/apps/Settings.tsx](file:///e:/MyWork/quirel/src/apps/Settings.tsx#L1025-L1041) 关于页改为:
 
 ```typescript
 import { CLIENT_VERSION } from '../config/version';
@@ -185,18 +185,18 @@ import { CLIENT_VERSION } from '../config/version';
 
 | 文件 | 改动 |
 |---|---|
-| [agent/src/main.rs](file:///e:/MyWork/gnome-remote/agent/src/main.rs#L14-L15) | clap `#[command]` 增加 `version` 属性;启动日志增加版本打印 |
-| [agent/src/protocol/serde.rs](file:///e:/MyWork/gnome-remote/agent/src/protocol/serde.rs#L142-L151) | `AuthResponse` 增加 `agent_version: Option<String>` 字段 |
-| Agent 认证成功构造 `AuthResponse` 位置 | 填入 `env!("CARGO_PKG_VERSION").to_string()`(候选 [auth.rs](file:///e:/MyWork/gnome-remote/agent/src/manager/auth.rs) / [handler.rs](file:///e:/MyWork/gnome-remote/agent/src/handler.rs)) |
+| [agent/src/main.rs](file:///e:/MyWork/quirel/agent/src/main.rs#L14-L15) | clap `#[command]` 增加 `version` 属性;启动日志增加版本打印 |
+| [agent/src/protocol/serde.rs](file:///e:/MyWork/quirel/agent/src/protocol/serde.rs#L142-L151) | `AuthResponse` 增加 `agent_version: Option<String>` 字段 |
+| Agent 认证成功构造 `AuthResponse` 位置 | 填入 `env!("CARGO_PKG_VERSION").to_string()`(候选 [auth.rs](file:///e:/MyWork/quirel/agent/src/manager/auth.rs) / [handler.rs](file:///e:/MyWork/quirel/agent/src/handler.rs)) |
 
 ### 5.2 Client 侧
 
 | 文件 | 改动 |
 |---|---|
-| [src-tauri/build.rs](file:///e:/MyWork/gnome-remote/src-tauri/build.rs) | 重写:保留 `tauri_build::build()`;读 Cargo.toml version 同步 tauri.conf.json、同步 package.json、生成 `src/config/version.ts`;`rerun-if-changed=Cargo.toml` |
-| [src/config/version.ts](file:///e:/MyWork/gnome-remote/src/config/version.ts) | **新增**,由 build.rs 生成,提交初始占位版本 |
-| [src/apps/Settings.tsx](file:///e:/MyWork/gnome-remote/src/apps/Settings.tsx#L1032) | 关于页改用 `CLIENT_VERSION` 动态显示;新增 Agent 版本显示(从 ServerManager/serversStore 读 `agent_version`) |
-| [src/types/server.ts](file:///e:/MyWork/gnome-remote/src/types/server.ts) | 前端 AuthResponse 类型镜像补充 `agent_version?: string` |
+| [src-tauri/build.rs](file:///e:/MyWork/quirel/src-tauri/build.rs) | 重写:保留 `tauri_build::build()`;读 Cargo.toml version 同步 tauri.conf.json、同步 package.json、生成 `src/config/version.ts`;`rerun-if-changed=Cargo.toml` |
+| [src/config/version.ts](file:///e:/MyWork/quirel/src/config/version.ts) | **新增**,由 build.rs 生成,提交初始占位版本 |
+| [src/apps/Settings.tsx](file:///e:/MyWork/quirel/src/apps/Settings.tsx#L1032) | 关于页改用 `CLIENT_VERSION` 动态显示;新增 Agent 版本显示(从 ServerManager/serversStore 读 `agent_version`) |
+| [src/types/server.ts](file:///e:/MyWork/quirel/src/types/server.ts) | 前端 AuthResponse 类型镜像补充 `agent_version?: string` |
 | ServerManager / serversStore | 缓存最近一次 `AuthResponse.agent_version` 供 UI 读取 |
 
 ### 5.3 脚本与配置
@@ -205,11 +205,11 @@ import { CLIENT_VERSION } from '../config/version';
 |---|---|
 | scripts/release.ps1 | **新增**,版本号修改 + 触发同步 + 打印 git 命令提示 |
 | scripts/sync-version.ps1 | **新增**,触发 build.rs 重新生成派生文件 |
-| [.gitignore](file:///e:/MyWork/gnome-remote/.gitignore) | `src/config/version.ts` **不**加入忽略(提交初始占位,build 时更新) |
+| [.gitignore](file:///e:/MyWork/quirel/.gitignore) | `src/config/version.ts` **不**加入忽略(提交初始占位,build 时更新) |
 
 ## 6. 验证标准
 
-1. **Agent `--version`:** WSL 执行 `agent --version` 输出 `gnome-remote-agent 0.2.0`。
+1. **Agent `--version`:** WSL 执行 `agent --version` 输出 `quireld 0.2.0`。
 2. **Agent 启动日志:** 首行包含 `version=0.2.0`。
 3. **Client 关于页:** 显示动态版本号(与 src-tauri/Cargo.toml 一致),非硬编码。
 4. **Agent 版本透传:** Client 连接 Agent 后,关于页/连接信息区显示所连 Agent 版本号,与 Agent `--version` 输出一致。

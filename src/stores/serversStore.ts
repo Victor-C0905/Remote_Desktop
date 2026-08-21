@@ -107,7 +107,7 @@ export const useServersStore = create<ServersState & ServersActions>()(
       },
     }),
     {
-      name: "gnome-remote-servers",
+      name: "quirel-servers",
       storage: createJSONStorage(() => serversStorage),
       // 加载时重置所有服务器状态为 disconnected
       onRehydrateStorage: () => {

@@ -25,7 +25,7 @@ impl AuditLogger {
     ///
     /// # 参数
     ///
-    /// - `log_path`: 日志文件路径（如 `/var/log/gnome-remote/audit.log`）
+    /// - `log_path`: 日志文件路径（如 `/var/log/quireld/audit.log`）
     ///
     /// # 返回
     ///
@@ -39,9 +39,9 @@ impl AuditLogger {
     /// # 示例
     ///
     /// ```rust
-    /// use agent::audit::AuditLogger;
+    /// use quireld::audit::AuditLogger;
     ///
-    /// let logger = AuditLogger::new("/var/log/gnome-remote/audit.log")?;
+    /// let logger = AuditLogger::new("/var/log/quireld/audit.log")?;
     /// ```
     pub fn new(log_path: &str) -> std::io::Result<Self> {
         // 自动创建日志目录

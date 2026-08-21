@@ -2,20 +2,20 @@ use anyhow::Result;
 use clap::Parser;
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
-use gnome_remote_agent::auth::CompositeAuthenticator;
+use quireld::auth::CompositeAuthenticator;
 
 // 使用库中的模块
-use gnome_remote_agent::{config, cert, event_bus, subscription, audit, server};
+use quireld::{config, cert, event_bus, subscription, audit, server};
 
 #[cfg(unix)]
-use gnome_remote_agent::manager::Manager;
+use quireld::manager::Manager;
 
 #[derive(Parser, Debug)]
-#[command(name = "gnome-remote-agent")]
-#[command(about = "GNOME Remote Control — 远程 Agent 服务端")]
+#[command(name = "quireld")]
+#[command(about = "Quirel Control — 远程 Agent 服务端")]
 struct Args {
     /// 配置文件路径
-    #[arg(short, long, default_value = "agent.toml")]
+    #[arg(short, long, default_value = "quireld.toml")]
     config: String,
 
     /// 日志输出目录（默认: ./logs）；设为 "off" 关闭文件日志
@@ -75,7 +75,7 @@ struct Args {
 ///
 /// - **调试模式**：RUST_LOG 环境变量存在时，优先使用；stdout 使用 pretty 格式
 /// - **生产模式**：默认紧凑格式输出到 stdout + JSON 结构化写入日志文件（按天轮转）
-/// - **日志文件**：`{log_dir}/agent.YYYY-MM-DD.log`（JSON 格式，便于日志聚合分析）
+/// - **日志文件**：`{log_dir}/quireld.YYYY-MM-DD.log`（JSON 格式，便于日志聚合分析）
 /// - **时间格式**：北京时间（UTC+8），格式：YYYY-MM-DD HH:MM:SS.mmm
 fn init_logging(_args: &Args, cfg: &config::AgentConfig) {
     use tracing_appender::rolling;
@@ -106,19 +106,19 @@ fn init_logging(_args: &Args, cfg: &config::AgentConfig) {
     let env_filter = if is_debug {
         // 调试模式：完全尊重 RUST_LOG 环境变量
         tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| "agent=debug".into())
+            .unwrap_or_else(|_| "quireld=debug".into())
     } else {
         // 生产模式：使用配置文件中的日志级别
-        // 注意:agent 是二进制 crate,gnome_remote_agent 是库 crate(manager/worker 等模块在其中)
+        // 注意:quireld 是二进制 crate,quireld 也是库 crate(manager/worker 等模块在其中)
         tracing_subscriber::EnvFilter::new(format!(
-            "agent={},agent::server={},agent::handler={},gnome_remote_agent={},tokio=info",
-            log_level, log_level, log_level, log_level
+            "quireld={},tokio=info",
+            log_level
         ))
     };
 
     // ── 日志文件层（JSON 结构化，按天轮转） ────────────────────
     if log_dir != "off" {
-        let file_appender = rolling::daily(log_dir, "agent.log");
+        let file_appender = rolling::daily(log_dir, "quireld.log");
         let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
         // 将 guard 泄漏到全局，防止日志文件句柄在 init() 后被关闭
@@ -140,7 +140,7 @@ fn init_logging(_args: &Args, cfg: &config::AgentConfig) {
                         .with_ansi(false)
                         .with_writer(non_blocking)
                         .with_filter(tracing_subscriber::EnvFilter::new(
-                            "agent=debug,agent::server=debug,agent::handler=debug,gnome_remote_agent=debug,tokio=info",
+                            "quireld=debug,tokio=info",
                         )),
                 )
                 .init();
@@ -162,7 +162,7 @@ fn init_logging(_args: &Args, cfg: &config::AgentConfig) {
                         .with_ansi(false)
                         .with_writer(non_blocking)
                         .with_filter(tracing_subscriber::EnvFilter::new(
-                            "agent=debug,agent::server=debug,agent::handler=debug,gnome_remote_agent=debug,tokio=info",
+                            "quireld=debug,tokio=info",
                         )),
                 )
                 .init();
@@ -235,8 +235,8 @@ async fn run_worker_mode(args: &Args) -> Result<()> {
     tracing::info!("Worker 模式启动，连接到: {}", ipc_socket_path);
 
     // 初始化 IpcClient 并连接到 Manager
-    let ipc_client = gnome_remote_agent::worker::IpcClient::connect(&ipc_socket_path).await?;
-    gnome_remote_agent::worker::run(ipc_client).await?;
+    let ipc_client = quireld::worker::IpcClient::connect(&ipc_socket_path).await?;
+    quireld::worker::run(ipc_client).await?;
 
     tracing::info!("Worker 进程已退出");
 
@@ -259,7 +259,7 @@ async fn run_manager_mode(args: &Args) -> Result<()> {
 
     // 日志模式标识
     let log_mode = if std::env::var("RUST_LOG").is_ok() { "debug (RUST_LOG)" } else { "production" };
-    tracing::info!("GNOME Remote Agent 启动中...");
+    tracing::info!("Quireld 启动中...");
     tracing::info!("   日志模式: {}", log_mode);
     tracing::info!("   日志级别: {}", cfg.log.level);
     tracing::info!("   日志目录: {}", if cfg.log.dir == "off" { "关闭".to_string() } else { cfg.log.dir.clone() });

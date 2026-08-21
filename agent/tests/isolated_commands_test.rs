@@ -35,7 +35,7 @@ fn unique_path(suffix: &str) -> String {
 /// 测试 isolated-reader 子命令：读文件 → stdout
 #[test]
 fn test_isolated_reader() {
-    let agent_bin = env!("CARGO_BIN_EXE_agent");
+    let agent_bin = env!("CARGO_BIN_EXE_quireld");
     let (uid, gid) = current_uid_gid();
 
     let test_path = unique_path("reader_input");
@@ -76,7 +76,7 @@ fn test_isolated_reader() {
 /// 测试 isolated-writer 子命令：stdin → 写文件 → rename
 #[test]
 fn test_isolated_writer() {
-    let agent_bin = env!("CARGO_BIN_EXE_agent");
+    let agent_bin = env!("CARGO_BIN_EXE_quireld");
     let (uid, gid) = current_uid_gid();
 
     let temp_path = unique_path("writer_temp");
@@ -127,7 +127,7 @@ fn test_isolated_writer() {
 /// 测试 isolated-writer-part 子命令：stdin → 写段文件 → sync（不 rename）
 #[test]
 fn test_isolated_writer_part() {
-    let agent_bin = env!("CARGO_BIN_EXE_agent");
+    let agent_bin = env!("CARGO_BIN_EXE_quireld");
     let (uid, gid) = current_uid_gid();
 
     let part_path = unique_path("writer_part");
@@ -164,7 +164,7 @@ fn test_isolated_writer_part() {
 /// 测试 isolated-merger 子命令：合并段文件 → 最终文件
 #[test]
 fn test_isolated_merger() {
-    let agent_bin = env!("CARGO_BIN_EXE_agent");
+    let agent_bin = env!("CARGO_BIN_EXE_quireld");
     let (uid, gid) = current_uid_gid();
 
     // 创建两个段文件
@@ -215,7 +215,7 @@ fn test_isolated_merger() {
 /// 测试 metadata 子命令：文件元数据 → JSON stdout
 #[test]
 fn test_metadata() {
-    let agent_bin = env!("CARGO_BIN_EXE_agent");
+    let agent_bin = env!("CARGO_BIN_EXE_quireld");
     let (uid, gid) = current_uid_gid();
 
     let test_path = unique_path("metadata");
@@ -256,7 +256,7 @@ fn test_metadata() {
 /// 测试 dispatch 互斥检查：同时指定两个子命令应失败
 #[test]
 fn test_dispatch_mutex_multiple_commands() {
-    let agent_bin = env!("CARGO_BIN_EXE_agent");
+    let agent_bin = env!("CARGO_BIN_EXE_quireld");
     let (uid, gid) = current_uid_gid();
 
     // 同时指定 --isolated-writer 和 --isolated-reader 应失败
@@ -286,7 +286,7 @@ fn test_dispatch_mutex_multiple_commands() {
 /// 由于 Manager 模式会尝试绑定端口等，这里用 --help 验证参数解析正常。
 #[test]
 fn test_no_isolated_command_help() {
-    let agent_bin = env!("CARGO_BIN_EXE_agent");
+    let agent_bin = env!("CARGO_BIN_EXE_quireld");
 
     // --help 由 clap 处理，验证二进制可正常启动且参数解析无误
     let output = Command::new(agent_bin)
@@ -294,10 +294,10 @@ fn test_no_isolated_command_help() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
-        .expect("启动 agent --help 失败");
+        .expect("启动 quireld --help 失败");
 
     assert_eq!(output.status.code(), Some(0), "--help 应成功退出");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("GNOME Remote"), "应包含 about 描述: {}", stdout);
-    assert!(stdout.contains("Usage: agent"), "应包含 Usage 行: {}", stdout);
+    assert!(stdout.contains("Quirel"), "应包含 about 描述: {}", stdout);
+    assert!(stdout.contains("Usage: quireld"), "应包含 Usage 行: {}", stdout);
 }

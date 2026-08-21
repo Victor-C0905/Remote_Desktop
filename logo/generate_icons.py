@@ -11,8 +11,8 @@ import os
 import struct
 from PIL import Image
 
-SOURCE = r"E:\MyWork\gnome-remote\logo\设计系统桌面UI logo (1).png"
-OUT_DIR = r"E:\MyWork\gnome-remote\src-tauri\icons"
+SOURCE = r"E:\MyWork\quirel\logo\设计系统桌面UI logo (1).png"
+OUT_DIR = r"E:\MyWork\quirel\src-tauri\icons"
 
 # Backup existing icons
 BACKUP_DIR = OUT_DIR + "_backup"
@@ -41,7 +41,7 @@ for y in range(1743, 2021):
 print(f"\nWatermark removed from ({1543},{1743}) to ({2021},{2020})")
 
 # Save clean source
-clean_path = r"E:\MyWork\gnome-remote\logo\clean_logo.png"
+clean_path = r"E:\MyWork\quirel\logo\clean_logo.png"
 img.save(clean_path, "PNG")
 print(f"Clean logo saved to: {clean_path}")
 

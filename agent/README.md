@@ -1,4 +1,4 @@
-# GNOME Remote Agent
+# Quireld
 
 远程桌面控制 Agent 端，支持 SSH 兼容的多用户认证系统。
 
@@ -26,37 +26,37 @@ cargo build --release
 
 ```bash
 # 复制 PAM 配置文件
-sudo cp pam.d/gnome-remote /etc/pam.d/
+sudo cp pam.d/quireld /etc/pam.d/
 
 # 验证配置
-cat /etc/pam.d/gnome-remote
+cat /etc/pam.d/quireld
 ```
 
 ### 3. 创建配置文件
 
 ```bash
 # 复制示例配置
-cp agent.toml ~/.config/gnome-remote/
+cp quireld.toml ~/.config/quireld/
 
 # 编辑配置
-vim ~/.config/gnome-remote/agent.toml
+vim ~/.config/quireld/quireld.toml
 ```
 
 ### 4. 启动 Agent
 
 ```bash
 # 直接启动
-sudo ./target/release/agent --config ~/.config/gnome-remote/agent.toml
+sudo ./target/release/agent --config ~/.config/quireld/quireld.toml
 
 # 或使用 systemd 服务
-sudo cp systemd/gnome-remote-agent.service /etc/systemd/system/
+sudo cp systemd/quireld.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl start gnome-remote-agent
+sudo systemctl start quireld
 ```
 
 ## 配置说明
 
-### agent.toml
+### quireld.toml
 
 ```toml
 [server]
@@ -72,7 +72,7 @@ enable_pubkey = true
 enable_password = true
 
 # PAM 服务名称
-pam_service = "gnome-remote"
+pam_service = "quireld"
 
 # 日志配置
 [log]
@@ -123,8 +123,8 @@ cargo test --test auth_integration_test -- --ignored
 
 ## 部署检查清单
 
-- [ ] 安装 PAM 配置到 `/etc/pam.d/gnome-remote`
-- [ ] 创建配置文件 `agent.toml`
+- [ ] 安装 PAM 配置到 `/etc/pam.d/quireld`
+- [ ] 创建配置文件 `quireld.toml`
 - [ ] 配置日志目录和权限
 - [ ] 创建 systemd 服务（可选）
 - [ ] 测试认证功能
@@ -144,23 +144,23 @@ cargo test --test auth_integration_test -- --ignored
 
 ```bash
 # 检查 PAM 配置
-sudo cat /etc/pam.d/gnome-remote
+sudo cat /etc/pam.d/quireld
 
 # 查看 Agent 日志
-journalctl -u gnome-remote-agent -f
+journalctl -u quireld -f
 
 # 测试 PAM 认证（需要安装 expect）
-pamtester gnome-remote <username> authenticate
+pamtester quireld <username> authenticate
 ```
 
 ### 权限问题
 
 ```bash
 # Agent 需要 root 权限
-sudo ./agent --config agent.toml
+sudo ./agent --config quireld.toml
 
 # 或使用 sudo 运行
-sudo systemctl start gnome-remote-agent
+sudo systemctl start quireld
 ```
 
 ## 相关文档

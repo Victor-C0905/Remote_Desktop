@@ -20,7 +20,7 @@
 
 ### 现状(已核实代码)
 
-- `WindowShell.tsx` 已有 `isMaximized` / `onMaximize` 支持;双击标题栏、绿点按钮触发最大化,且最大化时禁用拖拽/resize。这是 **GNOME 风格**,与 Windows 不同。
+- `WindowShell.tsx` 已有 `isMaximized` / `onMaximize` 支持;双击标题栏、绿点按钮触发最大化,且最大化时禁用拖拽/resize。这是 **Adwaita 风格**,与 Windows 不同。
 - `Window.ts` 已有 `_preMaximizeState` 保存最大化前位置/尺寸,`setMaximized(false)` 自动还原。
 - `Desktop.tsx` 中 `maxWindowSize = { width: innerWidth, height: innerHeight - 32 }`、`maxWindowPosition = { x: 0, y: 0 }`,工作区为 TopBar 下方。
 - `src/window-system/layout/SnapLayout.ts`、`FreeLayout.ts`、`LayoutEngine.ts` 三个模块存在但 **未被任何代码引用**(Grep 已确认),且其 `top` snap 是半高(不是最大化),与 Windows 行为不符。

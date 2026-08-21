@@ -37,7 +37,7 @@ function formatSpeed(bytesPerSecond: number): string {
 
 /**
  * 下载图标（向下箭头）
- * 来源：GNOME Adwaita go-down-symbolic.svg
+ * 来源：Adwaita go-down-symbolic.svg
  */
 function DownloadIcon({ className }: { className?: string }) {
   return (

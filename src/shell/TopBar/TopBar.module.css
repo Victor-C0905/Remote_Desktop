@@ -1,15 +1,15 @@
 /* ============================================================
-   TopBar Styles — GNOME Remote Client
+   TopBar Styles — Quirel Client
    从 Desktop.css 提取，完全保留所有原有样式
    ============================================================ */
 
 .topBar {
   height: var(--topbar-height);
   /* 毛玻璃效果：引用全局变量，保持与其他组件一致 */
-  background: var(--ovelis-frosted-bg);
-  backdrop-filter: var(--ovelis-frosted-blur);
-  -webkit-backdrop-filter: var(--ovelis-frosted-blur);
-  border-bottom: 1px solid var(--ovelis-frosted-border);
+  background: var(--quirel-frosted-bg);
+  backdrop-filter: var(--quirel-frosted-blur);
+  -webkit-backdrop-filter: var(--quirel-frosted-blur);
+  border-bottom: 1px solid var(--quirel-frosted-border);
   display: flex;
   align-items: center;
   padding: 0 12px;
@@ -33,7 +33,7 @@
 .activitiesBtn {
   background: none;
   border: none;
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
   font-family: var(--font-ui);
   font-size: var(--font-small);
   font-weight: 700;
@@ -44,13 +44,13 @@
 }
 
 .activitiesBtn:hover {
-  background: var(--ovelis-border-color);
+  background: var(--quirel-border-color);
 }
 
 .separator {
   width: 1px;
   height: 16px;
-  background: var(--ovelis-border-color);
+  background: var(--quirel-border-color);
 }
 
 .connectionIndicator {
@@ -58,7 +58,7 @@
   align-items: center;
   gap: 6px;
   font-size: var(--font-small);
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
 }
 
 .connectionDot {
@@ -85,20 +85,20 @@
   display: flex;
   gap: 12px;
   font-size: var(--font-small);
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   font-variant-numeric: tabular-nums;
 }
 
 .clock {
   font-size: var(--font-small);
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
   font-variant-numeric: tabular-nums;
 }
 
 .notificationBtn {
   background: none;
   border: none;
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   cursor: pointer;
   padding: 2px 6px;
   border-radius: var(--radius-xs);
@@ -108,5 +108,5 @@
 }
 
 .notificationBtn:hover {
-  background: var(--ovelis-border-color);
+  background: var(--quirel-border-color);
 }

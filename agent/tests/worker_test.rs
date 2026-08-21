@@ -6,8 +6,8 @@
 
 #![cfg(unix)]
 
-use gnome_remote_agent::worker::{PtyFactory, SessionManager};
-use gnome_remote_agent::protocol::generated::{ReadDir, ReadFile, WriteFile};
+use quireld::worker::{PtyFactory, SessionManager};
+use quireld::protocol::generated::{ReadDir, ReadFile, WriteFile};
 use nix::unistd::Pid;
 
 #[tokio::test]
@@ -74,8 +74,8 @@ async fn test_session_manager_concurrent_access() {
 
 mod file_operation_tests {
     use super::*;
-    use gnome_remote_agent::worker::handlers::file;
-    use gnome_remote_agent::protocol::generated::worker_response;
+    use quireld::worker::handlers::file;
+    use quireld::protocol::generated::worker_response;
     use tempfile;
     use std::fs;
 
@@ -196,8 +196,8 @@ mod file_operation_tests {
 
 mod command_and_system_tests {
     use super::*;
-    use gnome_remote_agent::worker::handlers::{command, system};
-    use gnome_remote_agent::protocol::generated::{ExecuteCommand, GetSystemInfo, worker_response};
+    use quireld::worker::handlers::{command, system};
+    use quireld::protocol::generated::{ExecuteCommand, GetSystemInfo, worker_response};
 
     #[tokio::test]
     async fn test_handle_execute_command_echo() {

@@ -41,11 +41,11 @@
 
 ### 2.1 install.sh 与 systemd service 不一致
 
-**问题**: `agent/deploy/install.sh` 内联生成的 systemd service 文件与 `systemd/gnome-remote-agent.service` 严重不一致。
+**问题**: `agent/deploy/install.sh` 内联生成的 systemd service 文件与 `systemd/quireld.service` 严重不一致。
 
 **差异对比**:
 
-| 配置项 | systemd/gnome-remote-agent.service | install.sh 内联生成 |
+| 配置项 | systemd/quireld.service | install.sh 内联生成 |
 |--------|-------------------------------------|---------------------|
 | Type | notify | simple |
 | KillMode | process (Phase 4) | 缺失 |
@@ -258,7 +258,7 @@ Phase 5 任务分解
 
 **修改方案**:
 - install.sh 不再内联生成 service 文件
-- 改为复制项目根目录的 `systemd/gnome-remote-agent.service`
+- 改为复制项目根目录的 `systemd/quireld.service`
 - 添加服务名称变量替换（如果 `--name` 指定了自定义名称）
 
 **文件**: `agent/deploy/install.sh`

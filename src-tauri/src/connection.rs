@@ -1566,7 +1566,7 @@ async fn try_quic_connect(host: &str, port: u16) -> Result<(quinn::Connection, f
     let conn = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         endpoint
-            .connect(addr, "gnome-remote")
+            .connect(addr, "quirel")
             .map_err(|e| {
                 tracing::warn!("[QUIC] 发起连接失败: addr={}, error={}", addr, e);
                 format!("发起连接失败: {}", e)
@@ -1945,7 +1945,7 @@ async fn perform_pubkey_auth(
             tracing::info!("[PubKeyAuth] 使用 Ed25519 签名");
 
             // 使用 ssh_key 的标准签名
-            let sshsig = key.sign("gnome-remote", ssh_key::HashAlg::default(), &challenge).map_err(|e| {
+            let sshsig = key.sign("quirel", ssh_key::HashAlg::default(), &challenge).map_err(|e| {
                 tracing::error!("[PubKeyAuth] Ed25519 签名失败: {}", e);
                 format!("Ed25519 签名失败: {}", e)
             })?;

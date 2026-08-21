@@ -1,5 +1,5 @@
 /* ============================================================
-   FileManager — GNOME Nautilus Style（无HeaderBar版本）
+   FileManager — Adwaita Nautilus Style（无HeaderBar版本）
    ============================================================ */
 
 /* ── App Container ───────────────────────────────────── */
@@ -8,15 +8,15 @@
   flex-direction: column;
   height: 100%;
   min-height: 0; /* ✅ 建立 flex 约束链，确保子元素滚动正常 */
-  background: var(--ovelis-window-bg);
+  background: var(--quirel-window-bg);
   outline: none; /* 移除焦点样式，避免黑框 */
 }
 
 /* ── Toolbar（替代原HeaderBar）───────────────────────── */
 .fm-toolbar {
   height: 40px;
-  background: var(--ovelis-view-bg);
-  border-bottom: 1px solid var(--ovelis-border-color);
+  background: var(--quirel-view-bg);
+  border-bottom: 1px solid var(--quirel-border-color);
   display: flex;
   align-items: center;
   padding: 0 8px;
@@ -46,15 +46,15 @@
   background: none;
   border: none;
   border-radius: var(--radius-xs);
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   cursor: pointer;
   font-size: 14px;
   transition: background var(--duration-fast) var(--ease-out);
 }
 
 .fm-toolbar-btn:hover:not(:disabled) {
-  background: var(--ovelis-border-color);
-  color: var(--ovelis-text-primary);
+  background: var(--quirel-border-color);
+  color: var(--quirel-text-primary);
 }
 
 .fm-toolbar-btn:disabled {
@@ -63,8 +63,8 @@
 }
 
 .fm-toolbar-btn.active {
-  background: var(--ovelis-accent-bg);
-  color: var(--ovelis-text-on-accent);
+  background: var(--quirel-accent-bg);
+  color: var(--quirel-text-on-accent);
 }
 
 /* ── Breadcrumb ──────────────────────────────────────── */
@@ -76,8 +76,8 @@
   min-width: 200px;
   padding: 0 6px;
   height: 32px;
-  background: var(--ovelis-view-bg);
-  border: 1px solid var(--ovelis-border-color);
+  background: var(--quirel-view-bg);
+  border: 1px solid var(--quirel-border-color);
   border-radius: var(--radius-sm);
   overflow: hidden;
   cursor: text;
@@ -87,7 +87,7 @@
 .fm-breadcrumb-segment {
   background: none;
   border: none;
-  color: var(--ovelis-accent-bg);
+  color: var(--quirel-accent-bg);
   font-family: var(--font-ui);
   font-size: calc(var(--font-body) - 1px);  /* 稍微小一点 */
   cursor: pointer;
@@ -100,12 +100,12 @@
 
 .fm-breadcrumb .fm-crumb:hover,
 .fm-breadcrumb-segment:hover {
-  background: var(--ovelis-hover-bg);
-  color: var(--ovelis-text-primary);
+  background: var(--quirel-hover-bg);
+  color: var(--quirel-text-primary);
 }
 
 .fm-breadcrumb .fm-crumb.fm-crumb-current {
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
   cursor: default;
   font-weight: 600;
 }
@@ -116,7 +116,7 @@
 
 .fm-breadcrumb .fm-sep,
 .fm-breadcrumb-separator {
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   font-size: calc(var(--font-body) - 1px);
   margin: 0 3px;
   user-select: none;
@@ -135,12 +135,12 @@
   width: 100%;
   height: 32px;
   padding: 0 12px;
-  background: var(--ovelis-view-bg);
-  border: 1px solid var(--ovelis-border-color);
+  background: var(--quirel-view-bg);
+  border: 1px solid var(--quirel-border-color);
   border-radius: var(--radius-sm);
   font-family: var(--font-ui);
   font-size: var(--font-body);
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
   outline: none;
   display: none;  /* 默认隐藏 */
   transition: border-color var(--duration-fast) var(--ease-out);
@@ -151,17 +151,17 @@
 }
 
 .fm-path-input:focus {
-  border-color: var(--ovelis-accent-bg);
+  border-color: var(--quirel-accent-bg);
 }
 
 .fm-path-input::placeholder {
-  color: var(--ovelis-text-disabled);
+  color: var(--quirel-text-disabled);
 }
 
 /* ── Content Area ─────────────────────────────────────── */
 .fm-sidebar {
   /* ✅ 不设置width，由AppLayout的CSS变量 --app-sidebar-width 控制 */
-  background: var(--ovelis-sidebar-bg);
+  background: var(--quirel-sidebar-bg);
   /* ✅ 不设置border-right，AppLayout的 appSidebar 已设置 */
   padding: 8px 0;
 }
@@ -174,7 +174,7 @@
 .fm-sidebar .fm-sidebar-section-title {
   font-size: var(--font-small);
   font-weight: 700;
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
   padding: 4px 8px;
@@ -188,18 +188,18 @@
   padding: 6px 8px;
   border-radius: var(--radius-xs);
   cursor: pointer;
-  color: var(--ovelis-sidebar-fg);
+  color: var(--quirel-sidebar-fg);
   font-size: var(--font-body);
   transition: background var(--duration-fast) var(--ease-out);
 }
 
 .fm-sidebar .fm-sidebar-item:hover {
-  background: var(--ovelis-border-color);
+  background: var(--quirel-border-color);
 }
 
 .fm-sidebar .fm-sidebar-item.fm-sidebar-item-active {
-  background: var(--ovelis-accent-bg);
-  color: var(--ovelis-accent-fg);
+  background: var(--quirel-accent-bg);
+  color: var(--quirel-accent-fg);
 }
 
 .fm-sidebar .fm-sidebar-item .fm-si-icon {
@@ -232,10 +232,10 @@
   gap: 8px;
   font-size: var(--font-small);
   font-weight: 600;
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   padding: 8px 12px;
-  background: var(--ovelis-headerbar-bg);  /* ✅ 使用标题栏背景色 */
-  border-bottom: 1px solid var(--ovelis-border-color);  /* ✅ 添加分隔线 */
+  background: var(--quirel-headerbar-bg);  /* ✅ 使用标题栏背景色 */
+  border-bottom: 1px solid var(--quirel-border-color);  /* ✅ 添加分隔线 */
   flex-shrink: 0;  /* ✅ 固定高度，不压缩 */
 }
 
@@ -259,12 +259,12 @@
 }
 
 .fm-list .fm-list-row:hover {
-  background: var(--ovelis-card-bg);
+  background: var(--quirel-card-bg);
 }
 
 .fm-list .fm-list-row.selected {
-  background: var(--ovelis-accent-bg);
-  color: var(--ovelis-accent-fg);
+  background: var(--quirel-accent-bg);
+  color: var(--quirel-accent-fg);
 }
 
 .fm-list .fm-list-row .fm-file-name {
@@ -292,23 +292,23 @@
   padding: 1px 2px;  /* 减小 padding，减少视觉偏移 */
   font-size: var(--font-body);
   font-family: inherit;
-  border: 1px solid var(--ovelis-accent-bg);  /* 减小 border，减少视觉偏移 */
+  border: 1px solid var(--quirel-accent-bg);  /* 减小 border，减少视觉偏移 */
   border-radius: 3px;  /* 减小圆角，配合更细的 border */
-  background: var(--ovelis-view-bg);
-  color: var(--ovelis-text-primary);
+  background: var(--quirel-view-bg);
+  color: var(--quirel-text-primary);
   outline: none;
 }
 
 .fm-list .fm-list-row .fm-file-name .fm-fn-edit-input:focus {
-  border-color: var(--ovelis-accent-bg);
-  box-shadow: 0 0 0 1px var(--ovelis-accent-bg);
+  border-color: var(--quirel-accent-bg);
+  box-shadow: 0 0 0 1px var(--quirel-accent-bg);
 }
 
 .fm-list .fm-list-row .fm-file-size,
 .fm-list .fm-list-row .fm-file-mtime,
 .fm-list .fm-list-row .fm-file-perm {
   font-size: var(--font-small);
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
 }
 
 .fm-list .fm-list-row.selected .fm-file-size,
@@ -337,12 +337,12 @@
 }
 
 .fm-grid .fm-grid-item:hover {
-  background: var(--ovelis-card-bg);
+  background: var(--quirel-card-bg);
 }
 
 .fm-grid .fm-grid-item.selected {
-  background: var(--ovelis-accent-bg);
-  color: var(--ovelis-accent-fg);
+  background: var(--quirel-accent-bg);
+  color: var(--quirel-accent-fg);
 }
 
 .fm-grid .fm-grid-item .fm-gi-icon {
@@ -364,25 +364,25 @@
   padding: 1px 2px;  /* 减小 padding，减少视觉偏移 */
   font-size: var(--font-small);
   font-family: inherit;
-  border: 1px solid var(--ovelis-accent-bg);  /* 减小 border，减少视觉偏移 */
+  border: 1px solid var(--quirel-accent-bg);  /* 减小 border，减少视觉偏移 */
   border-radius: 3px;  /* 减小圆角，配合更细的 border */
-  background: var(--ovelis-view-bg);
-  color: var(--ovelis-text-primary);
+  background: var(--quirel-view-bg);
+  color: var(--quirel-text-primary);
   outline: none;
   text-align: center;
 }
 
 .fm-grid .fm-grid-item .fm-gi-edit-input:focus {
-  border-color: var(--ovelis-accent-bg);
-  box-shadow: 0 0 0 1px var(--ovelis-accent-bg);
+  border-color: var(--quirel-accent-bg);
+  box-shadow: 0 0 0 1px var(--quirel-accent-bg);
 }
 
 /* ── Context Menu ─────────────────────────────────────── */
 .fm-context-menu {
   position: fixed;
   min-width: 180px;
-  background: var(--ovelis-view-bg);
-  border: 1px solid var(--ovelis-border-color);
+  background: var(--quirel-view-bg);
+  border: 1px solid var(--quirel-border-color);
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-popup);
   z-index: var(--z-app-dropdown); /* ✅ Layer 60: 应用内部下拉菜单 */
@@ -402,13 +402,13 @@
   padding: 6px 16px;
   font-size: var(--font-body);
   cursor: pointer;
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
   transition: background var(--duration-fast) var(--ease-out);
 }
 
 .fm-context-menu .fm-ctx-item:hover {
-  background: var(--ovelis-accent-bg);
-  color: var(--ovelis-accent-fg);
+  background: var(--quirel-accent-bg);
+  color: var(--quirel-accent-fg);
 }
 
 .fm-context-menu .fm-ctx-item .fm-ctx-icon {
@@ -419,7 +419,7 @@
 
 .fm-context-menu .fm-ctx-separator {
   height: 1px;
-  background: var(--ovelis-border-color);
+  background: var(--quirel-border-color);
   margin: 4px 0;
 }
 
@@ -430,8 +430,8 @@
   justify-content: space-between;
   padding: 0 12px;
   height: 32px;
-  background: var(--ovelis-card-bg);
-  border-top: 1px solid var(--ovelis-border-color);
+  background: var(--quirel-card-bg);
+  border-top: 1px solid var(--quirel-border-color);
   flex-shrink: 0;
 }
 
@@ -440,7 +440,7 @@
   align-items: center;
   gap: 16px;
   font-size: 12px;
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
 }
 
 .fm-statusbar-right {
@@ -456,7 +456,7 @@
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: var(--ovelis-text-disabled);
+  color: var(--quirel-text-disabled);
   gap: 8px;
 }
 
@@ -475,7 +475,7 @@
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   gap: 8px;
   font-size: var(--font-body);
 }
@@ -483,8 +483,8 @@
 .fm-loading .spinner {
   width: 20px;
   height: 20px;
-  border: 2px solid var(--ovelis-border-color);
-  border-top-color: var(--ovelis-accent-bg);
+  border: 2px solid var(--quirel-border-color);
+  border-top-color: var(--quirel-accent-bg);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
@@ -500,8 +500,8 @@
   left: 50%;
   transform: translate(-50%, -50%);
   width: 400px;
-  background: var(--ovelis-card-bg);
-  border: 1px solid var(--ovelis-border-color);
+  background: var(--quirel-card-bg);
+  border: 1px solid var(--quirel-border-color);
   border-radius: var(--radius-md);
   padding: 16px;
   z-index: var(--z-app-modal); /* ✅ Layer 70: 应用内部模态对话框 */
@@ -522,7 +522,7 @@
 .pd-name {
   font-size: 14pt;
   font-weight: 600;
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
 }
 
 .pd-content {
@@ -533,16 +533,16 @@
   display: flex;
   justify-content: space-between;
   padding: 8px 0;
-  border-bottom: 1px solid var(--ovelis-border-color);
+  border-bottom: 1px solid var(--quirel-border-color);
 }
 
 .pd-label {
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   font-size: var(--font-body);
 }
 
 .pd-value {
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
   font-size: var(--font-body);
 }
 
@@ -553,8 +553,8 @@
 
 .pd-footer button {
   padding: 6px 16px;
-  background: var(--ovelis-accent-bg);
-  color: var(--ovelis-accent-fg);
+  background: var(--quirel-accent-bg);
+  color: var(--quirel-accent-fg);
   border: none;
   border-radius: var(--radius-xs);
   cursor: pointer;
@@ -563,7 +563,7 @@
 }
 
 .pd-footer button:hover {
-  background: var(--ovelis-accent-hover);
+  background: var(--quirel-accent-hover);
 }
 
 /* ── Path Error Dialog (路径不存在弹窗 - 模态) ─────────────────── */
@@ -584,8 +584,8 @@
 .fm-path-error-dialog {
   position: relative;
   width: 400px;
-  background: var(--ovelis-card-bg);
-  border: 1px solid var(--ovelis-border-color);
+  background: var(--quirel-card-bg);
+  border: 1px solid var(--quirel-border-color);
   border-radius: var(--radius-md);
   padding: 20px;
   box-shadow: var(--shadow-popup);
@@ -607,15 +607,15 @@
 .ped-title {
   font-size: 14pt;
   font-weight: 600;
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
 }
 
 .ped-message {
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   font-size: var(--font-body);
   margin-bottom: 16px;
   padding: 8px 12px;
-  background: var(--ovelis-view-bg);
+  background: var(--quirel-view-bg);
   border-radius: var(--radius-xs);
   word-break: break-all;
 }
@@ -627,8 +627,8 @@
 
 .ped-footer button {
   padding: 6px 20px;
-  background: var(--ovelis-accent-bg);
-  color: var(--ovelis-accent-fg);
+  background: var(--quirel-accent-bg);
+  color: var(--quirel-accent-fg);
   border: none;
   border-radius: var(--radius-xs);
   cursor: pointer;
@@ -637,15 +637,15 @@
 }
 
 .ped-footer button:hover {
-  background: var(--ovelis-accent-hover);
+  background: var(--quirel-accent-hover);
 }
 
 /* ── Rename Dialog (重命名弹窗) ─────────────────── */
 .fm-rename-dialog {
   position: relative;
   width: 480px;
-  background: var(--ovelis-card-bg);
-  border: 1px solid var(--ovelis-border-color);
+  background: var(--quirel-card-bg);
+  border: 1px solid var(--quirel-border-color);
   border-radius: var(--radius-md);
   padding: 20px;
   box-shadow: var(--shadow-popup);
@@ -658,7 +658,7 @@
   gap: 10px;
   margin-bottom: 16px;
   padding-bottom: 12px;
-  border-bottom: 1px solid var(--ovelis-border-color);
+  border-bottom: 1px solid var(--quirel-border-color);
 }
 
 .rd-icon {
@@ -668,7 +668,7 @@
 .rd-title {
   font-size: 14pt;
   font-weight: 600;
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
 }
 
 .rd-content {
@@ -678,19 +678,19 @@
 .rd-original {
   margin-bottom: 16px;
   padding: 10px 12px;
-  background: var(--ovelis-view-bg);
+  background: var(--quirel-view-bg);
   border-radius: var(--radius-xs);
 }
 
 .rd-label {
   font-size: 12px;
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   margin-bottom: 6px;
 }
 
 .rd-original-name {
   font-size: var(--font-body);
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
   word-break: break-all;
   opacity: 0.7;
 }
@@ -702,21 +702,21 @@
 .rd-input {
   width: 100%;
   padding: 10px 12px;
-  background: var(--ovelis-input-bg);
-  border: 1px solid var(--ovelis-border-color);
+  background: var(--quirel-input-bg);
+  border: 1px solid var(--quirel-border-color);
   border-radius: var(--radius-xs);
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
   font-size: var(--font-body);
   outline: none;
   transition: border-color var(--duration-fast) var(--ease-out);
 }
 
 .rd-input:focus {
-  border-color: var(--ovelis-accent-bg);
+  border-color: var(--quirel-accent-bg);
 }
 
 .rd-input::placeholder {
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   opacity: 0.6;
 }
 
@@ -729,7 +729,7 @@
 }
 
 .rd-byte-valid {
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
 }
 
 .rd-byte-invalid {
@@ -738,7 +738,7 @@
 }
 
 .rd-byte-hint {
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   opacity: 0.7;
   margin-left: 4px;
 }
@@ -749,14 +749,14 @@
   gap: 10px;
   margin-top: 16px;
   padding-top: 12px;
-  border-top: 1px solid var(--ovelis-border-color);
+  border-top: 1px solid var(--quirel-border-color);
 }
 
 .rd-btn-cancel {
   padding: 8px 20px;
   background: transparent;
-  color: var(--ovelis-text-secondary);
-  border: 1px solid var(--ovelis-border-color);
+  color: var(--quirel-text-secondary);
+  border: 1px solid var(--quirel-border-color);
   border-radius: var(--radius-xs);
   cursor: pointer;
   font-size: var(--font-body);
@@ -764,14 +764,14 @@
 }
 
 .rd-btn-cancel:hover {
-  background: var(--ovelis-view-bg);
-  color: var(--ovelis-text-primary);
+  background: var(--quirel-view-bg);
+  color: var(--quirel-text-primary);
 }
 
 .rd-btn-confirm {
   padding: 8px 20px;
-  background: var(--ovelis-accent-bg);
-  color: var(--ovelis-accent-fg);
+  background: var(--quirel-accent-bg);
+  color: var(--quirel-accent-fg);
   border: none;
   border-radius: var(--radius-xs);
   cursor: pointer;
@@ -781,7 +781,7 @@
 }
 
 .rd-btn-confirm:hover:not(:disabled) {
-  background: var(--ovelis-accent-hover);
+  background: var(--quirel-accent-hover);
 }
 
 .rd-btn-confirm:disabled {
@@ -815,12 +815,12 @@
 .fm-offline .offline-title {
   font-size: 15pt;
   font-weight: 700;
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
 }
 
 .fm-offline .offline-desc {
   font-size: var(--font-body);
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   text-align: center;
   max-width: 320px;
   line-height: 1.5;
@@ -839,7 +839,7 @@
 .fm-offline .offline-servers-label {
   font-size: var(--font-small);
   font-weight: 600;
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   text-align: left;
   width: 100%;
   padding: 0 4px;
@@ -852,8 +852,8 @@
   gap: 10px;
   width: 100%;
   padding: 10px 14px;
-  background: var(--ovelis-view-bg);
-  border: 1px solid var(--ovelis-border-color);
+  background: var(--quirel-view-bg);
+  border: 1px solid var(--quirel-border-color);
   border-radius: var(--radius-sm);
   cursor: pointer;
   transition: all 150ms var(--ease-out);
@@ -861,7 +861,7 @@
 }
 
 .fm-offline .offline-server-btn:hover:not(:disabled) {
-  border-color: var(--ovelis-accent-bg);
+  border-color: var(--quirel-accent-bg);
   background: rgba(53, 132, 228, 0.06);
 }
 
@@ -887,7 +887,7 @@
 .fm-offline .offline-server-btn .osb-name {
   font-size: var(--font-body);
   font-weight: 600;
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -895,7 +895,7 @@
 
 .fm-offline .offline-server-btn .osb-host {
   font-size: var(--font-small);
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -903,14 +903,14 @@
 
 .fm-offline .offline-server-btn .osb-action {
   font-size: var(--font-body);
-  color: var(--ovelis-accent-bg);
+  color: var(--quirel-accent-bg);
   font-weight: 500;
   flex-shrink: 0;
   white-space: nowrap;
 }
 
 .fm-offline .offline-server-btn:disabled .osb-action {
-  color: var(--ovelis-text-disabled);
+  color: var(--quirel-text-disabled);
 }
 
 /* 无服务器提示 */
@@ -920,10 +920,10 @@
   align-items: center;
   gap: 4px;
   padding: 16px 24px;
-  background: var(--ovelis-card-bg);
+  background: var(--quirel-card-bg);
   border-radius: var(--radius-sm);
   font-size: var(--font-body);
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
 }
 
 /* ── Path Suggestions ─────────────────────────────────── */
@@ -935,9 +935,9 @@
   left: 0;
   width: 100%;  /* 宽度匹配地址栏 */
   margin-top: 4px;  /* 与地址栏间隔 4px */
-  background: var(--ovelis-view-bg);  /* 使用暖灰背景 */
+  background: var(--quirel-view-bg);  /* 使用暖灰背景 */
   opacity: 0.85;  /* 85% 透明度 */
-  border: 1px solid var(--ovelis-border-color);
+  border: 1px solid var(--quirel-border-color);
   border-radius: var(--radius-sm);  /* 四个角都圆角 */
   box-shadow: var(--shadow-popup);  /* 使用 CSS 变量 */
   z-index: var(--z-app-dropdown); /* ✅ Layer 60: 应用内部下拉菜单 */
@@ -956,12 +956,12 @@
 }
 
 .fm-suggestion-item:hover {
-  background: var(--ovelis-card-bg);
+  background: var(--quirel-card-bg);
 }
 
 .fm-suggestion-item.selected {
-  background: var(--ovelis-accent-bg);
-  color: var(--ovelis-accent-fg);
+  background: var(--quirel-accent-bg);
+  color: var(--quirel-accent-fg);
 }
 
 /* 建议项图标 */

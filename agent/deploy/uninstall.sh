@@ -1,19 +1,19 @@
 #!/bin/bash
-# GNOME Remote Agent 卸载脚本
+# Quireld 卸载脚本
 
 set -e
 
 # 显示帮助信息
 show_help() {
     cat << EOF
-GNOME Remote Agent 卸载工具
+Quireld 卸载工具
 
 用法:
     $0 [选项]
 
 选项:
     --dir DIR       安装目录 (默认: /usr/local/bin)
-    --name NAME     服务名称 (默认: gnome-remote-agent)
+    --name NAME     服务名称 (默认: quireld)
     --port PORT     监听端口 (默认: 8443)
     --help          显示此帮助信息
 
@@ -30,7 +30,7 @@ EOF
 
 # 解析命令行参数
 INSTALL_DIR="/usr/local/bin"
-SERVICE_NAME="gnome-remote-agent"
+SERVICE_NAME="quireld"
 QUIC_PORT="8443"
 
 while [[ $# -gt 0 ]]; do
@@ -67,7 +67,7 @@ fi
 # 显示卸载信息
 echo ""
 echo "================================"
-echo "  GNOME Remote Agent 卸载配置"
+echo "  Quireld 卸载配置"
 echo "================================"
 echo "  程序路径: $INSTALL_DIR/$SERVICE_NAME"
 echo "  配置路径: /etc/$SERVICE_NAME"

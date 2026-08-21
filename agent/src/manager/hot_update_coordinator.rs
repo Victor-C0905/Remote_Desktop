@@ -194,7 +194,7 @@ mod tests {
     #[tokio::test]
     async fn test_coordinator_creation() {
         let worker_manager = Arc::new(WorkerManager::new(
-            "/usr/bin/agent".to_string(),
+            "/usr/bin/quireld".to_string(),
             "/tmp/test.sock".to_string(),
             3,
         ));
@@ -207,7 +207,7 @@ mod tests {
     #[tokio::test]
     async fn test_trigger_when_reloading() {
         let worker_manager = Arc::new(WorkerManager::new(
-            "/usr/bin/agent".to_string(),
+            "/usr/bin/quireld".to_string(),
             "/tmp/test.sock".to_string(),
             3,
         ));

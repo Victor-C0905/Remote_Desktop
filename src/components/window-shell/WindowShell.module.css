@@ -81,10 +81,10 @@
 .windowHeaderBar {
   height: var(--headerbar-height); /* 48px */
   /* 毛玻璃效果：引用全局变量，与 TopBar 保持一致 */
-  background: var(--ovelis-frosted-bg);
-  backdrop-filter: var(--ovelis-frosted-blur);
-  -webkit-backdrop-filter: var(--ovelis-frosted-blur);
-  border-bottom: 1px solid var(--ovelis-frosted-border);
+  background: var(--quirel-frosted-bg);
+  backdrop-filter: var(--quirel-frosted-blur);
+  -webkit-backdrop-filter: var(--quirel-frosted-blur);
+  border-bottom: 1px solid var(--quirel-frosted-border);
   display: flex;
   align-items: center;
   padding: 0 12px;
@@ -102,7 +102,7 @@
 .windowTitle {
   font-size: var(--font-small); /* 9pt */
   font-weight: 600;
-  color: var(--ovelis-text-primary); /* ✅ 使用主题文字颜色(亮色: rgba(0,0,0,0.87), 暗色: rgba(255,255,255,0.87)) */
+  color: var(--quirel-text-primary); /* ✅ 使用主题文字颜色(亮色: rgba(0,0,0,0.87), 暗色: rgba(255,255,255,0.87)) */
   flex: 1;
   text-align: center;
   white-space: nowrap;

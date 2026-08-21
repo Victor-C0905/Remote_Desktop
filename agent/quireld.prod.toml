@@ -1,4 +1,4 @@
-# GNOME Remote Agent - 生产环境配置
+# Quireld - 生产环境配置
 # 用于生产部署
 
 [server]
@@ -43,8 +43,8 @@ process_scan_interval_secs = 2
 service_status_interval_secs = 5
 
 [audit]
-log_path = "/var/log/gnome-remote/audit.log"
+log_path = "/var/log/quireld/audit.log"
 
 [log]
 level = "info"  # 生产环境：信息级别日志
-dir = "/var/log/gnome-remote"
+dir = "/var/log/quireld"

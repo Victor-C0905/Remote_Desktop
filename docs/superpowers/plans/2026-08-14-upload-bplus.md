@@ -162,10 +162,10 @@ pub mod raw_frame;
 
 - [ ] **Step 4: 验证**
 
-Run: `cargo test -p gnome-remote-agent raw_frame`
+Run: `cargo test -p quireld raw_frame`
 Expected: 测试通过
 
-Run: `cargo build -p gnome-remote-agent`
+Run: `cargo build -p quireld`
 Expected: 编译通过(Windows lib,worker 模块 unix stub 不受影响)
 
 - [ ] **Step 5: 提示 commit(用户执行)**
@@ -272,7 +272,7 @@ let path = safe_path.as_str();
 
 - [ ] **Step 5: 验证**
 
-Run: `cargo build -p gnome-remote-agent`
+Run: `cargo build -p quireld`
 Expected: 编译通过
 
 单测:在 path_guard.rs 追加穿越(`../`)、越界、symlink、root 特例测试,`cargo test path_guard`。
@@ -392,7 +392,7 @@ let mut writer = FileStreamWriter::from_pipe(pipe_writer, child, file_size);
 
 - [ ] **Step 7: 验证**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo build"`(需 unix)
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo build"`(需 unix)
 Expected: 编译通过
 
 手动测试:以非 root 用户认证上传文件,验证文件 owner 为目标用户而非 root(`ls -l` 确认);传文件同时 PTY 仍响应(子进程 IO 不阻塞)。
@@ -462,7 +462,7 @@ audit_log.log_file_operation(&session.username, session.uid, "transfer_start", p
 `file_stream.rs:17-33` `generate_temp_path` 改:
 ```rust
 fn generate_temp_path(path: &Path) -> String {
-    let temp_name = format!("gnome_remote_{}.tmp", uuid::Uuid::new_v4());
+    let temp_name = format!("quirel_{}.tmp", uuid::Uuid::new_v4());
     path.parent().unwrap_or(Path::new(".")).join(temp_name).to_string_lossy().into_owned()
 }
 ```

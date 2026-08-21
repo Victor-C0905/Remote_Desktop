@@ -47,7 +47,7 @@
 **特点：**
 - 监听所有网络接口（0.0.0.0）
 - **权限控制完全依赖 Linux 文件系统权限（已重构）**
-- 生产级别的证书路径（`/etc/gnome-remote/`）
+- 生产级别的证书路径（`/etc/quireld/`）
 - 信息级别日志（info）
 - 长超时时间（5分钟）
 - 完整审计日志
@@ -60,7 +60,7 @@
 **生产部署建议：**
 1. 使用 systemd 管理 Agent 服务
 2. 日志文件使用 `logrotate` 自动轮转
-3. 定期审计 `/var/log/gnome-remote/audit.log`
+3. 定期审计 `/var/log/quireld/audit.log`
 4. 根据实际需求调整 `blocked_commands`
 
 ---
@@ -72,14 +72,14 @@
 | **绑定地址** | 127.0.0.1 | 0.0.0.0 | 0.0.0.0 |
 | **QUIC 端口** | 8443 | 8443 | 9443 |
 | **WS 端口** | 8444 | 8444 | 9444 |
-| **证书路径** | ./cert.pem | ./cert.pem | /etc/gnome-remote/ |
+| **证书路径** | ./cert.pem | ./cert.pem | /etc/quireld/ |
 | **日志级别** | debug | debug | info |
 | **连接超时** | 60s | 180s | 300s |
 | **最大终端会话** | 5 | 10 | 20 |
 | **文件传输限制** | 100MB | 200MB | 500MB |
 | **安全限制** | 宽松 | 中等 | 严格 |
 
-> **证书路径说明**：生产环境证书路径默认使用 `./cert.pem`，实际部署时建议使用 `/etc/gnome-remote/`
+> **证书路径说明**：生产环境证书路径默认使用 `./cert.pem`，实际部署时建议使用 `/etc/quireld/`
 
 ---
 
@@ -103,19 +103,19 @@ RUST_LOG=trace ./agent --config agent.prod.toml
 
 ```bash
 # 切换到测试环境
-ln -sf agent.test.toml agent.toml
+ln -sf agent.test.toml quireld.toml
 
 # 切换到开发环境
-ln -sf agent.dev.toml agent.toml
+ln -sf agent.dev.toml quireld.toml
 
 # 切换到生产环境
-ln -sf agent.prod.toml agent.toml
+ln -sf agent.prod.toml quireld.toml
 ```
 
 然后直接运行：
 
 ```bash
-./agent  # 自动使用 agent.toml
+./agent  # 自动使用 quireld.toml
 ```
 
 ---
@@ -144,13 +144,13 @@ ln -sf agent.prod.toml agent.toml
 
 ```bash
 # 实时查看日志
-tail -f logs/agent.log
+tail -f logs/quireld.log
 
 # 查看最近100行
-tail -n 100 logs/agent.log
+tail -n 100 logs/quireld.log
 
 # 搜索错误
-grep -i error logs/agent.log
+grep -i error logs/quireld.log
 ```
 
 ### 检查端口占用
@@ -184,5 +184,5 @@ ps aux | grep agent
 kill -TERM <PID>
 
 # 或者直接重启
-systemctl restart gnome-remote-agent  # 如果使用 systemd
+systemctl restart quireld  # 如果使用 systemd
 ```

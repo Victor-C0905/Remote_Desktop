@@ -1,5 +1,5 @@
-# PowerShell 脚本：启动 GNOME Remote 开发环境
-Write-Host "🚀 启动 GNOME Remote 开发环境..." -ForegroundColor Green
+# PowerShell 脚本：启动 Quirel 开发环境
+Write-Host "🚀 启动 Quirel 开发环境..." -ForegroundColor Green
 
 # 检查 Rust 是否已安装
 if (!(Get-Command "cargo" -ErrorAction SilentlyContinue)) {
@@ -13,7 +13,7 @@ if (!(Get-Command "npm" -ErrorAction SilentlyContinue)) {
     exit 1
 }
 
-Write-Host "📋 步骤 1: 构建 Agent..." -ForegroundColor Yellow
+Write-Host "📋 步骤 1: 构建 Quireld..." -ForegroundColor Yellow
 Set-Location -Path ".\agent"
 Start-Process -FilePath "cargo" -ArgumentList "watch", "-x", "run" -NoNewWindow
 Start-Sleep -Seconds 3
@@ -23,5 +23,5 @@ Set-Location -Path ".."
 Start-Process -FilePath "npm" -ArgumentList "run", "tauri", "dev" -NoNewWindow
 
 Write-Host "✅ 开发环境已启动！" -ForegroundColor Green
-Write-Host "💡 Agent 将在 http://localhost:8443 运行" -ForegroundColor Cyan
+Write-Host "💡 Quireld 将在 http://localhost:8443 运行" -ForegroundColor Cyan
 Write-Host "💡 Tauri 应用将在默认浏览器中打开" -ForegroundColor Cyan

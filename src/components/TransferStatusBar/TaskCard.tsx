@@ -79,7 +79,7 @@ function formatEta(seconds: number): string {
 
 /**
  * 下载图标（向下箭头）
- * 来源：GNOME Adwaita go-down-symbolic.svg
+ * 来源：Adwaita go-down-symbolic.svg
  */
 function DownloadIcon({ className }: { className?: string }) {
   return (
@@ -91,7 +91,7 @@ function DownloadIcon({ className }: { className?: string }) {
 
 /**
  * 上传图标（向上箭头）
- * 来源：GNOME Adwaita go-up-symbolic.svg
+ * 来源：Adwaita go-up-symbolic.svg
  */
 function UploadIcon({ className }: { className?: string }) {
   return (
@@ -103,7 +103,7 @@ function UploadIcon({ className }: { className?: string }) {
 
 /**
  * 暂停图标
- * 来源：GNOME Adwaita media-playback-pause-symbolic.svg
+ * 来源：Adwaita media-playback-pause-symbolic.svg
  */
 function PauseIcon({ className }: { className?: string }) {
   return (
@@ -116,7 +116,7 @@ function PauseIcon({ className }: { className?: string }) {
 
 /**
  * 继续图标（播放）
- * 来源：GNOME Adwaita media-playback-start-symbolic.svg
+ * 来源：Adwaita media-playback-start-symbolic.svg
  */
 function PlayIcon({ className }: { className?: string }) {
   return (
@@ -128,7 +128,7 @@ function PlayIcon({ className }: { className?: string }) {
 
 /**
  * 关闭图标
- * 来源：GNOME Adwaita window-close-symbolic.svg
+ * 来源：Adwaita window-close-symbolic.svg
  */
 function CloseIcon({ className }: { className?: string }) {
   return (
@@ -140,7 +140,7 @@ function CloseIcon({ className }: { className?: string }) {
 
 /**
  * 打开文件图标
- * 来源：GNOME Adwaita folder-open-symbolic.svg
+ * 来源：Adwaita folder-open-symbolic.svg
  */
 function FolderOpenIcon({ className }: { className?: string }) {
   return (
@@ -152,7 +152,7 @@ function FolderOpenIcon({ className }: { className?: string }) {
 
 /**
  * 重试图标
- * 来源：GNOME Adwaita view-refresh-symbolic.svg
+ * 来源：Adwaita view-refresh-symbolic.svg
  */
 function RefreshIcon({ className }: { className?: string }) {
   return (

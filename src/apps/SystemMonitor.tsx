@@ -479,11 +479,11 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
             <div className="sm-res-section sm-res-disks">
               <div className="sm-res-title-section">磁盘用量</div>
               {isOffline ? (
-                <div style={{ padding: '16px 0', color: 'var(--ovelis-text-disabled)', textAlign: 'center' }}>
+                <div style={{ padding: '16px 0', color: 'var(--quirel-text-disabled)', textAlign: 'center' }}>
                   无数据（未连接）
                 </div>
               ) : metrics.disks.length === 0 ? (
-                <div style={{ padding: '16px 0', color: 'var(--ovelis-text-secondary)', textAlign: 'center' }}>
+                <div style={{ padding: '16px 0', color: 'var(--quirel-text-secondary)', textAlign: 'center' }}>
                   暂无磁盘信息
                 </div>
               ) : (
@@ -527,7 +527,7 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
             </div>
             <div className="sm-fs-list">
               {isOffline ? (
-                <div className="sm-fs-row" style={{ justifyContent: 'center', color: 'var(--ovelis-text-disabled)', padding: '20px 0' }}>
+                <div className="sm-fs-row" style={{ justifyContent: 'center', color: 'var(--quirel-text-disabled)', padding: '20px 0' }}>
                   无数据（未连接）
                 </div>
               ) : (

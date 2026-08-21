@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "GNOME Remote",
+  "productName": "Quirel",
   "version": "0.1.0",
-  "identifier": "com.gnome-remote.app",
+  "identifier": "com.quirel.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "GNOME Remote",
+        "title": "Quirel",
         "width": 1024,
         "height": 768,
         "minWidth": 800,
@@ -37,10 +37,10 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "publisher": "GNOME Remote Project",
-    "homepage": "https://github.com/gnome-remote",
-    "shortDescription": "GNOME-style remote Linux server control client",
-    "longDescription": "A local-first remote control client for Linux servers, built with GNOME Adwaita design system.",
+    "publisher": "Quirel Project",
+    "homepage": "https://github.com/quirel",
+    "shortDescription": "Adwaita-style remote Linux server control client",
+    "longDescription": "A local-first remote control client for Linux servers, built with Adwaita design system.",
     "category": "Utility"
   },
   "plugins": {}

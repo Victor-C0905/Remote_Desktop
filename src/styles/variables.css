@@ -1,5 +1,5 @@
 /* ============================================================
-   CSS Variables — GNOME Remote Client
+   CSS Variables — Quirel Client
    从 adwaita.css 提取，只包含变量定义
    ============================================================ */
 
@@ -8,40 +8,40 @@
 /* ── Light Mode (Adwaita Default) ──────────────────────── */
 :root {
   /* Accent Colors */
-  --ovelis-accent-bg:      #15aa70;      /* RGB(21,170,112) - 纸张主题默认强调色 */
-  --ovelis-accent-fg:      #ffffff;
-  --ovelis-accent-hover:   #129864;
-  --ovelis-accent-active:  #0f8658;
+  --quirel-accent-bg:      #15aa70;      /* RGB(21,170,112) - 纸张主题默认强调色 */
+  --quirel-accent-fg:      #ffffff;
+  --quirel-accent-hover:   #129864;
+  --quirel-accent-active:  #0f8658;
 
   /* Window & Surfaces (Warm Gray) */
-  --ovelis-window-bg:      #fafafa;      /* RGB(250,250,250) - 柔和白 */
-  --ovelis-view-bg:        #faf5f3;      /* RGB(250,245,243) - 内容区（最浅） */
-  --ovelis-card-bg:        #faf5f3;      /* RGB(250,245,243) - 卡片背景（最浅） */
-  --ovelis-card-hover:     #ebe5d9;      /* RGB(235,229,217) - 卡片悬停（较深） */
-  --ovelis-headerbar-bg:   #f5f0e6;      /* RGB(245,240,230) - HeaderBar（中等） */
-  --ovelis-sidebar-bg:     #f5f0e6;      /* RGB(245,240,230) - 侧边栏（中等） */
-  --ovelis-sidebar-fg:     #3f3f3f;
-  --ovelis-sidebar-border: #d5d0c4;      /* RGB(213,208,196) - 边框（最深） */
+  --quirel-window-bg:      #fafafa;      /* RGB(250,250,250) - 柔和白 */
+  --quirel-view-bg:        #faf5f3;      /* RGB(250,245,243) - 内容区（最浅） */
+  --quirel-card-bg:        #faf5f3;      /* RGB(250,245,243) - 卡片背景（最浅） */
+  --quirel-card-hover:     #ebe5d9;      /* RGB(235,229,217) - 卡片悬停（较深） */
+  --quirel-headerbar-bg:   #f5f0e6;      /* RGB(245,240,230) - HeaderBar（中等） */
+  --quirel-sidebar-bg:     #f5f0e6;      /* RGB(245,240,230) - 侧边栏（中等） */
+  --quirel-sidebar-fg:     #3f3f3f;
+  --quirel-sidebar-border: #d5d0c4;      /* RGB(213,208,196) - 边框（最深） */
 
   /* Foreground */
-  --ovelis-text-primary:     rgba(0, 0, 0, 0.87);
-  --ovelis-text-secondary:   rgba(0, 0, 0, 0.60);
-  --ovelis-text-disabled:    rgba(0, 0, 0, 0.38);
-  --ovelis-text-on-accent:   #ffffff;
+  --quirel-text-primary:     rgba(0, 0, 0, 0.87);
+  --quirel-text-secondary:   rgba(0, 0, 0, 0.60);
+  --quirel-text-disabled:    rgba(0, 0, 0, 0.38);
+  --quirel-text-on-accent:   #ffffff;
 
   /* Status Colors */
-  --ovelis-success-color:    #26a269;      /* GNOME Green - 成功状态 */
-  --ovelis-error-color:      #e01b24;      /* GNOME Red - 错误状态 */
-  --ovelis-warning-color:    #f5c211;      /* GNOME Yellow - 警告状态 */
+  --quirel-success-color:    #26a269;      /* Adwaita Green - 成功状态 */
+  --quirel-error-color:      #e01b24;      /* Adwaita Red - 错误状态 */
+  --quirel-warning-color:    #f5c211;      /* Adwaita Yellow - 警告状态 */
 
   /* Borders */
-  --ovelis-border-color:   rgba(0, 0, 0, 0.15);
-  --ovelis-border-focus:   #3584e4;
+  --quirel-border-color:   rgba(0, 0, 0, 0.15);
+  --quirel-border-focus:   #3584e4;
 
   /* Slider (滑块滑条颜色) */
-  --ovelis-slider-track-bg:   #d5d0c4;      /* 深暖灰 - 滑条轨道 */
-  --ovelis-slider-thumb-bg:   #3584e4;      /* GNOME Blue - 滑块 */
-  --ovelis-slider-active-bg:  #1f75d1;      /* 滑块活动状态 */
+  --quirel-slider-track-bg:   #d5d0c4;      /* 深暖灰 - 滑条轨道 */
+  --quirel-slider-thumb-bg:   #3584e4;      /* Adwaita Blue - 滑块 */
+  --quirel-slider-active-bg:  #1f75d1;      /* 滑块活动状态 */
 
   /* Radius */
   --radius-xs:      4px;
@@ -70,12 +70,12 @@
 
   /* ── 毛玻璃效果 (Frosted Glass) ─────────────────────── */
   /* headerbar-bg 的 RGB 分离，用于构造 rgba 透明色 */
-  --ovelis-headerbar-bg-rgb: 245, 240, 230;
+  --quirel-headerbar-bg-rgb: 245, 240, 230;
   /* 毛玻璃参数：原色 + 0.78 透明度 */
-  --ovelis-frosted-bg:       rgba(245, 240, 230, 0.78);
-  --ovelis-frosted-blur:     blur(24px) saturate(160%);
+  --quirel-frosted-bg:       rgba(245, 240, 230, 0.78);
+  --quirel-frosted-blur:     blur(24px) saturate(160%);
   /* 毛玻璃边框（比普通边框更弱，避免突兀） */
-  --ovelis-frosted-border:   rgba(0, 0, 0, 0.06);
+  --quirel-frosted-border:   rgba(0, 0, 0, 0.06);
 
   /* Layout Constants */
   --topbar-height:    32px;
@@ -123,5 +123,5 @@
   /* 2. 同层级元素按 DOM 顺序渲染，z-index 相同              */
   /* 3. 应用内部浮动元素不得超过 Layer 60-70                 */
   /* 4. 全局弹窗不得超过 Layer 80-90                         */
-  /* 5. Dock 低于窗口，窗口可以遮挡 Dock（GNOME 行为）       */
+  /* 5. Dock 低于窗口，窗口可以遮挡 Dock（Adwaita 行为）       */
 }

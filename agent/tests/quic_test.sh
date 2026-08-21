@@ -1,19 +1,19 @@
 #!/bin/bash
 # QUIC 测试脚本
-# 在 WSL 内部测试 Agent 的 QUIC 连接
+# 在 WSL 内部测试 Quireld 的 QUIC 连接
 
 set -e
 
 echo "=== QUIC 连接测试 ==="
 echo ""
 
-# 检查 Agent 是否运行
-echo "1. 检查 Agent 是否运行..."
-if ! pgrep -f "target/release/agent" > /dev/null; then
-    echo "❌ Agent 未运行，请先启动 Agent"
+# 检查 Quireld 是否运行
+echo "1. 检查 Quireld 是否运行..."
+if ! pgrep -f "target/release/quireld" > /dev/null; then
+    echo "❌ Quireld 未运行，请先启动 Quireld"
     exit 1
 fi
-echo "✅ Agent 正在运行"
+echo "✅ Quireld 正在运行"
 echo ""
 
 # 测试 QUIC 端口
@@ -27,7 +27,7 @@ echo ""
 
 # 编写 Rust 测试程序
 echo "3. 编写 QUIC 测试程序..."
-cd ~/gnome-remote/agent/tests
+cd ~/quirel/agent/tests
 
 # 创建 Cargo.toml
 cat > Cargo.toml << 'EOF'
@@ -97,7 +97,7 @@ async fn main() -> Result<()> {
     println!("✅ 客户端 Endpoint 创建成功");
     
     // 连接服务器
-    println!("🔗 连接 Agent (127.0.0.1:8443)...");
+    println!("🔗 连接 Quireld (127.0.0.1:8443)...");
     let conn = client_endpoint
         .connect("127.0.0.1:8443".parse()?, "localhost")?
         .await?;

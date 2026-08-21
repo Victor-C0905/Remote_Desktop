@@ -249,7 +249,7 @@ impl CompositeAuthenticator {
     /// # 示例
     /// ```rust,ignore
     /// let auth = CompositeAuthenticator::new(
-    ///     "gnome-remote".to_string(),
+    ///     "quireld".to_string(),
     ///     true,
     ///     true,
     /// );

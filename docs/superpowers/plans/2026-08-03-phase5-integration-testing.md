@@ -47,15 +47,15 @@ agent/
 
 ```rust
     // 初始化 IpcClient 并连接到 Manager
-    let ipc_client = gnome_remote_agent::worker::IpcClient::connect(&ipc_socket_path).await?;
-    gnome_remote_agent::worker::run(ipc_client).await?;
+    let ipc_client = quireld::worker::IpcClient::connect(&ipc_socket_path).await?;
+    quireld::worker::run(ipc_client).await?;
 
     tracing::info!("Worker 进程已退出");
 ```
 
 - [ ] **Step 2: 验证编译通过**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo check 2>&1 | tail -5"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo check 2>&1 | tail -5"`
 Expected: `Finished` 无错误
 
 - [ ] **Step 3: 提示用户提交**
@@ -93,8 +93,8 @@ run_worker_mode 中的 IpcClient 连接逻辑被注释，导致 Worker 模式无
 use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
-use gnome_remote_agent::manager::{IpcServer, PtyRegistry, WorkerManager};
-use gnome_remote_agent::protocol::generated::{
+use quireld::manager::{IpcServer, PtyRegistry, WorkerManager};
+use quireld::protocol::generated::{
     ManagerRequest, manager_request,
     ReadDir, WorkerResponse, worker_response,
 };
@@ -186,7 +186,7 @@ async fn test_worker_connects_to_manager() {
 
 - [ ] **Step 2: 运行测试验证它通过**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo test --test integration_test test_worker_connects_to_manager -- --nocapture 2>&1 | tail -10"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo test --test integration_test test_worker_connects_to_manager -- --nocapture 2>&1 | tail -10"`
 Expected: `test test_worker_connects_to_manager ... ok`
 
 - [ ] **Step 3: 编写消息往返测试**
@@ -243,7 +243,7 @@ async fn test_ipc_message_roundtrip() {
 
 - [ ] **Step 4: 运行测试验证**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo test --test integration_test test_ipc_message_roundtrip -- --nocapture 2>&1 | tail -5"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo test --test integration_test test_ipc_message_roundtrip -- --nocapture 2>&1 | tail -5"`
 Expected: `test test_ipc_message_roundtrip ... ok`
 
 - [ ] **Step 5: 提示用户提交**
@@ -282,8 +282,8 @@ Expected: `test test_ipc_message_roundtrip ... ok`
 
 use std::sync::Arc;
 use std::time::Duration;
-use gnome_remote_agent::worker::{PtyFactory, SessionManager};
-use gnome_remote_agent::protocol::generated::{
+use quireld::worker::{PtyFactory, SessionManager};
+use quireld::protocol::generated::{
     CreateSession, ReadDir, ReadFile, WriteFile,
     ExecuteCommand, GetSystemInfo,
     worker_response,
@@ -333,7 +333,7 @@ async fn test_session_manager_concurrent_access() {
 
 - [ ] **Step 2: 运行测试验证**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo test --test worker_test -- --nocapture 2>&1 | tail -10"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo test --test worker_test -- --nocapture 2>&1 | tail -10"`
 Expected: 3 个测试全部 `ok`
 
 - [ ] **Step 3: 提示用户提交**
@@ -364,8 +364,8 @@ Expected: 3 个测试全部 `ok`
 
 mod file_operation_tests {
     use super::*;
-    use gnome_remote_agent::worker::handlers::file;
-    use gnome_remote_agent::protocol::generated::{worker_response, FileEntry};
+    use quireld::worker::handlers::file;
+    use quireld::protocol::generated::{worker_response, FileEntry};
     use tempfile::TempDir;
     use std::fs;
 
@@ -467,7 +467,7 @@ mod file_operation_tests {
 
 - [ ] **Step 2: 运行测试验证**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo test --test worker_test file_operation_tests -- --nocapture 2>&1 | tail -10"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo test --test worker_test file_operation_tests -- --nocapture 2>&1 | tail -10"`
 Expected: 4 个文件操作测试全部 `ok`
 
 - [ ] **Step 3: 提示用户提交**
@@ -498,8 +498,8 @@ Expected: 4 个文件操作测试全部 `ok`
 
 mod command_and_system_tests {
     use super::*;
-    use gnome_remote_agent::worker::handlers::{command, system};
-    use gnome_remote_agent::protocol::generated::worker_response;
+    use quireld::worker::handlers::{command, system};
+    use quireld::protocol::generated::worker_response;
 
     #[tokio::test]
     async fn test_handle_execute_command_echo() {
@@ -577,7 +577,7 @@ mod command_and_system_tests {
 
 - [ ] **Step 2: 运行测试验证**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo test --test worker_test command_and_system_tests -- --nocapture 2>&1 | tail -10"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo test --test worker_test command_and_system_tests -- --nocapture 2>&1 | tail -10"`
 Expected: 4 个测试全部 `ok`
 
 - [ ] **Step 3: 提示用户提交**
@@ -615,11 +615,11 @@ Expected: 4 个测试全部 `ok`
 #![cfg(unix)]
 
 use std::time::{Duration, Instant};
-use gnome_remote_agent::worker::{PtyFactory, SessionManager};
-use gnome_remote_agent::protocol::generated::{
+use quireld::worker::{PtyFactory, SessionManager};
+use quireld::protocol::generated::{
     ReadDir, ExecuteCommand,
 };
-use gnome_remote_agent::worker::handlers::{file, command};
+use quireld::worker::handlers::{file, command};
 
 /// 运行基准测试并输出结果
 fn bench<F: FnMut()>(name: &str, iterations: usize, mut f: F) {
@@ -714,12 +714,12 @@ async fn bench_session_manager_concurrent() {
 
 - [ ] **Step 2: 验证编译通过**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo test --test bench_test --no-run 2>&1 | tail -5"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo test --test bench_test --no-run 2>&1 | tail -5"`
 Expected: `Finished` 无错误
 
 - [ ] **Step 3: 运行性能基准（验证可执行）**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo test --test bench_test -- --ignored --nocapture 2>&1 | tail -20"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo test --test bench_test -- --ignored --nocapture 2>&1 | tail -20"`
 Expected: 输出包含 `avg=` `median=` `p99=` 的基准数据
 
 - [ ] **Step 4: 提示用户提交**
@@ -760,9 +760,9 @@ Expected: 输出包含 `avg=` `median=` `p99=` 的基准数据
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use gnome_remote_agent::worker::SessionManager;
-use gnome_remote_agent::protocol::generated::{ReadDir, WriteFile};
-use gnome_remote_agent::worker::handlers::file;
+use quireld::worker::SessionManager;
+use quireld::protocol::generated::{ReadDir, WriteFile};
+use quireld::worker::handlers::file;
 use tempfile::TempDir;
 
 #[tokio::test]
@@ -870,12 +870,12 @@ async fn stress_rapid_create_destroy_cycle() {
 
 - [ ] **Step 2: 验证编译通过**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo test --test stress_test --no-run 2>&1 | tail -5"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo test --test stress_test --no-run 2>&1 | tail -5"`
 Expected: `Finished` 无错误
 
 - [ ] **Step 3: 运行压力测试**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo test --test stress_test -- --ignored --nocapture 2>&1 | tail -20"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo test --test stress_test -- --ignored --nocapture 2>&1 | tail -20"`
 Expected: 3 个测试通过，输出耗时数据
 
 - [ ] **Step 4: 提示用户提交**
@@ -1037,12 +1037,12 @@ async fn test_fd_leak_detection() {
 
 - [ ] **Step 2: 验证编译通过**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo test --test stress_test --no-run 2>&1 | tail -5"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo test --test stress_test --no-run 2>&1 | tail -5"`
 Expected: `Finished` 无错误
 
 - [ ] **Step 3: 运行 FD 泄漏检测测试**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo test --test stress_test test_fd_leak_detection -- --ignored --nocapture 2>&1 | tail -10"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo test --test stress_test test_fd_leak_detection -- --ignored --nocapture 2>&1 | tail -10"`
 Expected: `test test_fd_leak_detection ... ok`
 
 - [ ] **Step 4: 提示用户提交**
@@ -1072,17 +1072,17 @@ Expected: `test test_fd_leak_detection ... ok`
 echo ">>> [2/3] 配置系统服务..."
 
 # 查找 systemd service 模板文件
-# 优先使用项目根目录的 systemd/gnome-remote-agent.service（包含 Phase 4 热更新配置）
+# 优先使用项目根目录的 systemd/quireld.service（包含 Phase 4 热更新配置）
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVICE_TEMPLATE=""
 
 # 尝试多个可能的路径
-if [ -f "$SCRIPT_DIR/../systemd/gnome-remote-agent.service" ]; then
-    SERVICE_TEMPLATE="$SCRIPT_DIR/../systemd/gnome-remote-agent.service"
-elif [ -f "$SCRIPT_DIR/../../systemd/gnome-remote-agent.service" ]; then
-    SERVICE_TEMPLATE="$SCRIPT_DIR/../../systemd/gnome-remote-agent.service"
-elif [ -f "$SCRIPT_DIR/systemd/gnome-remote-agent.service" ]; then
-    SERVICE_TEMPLATE="$SCRIPT_DIR/systemd/gnome-remote-agent.service"
+if [ -f "$SCRIPT_DIR/../systemd/quireld.service" ]; then
+    SERVICE_TEMPLATE="$SCRIPT_DIR/../systemd/quireld.service"
+elif [ -f "$SCRIPT_DIR/../../systemd/quireld.service" ]; then
+    SERVICE_TEMPLATE="$SCRIPT_DIR/../../systemd/quireld.service"
+elif [ -f "$SCRIPT_DIR/systemd/quireld.service" ]; then
+    SERVICE_TEMPLATE="$SCRIPT_DIR/systemd/quireld.service"
 fi
 
 if [ -n "$SERVICE_TEMPLATE" ] && [ -f "$SERVICE_TEMPLATE" ]; then
@@ -1090,14 +1090,14 @@ if [ -n "$SERVICE_TEMPLATE" ] && [ -f "$SERVICE_TEMPLATE" ]; then
 
     # 复制 service 文件，替换二进制路径和服务名称
     sed \
-        -e "s|/usr/local/bin/gnome-remote-agent|$INSTALL_DIR/$SERVICE_NAME|g" \
-        -e "s|gnome-remote-agent|$SERVICE_NAME|g" \
+        -e "s|/usr/local/bin/quireld|$INSTALL_DIR/$SERVICE_NAME|g" \
+        -e "s|quireld|$SERVICE_NAME|g" \
         "$SERVICE_TEMPLATE" > /etc/systemd/system/$SERVICE_NAME.service
 else
     echo "  警告: 未找到 service 模板，使用内联最小配置"
     cat > /etc/systemd/system/$SERVICE_NAME.service << EOF
 [Unit]
-Description=GNOME Remote Agent
+Description=Quireld
 After=network.target network-online.target
 Wants=network-online.target
 
@@ -1105,14 +1105,14 @@ Wants=network-online.target
 Type=notify
 User=root
 Group=root
-ExecStart=$INSTALL_DIR/$SERVICE_NAME --config /etc/$SERVICE_NAME/agent.toml --log-dir /var/log/gnome-remote
+ExecStart=$INSTALL_DIR/$SERVICE_NAME --config /etc/$SERVICE_NAME/quireld.toml --log-dir /var/log/quireld
 KillMode=process
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
 RestartSec=5s
 LimitNOFILE=65536
 Environment="RUST_LOG=info"
-Environment="HOME=/var/lib/gnome-remote"
+Environment="HOME=/var/lib/quireld"
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=$SERVICE_NAME
@@ -1125,12 +1125,12 @@ fi
 
 - [ ] **Step 2: 验证 install.sh 语法正确**
 
-Run: `wsl -e bash -l -c "bash -n /mnt/e/MyWork/gnome-remote/agent/deploy/install.sh && echo 'Syntax OK'"`
+Run: `wsl -e bash -l -c "bash -n /mnt/e/MyWork/quirel/agent/deploy/install.sh && echo 'Syntax OK'"`
 Expected: `Syntax OK`
 
 - [ ] **Step 3: 验证 systemd service 文件存在且包含 Phase 4 配置**
 
-Run: `wsl -e bash -l -c "grep -E 'KillMode|ExecReload|Type=notify' /mnt/e/MyWork/gnome-remote/systemd/gnome-remote-agent.service"`
+Run: `wsl -e bash -l -c "grep -E 'KillMode|ExecReload|Type=notify' /mnt/e/MyWork/quirel/systemd/quireld.service"`
 Expected: 输出包含 `KillMode=process`、`ExecReload=/bin/kill -HUP $MAINPID`、`Type=notify`
 
 - [ ] **Step 4: 提示用户提交**
@@ -1145,7 +1145,7 @@ install.sh 内联生成的 service 缺少 Phase 4 热更新配置：
 - 添加 LimitNOFILE=65536
 - 添加 network-online.target 依赖
 
-改为优先复制项目根目录的 systemd/gnome-remote-agent.service 模板，
+改为优先复制项目根目录的 systemd/quireld.service 模板，
 找不到模板时使用包含完整配置的内联 fallback。"
 ```
 
@@ -1183,7 +1183,7 @@ fn systemd_service_path() -> PathBuf {
         .parent()
         .unwrap_or(&project_root())
         .join("systemd")
-        .join("gnome-remote-agent.service")
+        .join("quireld.service")
 }
 
 #[test]
@@ -1272,7 +1272,7 @@ fn test_install_script_uses_service_template() {
 
     // 验证 install.sh 引用 service 模板
     assert!(
-        content.contains("gnome-remote-agent.service") || content.contains("SERVICE_TEMPLATE"),
+        content.contains("quireld.service") || content.contains("SERVICE_TEMPLATE"),
         "install.sh should reference the systemd service template file"
     );
 
@@ -1334,12 +1334,12 @@ fn test_systemd_service_syntax() {
 
 - [ ] **Step 2: 验证编译通过**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo test --test deploy_test --no-run 2>&1 | tail -5"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo test --test deploy_test --no-run 2>&1 | tail -5"`
 Expected: `Finished` 无错误
 
 - [ ] **Step 3: 运行部署验证测试**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo test --test deploy_test -- --nocapture 2>&1 | tail -15"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo test --test deploy_test -- --nocapture 2>&1 | tail -15"`
 Expected: 所有测试 `ok`
 
 - [ ] **Step 4: 提示用户提交**
@@ -1365,22 +1365,22 @@ Expected: 所有测试 `ok`
 
 - [ ] **Step 1: 运行全部单元测试**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo test --lib 2>&1 | tail -5"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo test --lib 2>&1 | tail -5"`
 Expected: `test result: ok. 82 passed; 0 failed`
 
 - [ ] **Step 2: 运行全部集成测试（非 ignored）**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo test --tests 2>&1 | tail -20"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo test --tests 2>&1 | tail -20"`
 Expected: 所有非 ignored 测试通过
 
 - [ ] **Step 3: 运行性能基准测试**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo test --test bench_test -- --ignored --nocapture 2>&1 | tail -20"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo test --test bench_test -- --ignored --nocapture 2>&1 | tail -20"`
 Expected: 输出基准数据（avg/median/p99）
 
 - [ ] **Step 4: 运行压力测试（FD 泄漏检测，不运行 5 分钟测试）**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo test --test stress_test test_fd_leak_detection -- --ignored --nocapture 2>&1 | tail -10"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo test --test stress_test test_fd_leak_detection -- --ignored --nocapture 2>&1 | tail -10"`
 Expected: `test test_fd_leak_detection ... ok`
 
 - [ ] **Step 5: 更新 TASK_BREAKDOWN.md**
