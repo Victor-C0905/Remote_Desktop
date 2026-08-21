@@ -10,8 +10,8 @@
 use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
-use gnome_remote_agent::manager::{IpcServer, PtyRegistry, WorkerManager};
-use gnome_remote_agent::protocol::generated::{
+use quireld::manager::{IpcServer, PtyRegistry, WorkerManager};
+use quireld::protocol::generated::{
     ManagerRequest, manager_request,
     ReadDir,
 };
@@ -36,7 +36,7 @@ impl TestEnv {
         // 创建并启动 IpcServer
         let registry = Arc::new(PtyRegistry::new());
         let worker_manager = Arc::new(WorkerManager::new(
-            "agent".to_string(),
+            "quireld".to_string(),
             socket_path.clone(),
             3,
         ));
@@ -48,15 +48,15 @@ impl TestEnv {
         ));
         server.start().await.expect("Failed to start IPC server");
 
-        // 获取 agent 二进制路径
-        // 测试二进制位于 target/<profile>/deps/，而 agent 二进制位于 target/<profile>/
+        // 获取 quireld 二进制路径
+        // 测试二进制位于 target/<profile>/deps/，而 quireld 二进制位于 target/<profile>/
         let agent_binary = std::env::current_exe()
             .expect("Failed to get current exe path")
             .parent()
             .expect("Failed to get parent dir")
             .parent()
             .expect("Failed to get grandparent dir")
-            .join("agent");
+            .join("quireld");
 
         // 启动 Worker 子进程
         let worker_process = Command::new(&agent_binary)

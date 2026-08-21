@@ -22,7 +22,7 @@
  *
  * 标准应用侧边栏样式:
  * - 固定宽度(默认 240px,可通过 style 属性自定义)
- * - 背景色跟随主题(--ovelis-sidebar-bg)
+ * - 背景色跟随主题(--quirel-sidebar-bg)
  * - 右侧边框分隔 Sidebar 和 Main 区域
  * - 独立滚动条(overflow-y: auto)
  * - flex-shrink: 0 防止宽度压缩
@@ -30,8 +30,8 @@
 .appSidebar {
   flex-shrink: 0; /* 固定宽度,不压缩 */
   width: var(--app-sidebar-width, 240px); /* ✅ 通过 CSS 变量控制，默认 240px */
-  background: var(--ovelis-sidebar-bg);
-  border-right: 1px solid var(--ovelis-border-color);
+  background: var(--quirel-sidebar-bg);
+  border-right: 1px solid var(--quirel-border-color);
   overflow-y: auto; /* Sidebar 内容独立滚动 */
   overflow-x: hidden; /* 防止横向滚动 */
 }

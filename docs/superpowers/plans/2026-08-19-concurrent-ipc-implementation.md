@@ -12,7 +12,7 @@
 
 #### Task 1: 添加 dashmap 依赖
 
-**文件**：[Cargo.toml](file:///e:\MyWork\gnome-remote\agent\Cargo.toml)
+**文件**：[Cargo.toml](file:///e:\MyWork\quirel\agent\Cargo.toml)
 
 **操作**：
 ```toml
@@ -30,8 +30,8 @@ dashmap = "6"
 #### Task 2: 添加 ipc_channel_capacity 配置项
 
 **文件**：
-- [config.rs](file:///e:\MyWork\gnome-remote\agent\src\config.rs)：WorkerConfig 新增字段
-- [agent.dev.toml](file:///e:\MyWork\gnome-remote\agent\agent.dev.toml) / [agent.prod.toml](file:///e:\MyWork\gnome-remote\agent\agent.prod.toml)：示例配置
+- [config.rs](file:///e:\MyWork\quirel\agent\src\config.rs)：WorkerConfig 新增字段
+- [agent.dev.toml](file:///e:\MyWork\quirel\agent\agent.dev.toml) / [agent.prod.toml](file:///e:\MyWork\quirel\agent\agent.prod.toml)：示例配置
 
 **操作**：
 ```rust
@@ -56,7 +56,7 @@ fn default_ipc_channel_capacity() -> usize { 128 }
 
 #### Task 3: IpcServer 结构改造
 
-**文件**：[ipc_server.rs](file:///e:\MyWork\gnome-remote\agent\src\manager\ipc_server.rs)
+**文件**：[ipc_server.rs](file:///e:\MyWork\quirel\agent\src\manager\ipc_server.rs)
 
 **操作**：
 1. 新增 `RequestItem` 结构
@@ -73,7 +73,7 @@ fn default_ipc_channel_capacity() -> usize { 128 }
 
 #### Task 4: 实现 dispatcher task
 
-**文件**：[ipc_server.rs](file:///e:\MyWork\gnome-remote\agent\src\manager\ipc_server.rs)
+**文件**：[ipc_server.rs](file:///e:\MyWork\quirel\agent\src\manager\ipc_server.rs)
 
 **操作**：
 1. 新增 `run_dispatcher` 私有异步函数
@@ -88,7 +88,7 @@ fn default_ipc_channel_capacity() -> usize { 128 }
 
 #### Task 5: 重写 send_request / create_pty_session
 
-**文件**：[ipc_server.rs](file:///e:\MyWork\gnome-remote\agent\src\manager\ipc_server.rs)
+**文件**：[ipc_server.rs](file:///e:\MyWork\quirel\agent\src\manager\ipc_server.rs)
 
 **操作**：
 1. `send_request` 改为 mpsc::send + oneshot::recv 模式
@@ -103,7 +103,7 @@ fn default_ipc_channel_capacity() -> usize { 128 }
 
 #### Task 6: 修复 run / stop / accept_and_set_pid
 
-**文件**：[ipc_server.rs](file:///e:\MyWork\gnome-remote\agent\src\manager\ipc_server.rs)
+**文件**：[ipc_server.rs](file:///e:\MyWork\quirel\agent\src\manager\ipc_server.rs)
 
 **操作**：
 1. `accept_and_set_pid`：Worker 连接到达时，split UnixStream，启动新 dispatcher，abort 旧 dispatcher
@@ -118,7 +118,7 @@ fn default_ipc_channel_capacity() -> usize { 128 }
 
 #### Task 7: Manager::new 传递 channel_capacity
 
-**文件**：[mod.rs](file:///e:\MyWork\gnome-remote\agent\src\manager\mod.rs)
+**文件**：[mod.rs](file:///e:\MyWork\quirel\agent\src\manager\mod.rs)
 
 **操作**：
 1. `Manager::new` 读取 `config.worker.ipc_channel_capacity`
@@ -134,7 +134,7 @@ fn default_ipc_channel_capacity() -> usize { 128 }
 
 #### Task 8: ForkGuard 引入
 
-**文件**：[executor.rs](file:///e:\MyWork\gnome-remote\agent\src\auth\executor.rs)
+**文件**：[executor.rs](file:///e:\MyWork\quirel\agent\src\auth\executor.rs)
 
 **操作**：
 1. 新增 `static FORK_GUARD: std::sync::Mutex<()>`
@@ -149,7 +149,7 @@ fn default_ipc_channel_capacity() -> usize { 128 }
 
 #### Task 9: 子命令实现（main.rs）
 
-**文件**：[main.rs](file:///e:\MyWork\gnome-remote\agent\src\main.rs)
+**文件**：[main.rs](file:///e:\MyWork\quirel\agent\src\main.rs)
 
 **操作**：
 1. Args 新增 5 个子命令参数（`--isolated-writer` 等）和通用参数（`--uid` `--gid` `--final-path` `--part-paths`）
@@ -165,7 +165,7 @@ fn default_ipc_channel_capacity() -> usize { 128 }
 
 #### Task 10: executor.rs 改造 spawn_isolated_*
 
-**文件**：[executor.rs](file:///e:\MyWork\gnome-remote\agent\src\auth\executor.rs)
+**文件**：[executor.rs](file:///e:\MyWork\quirel\agent\src\auth\executor.rs)
 
 **操作**：
 1. `spawn_isolated_writer`：fork + os_pipe → posix_spawn + std::process::Command
@@ -185,7 +185,7 @@ fn default_ipc_channel_capacity() -> usize { 128 }
 
 #### Task 11: file_stream.rs 类型适配
 
-**文件**：[file_stream.rs](file:///e:\MyWork\gnome-remote\agent\src\file_stream.rs)
+**文件**：[file_stream.rs](file:///e:\MyWork\quirel\agent\src\file_stream.rs)
 
 **操作**：
 1. `PipeFileStreamWriter.pipe_writer` 字段类型：`os_pipe::PipeWriter` → `std::process::ChildStdin`
@@ -203,8 +203,8 @@ fn default_ipc_channel_capacity() -> usize { 128 }
 #### Task 12: handler.rs / quic.rs 适配
 
 **文件**：
-- [handler.rs](file:///e:\MyWork\gnome-remote\agent\src\handler.rs)
-- [quic.rs](file:///e:\MyWork\gnome-remote\agent\src\server\quic.rs)
+- [handler.rs](file:///e:\MyWork\quirel\agent\src\handler.rs)
+- [quic.rs](file:///e:\MyWork\quirel\agent\src\server\quic.rs)
 
 **操作**：
 1. handler.rs:519 的 `execute_as_user` 改为 `get_metadata_async`
@@ -222,7 +222,7 @@ fn default_ipc_channel_capacity() -> usize { 128 }
 
 #### Task 13: 并发回归测试
 
-**文件**：[ipc_server.rs](file:///e:\MyWork\gnome-remote\agent\src\manager\ipc_server.rs)（测试模块）
+**文件**：[ipc_server.rs](file:///e:\MyWork\quirel\agent\src\manager\ipc_server.rs)（测试模块）
 
 **操作**：
 1. 新增 `test_concurrent_requests_no_race` 测试
@@ -236,7 +236,7 @@ fn default_ipc_channel_capacity() -> usize { 128 }
 
 #### Task 14: 子命令单元测试
 
-**文件**：[main.rs](file:///e:\MyWork\gnome-remote\agent\src\main.rs)（测试模块）或新建 tests/isolated_command.rs
+**文件**：[main.rs](file:///e:\MyWork\quirel\agent\src\main.rs)（测试模块）或新建 tests/isolated_command.rs
 
 **操作**：
 1. 测试 `run_isolated_writer`：写 stdin → 验证文件内容 + rename
@@ -258,8 +258,8 @@ fn default_ipc_channel_capacity() -> usize { 128 }
 4. 移除 `os_pipe` 依赖（Cargo.toml）
 
 **文件**：
-- [Cargo.toml](file:///e:\MyWork\gnome-remote\agent\Cargo.toml)：移除 `os_pipe = "1"`
-- [executor.rs](file:///e:\MyWork\gnome-remote\agent\src\auth\executor.rs)：移除 `use os_pipe` 或 `extern crate os_pipe`
+- [Cargo.toml](file:///e:\MyWork\quirel\agent\Cargo.toml)：移除 `os_pipe = "1"`
+- [executor.rs](file:///e:\MyWork\quirel\agent\src\auth\executor.rs)：移除 `use os_pipe` 或 `extern crate os_pipe`
 
 **验证**：
 - `cargo build --release` 零错误零警告

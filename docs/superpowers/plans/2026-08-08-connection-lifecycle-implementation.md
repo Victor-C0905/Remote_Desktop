@@ -503,7 +503,7 @@ Expected: 编译通过
 
 1. 启动应用，连接服务器
 2. 打开终端，开始一个命令（如 `top`）
-3. 在服务器上执行 `systemctl restart gnome-remote-agent`
+3. 在服务器上执行 `systemctl restart quireld`
 4. 验证：10s 内检测到断连（心跳超时），传输任务变为 cancelled，服务器状态变为 disconnected
 
 - [ ] **Step 5: 手动测试——心跳不被业务请求阻塞**

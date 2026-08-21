@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust(clap 4 / serde / build.rs)、TypeScript(React / Zustand / Tauri 2)、PowerShell(发布脚本)
 
-**关联 spec:** [docs/superpowers/specs/2026-08-21-version-system-design.md](file:///e:/MyWork/gnome-remote/docs/superpowers/specs/2026-08-21-version-system-design.md)
+**关联 spec:** [docs/superpowers/specs/2026-08-21-version-system-design.md](file:///e:/MyWork/quirel/docs/superpowers/specs/2026-08-21-version-system-design.md)
 
 **Git 规则:** 本计划所有 commit step 仅打印建议命令,由用户手动执行 git;实现过程不自动 `git add`/`git commit`/`git push`。
 
@@ -46,7 +46,7 @@
 ```rust
 #[test]
 fn test_auth_response_serializes_agent_version() {
-    use gnome_remote_agent::protocol::Payload;
+    use quireld::protocol::Payload;
 
     // 成功响应带 agent_version
     let payload = Payload::AuthResponse {
@@ -55,7 +55,7 @@ fn test_auth_response_serializes_agent_version() {
         session_id: Some("sess-123".into()),
         agent_version: Some("0.2.0".into()),
     };
-    let env = gnome_remote_agent::protocol::Envelope::new(1, payload);
+    let env = quireld::protocol::Envelope::new(1, payload);
     let json = env.encode().unwrap();
     let json_str = String::from_utf8(json).unwrap();
     assert!(json_str.contains(r#""agent_version":"0.2.0""#), "agent_version 应被序列化: {}", json_str);
@@ -67,7 +67,7 @@ fn test_auth_response_serializes_agent_version() {
         session_id: None,
         agent_version: None,
     };
-    let env_old = gnome_remote_agent::protocol::Envelope::new(2, payload_old);
+    let env_old = quireld::protocol::Envelope::new(2, payload_old);
     let json_old = String::from_utf8(env_old.encode().unwrap()).unwrap();
     assert!(!json_old.contains("agent_version"), "None 时不应序列化 agent_version: {}", json_old);
 }
@@ -76,8 +76,8 @@ fn test_auth_response_serializes_agent_version() {
 fn test_auth_response_deserializes_without_agent_version() {
     // 旧 Agent 发的响应(无 agent_version 字段)能被新 Client 解析,字段为 None
     let json = r#"{"request_id":3,"payload":{"type":"auth_response","data":{"success":true,"error":null,"session_id":"sess-x"}}}"#;
-    let env: gnome_remote_agent::protocol::Envelope = serde_json::from_str(json).unwrap();
-    if let gnome_remote_agent::protocol::Payload::AuthResponse { agent_version, .. } = env.payload {
+    let env: quireld::protocol::Envelope = serde_json::from_str(json).unwrap();
+    if let quireld::protocol::Payload::AuthResponse { agent_version, .. } = env.payload {
         assert_eq!(agent_version, None, "缺失字段应反序列化为 None");
     } else {
         panic!("期望 AuthResponse");
@@ -224,8 +224,8 @@ git commit -m "feat(agent): send_auth_response 填入 agent_version=CARGO_PKG_VE
 
 ```rust
 #[derive(Parser, Debug)]
-#[command(name = "gnome-remote-agent")]
-#[command(version, about = "GNOME Remote Control — 远程 Agent 服务端")]
+#[command(name = "quireld")]
+#[command(version, about = "Quirel Control — 远程 Agent 服务端")]
 struct Args {
 ```
 
@@ -236,22 +236,22 @@ struct Args {
 在 `agent/src/main.rs` 的 `init_logging` 调用之后、进入 worker/manager 业务逻辑之前(搜索 `init_logging` 调用处,在其后),插入:
 
 ```rust
-tracing::info!(version = env!("CARGO_PKG_VERSION"), "gnome-remote-agent starting");
+tracing::info!(version = env!("CARGO_PKG_VERSION"), "quireld starting");
 ```
 
 - [ ] **Step 3: 验证 --version 输出**
 
 Run(WSL,`agent/`): `cargo run --bin agent -- --version`
-Expected: 输出 `gnome-remote-agent 0.1.0`(当前 Cargo.toml 版本)。
+Expected: 输出 `quireld 0.1.0`(当前 Cargo.toml 版本)。
 
 - [ ] **Step 4: 验证 -V 简写**
 
 Run: `cargo run --bin agent -- -V`
-Expected: 同样输出 `gnome-remote-agent 0.1.0`。
+Expected: 同样输出 `quireld 0.1.0`。
 
 - [ ] **Step 5: 验证启动日志**
 
-Run: `cargo run --bin agent -- --config agent.toml`(若需配置,或用 `--help` 查可用参数,然后短时启动观察首行日志)
+Run: `cargo run --bin agent -- --config quireld.toml`(若需配置,或用 `--help` 查可用参数,然后短时启动观察首行日志)
 Expected: 首条 info 日志含 `version=0.1.0`。Ctrl+C 退出。
 
 - [ ] **Step 6: 提交(用户手动执行)**
@@ -669,7 +669,7 @@ import { CLIENT_VERSION } from '../config/version';
                   : 'Agent: 未连接'}
               </div>
               <div className="st-about-desc">
-                基于 GNOME 设计系统的远程 Linux 服务器控制客户端
+                基于 Adwaita 设计系统的远程 Linux 服务器控制客户端
               </div>
 ```
 

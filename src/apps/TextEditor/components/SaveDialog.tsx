@@ -4,7 +4,7 @@
  * 用于文本编辑器的"另存为"功能
  * 当用户保存新文件时，弹出此对话框让用户输入远程路径
  *
- * 设计遵循 GNOME HIG 规范：
+ * 设计遵循 Adwaita HIG 规范：
  * - 使用 Adwaita 设计系统的 CSS 变量
  * - 半透明遮罩层 + 圆角对话框
  * - 标题 + 内容区 + 操作按钮区
@@ -106,8 +106,8 @@ export function SaveDialog({ isOpen, defaultPath, onSave, onCancel }: SaveDialog
     >
       <div
         style={{
-          background: 'var(--ovelis-view-bg)',
-          border: '1px solid var(--ovelis-border-color)',
+          background: 'var(--quirel-view-bg)',
+          border: '1px solid var(--quirel-border-color)',
           borderRadius: 'var(--radius-lg)',
           padding: '24px',
           minWidth: '400px',
@@ -121,7 +121,7 @@ export function SaveDialog({ isOpen, defaultPath, onSave, onCancel }: SaveDialog
           style={{
             fontSize: '16px',
             fontWeight: 600,
-            color: 'var(--ovelis-text-primary)',
+            color: 'var(--quirel-text-primary)',
             marginBottom: '16px',
           }}
         >
@@ -135,7 +135,7 @@ export function SaveDialog({ isOpen, defaultPath, onSave, onCancel }: SaveDialog
             style={{
               display: 'block',
               fontSize: '13px',
-              color: 'var(--ovelis-text-secondary)',
+              color: 'var(--quirel-text-secondary)',
               marginBottom: '6px',
             }}
           >
@@ -153,16 +153,16 @@ export function SaveDialog({ isOpen, defaultPath, onSave, onCancel }: SaveDialog
             style={{
               width: '100%',
               padding: '8px 12px',
-              background: 'var(--ovelis-window-bg)',
-              border: '1px solid var(--ovelis-border-color)',
+              background: 'var(--quirel-window-bg)',
+              border: '1px solid var(--quirel-border-color)',
               borderRadius: 'var(--radius-sm)',
-              color: 'var(--ovelis-text-primary)',
+              color: 'var(--quirel-text-primary)',
               fontSize: '14px',
               fontFamily: 'var(--font-mono)',
               outline: 'none',
             }}
             onFocus={(e) => {
-              e.target.style.outline = '2px solid var(--ovelis-accent-bg)';
+              e.target.style.outline = '2px solid var(--quirel-accent-bg)';
               e.target.style.outlineOffset = '2px';
             }}
             onBlur={(e) => {
@@ -187,16 +187,16 @@ export function SaveDialog({ isOpen, defaultPath, onSave, onCancel }: SaveDialog
               borderRadius: 'var(--radius-sm)',
               fontSize: '13px',
               cursor: 'pointer',
-              background: 'var(--ovelis-card-bg)',
-              border: '1px solid var(--ovelis-border-color)',
-              color: 'var(--ovelis-text-primary)',
+              background: 'var(--quirel-card-bg)',
+              border: '1px solid var(--quirel-border-color)',
+              color: 'var(--quirel-text-primary)',
               transition: 'background var(--duration-fast) var(--ease-out)',
             }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'var(--ovelis-headerbar-bg)';
+              e.currentTarget.style.background = 'var(--quirel-headerbar-bg)';
             }}
             onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'var(--ovelis-card-bg)';
+              e.currentTarget.style.background = 'var(--quirel-card-bg)';
             }}
           >
             取消
@@ -211,20 +211,20 @@ export function SaveDialog({ isOpen, defaultPath, onSave, onCancel }: SaveDialog
               borderRadius: 'var(--radius-sm)',
               fontSize: '13px',
               cursor: path.trim() ? 'pointer' : 'not-allowed',
-              background: path.trim() ? 'var(--ovelis-accent-bg)' : 'var(--ovelis-text-disabled)',
-              border: '1px solid var(--ovelis-accent-bg)',
-              color: 'var(--ovelis-accent-fg)',
+              background: path.trim() ? 'var(--quirel-accent-bg)' : 'var(--quirel-text-disabled)',
+              border: '1px solid var(--quirel-accent-bg)',
+              color: 'var(--quirel-accent-fg)',
               transition: 'background var(--duration-fast) var(--ease-out)',
               opacity: path.trim() ? 1 : 0.6,
             }}
             onMouseEnter={(e) => {
               if (path.trim()) {
-                e.currentTarget.style.background = 'var(--ovelis-accent-hover)';
+                e.currentTarget.style.background = 'var(--quirel-accent-hover)';
               }
             }}
             onMouseLeave={(e) => {
               if (path.trim()) {
-                e.currentTarget.style.background = 'var(--ovelis-accent-bg)';
+                e.currentTarget.style.background = 'var(--quirel-accent-bg)';
               }
             }}
           >

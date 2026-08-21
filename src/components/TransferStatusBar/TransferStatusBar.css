@@ -1,4 +1,4 @@
-/* 传输状态栏组件样式（GNOME Adwaita 风格） */
+/* 传输状态栏组件样式（Adwaita 风格） */
 
 .transfer-status-bar {
   position: relative; /* 为 TransferPanel 提供定位上下文 */
@@ -16,7 +16,7 @@
   /* 字体 */
   font-family: var(--font-ui);
   font-size: var(--font-body);
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
 
   /* 可点击样式 */
   cursor: pointer;
@@ -45,13 +45,13 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--ovelis-accent-bg);
+  color: var(--quirel-accent-bg);
 }
 
 .tsb-count {
   font-size: 12px;
   font-weight: 600;
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
   min-width: 16px;
   text-align: center;
 }
@@ -60,14 +60,14 @@
 .tsb-progress-mini {
   width: 80px;
   height: 4px;
-  background: var(--ovelis-border-color);
+  background: var(--quirel-border-color);
   border-radius: 2px;
   overflow: hidden;
 }
 
 .tsb-progress-fill {
   height: 100%;
-  background: var(--ovelis-accent-bg);
+  background: var(--quirel-accent-bg);
   border-radius: 2px;
   transition: width 0.3s ease;
 }
@@ -82,14 +82,14 @@
 .tsb-percent {
   font-size: 12px;
   font-weight: 500;
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   min-width: 32px;
   text-align: right;
 }
 
 /* 空状态百分比（更柔和） */
 .tsb-percent-empty {
-  color: var(--ovelis-text-disabled);
+  color: var(--quirel-text-disabled);
   font-weight: 400;
 }
 
@@ -99,12 +99,12 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   transition: color 0.15s ease;
 }
 
 .transfer-status-bar:hover .tsb-toggle-indicator {
-  color: var(--ovelis-accent-bg);
+  color: var(--quirel-accent-bg);
 }
 
 .tsb-toggle-icon {

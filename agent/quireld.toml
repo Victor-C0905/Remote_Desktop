@@ -1,4 +1,4 @@
-# GNOME Remote Agent 配置文件
+# Quireld 配置文件
 
 [server]
 bind = "0.0.0.0"
@@ -29,7 +29,7 @@ process_scan_interval_secs = 2
 service_status_interval_secs = 5
 
 [audit]
-log_path = "/var/log/gnome-remote/audit.log"
+log_path = "/var/log/quireld/audit.log"
 
 [log]
 # 日志级别: trace, debug, info, warn, error
@@ -38,10 +38,10 @@ level = "info"
 dir = "logs"
 
 [worker]
-# Agent 二进制路径(相对于 agent 进程工作目录)
-agent_binary = "./target/release/agent"
+# Agent 二进制路径(相对于 quireld 进程工作目录)
+agent_binary = "./target/release/quireld"
 # IPC Socket 路径
-ipc_socket_path = "/tmp/gnome-remote-worker.sock"
+ipc_socket_path = "/tmp/quireld-worker.sock"
 # 最大重启次数
 max_restarts = 3
 # IPC 请求 channel 容量（Manager 侧 dispatcher 的 mpsc channel 大小）

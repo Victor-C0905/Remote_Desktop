@@ -1,5 +1,5 @@
 // src-tauri/src/terminal.rs
-// 远程终端 Tauri commands（符合 GNOME Terminal 标准）
+// 远程终端 Tauri commands（符合 Adwaita Terminal 标准）
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -67,7 +67,7 @@ impl Default for TerminalStreamManager {
 
 // ── Tauri Commands ─────────────────────────────────
 
-/// 创建远程终端会话（符合 GNOME Terminal 标准）
+/// 创建远程终端会话（符合 Adwaita Terminal 标准）
 #[tauri::command]
 #[tracing::instrument(skip(app), fields(server_id = %server_id))]
 pub async fn remote_spawn_terminal(

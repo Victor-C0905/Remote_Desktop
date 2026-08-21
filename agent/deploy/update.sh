@@ -1,17 +1,17 @@
 #!/bin/bash
-# GNOME Remote Agent 更新脚本
+# Quireld 更新脚本
 #
 # 标准更新流程:
 #   1. 备份旧版本
 #   2. rm + cp 替换二进制文件（不需要 stop，rm unlink 不影响运行中进程）
 #   3. 重启服务加载新二进制
 #      - SSH 终端：直接 systemctl restart，等待完成并验证
-#      - agent 终端：nohup 后台执行 restart，避免 SIGHUP 杀掉 systemctl
+#      - quireld 终端：nohup 后台执行 restart，避免 SIGHUP 杀掉 systemctl
 #
 # 关键原理:
 #   - rm(unlink) 只删除目录项，运行中进程持有的 inode 不受影响
 #   - cp 创建新文件（新 inode），不会触发 ETXTBSY
-#   - 通过 agent 终端执行时，systemctl restart 的 stop 会杀掉 agent，
+#   - 通过 quireld 终端执行时，systemctl restart 的 stop 会杀掉 quireld，
 #     导致 PTY 关闭 → bash 收到 SIGHUP → systemctl 进程被杀 → start 不执行
 #   - 用 nohup 后台执行 restart，systemctl 进程脱离 SIGHUP 影响，
 #     systemd(PID 1) 完成 stop + start 全流程
@@ -25,13 +25,13 @@ set -e
 # 显示帮助信息
 show_help() {
     cat << EOF
-GNOME Remote Agent 更新工具
+Quireld 更新工具
 
 用法:
     $0 [选项]
 
 选项:
-    --name NAME     服务名称 (默认: gnome-remote-agent)
+    --name NAME     服务名称 (默认: quireld)
     --help          显示此帮助信息
 
 示例:
@@ -47,8 +47,8 @@ GNOME Remote Agent 更新工具
     3. 重启服务（自动检测运行环境）
     4. 验证服务状态
 
-可通过 gnome-remote 终端安全执行:
-    脚本自动检测是否在 agent 管理的终端中运行。
+可通过 quireld 终端安全执行:
+    脚本自动检测是否在 quireld 管理的终端中运行。
     如果是，用 nohup 后台执行 restart，避免 SIGHUP 中断。
     用户需等待几秒后重新连接。
 
@@ -57,7 +57,7 @@ EOF
 }
 
 # 解析命令行参数
-SERVICE_NAME="gnome-remote-agent"
+SERVICE_NAME="quireld"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -87,20 +87,20 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PARENT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# 打包部署: agent 二进制在 deploy/ 同目录(用户上传覆盖);agent.toml 可选(仅首次安装用)
-# 源码部署: agent 在 ../target/release/ 或 ../target/debug/,agent.*.toml 在上级
-if [ -f "$SCRIPT_DIR/agent" ]; then
-    NEW_BINARY="$SCRIPT_DIR/agent"
-    NEW_CONFIG="$SCRIPT_DIR/agent.toml"
-elif [ -f "$PARENT_DIR/target/release/agent" ]; then
-    NEW_BINARY="$PARENT_DIR/target/release/agent"
-    NEW_CONFIG="$PARENT_DIR/agent.prod.toml"
-elif [ -f "$PARENT_DIR/target/debug/agent" ]; then
-    NEW_BINARY="$PARENT_DIR/target/debug/agent"
-    NEW_CONFIG="$PARENT_DIR/agent.dev.toml"
+# 打包部署: quireld 二进制在 deploy/ 同目录(用户上传覆盖);quireld.toml 可选(仅首次安装用)
+# 源码部署: quireld 在 ../target/release/ 或 ../target/debug/,quireld.*.toml 在上级
+if [ -f "$SCRIPT_DIR/quireld" ]; then
+    NEW_BINARY="$SCRIPT_DIR/quireld"
+    NEW_CONFIG="$SCRIPT_DIR/quireld.toml"
+elif [ -f "$PARENT_DIR/target/release/quireld" ]; then
+    NEW_BINARY="$PARENT_DIR/target/release/quireld"
+    NEW_CONFIG="$PARENT_DIR/quireld.prod.toml"
+elif [ -f "$PARENT_DIR/target/debug/quireld" ]; then
+    NEW_BINARY="$PARENT_DIR/target/debug/quireld"
+    NEW_CONFIG="$PARENT_DIR/quireld.dev.toml"
 else
     echo "错误: 未找到新版本二进制文件"
-    echo "已查找: $SCRIPT_DIR/agent, $PARENT_DIR/target/release/agent, $PARENT_DIR/target/debug/agent"
+    echo "已查找: $SCRIPT_DIR/quireld, $PARENT_DIR/target/release/quireld, $PARENT_DIR/target/debug/quireld"
     echo "请先运行: bash build.sh release"
     exit 1
 fi
@@ -120,9 +120,9 @@ if [ ! -f "$OLD_BINARY" ]; then
     exit 1
 fi
 
-# 检测当前是否在 agent 管理的终端中运行
-# 遍历父进程链，检查是否有 gnome-remote-agent
-is_under_agent() {
+# 检测当前是否在 quireld 管理的终端中运行
+# 遍历父进程链，检查是否有 quireld
+is_under_quireld() {
     local pid=$$
     while [ "$pid" != "1" ] && [ -n "$pid" ]; do
         local cmdline
@@ -138,7 +138,7 @@ is_under_agent() {
 # 显示更新信息
 echo ""
 echo "================================"
-echo "  GNOME Remote Agent 更新"
+echo "  Quireld 更新"
 echo "================================"
 echo "  服务名称: $SERVICE_NAME"
 echo "  旧版本: $OLD_BINARY"
@@ -171,15 +171,15 @@ echo ">>> [2/4] 替换二进制文件..."
 rm -f "$OLD_BINARY"
 cp "$NEW_BINARY" "$OLD_BINARY"
 chmod +x "$OLD_BINARY"
-# 配置策略:用户传了 agent.toml 则覆盖(备份旧配置),未传则保留远程配置
-# 这样用户改了配置后,传 agent.toml + 二进制一起更新;只传二进制则配置不变
-CONFIG_PATH="/etc/$SERVICE_NAME/agent.toml"
+# 配置策略:用户传了 quireld.toml 则覆盖(备份旧配置),未传则保留远程配置
+# 这样用户改了配置后,传 quireld.toml + 二进制一起更新;只传二进制则配置不变
+CONFIG_PATH="/etc/$SERVICE_NAME/quireld.toml"
 if [ -f "$NEW_CONFIG" ]; then
     if [ -f "$CONFIG_PATH" ]; then
         cp "$CONFIG_PATH" "$CONFIG_PATH.bak"
     fi
     cp "$NEW_CONFIG" "$CONFIG_PATH"
-    echo "  配置已更新(旧配置备份为 agent.toml.bak)"
+    echo "  配置已更新(旧配置备份为 quireld.toml.bak)"
 else
     if [ -f "$CONFIG_PATH" ]; then
         echo "  配置已保留(未传新配置)"
@@ -192,8 +192,8 @@ echo "程序已更新"
 # 3/4 重启服务
 echo ">>> [3/4] 重启服务..."
 
-if is_under_agent; then
-    # 通过 agent 终端执行：systemctl restart 的 stop 会杀掉 agent，
+if is_under_quireld; then
+    # 通过 quireld 终端执行：systemctl restart 的 stop 会杀掉 quireld，
     # 导致 PTY 关闭 → bash 收到 SIGHUP → systemctl 进程被杀 → start 不执行
     # 解决：用 nohup 后台执行 restart，systemd(PID 1) 完成 stop + start 全流程
     echo "  检测到当前终端由 $SERVICE_NAME 管理"
@@ -205,7 +205,7 @@ if is_under_agent; then
     echo "  服务正在后台重启，当前终端即将断开"
     echo "  请等待 5-10 秒后重新连接"
     echo ""
-    # 脚本退出，agent 被 stop 后 PTY 关闭，但 nohup 的子进程不受影响
+    # 脚本退出，quireld 被 stop 后 PTY 关闭，但 nohup 的子进程不受影响
     exit 0
 else
     # 通过 SSH 终端执行：直接 restart，等待完成并验证

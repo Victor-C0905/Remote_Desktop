@@ -174,7 +174,7 @@ Manager 重启期间，Session 进程的 socket 连接断开。Session 不立即
 Session 进程使用 Linux abstract socket（不创建文件）：
 
 ```
-socket 名称: \0gnome-remote-session-{session_id}
+socket 名称: \0quirel-session-{session_id}
 ```
 
 优势：

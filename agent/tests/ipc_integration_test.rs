@@ -6,7 +6,7 @@
 #![cfg(unix)]
 
 use std::sync::Arc;
-use gnome_remote_agent::manager::{IpcServer, PtyRegistry, WorkerManager};
+use quireld::manager::{IpcServer, PtyRegistry, WorkerManager};
 
 #[tokio::test]
 async fn test_ipc_server_with_pty_registry() {
@@ -15,7 +15,7 @@ async fn test_ipc_server_with_pty_registry() {
 
     // 创建 WorkerManager
     let worker_manager = Arc::new(WorkerManager::new(
-        "/usr/bin/agent".to_string(),
+        "/usr/bin/quireld".to_string(),
         "/tmp/test.sock".to_string(),
         3
     ));
@@ -46,7 +46,7 @@ async fn test_ipc_server_with_pty_registry() {
 async fn test_multiple_start_stop_cycles() {
     let registry = Arc::new(PtyRegistry::new());
     let worker_manager = Arc::new(WorkerManager::new(
-        "/usr/bin/agent".to_string(),
+        "/usr/bin/quireld".to_string(),
         "/tmp/test.sock".to_string(),
         3
     ));
@@ -74,7 +74,7 @@ async fn test_worker_status_event_integration() {
     // 测试 WorkerManager 和 IpcServer 的事件集成
     let registry = Arc::new(PtyRegistry::new());
     let worker_manager = Arc::new(WorkerManager::new(
-        "/usr/bin/agent".to_string(),
+        "/usr/bin/quireld".to_string(),
         "/tmp/test_worker.sock".to_string(),
         3
     ));
@@ -99,9 +99,9 @@ async fn test_worker_status_event_integration() {
 #[tokio::test]
 async fn test_manager_creation() {
     // 测试 Manager 创建（需要配置）
-    use gnome_remote_agent::config::AgentConfig;
+    use quireld::config::AgentConfig;
 
     let config = AgentConfig::default();
-    let result = gnome_remote_agent::manager::Manager::new(&config).await;
+    let result = quireld::manager::Manager::new(&config).await;
     assert!(result.is_ok());
 }

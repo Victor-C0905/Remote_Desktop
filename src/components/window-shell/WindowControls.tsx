@@ -1,5 +1,5 @@
 // src/components/window-shell/WindowControls.tsx
-// 窗口控制按钮 - GNOME 风格：黄绿红圆点
+// 窗口控制按钮 - Adwaita 风格：黄绿红圆点
 
 import { memo } from "react";
 import styles from "./WindowControls.module.css";
@@ -13,7 +13,7 @@ export interface WindowControlsProps {
 /**
  * WindowControls - 窗口控制按钮
  *
- * GNOME 风格：黄绿红圆点（最小化/最大化/关闭）
+ * Adwaita 风格：黄绿红圆点（最小化/最大化/关闭）
  * 完全独立，不受应用样式影响
  */
 export const WindowControls = memo(function WindowControls({

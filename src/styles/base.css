@@ -1,5 +1,5 @@
 /* ============================================================
-   Base Styles — GNOME Remote Client
+   Base Styles — Quirel Client
    最小化全局重置样式（职责单一：只做 Reset）
    ============================================================ */
 
@@ -18,8 +18,8 @@ html, body, #root {
   /* 全局默认字体 */
   font-family: var(--font-ui);
   font-size: var(--font-body);
-  color: var(--ovelis-text-primary);
-  background: var(--ovelis-window-bg);
+  color: var(--quirel-text-primary);
+  background: var(--quirel-window-bg);
 }
 
 /* ✅ 关键修复：确保应用容器不阻止滚动 */

@@ -1,15 +1,15 @@
 [package]
-name = "gnome-remote-agent"
+name = "quireld"
 version = "0.1.0"
 edition = "2021"
-description = "GNOME Remote Control — 远程 Agent 服务端"
+description = "Quirel — 远程 Agent 服务端"
 
 [lib]
-name = "gnome_remote_agent"
+name = "quireld"
 path = "src/lib.rs"
 
 [[bin]]
-name = "agent"
+name = "quireld"
 path = "src/main.rs"
 
 [dependencies]

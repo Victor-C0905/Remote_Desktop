@@ -255,7 +255,7 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
   /**
    * 渲染工具栏
    *
-   * GNOME HeaderBar 风格：
+   * Adwaita HeaderBar 风格：
    * - 左侧：文件名显示（如果有）+ 未保存标记
    * - 右侧：保存按钮 + 编辑模式切换
    */

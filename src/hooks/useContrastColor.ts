@@ -95,7 +95,7 @@ export function useContrastColor(
       // ✅ 如果使用主题文本颜色,从 CSS 变量获取
       if (useThemeText) {
         const root = document.documentElement;
-        const themeTextColor = getComputedStyle(root).getPropertyValue('--ovelis-text-primary').trim();
+        const themeTextColor = getComputedStyle(root).getPropertyValue('--quirel-text-primary').trim();
         
         // 如果主题文本颜色存在,使用主题色
         if (themeTextColor) {

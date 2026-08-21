@@ -10,11 +10,11 @@
 #![cfg(unix)]
 
 use std::time::Instant;
-use gnome_remote_agent::worker::SessionManager;
-use gnome_remote_agent::protocol::generated::{
+use quireld::worker::SessionManager;
+use quireld::protocol::generated::{
     ReadDir, ExecuteCommand,
 };
-use gnome_remote_agent::worker::handlers::{file, command};
+use quireld::worker::handlers::{file, command};
 use nix::unistd::Pid;
 
 /// 运行基准测试并输出结果（async 版本，避免 runtime 嵌套）

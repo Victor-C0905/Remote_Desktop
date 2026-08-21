@@ -132,7 +132,7 @@ impl std::fmt::Display for TransferStatus {
 /// - 断点续传：无需搜索，直接找到之前的临时文件
 /// - 避免中文/长文件名导致的路径长度问题
 ///
-/// 文件名格式: `gnome_remote_{hash前16位}.tmp`
+/// 文件名格式: `quirel_{hash前16位}.tmp`
 fn generate_temp_path(path: &Path) -> PathBuf {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -142,7 +142,7 @@ fn generate_temp_path(path: &Path) -> PathBuf {
     path_str.hash(&mut hasher);
     let hash = hasher.finish();
 
-    let temp_name = format!("gnome_remote_{:016x}.tmp", hash);
+    let temp_name = format!("quirel_{:016x}.tmp", hash);
     path.parent().unwrap_or(Path::new(".")).join(temp_name)
 }
 

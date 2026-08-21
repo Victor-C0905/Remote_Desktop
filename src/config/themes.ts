@@ -200,11 +200,11 @@ export const themes: Record<ThemeId, Theme> = {
       headerbarBg: '#303030',        // HeaderBar
       sidebarBg: '#303030',          // 侧边栏
       sidebarBorder: '#3d3d3d',      // 边框
-      accentBg: '#62a0ea',           // GNOME Blue
+      accentBg: '#62a0ea',           // Adwaita Blue
       accentHover: '#7ab2f0',
       accentActive: '#8ec1ff',
       sliderTrackBg: '#454545',      // 深灰滑条轨道
-      sliderThumbBg: '#62a0ea',      // GNOME Blue 滑块
+      sliderThumbBg: '#62a0ea',      // Adwaita Blue 滑块
       sliderActiveBg: '#7ab2f0',     // 活动状态
       textPrimary: 'rgba(255, 255, 255, 0.87)',
       textSecondary: 'rgba(255, 255, 255, 0.60)',
@@ -215,15 +215,15 @@ export const themes: Record<ThemeId, Theme> = {
   },
 
   // --------------------------------------------------------
-  // 中性色调主题 - 符合 GNOME Adwaita 标准
-  // 特点：纯中性灰色系，无色彩倾向，最符合 GNOME 设计规范
-  // 默认强调色：#3584e4 (GNOME Blue)
+  // 中性色调主题 - 符合 Adwaita 标准
+  // 特点：纯中性灰色系，无色彩倾向，最符合 Adwaita 设计规范
+  // 默认强调色：#3584e4 (Adwaita Blue)
   // 无可选强调色
   // --------------------------------------------------------
   neutral: {
     id: 'neutral',
-    name: '中性色调（GNOME 标准）',
-    description: '符合 GNOME Adwaita 标准的中性色调',
+    name: '中性色调（Adwaita 标准）',
+    description: '符合 Adwaita 标准的中性色调',
     lightColors: {
       windowBg: '#fafafa',           // 柔和白
       viewBg: '#f5f5f5',             // 内容区 - 中性浅灰
@@ -232,11 +232,11 @@ export const themes: Record<ThemeId, Theme> = {
       headerbarBg: '#e8e8e8',        // HeaderBar - 中性灰
       sidebarBg: '#e8e8e8',          // 侧边栏 - 中性灰
       sidebarBorder: '#d0d0d0',      // 边框 - 中性深灰
-      accentBg: '#3584e4',           // GNOME Blue
+      accentBg: '#3584e4',           // Adwaita Blue
       accentHover: '#1f75d1',
       accentActive: '#1a5fb4',
       sliderTrackBg: '#d0d0d0',      // 中性灰滑条轨道
-      sliderThumbBg: '#3584e4',      // GNOME Blue 滑块
+      sliderThumbBg: '#3584e4',      // Adwaita Blue 滑块
       sliderActiveBg: '#1f75d1',     // 活动状态
       textPrimary: 'rgba(0, 0, 0, 0.87)',
       textSecondary: 'rgba(0, 0, 0, 0.60)',
@@ -251,24 +251,24 @@ export const themes: Record<ThemeId, Theme> = {
       headerbarBg: '#303030',        // HeaderBar
       sidebarBg: '#303030',          // 侧边栏
       sidebarBorder: '#3d3d3d',      // 边框
-      accentBg: '#62a0ea',           // GNOME Blue (暗色版)
+      accentBg: '#62a0ea',           // Adwaita Blue (暗色版)
       accentHover: '#7ab2f0',
       accentActive: '#8ec1ff',
       sliderTrackBg: '#454545',      // 深灰滑条轨道
-      sliderThumbBg: '#62a0ea',      // GNOME Blue 滑块
+      sliderThumbBg: '#62a0ea',      // Adwaita Blue 滑块
       sliderActiveBg: '#7ab2f0',     // 活动状态
       textPrimary: 'rgba(255, 255, 255, 0.87)',
       textSecondary: 'rgba(255, 255, 255, 0.60)',
       textDisabled: 'rgba(255, 255, 255, 0.38)',
       borderColor: 'rgba(255, 255, 255, 0.12)',
     },
-    // 无可选强调色，使用固定的 GNOME Blue
+    // 无可选强调色，使用固定的 Adwaita Blue
   },
 
   // --------------------------------------------------------
   // 暗色主题 - 高对比度深色主题
   // 特点：深色背景 + 白色文字，适合夜间使用
-  // 默认强调色：#62a0ea (GNOME Blue 暗色版)
+  // 默认强调色：#62a0ea (Adwaita Blue 暗色版)
   // 注意：此主题始终使用暗色配置（lightColors === darkColors）
   // 无可选强调色
   // --------------------------------------------------------
@@ -284,11 +284,11 @@ export const themes: Record<ThemeId, Theme> = {
       headerbarBg: '#303030',        // HeaderBar
       sidebarBg: '#303030',          // 侧边栏
       sidebarBorder: '#3d3d3d',      // 边框
-      accentBg: '#62a0ea',           // GNOME Blue (暗色版)
+      accentBg: '#62a0ea',           // Adwaita Blue (暗色版)
       accentHover: '#7ab2f0',
       accentActive: '#8ec1ff',
       sliderTrackBg: '#454545',      // 深灰滑条轨道
-      sliderThumbBg: '#62a0ea',      // GNOME Blue 滑块
+      sliderThumbBg: '#62a0ea',      // Adwaita Blue 滑块
       sliderActiveBg: '#7ab2f0',     // 活动状态
       textPrimary: 'rgba(255, 255, 255, 0.87)',
       textSecondary: 'rgba(255, 255, 255, 0.60)',
@@ -314,7 +314,7 @@ export const themes: Record<ThemeId, Theme> = {
       textDisabled: 'rgba(255, 255, 255, 0.38)',
       borderColor: 'rgba(255, 255, 255, 0.12)',
     },
-    // 无可选强调色，使用固定的 GNOME Blue
+    // 无可选强调色，使用固定的 Adwaita Blue
   },
 };
 
@@ -323,7 +323,7 @@ export const themes: Record<ThemeId, Theme> = {
 // ============================================================
 export const accentColors: Record<AccentColorId, { light: string; dark: string }> = {
 
-  // 暖蓝色 - 比 GNOME Blue 更暖的蓝色
+  // 暖蓝色 - 比 Adwaita Blue 更暖的蓝色
   warmBlue: {
     light: '#4a90e2',               // 亮色模式
     dark: '#62a0ea',                // 暗色模式
@@ -335,7 +335,7 @@ export const accentColors: Record<AccentColorId, { light: string; dark: string }
     dark: '#4ec9b0',                // 暗色模式
   },
 
-  // 橙色 - GNOME Orange
+  // 橙色 - Adwaita Orange
   orange: {
     light: '#e66100',               // 亮色模式
     dark: '#e66100',                // 暗色模式（橙色在暗色模式下保持不变）

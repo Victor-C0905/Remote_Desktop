@@ -407,14 +407,14 @@ export class WindowManager implements IWindowManager {
     this.saveTimer = setTimeout(() => {
       try {
         const data = this.windows.getAll().map(w => w.serialize());
-        localStorage.setItem('gnome-remote-windows', JSON.stringify(data));
+        localStorage.setItem('quirel-windows', JSON.stringify(data));
       } catch (error) {
         log.error('Failed to save window states:', error);
         // ✅ 尝试清理旧数据后再保存
         try {
           const data = this.windows.getAll().map(w => w.serialize());
-          localStorage.removeItem('gnome-remote-windows');
-          localStorage.setItem('gnome-remote-windows', JSON.stringify(data));
+          localStorage.removeItem('quirel-windows');
+          localStorage.setItem('quirel-windows', JSON.stringify(data));
         } catch (retryError) {
           log.error('Retry save failed:', retryError);
           // 最终失败，不影响应用运行
@@ -429,7 +429,7 @@ export class WindowManager implements IWindowManager {
    * Applies boundary constraints to restored positions
    */
   load(): void {
-    const stored = localStorage.getItem('gnome-remote-windows');
+    const stored = localStorage.getItem('quirel-windows');
     if (!stored) return;
 
     try {

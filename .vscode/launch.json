@@ -2,19 +2,19 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Run GNOME Remote Agent",
+            "name": "Run Quireld",
             "type": "lldb",
             "request": "launch",
             "cargo": {
                 "args": [
                     "build",
                     "--package",
-                    "gnome-remote-agent",
+                    "quireld",
                     "--bin",
-                    "agent"
+                    "quireld"
                 ],
                 "filter": {
-                    "name": "agent",
+                    "name": "quireld",
                     "kind": "bin"
                 }
             },
@@ -28,21 +28,21 @@
             "reuseWindows": "prompt"
         },
         {
-            "name": "Debug GNOME Remote Agent",
+            "name": "Debug Quireld",
             "type": "lldb",
             "request": "launch",
             "cargo": {
                 "args": [
                     "build",
                     "--package",
-                    "gnome-remote-agent",
+                    "quireld",
                     "--bin",
-                    "agent",
+                    "quireld",
                     "--features",
                     "debug"
                 ],
                 "filter": {
-                    "name": "agent",
+                    "name": "quireld",
                     "kind": "bin"
                 }
             },
@@ -76,9 +76,9 @@
     ],
     "compounds": [
         {
-            "name": "Full Debug (Agent + Tauri)",
+            "name": "Full Debug (Quireld + Tauri)",
             "configurations": [
-                "Run GNOME Remote Agent"
+                "Run Quireld"
             ],
             "stopAll": true,
             "presentation": {

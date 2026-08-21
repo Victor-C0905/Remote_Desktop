@@ -92,7 +92,7 @@ UpdateAgentResponse {
 ///
 /// # 参数
 /// - `temp_binary`: 已接收的临时文件路径（/tmp/agent.new）
-/// - `current_binary`: 当前二进制路径（/usr/local/bin/gnome-remote-agent）
+/// - `current_binary`: 当前二进制路径（/usr/local/bin/quireld）
 ///
 /// # 流程
 /// 1. 备份当前二进制到 .bak
@@ -191,7 +191,7 @@ Payload::UpdateAgentRequest { file_size } => {
     send_response(&mut stream, &accept).await?;
     
     // 3. 接收 FileChunk 数据
-    let temp_path = Path::new("/tmp/gnome-remote-agent.new");
+    let temp_path = Path::new("/tmp/quireld.new");
     let mut file = tokio::fs::File::create(&temp_path).await?;
     let mut received = 0u64;
     
@@ -206,7 +206,7 @@ Payload::UpdateAgentRequest { file_size } => {
     drop(file);
     
     // 4. 执行更新
-    let current_binary = Path::new("/usr/local/bin/gnome-remote-agent");
+    let current_binary = Path::new("/usr/local/bin/quireld");
     let result = updater::perform_update(&temp_path, current_binary).await;
     
     // 5. 返回结果

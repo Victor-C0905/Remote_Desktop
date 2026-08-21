@@ -15,9 +15,9 @@ use std::path::Path;
 /// 注意：随机命名后无法通过目标路径反查临时文件，断点续传需将临时名存入
 /// TransferSession（当前隔离写入模式已禁用断点续传，故此处返回 None）。
 ///
-/// 文件名格式: `gnome_remote_{uuid}.tmp`
+/// 文件名格式: `quireld_{uuid}.tmp`
 pub fn generate_temp_path(path: &Path) -> String {
-    let temp_name = format!("gnome_remote_{}.tmp", uuid::Uuid::new_v4());
+    let temp_name = format!("quireld_{}.tmp", uuid::Uuid::new_v4());
     path.parent()
         .unwrap_or(Path::new("."))
         .join(temp_name)

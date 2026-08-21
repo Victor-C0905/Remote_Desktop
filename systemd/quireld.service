@@ -1,6 +1,6 @@
 [Unit]
-Description=GNOME Remote Agent - SSH-like Remote Management
-Documentation=https://github.com/yourname/gnome-remote
+Description=Quireld - SSH-like Remote Management
+Documentation=https://github.com/quirel
 After=network.target network-online.target
 Wants=network-online.target
 StartLimitBurst=3
@@ -14,11 +14,11 @@ Group=root
 # Linux 规范：设置工作目录
 # - 证书等相对路径(cert.pem/key.pem)基于此目录解析
 # - Worker 路径通过 /proc/self/exe 获取,不依赖此目录
-WorkingDirectory=/var/lib/gnome-remote
+WorkingDirectory=/var/lib/quireld
 
-ExecStart=/usr/local/bin/gnome-remote-agent \
-    --config /etc/gnome-remote-agent/agent.toml \
-    --log-dir /var/log/gnome-remote
+ExecStart=/usr/local/bin/quireld \
+    --config /etc/quireld/quireld.toml \
+    --log-dir /var/log/quireld
 
 # ====================================================================
 # Phase 4 热更新配置（Manager/Worker 架构已集成，已启用）
@@ -38,7 +38,7 @@ RestartSec=5s
 
 # 安全配置
 # 注意：不要使用 CapabilityBoundingSet 限制能力
-# agent 需要读取所有用户的 .ssh/authorized_keys 文件（公钥认证）
+# quireld 需要读取所有用户的 .ssh/authorized_keys 文件（公钥认证）
 # 和切换用户身份（PAM 认证），需要完整能力
 NoNewPrivileges=false
 
@@ -48,12 +48,12 @@ LimitNPROC=infinity
 
 # 环境变量
 Environment="RUST_LOG=info"
-Environment="HOME=/var/lib/gnome-remote"
+Environment="HOME=/var/lib/quireld"
 
 # 日志
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=gnome-remote-agent
+SyslogIdentifier=quireld
 
 [Install]
 WantedBy=multi-user.target

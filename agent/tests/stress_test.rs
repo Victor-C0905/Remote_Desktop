@@ -12,9 +12,9 @@
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use gnome_remote_agent::worker::SessionManager;
-use gnome_remote_agent::protocol::generated::{ReadDir, WriteFile};
-use gnome_remote_agent::worker::handlers::file;
+use quireld::worker::SessionManager;
+use quireld::protocol::generated::{ReadDir, WriteFile};
+use quireld::worker::handlers::file;
 use nix::unistd::Pid;
 
 #[tokio::test]

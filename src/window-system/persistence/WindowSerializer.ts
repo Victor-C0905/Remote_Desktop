@@ -14,7 +14,7 @@ const log = createLogger('WindowSerializer');
 const CURRENT_VERSION = 1;
 
 // Storage key for window states
-const STORAGE_KEY = 'gnome-remote-windows';
+const STORAGE_KEY = 'quirel-windows';
 
 // Versioned data structure
 interface VersionedWindowData {

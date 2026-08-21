@@ -15,7 +15,7 @@ import './TransferStatusBar.css';
 
 /**
  * 下载图标（向下箭头）
- * 来源：GNOME Adwaita go-down-symbolic.svg
+ * 来源：Adwaita go-down-symbolic.svg
  */
 function DownloadIcon({ className }: { className?: string }) {
   return (
@@ -27,7 +27,7 @@ function DownloadIcon({ className }: { className?: string }) {
 
 /**
  * 展开图标（向下箭头）
- * 来源：GNOME Adwaita pan-down-symbolic.svg
+ * 来源：Adwaita pan-down-symbolic.svg
  */
 function ExpandIcon({ className }: { className?: string }) {
   return (
@@ -39,7 +39,7 @@ function ExpandIcon({ className }: { className?: string }) {
 
 /**
  * 收起图标（向上箭头）
- * 来源：GNOME Adwaita pan-up-symbolic.svg
+ * 来源：Adwaita pan-up-symbolic.svg
  */
 function CollapseIcon({ className }: { className?: string }) {
   return (

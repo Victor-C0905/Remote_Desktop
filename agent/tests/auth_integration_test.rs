@@ -18,7 +18,7 @@ use anyhow::Result;
 ///
 /// **前置条件**：
 /// - 真实 Linux 环境
-/// - PAM 配置已安装到 /etc/pam.d/gnome-remote
+/// - PAM 配置已安装到 /etc/pam.d/quireld
 /// - 测试用户存在且密码正确
 ///
 /// **运行方式**：
@@ -37,10 +37,10 @@ async fn test_password_auth_integration() -> Result<()> {
     // 4. 验证返回的用户身份信息
     //
     // 示例代码（需要在部署后手动验证）：
-    // use gnome_remote_agent::auth::{CompositeAuthenticator, Authenticator, AuthResult};
+    // use quireld::auth::{CompositeAuthenticator, Authenticator, AuthResult};
     //
     // let auth = CompositeAuthenticator::new(
-    //     "gnome-remote".to_string(),
+    //     "quireld".to_string(),
     //     false,  // 禁用公钥认证
     //     true,   // 启用密码认证
     // );
@@ -74,11 +74,11 @@ async fn test_pubkey_auth_integration() -> Result<()> {
     // 4. 验证认证结果
     //
     // 示例代码（需要在部署后手动验证）：
-    // use gnome_remote_agent::auth::{CompositeAuthenticator, Authenticator, AuthResult};
+    // use quireld::auth::{CompositeAuthenticator, Authenticator, AuthResult};
     // use std::fs;
     //
     // let auth = CompositeAuthenticator::new(
-    //     "gnome-remote".to_string(),
+    //     "quireld".to_string(),
     //     true,   // 启用公钥认证
     //     false,  // 禁用密码认证
     // );
@@ -112,10 +112,10 @@ async fn test_composite_auth_integration() -> Result<()> {
     // 4. 验证至少有一种认证方式成功
     //
     // 示例代码（需要在部署后手动验证）：
-    // use gnome_remote_agent::auth::{CompositeAuthenticator, Authenticator, AuthResult};
+    // use quireld::auth::{CompositeAuthenticator, Authenticator, AuthResult};
     //
     // let auth = CompositeAuthenticator::new(
-    //     "gnome-remote".to_string(),
+    //     "quireld".to_string(),
     //     true,  // 启用公钥认证
     //     true,  // 启用密码认证
     // );
@@ -155,10 +155,10 @@ async fn test_auth_failure_scenarios() -> Result<()> {
     // 4. 不存在的用户
     //
     // 示例代码（需要在部署后手动验证）：
-    // use gnome_remote_agent::auth::{CompositeAuthenticator, Authenticator, AuthResult};
+    // use quireld::auth::{CompositeAuthenticator, Authenticator, AuthResult};
     //
     // let auth = CompositeAuthenticator::new(
-    //     "gnome-remote".to_string(),
+    //     "quireld".to_string(),
     //     true,
     //     true,
     // );
@@ -194,7 +194,7 @@ async fn test_get_user_info_integration() -> Result<()> {
     // 3. 测试不存在的用户
     //
     // 示例代码（需要在部署后手动验证）：
-    // use gnome_remote_agent::auth::get_user_info;
+    // use quireld::auth::get_user_info;
     //
     // // 测试 root 用户
     // let identity = get_user_info("root")?;

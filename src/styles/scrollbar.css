@@ -1,9 +1,9 @@
 /* ============================================================
-   Scrollbar 全局样式 — GNOME Remote Client
+   Scrollbar 全局样式 — Quirel Client
    从 adwaita.css 提取，确保桌面系统统一滚动条样式
    ============================================================ */
 
-/* ── Scrollbar (GNOME Style) ───────────────────────────── */
+/* ── Scrollbar (Adwaita Style) ───────────────────────────── */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -14,7 +14,7 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--ovelis-border-color);
+  background: var(--quirel-border-color);
   border-radius: var(--radius-pill);
 }
 

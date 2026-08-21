@@ -26,7 +26,7 @@ agent/src/worker/handlers/shutdown.rs              # 新建：优雅关闭处理
 agent/tests/hot_update_test.rs                     # 新建：热更新集成测试
 agent/tests/crash_recovery_test.rs                 # 新建：崩溃恢复集成测试
 agent/tests/orphan_reaper_test.rs                  # 新建：孤儿进程回收测试
-systemd/gnome-remote-agent.service                 # 修改：新增 KillMode/ExecReload
+systemd/quireld.service                 # 修改：新增 KillMode/ExecReload
 ```
 
 ### 修改文件
@@ -135,7 +135,7 @@ git add agent/protocol/agent.proto
 
 - [ ] **Step 1: 在 `SessionManager` impl 块中添加 `all_idle` 和 `snapshot` 方法**
 
-在 [session_manager.rs](file:///e:/MyWork/gnome-remote/agent/src/worker/session_manager.rs) 的 `impl SessionManager` 块末尾（`monitor_child_processes` 方法之后）添加：
+在 [session_manager.rs](file:///e:/MyWork/quirel/agent/src/worker/session_manager.rs) 的 `impl SessionManager` 块末尾（`monitor_child_processes` 方法之后）添加：
 
 ```rust
     /// 检查所有会话是否空闲（无未决请求）
@@ -273,7 +273,7 @@ pub async fn handle_graceful_shutdown(
 
 - [ ] **Step 2: 修改 `agent/src/worker/handlers/mod.rs`，注册 shutdown 模块**
 
-将 [handlers/mod.rs](file:///e:/MyWork/gnome-remote/agent/src/worker/handlers/mod.rs) 的内容修改为：
+将 [handlers/mod.rs](file:///e:/MyWork/quirel/agent/src/worker/handlers/mod.rs) 的内容修改为：
 
 ```rust
 //! Handlers 模块 - 处理各类 Manager 请求
@@ -294,7 +294,7 @@ pub mod system;
 
 - [ ] **Step 3: 修改 `agent/src/worker/mod.rs`，在 `handle_request` 中分发 GracefulShutdown 请求**
 
-在 [worker/mod.rs](file:///e:/MyWork/gnome-remote/agent/src/worker/mod.rs) 中，`handle_request` 函数的 match 语句里，在 `GetSystemInfo` 分支之后、`None` 分支之前添加新分支。
+在 [worker/mod.rs](file:///e:/MyWork/quirel/agent/src/worker/mod.rs) 中，`handle_request` 函数的 match 语句里，在 `GetSystemInfo` 分支之后、`None` 分支之前添加新分支。
 
 需要先修改 `run` 函数签名，添加 `shutdown_rx` 接收器。找到 `run` 函数，将其修改为：
 
@@ -454,7 +454,7 @@ git add agent/src/worker/handlers/shutdown.rs agent/src/worker/handlers/mod.rs a
 
 - [ ] **Step 1: 在 `WorkerManager` 结构体中添加 `is_graceful_shutdown` 字段**
 
-在 [worker_manager.rs](file:///e:/MyWork/gnome-remote/agent/src/manager/worker_manager.rs) 的 `pub struct WorkerManager` 中，在 `status_tx` 字段之后添加：
+在 [worker_manager.rs](file:///e:/MyWork/quirel/agent/src/manager/worker_manager.rs) 的 `pub struct WorkerManager` 中，在 `status_tx` 字段之后添加：
 
 ```rust
 pub struct WorkerManager {
@@ -913,7 +913,7 @@ mod tests {
 
 - [ ] **Step 2: 在 `agent/src/manager/mod.rs` 中注册新模块**
 
-在 [manager/mod.rs](file:///e:/MyWork/gnome-remote/agent/src/manager/mod.rs) 的 `#[cfg(unix)] pub mod ipc_server;` 之后添加：
+在 [manager/mod.rs](file:///e:/MyWork/quirel/agent/src/manager/mod.rs) 的 `#[cfg(unix)] pub mod ipc_server;` 之后添加：
 
 ```rust
 #[cfg(unix)]
@@ -960,7 +960,7 @@ git add agent/src/manager/orphan_reaper.rs agent/src/manager/mod.rs
 
 - [ ] **Step 1: 修改 `spawn_pty_output_task` 函数签名，添加 `orphan_reaper` 参数**
 
-在 [pty_output.rs](file:///e:/MyWork/gnome-remote/agent/src/manager/pty_output.rs) 中，修改 `spawn_pty_output_task` 函数：
+在 [pty_output.rs](file:///e:/MyWork/quirel/agent/src/manager/pty_output.rs) 中，修改 `spawn_pty_output_task` 函数：
 
 ```rust
 /// 启动 PTY 输出推送任务（新架构：使用 PtyRegistry）
@@ -1401,7 +1401,7 @@ mod tests {
 
 - [ ] **Step 2: 在 `agent/src/manager/mod.rs` 中注册新模块**
 
-在 [manager/mod.rs](file:///e:/MyWork/gnome-remote/agent/src/manager/mod.rs) 的 `#[cfg(unix)] pub mod orphan_reaper;` 之后添加：
+在 [manager/mod.rs](file:///e:/MyWork/quirel/agent/src/manager/mod.rs) 的 `#[cfg(unix)] pub mod orphan_reaper;` 之后添加：
 
 ```rust
 #[cfg(unix)]
@@ -1591,7 +1591,7 @@ mod tests {
 
 - [ ] **Step 2: 在 `agent/src/manager/mod.rs` 中注册新模块**
 
-在 [manager/mod.rs](file:///e:/MyWork/gnome-remote/agent/src/manager/mod.rs) 的 `#[cfg(unix)] pub mod crash_detector;` 之后添加：
+在 [manager/mod.rs](file:///e:/MyWork/quirel/agent/src/manager/mod.rs) 的 `#[cfg(unix)] pub mod crash_detector;` 之后添加：
 
 ```rust
 #[cfg(unix)]
@@ -1855,7 +1855,7 @@ mod tests {
 
 - [ ] **Step 2: 在 `agent/src/manager/mod.rs` 中注册新模块**
 
-在 [manager/mod.rs](file:///e:/MyWork/gnome-remote/agent/src/manager/mod.rs) 的 `#[cfg(unix)] pub mod signal_handler;` 之后添加：
+在 [manager/mod.rs](file:///e:/MyWork/quirel/agent/src/manager/mod.rs) 的 `#[cfg(unix)] pub mod signal_handler;` 之后添加：
 
 ```rust
 #[cfg(unix)]
@@ -1903,7 +1903,7 @@ git add agent/src/manager/hot_update_coordinator.rs agent/src/manager/mod.rs
 
 - [ ] **Step 1: 修改 `Manager` 结构体，添加 HotUpdateCoordinator 和 WorkerCrashDetector**
 
-在 [manager/mod.rs](file:///e:/MyWork/gnome-remote/agent/src/manager/mod.rs) 中，修改 `Manager` 结构体：
+在 [manager/mod.rs](file:///e:/MyWork/quirel/agent/src/manager/mod.rs) 中，修改 `Manager` 结构体：
 
 ```rust
 /// Manager 主结构
@@ -2105,7 +2105,7 @@ async fn run_manager_mode(args: &Args) -> Result<()> {
     // ... 现有的初始化代码 ...
 
     // 创建并启动 Manager
-    let mut manager = gnome_remote_agent::manager::Manager::new(&cfg).await?;
+    let mut manager = quireld::manager::Manager::new(&cfg).await?;
     manager.run().await?;
 
     Ok(())
@@ -2152,7 +2152,7 @@ git add agent/src/manager/mod.rs agent/src/main.rs
 
 use std::sync::Arc;
 use std::time::Duration;
-use gnome_remote_agent::manager::{
+use quireld::manager::{
     WorkerManager, PtyRegistry, IpcServer,
     OrphanProcessReaper, WorkerCrashDetector,
     HotUpdateCoordinator, ReloadTrigger, watch_sighup,
@@ -2323,11 +2323,11 @@ git add agent/tests/hot_update_test.rs
 ## Task 12: 更新 systemd 服务配置
 
 **Files:**
-- Modify: `systemd/gnome-remote-agent.service`
+- Modify: `systemd/quireld.service`
 
 - [ ] **Step 1: 读取现有 systemd 服务文件**
 
-先读取 `systemd/gnome-remote-agent.service` 的内容，了解现有配置。
+先读取 `systemd/quireld.service` 的内容，了解现有配置。
 
 - [ ] **Step 2: 修改 systemd 服务文件，添加 KillMode 和 ExecReload**
 
@@ -2353,12 +2353,12 @@ RestartSec=5s
 
 ```ini
 [Unit]
-Description=GNOME Remote Control Agent
+Description=Quirel Control Agent
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/gnome-remote-agent --config /etc/gnome-remote/agent.toml
+ExecStart=/usr/bin/quireld --config /etc/quireld/quireld.toml
 
 # 热更新支持
 KillMode=process
@@ -2369,8 +2369,8 @@ Restart=on-failure
 RestartSec=5s
 
 # 用户和权限
-User=gnome-remote
-Group=gnome-remote
+User=quirel
+Group=quirel
 
 # 日志
 StandardOutput=journal
@@ -2399,13 +2399,13 @@ WantedBy=multi-user.target
 ### 1. systemctl reload
 
 ```bash
-sudo systemctl reload gnome-remote-agent
+sudo systemctl reload quireld
 ```
 
 ### 2. 手动发送 SIGHUP
 
 ```bash
-sudo kill -HUP $(pidof gnome-remote-agent)
+sudo kill -HUP $(pidof quireld)
 ```
 
 ### 3. apt 升级后自动触发
@@ -2413,19 +2413,19 @@ sudo kill -HUP $(pidof gnome-remote-agent)
 在 `/etc/apt/apt.conf.d/` 下创建钩子：
 
 ```bash
-# /etc/apt/apt.conf.d/99-gnome-remote-reload
-DPkg::Post-Invoke { "systemctl reload gnome-remote-agent || true"; };
+# /etc/apt/apt.conf.d/99-quirel-reload
+DPkg::Post-Invoke { "systemctl reload quireld || true"; };
 ```
 
 ### 4. QUIC 客户端命令（远程运维）
 
-通过 GNOME Remote 客户端 UI 发送 Reload 命令。
+通过 Quirel 客户端 UI 发送 Reload 命令。
 ```
 
 - [ ] **Step 4: 提交（由用户执行）**
 
 ```bash
-git add systemd/gnome-remote-agent.service systemd/README.md
+git add systemd/quireld.service systemd/README.md
 ```
 
 ---
@@ -2437,7 +2437,7 @@ git add systemd/gnome-remote-agent.service systemd/README.md
 
 - [ ] **Step 1: 在 TASK_BREAKDOWN.md 中添加 Phase 4 任务记录**
 
-在 [TASK_BREAKDOWN.md](file:///e:/MyWork/gnome-remote/docs/TASK_BREAKDOWN.md) 的"总体进度"部分更新：
+在 [TASK_BREAKDOWN.md](file:///e:/MyWork/quirel/docs/TASK_BREAKDOWN.md) 的"总体进度"部分更新：
 
 ```markdown
 **当前阶段**: Phase 4 - 热更新功能（已完成）

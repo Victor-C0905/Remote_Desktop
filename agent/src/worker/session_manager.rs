@@ -96,7 +96,7 @@ impl SessionManager {
     /// # 示例
     ///
     /// ```rust,ignore
-    /// manager.register("session-123".to_string(), Pid::from_raw(1234), "gnome-remote-session-123".to_string(), "/bin/bash".to_string()).await;
+    /// manager.register("session-123".to_string(), Pid::from_raw(1234), "quireld-session-123".to_string(), "/bin/bash".to_string()).await;
     /// ```
     pub async fn register(&self, session_id: String, pid: Pid, socket_name: String, shell: String) {
         let mut sessions = self.sessions.write().await;
@@ -287,7 +287,7 @@ mod tests {
         let manager = SessionManager::new();
 
         // 注册会话
-        manager.register("session-1".to_string(), Pid::from_raw(1234), "gnome-remote-session-1".to_string(), "/bin/bash".to_string()).await;
+        manager.register("session-1".to_string(), Pid::from_raw(1234), "quireld-session-1".to_string(), "/bin/bash".to_string()).await;
 
         // 查询会话
         let info = manager.get("session-1").await;
@@ -296,7 +296,7 @@ mod tests {
         let info = info.unwrap();
         assert_eq!(info.session_id, "session-1");
         assert_eq!(info.pid, Pid::from_raw(1234));
-        assert_eq!(info.socket_name, "gnome-remote-session-1");
+        assert_eq!(info.socket_name, "quireld-session-1");
         assert_eq!(info.shell, "/bin/bash");
     }
 
@@ -305,7 +305,7 @@ mod tests {
         let manager = SessionManager::new();
 
         // 注册会话
-        manager.register("session-2".to_string(), Pid::from_raw(5678), "gnome-remote-session-2".to_string(), "/bin/zsh".to_string()).await;
+        manager.register("session-2".to_string(), Pid::from_raw(5678), "quireld-session-2".to_string(), "/bin/zsh".to_string()).await;
 
         // 验证存在
         assert!(manager.get("session-2").await.is_some());
@@ -322,8 +322,8 @@ mod tests {
         let manager = SessionManager::new();
 
         // 注册多个会话
-        manager.register("session-3".to_string(), Pid::from_raw(1111), "gnome-remote-session-3".to_string(), "/bin/bash".to_string()).await;
-        manager.register("session-4".to_string(), Pid::from_raw(2222), "gnome-remote-session-4".to_string(), "/bin/zsh".to_string()).await;
+        manager.register("session-3".to_string(), Pid::from_raw(1111), "quireld-session-3".to_string(), "/bin/bash".to_string()).await;
+        manager.register("session-4".to_string(), Pid::from_raw(2222), "quireld-session-4".to_string(), "/bin/zsh".to_string()).await;
 
         // 列出所有会话
         let sessions = manager.list().await;
@@ -343,7 +343,7 @@ mod tests {
                 manager_clone.register(
                     format!("session-{}", i),
                     Pid::from_raw(i),
-                    format!("gnome-remote-session-{}", i),
+                    format!("quireld-session-{}", i),
                     "/bin/bash".to_string()
                 ).await;
             });

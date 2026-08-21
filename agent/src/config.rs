@@ -207,7 +207,7 @@ fn default_connection_idle_timeout() -> u64 { 300 }  // 5 分钟
 fn default_file_changes_delay() -> u64 { 100 }
 fn default_process_scan_interval() -> u64 { 2 }
 fn default_service_status_interval() -> u64 { 5 }
-fn default_audit_log_path() -> String { "/var/log/gnome-remote/audit.log".into() }
+fn default_audit_log_path() -> String { "/var/log/quireld/audit.log".into() }
 fn default_log_level() -> String { "info".into() }
 fn default_log_dir() -> String { "logs".into() }
 
@@ -228,9 +228,9 @@ fn default_agent_binary() -> String {
         .ok()
         .and_then(|p| p.canonicalize().ok())
         .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|| "./agent".into())
+        .unwrap_or_else(|| "./quireld".into())
 }
-fn default_ipc_socket_path() -> String { "/tmp/gnome-remote-worker.sock".into() }
+fn default_ipc_socket_path() -> String { "/tmp/quireld-worker.sock".into() }
 fn default_max_restarts() -> u32 { 3 }
 fn default_ipc_channel_capacity() -> usize { 128 }
 

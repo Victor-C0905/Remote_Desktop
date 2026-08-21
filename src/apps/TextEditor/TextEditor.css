@@ -1,6 +1,6 @@
 /* ============================================================
    文本编辑器样式
-   基础的文本编辑面板，遵循 GNOME 设计规范
+   基础的文本编辑面板，遵循 Adwaita 设计规范
    ============================================================ */
 
 /* ── 文本编辑面板容器 ──────────────────────────────────── */
@@ -28,8 +28,8 @@
   resize: none; /* 禁用手动调整大小 */
 
   /* 背景和文字颜色（使用项目 CSS 变量） */
-  background: var(--ovelis-window-bg);
-  color: var(--ovelis-text-primary);
+  background: var(--quirel-window-bg);
+  color: var(--quirel-text-primary);
 
   /* 字体设置（业内标准等宽字体栈） */
   font-family: 'Source Code Pro', 'Consolas', 'Monaco', 'Menlo', 'SF Mono', 'Courier New', monospace;
@@ -65,13 +65,13 @@
 }
 
 .te-textarea::-webkit-scrollbar-thumb {
-  background: var(--ovelis-border-color); /* 滚动条滑块颜色 */
+  background: var(--quirel-border-color); /* 滚动条滑块颜色 */
   border-radius: 6px; /* 圆角 */
   border: 2px solid transparent; /* 透明边框，确保滑块不占据额外空间 */
 }
 
 .te-textarea::-webkit-scrollbar-thumb:hover {
-  background: var(--ovelis-text-secondary); /* 悬停时颜色 */
+  background: var(--quirel-text-secondary); /* 悬停时颜色 */
 }
 
 .te-textarea::-webkit-scrollbar-corner {
@@ -80,14 +80,14 @@
 
 /* ── Placeholder 样式 ───────────────────────────────────── */
 .te-textarea::placeholder {
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   opacity: 1; /* 确保 placeholder 可见 */
 }
 
 /* ── Focus 状态（聚焦时的视觉效果）────────────────────── */
 .te-textarea:focus {
   /* 使用项目定义的 focus ring */
-  outline: 2px solid var(--ovelis-border-focus);
+  outline: 2px solid var(--quirel-border-focus);
   outline-offset: 2px;
   border-radius: var(--radius-xs);
 }
@@ -109,7 +109,7 @@
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: var(--ovelis-window-bg);
+  background: var(--quirel-window-bg);
 }
 
 /* ── 分页控制栏 ─────────────────────────────────────────── */
@@ -119,17 +119,17 @@
   justify-content: space-between;
   gap: 12px;
   padding: 8px 12px;
-  border-bottom: 1px solid var(--ovelis-border-color);
-  background: var(--ovelis-headerbar-bg);
+  border-bottom: 1px solid var(--quirel-border-color);
+  background: var(--quirel-headerbar-bg);
 }
 
 /* ── 分页按钮 ───────────────────────────────────────────── */
 .te-hex-pagination-btn {
   padding: 6px 12px;
-  border: 1px solid var(--ovelis-border-color);
+  border: 1px solid var(--quirel-border-color);
   border-radius: var(--radius-sm);
-  background: var(--ovelis-view-bg);
-  color: var(--ovelis-text-primary);
+  background: var(--quirel-view-bg);
+  color: var(--quirel-text-primary);
   font-family: var(--font-ui);
   font-size: 13px;
   cursor: pointer;
@@ -137,9 +137,9 @@
 }
 
 .te-hex-pagination-btn:hover:not(:disabled) {
-  background: var(--ovelis-accent-bg);
-  color: var(--ovelis-accent-fg);
-  border-color: var(--ovelis-accent-bg);
+  background: var(--quirel-accent-bg);
+  color: var(--quirel-accent-fg);
+  border-color: var(--quirel-accent-bg);
 }
 
 .te-hex-pagination-btn:disabled {
@@ -151,7 +151,7 @@
 .te-hex-pagination-info {
   font-family: var(--font-ui);
   font-size: 13px;
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
 }
 
 /* ── 十六进制内容区 ─────────────────────────────────────── */
@@ -160,7 +160,7 @@
   overflow-y: auto;
   overflow-x: auto;
   padding: 12px;
-  background: var(--ovelis-window-bg);
+  background: var(--quirel-window-bg);
 }
 
 /* ── 十六进制行 ─────────────────────────────────────────── */
@@ -171,7 +171,7 @@
   line-height: 1.5;
   letter-spacing: 0.3px;
 
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
   white-space: pre; /* 保留空格和格式 */
   user-select: text; /* 允许选择文本 */
   padding: 2px 0;
@@ -194,13 +194,13 @@
 .te-hex-empty-text {
   font-family: var(--font-ui);
   font-size: 14px;
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
 }
 
 /* ============================================================
    编辑模式切换组件样式
    用于在文本模式和十六进制模式之间切换
-   GNOME 分组按钮样式（Linked Buttons）
+   Adwaita 分组按钮样式（Linked Buttons）
    ============================================================ */
 
 /* ── 编辑模式容器 ──────────────────────────────────────── */
@@ -212,21 +212,21 @@
 
 /* ── 模式按钮基础样式 ───────────────────────────────────── */
 .te-mode-btn {
-  /* GNOME Linked Button 样式 */
+  /* Adwaita Linked Button 样式 */
   padding: 8px 16px;
-  min-height: 32px; /* GNOME 按钮 Minimum height: 32px */
+  min-height: 32px; /* Adwaita 按钮 Minimum height: 32px */
 
   /* 边框和圆角（分组按钮：左边按钮右边圆角，右边按钮左边圆角） */
-  border: 1px solid var(--ovelis-border-color);
+  border: 1px solid var(--quirel-border-color);
   border-radius: 0; /* 默认无圆角 */
 
   /* 背景和文字 */
-  background: var(--ovelis-view-bg);
-  color: var(--ovelis-text-primary);
+  background: var(--quirel-view-bg);
+  color: var(--quirel-text-primary);
 
   /* 字体设置 */
   font-family: var(--font-ui);
-  font-size: 14px; /* GNOME 标准字号 */
+  font-size: 14px; /* Adwaita 标准字号 */
   font-weight: 500; /* 中等字重 */
 
   /* 交互 */
@@ -253,24 +253,24 @@
 
 /* ── 模式按钮 Hover 状态 ──────────────────────────────── */
 .te-mode-btn:hover {
-  background: var(--ovelis-headerbar-bg);
+  background: var(--quirel-headerbar-bg);
 }
 
 /* ── 模式按钮 Active 状态 ────────────────────────────── */
 .te-mode-btn.active {
   /* 激活状态使用 accent 颜色 */
-  background: var(--ovelis-accent-bg);
-  color: var(--ovelis-accent-fg);
-  border-color: var(--ovelis-accent-bg);
+  background: var(--quirel-accent-bg);
+  color: var(--quirel-accent-fg);
+  border-color: var(--quirel-accent-bg);
 }
 
 /* ── Active 状态的相邻按钮边框 ────────────────────────── */
 .te-mode-btn.active:not(:last-child) {
-  border-right: 1px solid var(--ovelis-accent-bg); /* 保留右边边框 */
+  border-right: 1px solid var(--quirel-accent-bg); /* 保留右边边框 */
 }
 
 .te-mode-btn.active:not(:first-child) {
-  border-left: 1px solid var(--ovelis-accent-bg); /* 保留左边边框 */
+  border-left: 1px solid var(--quirel-accent-bg); /* 保留左边边框 */
 }
 
 /* ── 模式按钮 Disabled 状态 ───────────────────────────── */
@@ -294,10 +294,10 @@
   height: 28px; /* 固定高度，更紧凑 */
 
   /* 边框 */
-  border-top: 1px solid var(--ovelis-border-color);
+  border-top: 1px solid var(--quirel-border-color);
 
   /* 背景 */
-  background: var(--ovelis-headerbar-bg);
+  background: var(--quirel-headerbar-bg);
 }
 
 /* ── 状态项 ────────────────────────────────────────────── */
@@ -308,7 +308,7 @@
   line-height: 1.4;
 
   /* 文字颜色 */
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
 
   /* 禁止换行 */
   white-space: nowrap;
@@ -322,7 +322,7 @@
   line-height: 1.4;
 
   /* 文字颜色 */
-  color: var(--ovelis-border-color);
+  color: var(--quirel-border-color);
 
   /* 禁止换行 */
   white-space: nowrap;
@@ -334,7 +334,7 @@
 /* ── 只读标识（二进制文件） ───────────────────────────── */
 .te-status-readonly {
   font-weight: 600; /* 加粗 */
-  color: var(--ovelis-accent-bg); /* 使用强调色（蓝色），表示只读状态 */
+  color: var(--quirel-accent-bg); /* 使用强调色（蓝色），表示只读状态 */
   padding: 2px 6px; /* 内边距 */
   background: rgba(53, 132, 228, 0.1); /* 浅蓝色背景 */
   border-radius: 4px; /* 圆角 */
@@ -376,9 +376,9 @@
   align-items: center;
   justify-content: space-between; /* 左侧/右侧分离布局 */
   padding: 0 16px;  /* 左右边距与文本编辑区一致 */
-  height: 48px; /* GNOME HeaderBar 标准高度 */
-  background: var(--ovelis-headerbar-bg);
-  border-bottom: 1px solid var(--ovelis-border-color);
+  height: 48px; /* Adwaita HeaderBar 标准高度 */
+  background: var(--quirel-headerbar-bg);
+  border-bottom: 1px solid var(--quirel-border-color);
 }
 
 /* ── 工具栏左侧区域 ─────────────────────────────────────── */
@@ -408,7 +408,7 @@
   font-family: var(--font-ui);
   font-size: 15px; /* 稍大字号，标题感 */
   font-weight: 600;
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -417,7 +417,7 @@
 
 /* ── 未保存标记 ─────────────────────────────────────────── */
 .te-unsaved-marker {
-  color: var(--ovelis-accent-bg);
+  color: var(--quirel-accent-bg);
   font-weight: 700;
   font-size: 14px;
   margin-left: 2px; /* 与文件名间距 */
@@ -425,21 +425,21 @@
 
 /* ── 工具栏按钮 ─────────────────────────────────────────── */
 .te-toolbar-btn {
-  /* GNOME 标准按钮样式 */
+  /* Adwaita 标准按钮样式 */
   padding: 8px 16px;
-  min-height: 32px; /* GNOME 按钮 Minimum height: 32px */
+  min-height: 32px; /* Adwaita 按钮 Minimum height: 32px */
 
   /* 边框和圆角 */
-  border: 1px solid var(--ovelis-border-color);
+  border: 1px solid var(--quirel-border-color);
   border-radius: var(--radius-sm); /* 8px */
 
   /* 背景和文字 */
-  background: var(--ovelis-view-bg);
-  color: var(--ovelis-text-primary);
+  background: var(--quirel-view-bg);
+  color: var(--quirel-text-primary);
 
   /* 字体设置 */
   font-family: var(--font-ui);
-  font-size: 14px; /* GNOME 标准字号 */
+  font-size: 14px; /* Adwaita 标准字号 */
   font-weight: 500; /* 中等字重 */
 
   /* 交互 */
@@ -451,14 +451,14 @@
 }
 
 .te-toolbar-btn:hover:not(:disabled) {
-  background: var(--ovelis-headerbar-bg); /* hover 背景 */
-  border-color: var(--ovelis-border-color);
+  background: var(--quirel-headerbar-bg); /* hover 背景 */
+  border-color: var(--quirel-border-color);
 }
 
 .te-toolbar-btn:active:not(:disabled) {
-  background: var(--ovelis-accent-bg); /* active 背景 */
-  color: var(--ovelis-accent-fg);
-  border-color: var(--ovelis-accent-bg);
+  background: var(--quirel-accent-bg); /* active 背景 */
+  color: var(--quirel-accent-fg);
+  border-color: var(--quirel-accent-bg);
 }
 
 .te-toolbar-btn:disabled {
@@ -478,13 +478,13 @@
   align-items: center;
   justify-content: center;
   padding: 60px 40px; /* 更大的内边距 */
-  background: var(--ovelis-window-bg);
+  background: var(--quirel-window-bg);
 }
 
 .te-loading-text {
   font-family: var(--font-ui);
   font-size: 15px; /* 稍大字号 */
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   opacity: 0.8; /* 半透明 */
 }
 
@@ -494,7 +494,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--ovelis-window-bg);
+  background: var(--quirel-window-bg);
 }
 
 /* 空状态容器（视觉绑定） */
@@ -504,8 +504,8 @@
   align-items: center;
   gap: 20px; /* 更大间距 */
   padding: 60px 80px; /* 更大的内边距 */
-  background: var(--ovelis-card-bg);
-  border: 2px dashed var(--ovelis-border-color);
+  background: var(--quirel-card-bg);
+  border: 2px dashed var(--quirel-border-color);
   border-radius: var(--radius-lg);
   max-width: 480px; /* 更大的最大宽度 */
 }
@@ -519,13 +519,13 @@
   font-family: var(--font-ui);
   font-size: 17px; /* 更大字号 */
   font-weight: 500;
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
 }
 
 .te-empty-hint {
   font-family: var(--font-ui);
   font-size: 14px;
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   text-align: center;
   line-height: 1.6; /* 更大的行高 */
 }
@@ -537,7 +537,7 @@
   align-items: center;
   justify-content: center;
   padding: 40px 60px; /* 更大的内边距 */
-  background: var(--ovelis-window-bg);
+  background: var(--quirel-window-bg);
 }
 
 .te-error-content {
@@ -545,8 +545,8 @@
   align-items: center;
   gap: 16px; /* 更大间距 */
   padding: 16px 24px; /* 更大的内边距 */
-  background: var(--ovelis-card-bg);
-  border: 1px solid var(--ovelis-border-color);
+  background: var(--quirel-card-bg);
+  border: 1px solid var(--quirel-border-color);
   border-radius: var(--radius-md); /* 更大的圆角 */
   max-width: 640px; /* 更大的最大宽度 */
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1); /* 添加阴影 */
@@ -554,14 +554,14 @@
 
 .te-error-icon {
   font-size: 24px; /* 更大的图标 */
-  color: #e01b24; /* GNOME 红色（错误色） */
+  color: #e01b24; /* Adwaita 红色（错误色） */
 }
 
 .te-error-text {
   flex: 1;
   font-family: var(--font-ui);
   font-size: 14px; /* 稍大字号 */
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
   word-wrap: break-word;
   line-height: 1.5;
 }
@@ -571,15 +571,15 @@
   border: none;
   border-radius: var(--radius-xs);
   background: transparent;
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   cursor: pointer;
   transition: all var(--duration-fast) var(--ease-out);
   font-size: 18px; /* 更大的关闭图标 */
 }
 
 .te-error-close:hover {
-  background: var(--ovelis-headerbar-bg);
-  color: var(--ovelis-text-primary);
+  background: var(--quirel-headerbar-bg);
+  color: var(--quirel-text-primary);
 }
 
 /* ── 二进制文件警告 ──────────────────────────────────────── */
@@ -589,13 +589,13 @@
   align-items: center;
   justify-content: center;
   padding: 60px 40px; /* 更大的内边距 */
-  background: var(--ovelis-window-bg);
+  background: var(--quirel-window-bg);
 }
 
 .te-binary-warning-text {
   font-family: var(--font-ui);
   font-size: 15px; /* 稍大字号 */
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   text-align: center;
   opacity: 0.8; /* 半透明 */
 }

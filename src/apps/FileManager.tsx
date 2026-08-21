@@ -802,7 +802,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
   }, [currentPath, activeServerId, loadDir]);
 
   const handleRename = useCallback((entry: FileEntry) => {
-    // GNOME-style inline editing：直接在文件名上编辑
+    // Adwaita-style inline editing：直接在文件名上编辑
     setEditingEntry(entry);
     setEditingName(entry.name);
     setContextMenu(null);  // 关闭右键菜单
@@ -1534,7 +1534,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
                         clickTimerRef.current = null;
                       }
 
-                      // GNOME-style: 如果文件已被选中，延迟判断是否为单击（防止双击误触发）
+                      // Adwaita-style: 如果文件已被选中，延迟判断是否为单击（防止双击误触发）
                       if (selectedIdx === idx && editingEntry?.name !== entry.name) {
                         clickTimerRef.current = setTimeout(() => {
                           handleRename(entry);
@@ -1597,7 +1597,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
                       clickTimerRef.current = null;
                     }
 
-                    // GNOME-style: 如果文件已被选中，延迟判断是否为单击（防止双击误触发）
+                    // Adwaita-style: 如果文件已被选中，延迟判断是否为单击（防止双击误触发）
                     if (selectedIdx === idx && editingEntry?.name !== entry.name) {
                       clickTimerRef.current = setTimeout(() => {
                         handleRename(entry);

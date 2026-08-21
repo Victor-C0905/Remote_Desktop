@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust 2024 edition, Tokio, Prost(Protobuf), Serde(JSON), nix(SCM_RIGHTS/setuid)
 
-**设计文档:** [2026-08-04-manager-worker-integration-design.md](file:///e:/MyWork/gnome-remote/docs/superpowers/specs/2026-08-04-manager-worker-integration-design.md)
+**设计文档:** [2026-08-04-manager-worker-integration-design.md](file:///e:/MyWork/quirel/docs/superpowers/specs/2026-08-04-manager-worker-integration-design.md)
 
 ---
 
@@ -375,7 +375,7 @@ pub struct ExecuteCommand {
 
 - [ ] **Step 7: 编译验证**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo check 2>&1 | tail -20"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo check 2>&1 | tail -20"`
 Expected: 编译通过(可能有 warning,不能有 error)
 
 ---
@@ -708,7 +708,7 @@ pub async fn handle_file_exists(req: FileExistsReq) -> WorkerResponse {
 
 - [ ] **Step 8: 编译验证**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo check 2>&1 | tail -20"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo check 2>&1 | tail -20"`
 Expected: 编译通过
 
 ---
@@ -838,7 +838,7 @@ pub async fn handle_apply_diff(req: ApplyDiffReq) -> WorkerResponse {
 
 - [ ] **Step 3: 编译验证**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo check 2>&1 | tail -20"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo check 2>&1 | tail -20"`
 Expected: 编译通过
 
 ---
@@ -878,7 +878,7 @@ Expected: 编译通过
 
 - [ ] **Step 2: 编译验证**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo check 2>&1 | tail -20"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo check 2>&1 | tail -20"`
 Expected: 编译通过
 
 ---
@@ -1064,7 +1064,7 @@ Expected: 编译通过
 
 - [ ] **Step 4: 编译验证 + 单元测试**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo test --lib protocol_adapter 2>&1 | tail -20"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo test --lib protocol_adapter 2>&1 | tail -20"`
 Expected: 所有现有测试通过
 
 ---
@@ -1073,17 +1073,17 @@ Expected: 所有现有测试通过
 
 - [ ] **Step 1: 完整编译检查**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo check 2>&1 | tail -30"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo check 2>&1 | tail -30"`
 Expected: 零编译错误
 
 - [ ] **Step 2: 运行所有 lib 测试**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo test --lib 2>&1 | tail -15"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo test --lib 2>&1 | tail -15"`
 Expected: 所有测试通过
 
 - [ ] **Step 3: 运行 Phase 2 集成测试**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo test --test phase2_integration_test 2>&1 | tail -10"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo test --test phase2_integration_test 2>&1 | tail -10"`
 Expected: 3 个测试通过
 
 - [ ] **Step 4: 提交 Phase 3 续**
@@ -1178,12 +1178,12 @@ git commit -m "feat(phase3): migrate file ops (Delete/Mkdir/Rename/Copy/Move/Fil
 
 - [ ] **Step 6: 编译验证**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo check 2>&1 | tail -20"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo check 2>&1 | tail -20"`
 Expected: 编译通过
 
 - [ ] **Step 7: 运行测试确保不破坏现有功能**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo test --lib 2>&1 | tail -15"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo test --lib 2>&1 | tail -15"`
 Expected: 所有测试通过
 
 - [ ] **Step 8: 提交 Phase 4**
@@ -1205,7 +1205,7 @@ git commit -m "feat(phase4): enable SIGHUP + HotUpdateCoordinator in Manager::st
 
 - [ ] **Step 1: 确认 legacy 函数无外部调用**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && grep -rn 'spawn_pty_output_task_legacy\|spawn_pty_output_task[^_]' src/ --include='*.rs' | grep -v 'pty_output.rs'"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && grep -rn 'spawn_pty_output_task_legacy\|spawn_pty_output_task[^_]' src/ --include='*.rs' | grep -v 'pty_output.rs'"`
 Expected: 无结果(或只有注释引用)
 
 - [ ] **Step 2: 删除 pty_output.rs 中的 legacy 函数和 impl 块**
@@ -1235,7 +1235,7 @@ pub use pty_output::{PtyOutputConfig, spawn_pty_output_task_v2};
 
 - [ ] **Step 4: 编译验证**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo check 2>&1 | tail -20"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo check 2>&1 | tail -20"`
 Expected: 编译通过
 
 ---
@@ -1291,13 +1291,13 @@ Expected: 编译通过
 
 搜索所有 `ctx.cleanup(pty_manager` 调用,改为 `ctx.cleanup(manager.pty_registry()`。
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && grep -n 'cleanup(pty_manager' src/server/quic.rs"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && grep -n 'cleanup(pty_manager' src/server/quic.rs"`
 
 将每处调用改为使用 `manager.pty_registry()`。
 
 - [ ] **Step 4: 编译验证**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo check 2>&1 | tail -20"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo check 2>&1 | tail -20"`
 Expected: 编译通过
 
 ---
@@ -1354,7 +1354,7 @@ async fn handle_stream(
 
 - [ ] **Step 5: 编译验证**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo check 2>&1 | tail -20"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo check 2>&1 | tail -20"`
 Expected: 编译通过
 
 ---
@@ -1368,7 +1368,7 @@ Expected: 编译通过
 
 - [ ] **Step 1: 确认 pty.rs 无其他引用**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && grep -rn 'crate::pty\|use.*pty::PtyManager' src/ --include='*.rs'"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && grep -rn 'crate::pty\|use.*pty::PtyManager' src/ --include='*.rs'"`
 Expected: 仅剩 `agent/src/server/quic.rs:16` 的 `use crate::pty::PtyManager;`(Task 10/11 完成后已无使用,需在此步删除)
 
 - [ ] **Step 2: 从 lib.rs 中移除 pty 模块声明**
@@ -1387,7 +1387,7 @@ rm agent/src/pty.rs
 
 - [ ] **Step 5: 编译验证**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo check 2>&1 | tail -20"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo check 2>&1 | tail -20"`
 Expected: 编译通过
 
 ---
@@ -1422,7 +1422,7 @@ Expected: 编译通过
 
 - [ ] **Step 4: 编译验证**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo check 2>&1 | tail -20"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo check 2>&1 | tail -20"`
 Expected: 编译通过
 
 ---
@@ -1431,12 +1431,12 @@ Expected: 编译通过
 
 - [ ] **Step 1: 完整编译检查**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo check 2>&1 | tail -30"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo check 2>&1 | tail -30"`
 Expected: 零编译错误
 
 - [ ] **Step 2: 运行所有测试**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo test 2>&1 | tail -20"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo test 2>&1 | tail -20"`
 Expected: 所有测试通过
 
 - [ ] **Step 3: 提交 Phase 5**
@@ -1486,5 +1486,5 @@ git commit -m "refactor(phase5): remove dead code (legacy pty_output, old PtyMan
 
 ## 参考
 
-- [设计文档](file:///e:/MyWork/gnome-remote/docs/superpowers/specs/2026-08-04-manager-worker-integration-design.md)
-- [Phase 4 热更新设计](file:///e:/MyWork/gnome-remote/docs/superpowers/specs/2026-08-03-phase4-hot-update-design.md)
+- [设计文档](file:///e:/MyWork/quirel/docs/superpowers/specs/2026-08-04-manager-worker-integration-design.md)
+- [Phase 4 热更新设计](file:///e:/MyWork/quirel/docs/superpowers/specs/2026-08-03-phase4-hot-update-design.md)

@@ -130,7 +130,7 @@ interface StatsResponse {
 3. 用户权限不足
 
 **解决方案：**
-1. 检查 Agent 服务状态：`systemctl status gnome-remote-agent`
+1. 检查 Agent 服务状态：`systemctl status quireld`
 2. 检查网络连接
 3. 确认用户登录状态
 

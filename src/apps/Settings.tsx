@@ -1028,10 +1028,10 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
             <div className="st-section-title text-heading">关于</div>
             <div className="st-card st-about-card">
               <div className="st-about-logo">🖥️</div>
-              <div className="st-about-name">GNOME Remote</div>
+              <div className="st-about-name">Quirel</div>
               <div className="st-about-version">版本 0.1.0</div>
               <div className="st-about-desc">
-                基于 GNOME 设计系统的远程 Linux 服务器控制客户端
+                基于 Adwaita 设计系统的远程 Linux 服务器控制客户端
               </div>
               <div className="st-about-tech">
                 <span>Tauri 2.x + React 18</span>
@@ -1056,7 +1056,7 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                 </div>
                 <div className="st-tech-item">
                   <span className="st-tech-name text-label">设计系统</span>
-                  <span className="st-tech-value">GNOME Adwaita</span>
+                  <span className="st-tech-value">Adwaita</span>
                 </div>
               </div>
             </div>

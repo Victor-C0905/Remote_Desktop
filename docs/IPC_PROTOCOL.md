@@ -14,7 +14,7 @@
 
 ### 1.1 设计目标
 
-本 IPC 协议是 GNOME 远程控制系统中 **Manager（网关层）** 和 **Worker（逻辑层）** 之间的通信协议，核心设计目标：
+本 IPC 协议是 Quirel 远程控制系统中 **Manager（网关层）** 和 **Worker（逻辑层）** 之间的通信协议，核心设计目标：
 
 | 目标 | 说明 |
 |------|------|
@@ -28,7 +28,7 @@
 
 #### Manager（网关层）
 
-- **监听端**: Unix Domain Socket 服务器（`/tmp/gnome-remote-manager.sock`）
+- **监听端**: Unix Domain Socket 服务器（`/tmp/quireld-manager.sock`）
 - **职责**:
   - 接收 Worker 发送的 `master_fd`（通过 `SCM_RIGHTS`）
   - 持有所有活动 PTY 的文件描述符
@@ -897,7 +897,7 @@ let mut buf = Vec::new();
 request.encode(&mut buf)?;
 
 // 3. 发送到 Unix Socket
-let mut socket = UnixStream::connect("/tmp/gnome-remote-manager.sock")?;
+let mut socket = UnixStream::connect("/tmp/quireld-manager.sock")?;
 
 // 写入长度（4 字节）
 socket.write_all(&(buf.len() as u32).to_le_bytes())?;

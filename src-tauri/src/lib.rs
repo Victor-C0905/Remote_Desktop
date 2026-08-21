@@ -38,11 +38,11 @@ fn init_logging(app: &tauri::App) {
     let is_debug = std::env::var("RUST_LOG").is_ok();
 
     // 默认过滤规则：客户端模块 info，第三方库 warn
-    let default_filter = "gnome_remote_lib=info,gnome_remote_lib::connection=info,gnome_remote_lib::transfer=info,tokio=info";
+    let default_filter = "quirel_lib=info,quirel_lib::connection=info,quirel_lib::transfer=info,tokio=info";
 
     let env_filter = if is_debug {
         tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| "gnome_remote_lib=debug".into())
+            .unwrap_or_else(|_| "quirel_lib=debug".into())
     } else {
         tracing_subscriber::EnvFilter::new(default_filter)
     };
@@ -77,7 +77,7 @@ fn init_logging(app: &tauri::App) {
                     .with_ansi(false)
                     .with_writer(non_blocking)
                     .with_filter(tracing_subscriber::EnvFilter::new(
-                        "gnome_remote_lib=debug,gnome_remote_lib::connection=debug,gnome_remote_lib::transfer=debug,tokio=info",
+                        "quirel_lib=debug,quirel_lib::connection=debug,quirel_lib::transfer=debug,tokio=info",
                     )),
             )
             .init();
@@ -98,7 +98,7 @@ fn init_logging(app: &tauri::App) {
                     .with_ansi(false)
                     .with_writer(non_blocking)
                     .with_filter(tracing_subscriber::EnvFilter::new(
-                        "gnome_remote_lib=debug,gnome_remote_lib::connection=debug,gnome_remote_lib::transfer=debug,tokio=info",
+                        "quirel_lib=debug,quirel_lib::connection=debug,quirel_lib::transfer=debug,tokio=info",
                     )),
             )
             .init();
@@ -550,7 +550,7 @@ pub fn run() {
         .setup(|app| {
             // 初始化日志系统（必须在所有其他操作之前）
             init_logging(app);
-            tracing::info!("GNOME Remote 客户端启动中...");
+            tracing::info!("Quirel 客户端启动中...");
 
             // 注册关闭钩子
             setup_shutdown_hook(&app.handle());

@@ -1,4 +1,4 @@
-// src/apps/Terminal.tsx - GNOME Terminal 风格终端
+// src/apps/Terminal.tsx - Adwaita Terminal 风格终端
 // 标准 xterm.js 集成：每个 tab 一个独立子组件，由 React 生命周期管理
 // 支持远程 PTY 连接（通过 QUIC Stream）和本地演示模式
 // 集成窗口系统：每个窗口实例独立状态，支持多窗口运行
@@ -18,8 +18,8 @@ import './Terminal.css';
 
 const log = createLogger('Terminal');
 
-// ── GNOME Terminal 主题 ────────────────────────────────────────────
-const GNOME_TERMINAL_THEME = {
+// ── Adwaita Terminal 主题 ────────────────────────────────────────────
+const ADWAITA_TERMINAL_THEME = {
   background: '#1e1e1e',
   foreground: '#ffffff',
   cursor: '#4ec9b0',
@@ -92,7 +92,7 @@ function TerminalInstance({
 
       // 1. 创建 xterm 实例
       const terminal = new Terminal({
-        theme: GNOME_TERMINAL_THEME,
+        theme: ADWAITA_TERMINAL_THEME,
         fontFamily: 'Consolas, "Source Code Pro", monospace',
         fontSize: fontSize,
         cursorBlink: cursorBlink,
@@ -451,7 +451,7 @@ function runDemoShell(terminal: Terminal): void {
   let cwd = '~';
   let buffer = '';
   const username = 'user';
-  const hostname = 'gnome-remote';
+  const hostname = 'quirel';
 
   const writePrompt = () => terminal.write(`\r\n\x1b[32m${username}@${hostname}\x1b[0m:\x1b[34m${cwd}\x1b[0m$ `);
 
@@ -585,7 +585,7 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
     }
   };
 
-  // ── 右键菜单（GNOME Terminal 风格：选中后右键直接复制，未选中时显示粘贴菜单）────────────────
+  // ── 右键菜单（Adwaita Terminal 风格：选中后右键直接复制，未选中时显示粘贴菜单）────────────────
   const handleContextMenu = async (e: React.MouseEvent) => {
     e.preventDefault();
     const terminal = activeTerminalRef.current;

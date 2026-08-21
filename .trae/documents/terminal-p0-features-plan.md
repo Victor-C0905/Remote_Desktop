@@ -1,6 +1,6 @@
 # 终端 P0 功能实现计划
 
-> 目标：对齐 GNOME Terminal 核心功能（复制/粘贴、搜索、快捷键）
+> 目标：对齐 Adwaita Terminal 核心功能（复制/粘贴、搜索、快捷键）
 
 ***
 
@@ -38,7 +38,7 @@
 | ----- | -------------------------------- | -------------------------- |
 | 复制/粘贴 | 原生 `navigator.clipboard` API     | 无需额外安装包，Tauri WebView 支持   |
 | 搜索功能  | `@xterm/addon-search`            | 已安装，官方 addon               |
-| 快捷键   | React `useEffect` + `keydown` 事件 | 简单直接，符合 GNOME Terminal 快捷键 |
+| 快捷键   | React `useEffect` + `keydown` 事件 | 简单直接，符合 Adwaita Terminal 快捷键 |
 
 ***
 
@@ -94,7 +94,7 @@
 1. 在 `TerminalApp` 中添加 `useEffect` 监听 `keydown` 事件
 2. 实现以下快捷键：
 
-| 快捷键              | 功能        | GNOME Terminal 对应 |
+| 快捷键              | 功能        | Adwaita Terminal 对应 |
 | ---------------- | --------- | ----------------- |
 | `Ctrl+Shift+C`   | 复制选中文本    | ✅                 |
 | `Ctrl+Shift+V`   | 粘贴        | ✅                 |

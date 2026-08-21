@@ -1,4 +1,4 @@
-# gnome-remote-agent 发布优化方案
+# quireld 发布优化方案
 
 > 日期：2026-07-19
 > 状态：待执行
@@ -108,10 +108,10 @@ tempfile = "3"
 
 ```toml
 [package]
-name = "gnome-remote-agent"
+name = "quireld"
 version = "0.1.0"
 edition = "2021"
-description = "GNOME Remote Control — 远程 Agent 服务端"
+description = "Quirel Control — 远程 Agent 服务端"
 
 [[bin]]
 name = "agent"
@@ -198,15 +198,15 @@ codegen-units = 1
 
 ```
 agent          ~5 MB    二进制
-agent.toml     <1 KB    配置模板
+quireld.toml     <1 KB    配置模板
 ```
 
 首次运行自动生成 cert.pem / key.pem。目标机器需要 glibc 2.17+（CentOS 7+ / Ubuntu 16.04+）。
 
 ```bash
 # 部署
-scp agent agent.toml user@server:~/.local/bin/
+scp agent quireld.toml user@server:~/.local/bin/
 ssh user@server
 chmod +x ~/.local/bin/agent
-agent --config ~/.local/bin/agent.toml
+agent --config ~/.local/bin/quireld.toml
 ```

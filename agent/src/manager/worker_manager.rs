@@ -17,7 +17,7 @@ use std::path::Path;
 /// 解析 Worker 二进制路径
 ///
 /// Linux 规范：Worker 与 Manager 是同一个二进制，通过 /proc/self/exe 获取绝对路径。
-/// Manager 启动 Worker 时用 `agent --worker` 参数，所以 Worker 路径 = Manager 路径。
+/// Manager 启动 Worker 时用 `quireld --worker` 参数，所以 Worker 路径 = Manager 路径。
 ///
 /// # 解析策略（符合 Linux 规范）
 /// 1. 配置了绝对路径且文件存在 → 使用配置路径
@@ -37,7 +37,7 @@ fn resolve_worker_binary(configured_path: &str) -> String {
     }
 
     // 情况 2: 回退到 /proc/self/exe（当前进程的可执行文件路径）
-    // 适用于：相对路径(./agent)、文件不存在、默认值
+    // 适用于：相对路径(./quireld)、文件不存在、默认值
     match std::env::current_exe()
         .ok()
         .and_then(|p| p.canonicalize().ok())
@@ -166,7 +166,7 @@ impl WorkerManager {
     /// 启动 Worker 进程
     ///
     /// # 流程
-    /// 1. 启动 Worker 子进程（agent --worker）
+    /// 1. 启动 Worker 子进程（quireld --worker）
     /// 2. 记录进程信息
     /// 3. 发送状态变化事件
     /// 4. 等待 Worker 连接 IPC Socket（由 IpcServer 处理）
@@ -476,7 +476,7 @@ mod tests {
     #[tokio::test]
     async fn test_worker_manager_creation() {
         let manager = WorkerManager::new(
-            "/usr/bin/agent".to_string(),
+            "/usr/bin/quireld".to_string(),
             "/tmp/test.sock".to_string(),
             3
         );
@@ -536,7 +536,7 @@ mod tests {
     #[tokio::test]
     async fn test_graceful_shutdown_flag() {
         let manager = WorkerManager::new(
-            "/usr/bin/agent".to_string(),
+            "/usr/bin/quireld".to_string(),
             "/tmp/test.sock".to_string(),
             3
         );

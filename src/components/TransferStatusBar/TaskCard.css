@@ -45,7 +45,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   flex-shrink: 0;
 }
 
@@ -63,7 +63,7 @@
 
 .tc-filename {
   font-size: 13px;
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -74,7 +74,7 @@
 
 .tc-file-size {
   font-size: 11px;
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   line-height: 1.4;
   font-variant-numeric: tabular-nums; /* 数字等宽 */
   flex-shrink: 0; /* 文件大小不收缩，始终可见 */
@@ -106,7 +106,7 @@
 
 .tc-progress-fill {
   height: 100%;
-  background: var(--ovelis-accent-bg);
+  background: var(--quirel-accent-bg);
   border-radius: 1.5px;
   transition: width 0.15s cubic-bezier(0.4, 0, 0.2, 1);
 }
@@ -123,17 +123,17 @@
 
 /* 失败任务的进度条样式 */
 .tc-progress-fill.error {
-  background: var(--ovelis-error-color);
+  background: var(--quirel-error-color);
 }
 
 /* 已取消任务的进度条样式 */
 .tc-progress-fill.cancelled {
-  background: var(--ovelis-text-disabled);
+  background: var(--quirel-text-disabled);
 }
 
 /* 已完成任务的进度条样式 */
 .tc-progress-fill.completed {
-  background: var(--ovelis-success-color);
+  background: var(--quirel-success-color);
   animation: progress-complete 0.4s ease-out;
 }
 
@@ -146,16 +146,16 @@
 /* 已取消任务的整体样式 */
 .task-card.cancelled .tc-filename {
   text-decoration: line-through;
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
 }
 
 .task-card.cancelled .tc-percent {
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
 }
 
 .tc-percent {
   font-size: 12px;
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   flex-shrink: 0;
   min-width: 36px;
   text-align: right;
@@ -166,7 +166,7 @@
 /* 下载/上传速度 */
 .tc-speed {
   font-size: 11px;
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   flex-shrink: 0;
   min-width: 56px;
   text-align: left;
@@ -177,7 +177,7 @@
 /* 传输耗时 */
 .tc-elapsed {
   font-size: 11px;
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   flex-shrink: 0;
   min-width: 40px;
   text-align: left;
@@ -188,7 +188,7 @@
 /* 剩余时间 */
 .tc-eta {
   font-size: 11px;
-  color: var(--ovelis-accent-bg);
+  color: var(--quirel-accent-bg);
   flex-shrink: 0;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -197,7 +197,7 @@
 /* 错误信息 */
 .tc-error-msg {
   font-size: 11px;
-  color: var(--ovelis-error-color);
+  color: var(--quirel-error-color);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -229,7 +229,7 @@
   background: transparent;
   border: none;
   border-radius: 4px;
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
   flex-shrink: 0;
@@ -237,7 +237,7 @@
 
 .tc-action-btn:hover {
   background: rgba(0, 0, 0, 0.08);
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
 }
 
 .tc-action-btn:active {
@@ -246,7 +246,7 @@
 }
 
 .tc-action-btn:focus {
-  outline: 2px solid var(--ovelis-accent-bg);
+  outline: 2px solid var(--quirel-accent-bg);
   outline-offset: -2px;
 }
 
@@ -258,7 +258,7 @@
 }
 
 .task-card.completed .tc-icon {
-  color: var(--ovelis-success-color);
+  color: var(--quirel-success-color);
 }
 
 .task-card.completed .tc-progress-bar {
@@ -267,11 +267,11 @@
 
 /* 失败任务 */
 .task-card.error .tc-icon {
-  color: var(--ovelis-error-color);
+  color: var(--quirel-error-color);
 }
 
 .task-card.error .tc-filename {
-  color: var(--ovelis-error-color);
+  color: var(--quirel-error-color);
 }
 
 /* 排队中任务 */

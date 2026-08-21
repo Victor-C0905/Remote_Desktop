@@ -9,8 +9,8 @@
 #![cfg(unix)]
 
 use std::time::Duration;
-use gnome_remote_agent::config::AgentConfig;
-use gnome_remote_agent::manager::Manager;
+use quireld::config::AgentConfig;
+use quireld::manager::Manager;
 
 /// 测试 Manager 能成功实例化
 #[tokio::test]
@@ -26,11 +26,11 @@ async fn test_manager_start_ipc_and_worker() {
     let mut config = AgentConfig::default();
     // 使用唯一的 socket 路径,避免冲突
     config.worker.ipc_socket_path = format!(
-        "/tmp/gnome-remote-test-{}.sock",
+        "/tmp/quireld-test-{}.sock",
         std::process::id()
     );
-    // 使用当前编译的 agent 二进制
-    config.worker.agent_binary = env!("CARGO_BIN_EXE_agent").to_string();
+    // 使用当前编译的 quireld 二进制
+    config.worker.agent_binary = env!("CARGO_BIN_EXE_quireld").to_string();
     config.worker.max_restarts = 1;
 
     let mut manager = Manager::new(&config).await.expect("Manager 创建失败");
@@ -61,10 +61,10 @@ async fn test_manager_start_ipc_and_worker() {
 async fn test_manager_shutdown_cleanup() {
     let mut config = AgentConfig::default();
     config.worker.ipc_socket_path = format!(
-        "/tmp/gnome-remote-test-shutdown-{}.sock",
+        "/tmp/quireld-test-shutdown-{}.sock",
         std::process::id()
     );
-    config.worker.agent_binary = env!("CARGO_BIN_EXE_agent").to_string();
+    config.worker.agent_binary = env!("CARGO_BIN_EXE_quireld").to_string();
     config.worker.max_restarts = 1;
 
     let mut manager = Manager::new(&config).await.expect("Manager 创建失败");
@@ -82,7 +82,7 @@ async fn test_manager_shutdown_cleanup() {
     let worker_info = manager.worker_info().await;
     // Worker 信息应该为 None 或状态为 Stopped
     if let Some(info) = worker_info {
-        use gnome_remote_agent::manager::WorkerStatus;
+        use quireld::manager::WorkerStatus;
         assert!(
             info.status == WorkerStatus::Stopped
                 || info.status == WorkerStatus::Stopping,

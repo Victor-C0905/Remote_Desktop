@@ -29,7 +29,7 @@
 
 - WSL 环境可用(Rust 1.96.0)
 - 当前代码 `cargo build` 通过
-- 配置文件 `agent.toml` 中 `[worker]` 段配置正确
+- 配置文件 `quireld.toml` 中 `[worker]` 段配置正确
 
 ---
 
@@ -40,12 +40,12 @@
 
 - [ ] **Step 1:阅读现有 `Manager::run` 方法**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && sed -n '151,205p' src/manager/mod.rs"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && sed -n '151,205p' src/manager/mod.rs"`
 Expected: 显示 `run` 方法,包含 IPC 启动、Worker 启动、CrashDetector 启动、SIGHUP、HotUpdateCoordinator、ctrl_c 等待
 
 - [ ] **Step 2:在 `manager/mod.rs` 的 `impl Manager` 块中,`run` 方法之后新增 `start` 和 `shutdown` 方法**
 
-在 [manager/mod.rs](file:///e:/MyWork/gnome-remote/agent/src/manager/mod.rs) 的 `run` 方法结束(第 205 行 `}`)之后,`handle_resize_window` 方法之前插入:
+在 [manager/mod.rs](file:///e:/MyWork/quirel/agent/src/manager/mod.rs) 的 `run` 方法结束(第 205 行 `}`)之后,`handle_resize_window` 方法之前插入:
 
 ```rust
     /// 启动 Manager(非阻塞)
@@ -116,7 +116,7 @@ Expected: 显示 `run` 方法,包含 IPC 启动、Worker 启动、CrashDetector 
 
 - [ ] **Step 3:在 `Manager` 结构体中新增 `crash_detector` 字段**
 
-在 [manager/mod.rs:66-86](file:///e:/MyWork/gnome-remote/agent/src/manager/mod.rs#L66-L86) 的 `Manager` 结构体中,`orphan_reaper` 字段之后新增:
+在 [manager/mod.rs:66-86](file:///e:/MyWork/quirel/agent/src/manager/mod.rs#L66-L86) 的 `Manager` 结构体中,`orphan_reaper` 字段之后新增:
 
 ```rust
     /// 崩溃检测器
@@ -127,7 +127,7 @@ Expected: 显示 `run` 方法,包含 IPC 启动、Worker 启动、CrashDetector 
 
 - [ ] **Step 4:在 `Manager::new` 的 `Ok(Self { ... })` 中初始化 `crash_detector`**
 
-在 [manager/mod.rs:122-128](file:///e:/MyWork/gnome-remote/agent/src/manager/mod.rs#L122-L128) 的 `Ok(Self { ... })` 中,`orphan_reaper` 之后新增:
+在 [manager/mod.rs:122-128](file:///e:/MyWork/quirel/agent/src/manager/mod.rs#L122-L128) 的 `Ok(Self { ... })` 中,`orphan_reaper` 之后新增:
 
 ```rust
             crash_detector: None,
@@ -135,7 +135,7 @@ Expected: 显示 `run` 方法,包含 IPC 启动、Worker 启动、CrashDetector 
 
 - [ ] **Step 4b:新增 `worker_info` 公共 getter 方法,并 re-export `WorkerInfo`**
 
-首先在 [manager/mod.rs:44](file:///e:/MyWork/gnome-remote/agent/src/manager/mod.rs#L44) 的 `pub use worker_manager::{WorkerManager, WorkerStatus, WorkerStatusEvent};` 修改为:
+首先在 [manager/mod.rs:44](file:///e:/MyWork/quirel/agent/src/manager/mod.rs#L44) 的 `pub use worker_manager::{WorkerManager, WorkerStatus, WorkerStatusEvent};` 修改为:
 
 ```rust
 pub use worker_manager::{WorkerManager, WorkerInfo, WorkerStatus, WorkerStatusEvent};
@@ -153,7 +153,7 @@ pub use worker_manager::{WorkerManager, WorkerInfo, WorkerStatus, WorkerStatusEv
 
 - [ ] **Step 5:验证编译**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo check 2>&1 | tail -20"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo check 2>&1 | tail -20"`
 Expected: 编译通过,可能有无关的 warning,但无 error
 
 - [ ] **Step 6:提示用户提交**
@@ -172,21 +172,21 @@ git commit -m "feat(manager): 新增 Manager::start/shutdown 非阻塞方法"
 
 - [ ] **Step 1:阅读当前 `run_manager_mode` 函数**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && sed -n '200,252p' src/main.rs"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && sed -n '200,252p' src/main.rs"`
 Expected: 显示函数,包含 config 加载、cert、event_bus、subscription_manager、pty_manager、audit_log、authenticator、try_join!
 
 - [ ] **Step 2:在 `main.rs` 顶部新增 Manager 导入**
 
-在 [main.rs:8](file:///e:/MyWork/gnome-remote/agent/src/main.rs#L8) 的 `use gnome_remote_agent::{config, cert, event_bus, subscription, pty, audit, server};` 之后新增:
+在 [main.rs:8](file:///e:/MyWork/quirel/agent/src/main.rs#L8) 的 `use quireld::{config, cert, event_bus, subscription, pty, audit, server};` 之后新增:
 
 ```rust
 #[cfg(unix)]
-use gnome_remote_agent::manager::Manager;
+use quireld::manager::Manager;
 ```
 
 - [ ] **Step 3:修改 `run_manager_mode` 函数,在 `try_join!` 之前实例化并启动 Manager**
 
-替换 [main.rs:200-252](file:///e:/MyWork/gnome-remote/agent/src/main.rs#L200-L252) 的 `run_manager_mode` 函数为:
+替换 [main.rs:200-252](file:///e:/MyWork/quirel/agent/src/main.rs#L200-L252) 的 `run_manager_mode` 函数为:
 
 ```rust
 /// Manager 模式入口
@@ -203,7 +203,7 @@ async fn run_manager_mode(args: &Args) -> Result<()> {
 
     // 日志模式标识
     let log_mode = if std::env::var("RUST_LOG").is_ok() { "debug (RUST_LOG)" } else { "production" };
-    tracing::info!("GNOME Remote Agent 启动中...");
+    tracing::info!("Quireld 启动中...");
     tracing::info!("   日志模式: {}", log_mode);
     tracing::info!("   日志级别: {}", cfg.log.level);
     tracing::info!("   日志目录: {}", if cfg.log.dir == "off" { "关闭".to_string() } else { cfg.log.dir.clone() });
@@ -267,7 +267,7 @@ async fn run_manager_mode(args: &Args) -> Result<()> {
 
 - [ ] **Step 4:验证编译**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo check 2>&1 | tail -20"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo check 2>&1 | tail -20"`
 Expected: 编译通过,可能有无关 warning
 
 - [ ] **Step 5:提示用户提交**
@@ -286,21 +286,21 @@ git commit -m "feat(main): 实例化 Manager 并启动 IPC + Worker(阶段 1)"
 
 - [ ] **Step 1:编译 release 版本**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo build --release 2>&1 | tail -5"`
-Expected: 编译成功,生成 `target/release/agent`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo build --release 2>&1 | tail -5"`
+Expected: 编译成功,生成 `target/release/quireld`
 
 - [ ] **Step 2:检查 agent 二进制文件存在**
 
-Run: `wsl -e bash -l -c "ls -la /mnt/e/MyWork/gnome-remote/agent/target/release/agent"`
+Run: `wsl -e bash -l -c "ls -la /mnt/e/MyWork/quirel/agent/target/release/quireld"`
 Expected: 文件存在,大小约 5-10MB
 
 - [ ] **Step 3:后台启动 agent,观察日志**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && timeout 5 ./target/release/agent --config agent.toml --log-level info 2>&1 | head -30"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && timeout 5 ./target/release/quireld --config quireld.toml --log-level info 2>&1 | head -30"`
 Expected: 日志包含:
-- `GNOME Remote Agent 启动中...`
+- `Quireld 启动中...`
 - `Manager 已实例化,正在启动...`
-- `IPC 服务器已启动: path=/tmp/gnome-remote-worker.sock`
+- `IPC 服务器已启动: path=/tmp/quireld-worker.sock`
 - `Worker 进程已启动: pid=XXXX, binary=...`
 - `Worker 崩溃检测器启动`
 - `Manager 已启动(IPC + Worker + CrashDetector)`
@@ -311,12 +311,12 @@ Expected: 日志包含:
 在另一个终端(在 agent 运行期间)运行:
 Run: `wsl -e bash -l -c "ps aux | grep '[a]gent' | head -5"`
 Expected: 显示两个进程:
-- 主进程:`./target/release/agent --config agent.toml`
-- Worker 子进程:`./target/release/agent --worker --ipc-socket /tmp/gnome-remote-worker.sock`
+- 主进程:`./target/release/quireld --config quireld.toml`
+- Worker 子进程:`./target/release/quireld --worker --ipc-socket /tmp/quireld-worker.sock`
 
 - [ ] **Step 5:验证 IPC Socket 文件存在**
 
-Run: `wsl -e bash -l -c "ls -la /tmp/gnome-remote-worker.sock"`
+Run: `wsl -e bash -l -c "ls -la /tmp/quireld-worker.sock"`
 Expected: socket 文件存在
 
 ---
@@ -328,7 +328,7 @@ Expected: socket 文件存在
 
 - [ ] **Step 1:后台启动 agent**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && ./target/release/agent --config agent.toml > /tmp/agent-test.log 2>&1 &"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && ./target/release/quireld --config quireld.toml > /tmp/quireld-test.log 2>&1 &"`
 Expected: 无输出(进程后台运行)
 
 - [ ] **Step 2:获取 Worker 子进程 PID**
@@ -344,7 +344,7 @@ Expected: 无输出
 
 - [ ] **Step 4:等待 2 秒后检查日志**
 
-Run: `wsl -e bash -l -c "sleep 2 && tail -20 /tmp/agent-test.log"`
+Run: `wsl -e bash -l -c "sleep 2 && tail -20 /tmp/quireld-test.log"`
 Expected: 日志包含:
 - `Worker 进程异常退出` 或类似的崩溃检测日志
 - `Worker 崩溃,触发自动重启` 或类似
@@ -357,7 +357,7 @@ Expected: 显示一个**新的** Worker 子进程(PID 与 Step 2 不同)
 
 - [ ] **Step 6:清理测试进程**
 
-Run: `wsl -e bash -l -c "pkill -f 'target/release/agent' && rm -f /tmp/gnome-remote-worker.sock /tmp/agent-test.log"`
+Run: `wsl -e bash -l -c "pkill -f 'target/release/quireld' && rm -f /tmp/quireld-worker.sock /tmp/quireld-test.log"`
 Expected: 无输出
 
 ---
@@ -369,7 +369,7 @@ Expected: 无输出
 
 - [ ] **Step 1:运行全部单元测试**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo test 2>&1 | tail -20"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo test 2>&1 | tail -20"`
 Expected: 所有测试通过(103+ 个非 ignored 测试),无失败
 
 - [ ] **Step 2:手动测试 QUIC 客户端连接(如果有客户端)**
@@ -385,12 +385,12 @@ Expected: 所有测试通过(103+ 个非 ignored 测试),无失败
 - [ ] **Step 3:验证 Manager 启动不影响 QUIC 功能**
 
 启动 agent,然后用客户端连接(或用 `quic_test.sh`):
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && bash tests/quic_test.sh 2>&1 | tail -10"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && bash tests/quic_test.sh 2>&1 | tail -10"`
 Expected: QUIC 测试通过(或无连接错误)
 
 - [ ] **Step 4:清理**
 
-Run: `wsl -e bash -l -c "pkill -f 'target/release/agent' 2>/dev/null; rm -f /tmp/gnome-remote-worker.sock"`
+Run: `wsl -e bash -l -c "pkill -f 'target/release/quireld' 2>/dev/null; rm -f /tmp/quireld-worker.sock"`
 Expected: 无输出
 
 ---
@@ -416,8 +416,8 @@ Expected: 无输出
 #![cfg(unix)]
 
 use std::time::Duration;
-use gnome_remote_agent::config::AgentConfig;
-use gnome_remote_agent::manager::Manager;
+use quireld::config::AgentConfig;
+use quireld::manager::Manager;
 
 /// 测试 Manager 能成功实例化
 #[tokio::test]
@@ -433,7 +433,7 @@ async fn test_manager_start_ipc_and_worker() {
     let mut config = AgentConfig::default();
     // 使用唯一的 socket 路径,避免冲突
     config.worker.ipc_socket_path = format!(
-        "/tmp/gnome-remote-test-{}.sock",
+        "/tmp/quireld-test-{}.sock",
         std::process::id()
     );
     // 使用当前编译的 agent 二进制
@@ -468,7 +468,7 @@ async fn test_manager_start_ipc_and_worker() {
 async fn test_manager_shutdown_cleanup() {
     let mut config = AgentConfig::default();
     config.worker.ipc_socket_path = format!(
-        "/tmp/gnome-remote-test-shutdown-{}.sock",
+        "/tmp/quireld-test-shutdown-{}.sock",
         std::process::id()
     );
     config.worker.agent_binary = env!("CARGO_BIN_EXE_agent").to_string();
@@ -489,7 +489,7 @@ async fn test_manager_shutdown_cleanup() {
     let worker_info = manager.worker_info().await;
     // Worker 信息应该为 None 或状态为 Stopped
     if let Some(info) = worker_info {
-        use gnome_remote_agent::manager::WorkerStatus;
+        use quireld::manager::WorkerStatus;
         assert!(
             info.status == WorkerStatus::Stopped
                 || info.status == WorkerStatus::Stopping,
@@ -504,7 +504,7 @@ async fn test_manager_shutdown_cleanup() {
 
 - [ ] **Step 2:运行新增测试**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo test --test phase1_integration_test -- --nocapture 2>&1 | tail -30"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo test --test phase1_integration_test -- --nocapture 2>&1 | tail -30"`
 Expected: 3 个测试全部通过:
 - `test_manager_creation`
 - `test_manager_start_ipc_and_worker`
@@ -522,21 +522,21 @@ git commit -m "test(phase1): 新增 Manager 启动流程集成测试"
 ## Task 7:更新配置文件确保 Worker 路径正确
 
 **Files:**
-- Modify: `agent/agent.toml`(检查 `[worker]` 段)
+- Modify: `agent/quireld.toml`(检查 `[worker]` 段)
 
-- [ ] **Step 1:查看当前 agent.toml 的 worker 配置**
+- [ ] **Step 1:查看当前 quireld.toml 的 worker 配置**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && grep -A 5 '\[worker\]' agent.toml 2>/dev/null || echo 'No [worker] section found'"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && grep -A 5 '\[worker\]' quireld.toml 2>/dev/null || echo 'No [worker] section found'"`
 Expected: 显示 worker 配置,或提示无配置
 
 - [ ] **Step 2:如果 `[worker]` 段不存在或 `agent_binary` 路径错误,更新配置**
 
-在 `agent/agent.toml` 中添加或修改(如果已存在):
+在 `agent/quireld.toml` 中添加或修改(如果已存在):
 
 ```toml
 [worker]
-agent_binary = "./target/release/agent"
-ipc_socket_path = "/tmp/gnome-remote-worker.sock"
+agent_binary = "./target/release/quireld"
+ipc_socket_path = "/tmp/quireld-worker.sock"
 max_restarts = 3
 ```
 
@@ -544,18 +544,18 @@ max_restarts = 3
 
 - [ ] **Step 3:验证配置加载**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && ./target/release/agent --config agent.toml --log-dir off 2>&1 | head -15 &"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && ./target/release/quireld --config quireld.toml --log-dir off 2>&1 | head -15 &"`
 Expected: 日志显示配置加载成功,Worker 路径正确
 
 - [ ] **Step 4:清理测试进程**
 
-Run: `wsl -e bash -l -c "pkill -f 'target/release/agent' 2>/dev/null"`
+Run: `wsl -e bash -l -c "pkill -f 'target/release/quireld' 2>/dev/null"`
 Expected: 无输出
 
 - [ ] **Step 5:提示用户提交(如有改动)**
 
 ```bash
-git add agent/agent.toml
+git add agent/quireld.toml
 git commit -m "config: 更新 worker 配置路径"
 ```
 
@@ -568,15 +568,15 @@ git commit -m "config: 更新 worker 配置路径"
 
 - [ ] **Step 1:运行全部测试**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo test 2>&1 | tail -10"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo test 2>&1 | tail -10"`
 Expected: 所有测试通过,包括新增的 phase1_integration_test
 
 - [ ] **Step 2:启动 agent 并验证完整启动流程**
 
-Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && timeout 10 ./target/release/agent --config agent.toml 2>&1 | grep -E '(Manager|Worker|IPC|QUIC|WS)' | head -15"`
+Run: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && timeout 10 ./target/release/quireld --config quireld.toml 2>&1 | grep -E '(Manager|Worker|IPC|QUIC|WS)' | head -15"`
 Expected: 日志按顺序显示:
 1. `Manager 已实例化,正在启动...`
-2. `IPC 服务器已启动: path=/tmp/gnome-remote-worker.sock`
+2. `IPC 服务器已启动: path=/tmp/quireld-worker.sock`
 3. `Worker 进程已启动: pid=XXXX`
 4. `Worker 崩溃检测器启动`
 5. `Manager 已启动(IPC + Worker + CrashDetector)`
@@ -593,7 +593,7 @@ Expected: 输出 `2`(主进程 + Worker 子进程)
 
 ```bash
 # 1. 后台启动 agent
-wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && ./target/release/agent --config agent.toml > /tmp/agent-final-test.log 2>&1 &"
+wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && ./target/release/quireld --config quireld.toml > /tmp/quireld-final-test.log 2>&1 &"
 
 # 2. 等待启动
 wsl -e bash -l -c "sleep 2"
@@ -608,10 +608,10 @@ wsl -e bash -l -c "sleep 3"
 wsl -e bash -l -c "ps aux | grep '[a]gent --worker' | head -1"
 
 # 6. 查看日志
-wsl -e bash -l -c "tail -15 /tmp/agent-final-test.log"
+wsl -e bash -l -c "tail -15 /tmp/quireld-final-test.log"
 
 # 7. 清理
-wsl -e bash -l -c "pkill -f 'target/release/agent' && rm -f /tmp/agent-final-test.log /tmp/gnome-remote-worker.sock"
+wsl -e bash -l -c "pkill -f 'target/release/quireld' && rm -f /tmp/quireld-final-test.log /tmp/quireld-worker.sock"
 ```
 
 Expected:

@@ -340,11 +340,11 @@ Manager 需要维护 `request_id → QUIC Stream` 的映射,Worker 返回响应�
 
 #### 4.4 systemd 配置
 
-`systemd/gnome-remote-agent.service` 已有 `ExecReload=/bin/kill -HUP $MAINPID`。启用后 `systemctl reload gnome-remote-agent` 触发热更新。
+`systemd/quireld.service` 已有 `ExecReload=/bin/kill -HUP $MAINPID`。启用后 `systemctl reload quireld` 触发热更新。
 
 ### 验证标准
 
-1. `systemctl reload gnome-remote-agent` 后,Worker PID 变化,但终端会话不中断
+1. `systemctl reload quireld` 后,Worker PID 变化,但终端会话不中断
 2. 热更新期间,客户端输入命令仍能响应(数据缓存在内核 buffer)
 3. Shell 进程在 Worker 重启后仍存活(`ps aux` 确认)
 4. PTY EOF 后,僵尸进程被 OrphanReaper 回收

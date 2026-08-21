@@ -20,7 +20,7 @@ fn systemd_service_path() -> PathBuf {
         .parent()
         .unwrap_or(&project_root())
         .join("systemd")
-        .join("gnome-remote-agent.service")
+        .join("quireld.service")
 }
 
 #[test]
@@ -39,10 +39,10 @@ fn test_systemd_service_contains_phase4_config() {
     let content = std::fs::read_to_string(&path)
         .expect("Failed to read systemd service file");
 
-    // 验证 Type=simple（agent 未实现 sd_notify）
+    // 验证 Type=simple（quireld 未实现 sd_notify）
     assert!(
         content.contains("Type=simple"),
-        "Service should use Type=simple (agent does not implement sd_notify)"
+        "Service should use Type=simple (quireld does not implement sd_notify)"
     );
 
     // Phase 4 热更新配置（KillMode/ExecReload）当前被注释
@@ -71,7 +71,7 @@ fn test_systemd_service_contains_security_config() {
     );
 
     // 验证未使用 CapabilityBoundingSet 限制能力
-    // agent 需要读取所有用户的 .ssh/authorized_keys 文件（公钥认证）
+    // quireld 需要读取所有用户的 .ssh/authorized_keys 文件（公钥认证）
     // 和切换用户身份（PAM 认证），需要完整能力
     let has_capability_restriction = content
         .lines()
@@ -118,14 +118,14 @@ fn test_install_script_uses_service_template() {
 
     // 验证 install.sh 引用 service 模板
     assert!(
-        content.contains("gnome-remote-agent.service") || content.contains("SERVICE_TEMPLATE"),
+        content.contains("quireld.service") || content.contains("SERVICE_TEMPLATE"),
         "install.sh should reference the systemd service template file"
     );
 
     // 验证 install.sh 包含 Type=simple（当前部署版本）
     assert!(
         content.contains("Type=simple"),
-        "install.sh should use Type=simple (current agent version)"
+        "install.sh should use Type=simple (current quireld version)"
     );
 }
 

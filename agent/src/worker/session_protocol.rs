@@ -31,7 +31,7 @@ pub const MAX_FRAME_DATA_SIZE: usize = 64 * 1024;
 pub const RECONNECT_TIMEOUT_SECS: u32 = 30;
 
 /// Abstract socket 名称前缀（不含 \0 前缀，nix::UnixAddr::new_abstract 会自动添加）
-pub const SOCKET_PREFIX: &str = "gnome-remote-session-";
+pub const SOCKET_PREFIX: &str = "quireld-session-";
 
 /// 生成 abstract socket 名称（不含 \0 前缀）
 pub fn generate_socket_name(session_id: &str) -> String {

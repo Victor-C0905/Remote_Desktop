@@ -1,5 +1,5 @@
 /* ============================================================
-   Terminal App — GNOME Terminal 风格
+   Terminal App — Adwaita Terminal 风格
    重点：彻底隔离 xterm.js 不受全局 CSS (box-sizing / user-select / margin / padding) 影响
    ============================================================ */
 
@@ -16,8 +16,8 @@
   display: flex;
   align-items: center;
   padding: 8px 12px;
-  background: var(--ovelis-headerbar-bg);
-  border-bottom: 1px solid var(--ovelis-border-color);
+  background: var(--quirel-headerbar-bg);
+  border-bottom: 1px solid var(--quirel-border-color);
   gap: 8px;
   z-index: 1; /* ✅ 内容层，相对于父容器，无需高 z-index */
   position: relative;
@@ -28,14 +28,14 @@
   padding: 4px 12px;
   border: none;
   background: transparent;
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
   cursor: pointer;
   border-radius: var(--radius-xs);
   font-size: 13px;
 }
 
 .terminal-header-button:hover {
-  background: var(--ovelis-card-bg);
+  background: var(--quirel-card-bg);
 }
 
 /* ── Search Bar ─────────────────────────────────────────────── */
@@ -43,8 +43,8 @@
   display: flex;
   align-items: center;
   padding: 8px 12px;
-  background: var(--ovelis-card-bg);
-  border-bottom: 1px solid var(--ovelis-border-color);
+  background: var(--quirel-card-bg);
+  border-bottom: 1px solid var(--quirel-border-color);
   gap: 8px;
   flex-shrink: 0;
 }
@@ -52,9 +52,9 @@
 .terminal-search-input {
   flex: 1;
   padding: 4px 8px;
-  border: 1px solid var(--ovelis-border-color);
-  background: var(--ovelis-view-bg);
-  color: var(--ovelis-text-primary);
+  border: 1px solid var(--quirel-border-color);
+  background: var(--quirel-view-bg);
+  color: var(--quirel-text-primary);
   border-radius: var(--radius-xs);
   font-family: var(--font-ui);
   font-size: 13px;
@@ -64,14 +64,14 @@
 }
 
 .terminal-search-input:focus {
-  outline: 2px solid var(--ovelis-accent-bg);
+  outline: 2px solid var(--quirel-accent-bg);
   outline-offset: -2px;
 }
 
 .terminal-search-button {
   padding: 4px 12px;
   border: none;
-  background: var(--ovelis-accent-bg);
+  background: var(--quirel-accent-bg);
   color: #fff;
   cursor: pointer;
   border-radius: var(--radius-xs);
@@ -79,7 +79,7 @@
 }
 
 .terminal-search-button:hover {
-  background: var(--ovelis-accent-hover);
+  background: var(--quirel-accent-hover);
 }
 
 /* ── Settings Panel ─────────────────────────────────────────────── */
@@ -89,8 +89,8 @@
   right: 12px;
   width: 300px;
   padding: 16px;
-  background: var(--ovelis-card-bg);
-  border: 1px solid var(--ovelis-border-color);
+  background: var(--quirel-card-bg);
+  border: 1px solid var(--quirel-border-color);
   border-radius: var(--radius-sm);
   z-index: var(--z-app-dropdown); /* ✅ Layer 60: 应用内部浮动层 */
   box-shadow: var(--shadow-popup);
@@ -100,7 +100,7 @@
   display: flex;
   align-items: center;
   margin-bottom: 12px;
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
   font-size: 13px;
   font-family: var(--font-ui);
 }
@@ -124,7 +124,7 @@
   width: 100%;
   padding: 8px;
   border: none;
-  background: var(--ovelis-accent-bg);
+  background: var(--quirel-accent-bg);
   color: #fff;
   border-radius: var(--radius-xs);
   cursor: pointer;
@@ -133,15 +133,15 @@
 }
 
 .terminal-settings-close-button:hover {
-  background: var(--ovelis-accent-hover);
+  background: var(--quirel-accent-hover);
 }
 
 /* ── Context Menu ─────────────────────────────────────────────── */
 .terminal-context-menu {
   position: fixed;
   padding: 6px 0;
-  background: var(--ovelis-card-bg);
-  border: 1px solid var(--ovelis-border-color);
+  background: var(--quirel-card-bg);
+  border: 1px solid var(--quirel-border-color);
   border-radius: var(--radius-sm);
   z-index: var(--z-app-dropdown); /* ✅ Layer 60: 应用内部下拉菜单 */
   min-width: 160px;
@@ -154,7 +154,7 @@
   padding: 8px 16px;
   border: none;
   background: transparent;
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
   cursor: pointer;
   text-align: left;
   font-size: 13px;
@@ -162,13 +162,13 @@
 }
 
 .terminal-menu-item:hover {
-  background: var(--ovelis-card-hover);
+  background: var(--quirel-card-hover);
 }
 
 .terminal-menu-divider {
   margin: 4px 0;
   border: none;
-  border-top: 1px solid var(--ovelis-border-color);
+  border-top: 1px solid var(--quirel-border-color);
 }
 
 /* ── Tab Bar ─────────────────────────────────────────────── */
@@ -176,8 +176,8 @@
   display: flex;
   align-items: center;
   height: 48px;
-  background: var(--ovelis-headerbar-bg);
-  border-bottom: 1px solid var(--ovelis-border-color);
+  background: var(--quirel-headerbar-bg);
+  border-bottom: 1px solid var(--quirel-border-color);
   padding: 0 4px;
   flex-shrink: 0;
   z-index: 1; /* ✅ 内容层，相对于父容器，无需高 z-index */
@@ -192,7 +192,7 @@
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: thin;
-  scrollbar-color: var(--ovelis-border-color) transparent;
+  scrollbar-color: var(--quirel-border-color) transparent;
 }
 
 .terminal-tab-list::-webkit-scrollbar {
@@ -204,7 +204,7 @@
 }
 
 .terminal-tab-list::-webkit-scrollbar-thumb {
-  background: var(--ovelis-border-color);
+  background: var(--quirel-border-color);
   border-radius: var(--radius-pill);
 }
 
@@ -231,15 +231,15 @@
   border-radius: var(--radius-xs);
   border: none;
   background: transparent;
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   font-size: 14px;
   cursor: pointer;
   flex-shrink: 0;
 }
 
 .terminal-tab-btn:hover {
-  background: var(--ovelis-card-bg);
-  color: var(--ovelis-text-primary);
+  background: var(--quirel-card-bg);
+  color: var(--quirel-text-primary);
 }
 
 .terminal-status {
@@ -248,7 +248,7 @@
   gap: 4px;
   padding: 4px 8px;
   font-size: 11px;
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   font-family: var(--font-ui);
   white-space: nowrap;
 }
@@ -260,7 +260,7 @@
   padding: 4px 8px;
   height: 28px;
   font-size: 12px;
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   border-radius: var(--radius-xs) var(--radius-xs) 0 0;
   cursor: pointer;
   border: none;
@@ -273,20 +273,20 @@
 }
 
 .terminal-tab:hover {
-  background: var(--ovelis-card-bg);
-  color: var(--ovelis-text-primary);
+  background: var(--quirel-card-bg);
+  color: var(--quirel-text-primary);
 }
 
 .terminal-tab.active {
-  background: var(--ovelis-view-bg);
-  color: var(--ovelis-text-primary);
-  border-bottom: 2px solid var(--ovelis-accent-bg);
+  background: var(--quirel-view-bg);
+  color: var(--quirel-text-primary);
+  border-bottom: 2px solid var(--quirel-accent-bg);
 }
 
 .terminal-tab .tab-icon {
   font-size: 11px;
   font-family: var(--font-mono);
-  color: var(--ovelis-accent-bg);
+  color: var(--quirel-accent-bg);
   flex-shrink: 0;
   width: 14px;
   text-align: center;
@@ -311,7 +311,7 @@
   border-radius: 50%;
   border: none;
   background: transparent;
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   font-size: 12px;
   line-height: 1;
   cursor: pointer;
@@ -325,8 +325,8 @@
 }
 
 .terminal-tab .tab-close:hover {
-  background: var(--ovelis-card-hover);
-  color: var(--ovelis-text-primary);
+  background: var(--quirel-card-hover);
+  color: var(--quirel-text-primary);
 }
 
 .terminal-new-tab {
@@ -338,7 +338,7 @@
   border-radius: var(--radius-xs);
   border: none;
   background: transparent;
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   font-size: 18px;
   cursor: pointer;
   margin-left: 2px;
@@ -346,8 +346,8 @@
 }
 
 .terminal-new-tab:hover {
-  background: var(--ovelis-card-bg);
-  color: var(--ovelis-text-primary);
+  background: var(--quirel-card-bg);
+  color: var(--quirel-text-primary);
 }
 
 /* ═════════════════════════════════════════════════════════════
@@ -468,7 +468,7 @@
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   gap: 12px;
 }
 
@@ -483,5 +483,5 @@
 
 .terminal-empty .empty-hint {
   font-size: 12px;
-  color: var(--ovelis-text-disabled);
+  color: var(--quirel-text-disabled);
 }

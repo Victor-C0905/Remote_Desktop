@@ -3,27 +3,27 @@
 set -e
 
 echo "=== 1. 清理旧进程 ==="
-pkill -f 'target/release/agent' 2>/dev/null || true
-rm -f /tmp/gnome-remote-worker.sock
+pkill -f 'target/release/quireld' 2>/dev/null || true
+rm -f /tmp/quireld-worker.sock
 sleep 1
 
-echo "=== 2. 启动 agent(后台) ==="
-cd /mnt/e/MyWork/gnome-remote/agent
-./target/release/agent --config agent.toml --log-dir off > /tmp/agent-phase1-test.log 2>&1 &
+echo "=== 2. 启动 quireld(后台) ==="
+cd /mnt/e/MyWork/quirel/agent
+./target/release/quireld --config quireld.toml --log-dir off > /tmp/quireld-phase1-test.log 2>&1 &
 MAIN_PID=$!
 echo "主进程 PID: $MAIN_PID"
 sleep 3
 
 echo "=== 3. 检查进程 ==="
-ps aux | grep '[a]gent' || true
+ps aux | grep '[q]uireld' || true
 
 echo "=== 4. 获取 Worker PID ==="
-WORKER_PID=$(ps aux | grep '[a]gent --worker' | awk '{print $2}' | head -1)
+WORKER_PID=$(ps aux | grep '[q]uireld --worker' | awk '{print $2}' | head -1)
 echo "Worker PID: $WORKER_PID"
 
 if [ -z "$WORKER_PID" ]; then
     echo "ERROR: Worker 进程未找到"
-    cat /tmp/agent-phase1-test.log
+    cat /tmp/quireld-phase1-test.log
     exit 1
 fi
 
@@ -35,7 +35,7 @@ echo "=== 6. 等待自动重启(3秒) ==="
 sleep 3
 
 echo "=== 7. 检查新 Worker 进程 ==="
-NEW_WORKER_PID=$(ps aux | grep '[a]gent --worker' | awk '{print $2}' | head -1)
+NEW_WORKER_PID=$(ps aux | grep '[q]uireld --worker' | awk '{print $2}' | head -1)
 echo "新 Worker PID: $NEW_WORKER_PID"
 
 if [ -z "$NEW_WORKER_PID" ]; then
@@ -47,11 +47,11 @@ else
 fi
 
 echo "=== 8. 日志尾部 ==="
-tail -20 /tmp/agent-phase1-test.log
+tail -20 /tmp/quireld-phase1-test.log
 
 echo "=== 9. 清理 ==="
 kill $MAIN_PID 2>/dev/null || true
-pkill -f 'target/release/agent' 2>/dev/null || true
-rm -f /tmp/gnome-remote-worker.sock
+pkill -f 'target/release/quireld' 2>/dev/null || true
+rm -f /tmp/quireld-worker.sock
 
 echo "=== 完成 ==="

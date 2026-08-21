@@ -61,7 +61,7 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
       setAccentColor: (color) => {
         set({ accentColor: color });
         // 同步更新 CSS 变量
-        document.documentElement.style.setProperty("--ovelis-accent-bg", color);
+        document.documentElement.style.setProperty("--quirel-accent-bg", color);
       },
 
       setFontSize: (size) => {
@@ -86,7 +86,7 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
       },
     }),
     {
-      name: "gnome-remote-settings",
+      name: "quirel-settings",
       storage: createJSONStorage(() => settingsStorage),
       // 初始化时应用设置到 DOM（在 React 渲染前提供正确的初始值，避免闪烁）
       onRehydrateStorage: () => (state) => {

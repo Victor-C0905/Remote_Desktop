@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 use std::time::Duration;
-use gnome_remote_agent::manager::{
+use quireld::manager::{
     WorkerManager, PtyRegistry,
     OrphanProcessReaper, WorkerCrashDetector,
     HotUpdateCoordinator, ReloadTrigger, watch_sighup,
@@ -37,7 +37,7 @@ async fn test_orphan_reaper_cleanup_nonexistent() {
 #[tokio::test]
 async fn test_worker_manager_graceful_shutdown_flag() {
     let manager = WorkerManager::new(
-        "/usr/bin/agent".to_string(),
+        "/usr/bin/quireld".to_string(),
         "/tmp/test.sock".to_string(),
         3,
     );
@@ -57,7 +57,7 @@ async fn test_worker_manager_graceful_shutdown_flag() {
 #[tokio::test]
 async fn test_hot_update_coordinator_creation() {
     let worker_manager = Arc::new(WorkerManager::new(
-        "/usr/bin/agent".to_string(),
+        "/usr/bin/quireld".to_string(),
         "/tmp/test.sock".to_string(),
         3,
     ));
@@ -109,7 +109,7 @@ async fn test_crash_detector_start_stop() {
 #[tokio::test]
 async fn test_hot_update_coordinator_rejects_duplicate_trigger() {
     let worker_manager = Arc::new(WorkerManager::new(
-        "/usr/bin/agent".to_string(),
+        "/usr/bin/quireld".to_string(),
         "/tmp/test.sock".to_string(),
         3,
     ));

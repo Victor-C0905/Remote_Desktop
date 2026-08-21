@@ -1,5 +1,5 @@
 /* src/components/window-shell/WindowControls.module.css */
-/* WindowControls 样式 - GNOME 风格窗口控制按钮 */
+/* WindowControls 样式 - Adwaita 风格窗口控制按钮 */
 
 /* ═════════════════════════════════════════════════════════════
    窗口控制按钮组
@@ -21,11 +21,11 @@
 }
 
 /* ═════════════════════════════════════════════════════════════
-   GNOME Adwaita 风格按钮颜色
+   Adwaita 风格按钮颜色
    ═════════════════════════════════════════════════════════════ */
 
 .windowControlBtnMinimize {
-  background: #f7d76a; /* GNOME Adwaita 浅黄色,更柔和 */
+  background: #f7d76a; /* Adwaita 浅黄色,更柔和 */
 }
 
 .windowControlBtnMinimizeHover {
@@ -33,7 +33,7 @@
 }
 
 .windowControlBtnMaximize {
-  background: #57e389; /* GNOME Adwaita 浅绿色,更柔和 */
+  background: #57e389; /* Adwaita 浅绿色,更柔和 */
 }
 
 .windowControlBtnMaximizeHover {
@@ -41,7 +41,7 @@
 }
 
 .windowControlBtnClose {
-  background: #f66151; /* GNOME Adwaita 浅红色,更柔和 */
+  background: #f66151; /* Adwaita 浅红色,更柔和 */
 }
 
 .windowControlBtnCloseHover {

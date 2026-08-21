@@ -1,5 +1,5 @@
 /* ============================================================
-   SystemMonitor — GNOME System Monitor Style
+   SystemMonitor — Adwaita System Monitor Style
    ============================================================ */
 
 .sm {
@@ -7,14 +7,14 @@
   flex-direction: column;
   height: 100%;
   min-height: 0; /* ✅ 建立 flex 约束链（关键修复） */
-  background: var(--ovelis-window-bg);
+  background: var(--quirel-window-bg);
 }
 
 /* ── Header Bar ──────────────────────────────────────── */
 .sm-headerbar {
   height: var(--headerbar-height);
-  background: var(--ovelis-headerbar-bg);
-  border-bottom: 1px solid var(--ovelis-border-color);
+  background: var(--quirel-headerbar-bg);
+  border-bottom: 1px solid var(--quirel-border-color);
   display: flex;
   align-items: center;
   padding: 0 12px;
@@ -28,14 +28,14 @@
   overflow-x: auto;  /* ✅ 新增：横向滚动支持 */
   overflow-y: hidden;  /* ✅ 新增：禁止纵向滚动 */
   scrollbar-width: thin;  /* ✅ 新增：细滚动条 */
-  scrollbar-color: var(--ovelis-border-color) transparent;  /* ✅ 新增：滚动条颜色 */
+  scrollbar-color: var(--quirel-border-color) transparent;  /* ✅ 新增：滚动条颜色 */
 }
 
 .sm-tab {
   padding: 6px 16px;
   font-size: var(--font-body);
   font-weight: 600;
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   background: none;
   border: none;
   border-radius: var(--radius-xs);
@@ -47,13 +47,13 @@
 }
 
 .sm-tab:hover {
-  background: var(--ovelis-border-color);
-  color: var(--ovelis-text-primary);
+  background: var(--quirel-border-color);
+  color: var(--quirel-text-primary);
 }
 
 .sm-tab.active {
-  background: var(--ovelis-accent-bg);
-  color: var(--ovelis-accent-fg);
+  background: var(--quirel-accent-bg);
+  color: var(--quirel-accent-fg);
 }
 
 /* ✅ 新增：WebKit 滚动条样式 */
@@ -66,7 +66,7 @@
 }
 
 .sm-tabs::-webkit-scrollbar-thumb {
-  background: var(--ovelis-border-color);
+  background: var(--quirel-border-color);
   border-radius: var(--radius-pill);
 }
 
@@ -87,14 +87,14 @@
   background: none;
   border: none;
   border-radius: var(--radius-xs);
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   font-size: 18px;
   cursor: pointer;
   transition: background var(--duration-fast) var(--ease-out);
 }
 
 .sm-menu-btn:hover {
-  background: var(--ovelis-border-color);
+  background: var(--quirel-border-color);
 }
 
 /* ── Content Area ────────────────────────────────────── */
@@ -119,11 +119,11 @@
   grid-template-columns: 60px 1fr 80px 70px 70px 40px;
   gap: 8px;
   padding: 6px 12px;
-  background: var(--ovelis-headerbar-bg);
-  border-bottom: 1px solid var(--ovelis-border-color);
+  background: var(--quirel-headerbar-bg);
+  border-bottom: 1px solid var(--quirel-border-color);
   font-size: var(--font-small);
   font-weight: 600;
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   flex-shrink: 0;
 }
 
@@ -133,7 +133,7 @@
 }
 
 .sm-process-header span:hover {
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
 }
 
 .sm-process-list {
@@ -152,12 +152,12 @@
 }
 
 .sm-process-row:hover {
-  background: var(--ovelis-card-bg);
+  background: var(--quirel-card-bg);
 }
 
 .sm-process-row.selected {
-  background: var(--ovelis-accent-bg);
-  color: var(--ovelis-accent-fg);
+  background: var(--quirel-accent-bg);
+  color: var(--quirel-accent-fg);
 }
 
 .sm-pr-pid {
@@ -171,7 +171,7 @@
 }
 
 .sm-pr-user {
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   font-size: var(--font-small);
 }
 
@@ -187,7 +187,7 @@
 
 .sm-pr-state {
   font-size: var(--font-small);
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
 }
 
 .sm-process-row.selected .sm-pr-state {
@@ -196,10 +196,10 @@
 
 .sm-process-footer {
   padding: 6px 12px;
-  background: var(--ovelis-headerbar-bg);
-  border-top: 1px solid var(--ovelis-border-color);
+  background: var(--quirel-headerbar-bg);
+  border-top: 1px solid var(--quirel-border-color);
   font-size: var(--font-small);
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   flex-shrink: 0;
 }
 
@@ -217,8 +217,8 @@
 
 .sm-res-card {
   flex: 1;
-  background: var(--ovelis-view-bg);
-  border: 1px solid var(--ovelis-border-color);
+  background: var(--quirel-view-bg);
+  border: 1px solid var(--quirel-border-color);
   border-radius: var(--radius-sm);
   padding: 12px;
   display: flex;
@@ -233,13 +233,13 @@
 .sm-res-title {
   font-size: var(--font-small);
   font-weight: 600;
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
 }
 
 .sm-res-title-section {
   font-size: var(--font-body);
   font-weight: 600;
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
   margin-bottom: 8px;
 }
 
@@ -270,7 +270,7 @@
 .sm-res-value {
   font-size: 14pt;
   font-weight: 600;
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
   font-variant-numeric: tabular-nums;
 }
 
@@ -280,14 +280,14 @@
 
 .sm-res-label {
   font-size: var(--font-small);
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
 }
 
 /* ── Progress Bars ──────────────────────────────────── */
 .sm-res-bar-card {
   flex: 1;
-  background: var(--ovelis-view-bg);
-  border: 1px solid var(--ovelis-border-color);
+  background: var(--quirel-view-bg);
+  border: 1px solid var(--quirel-border-color);
   border-radius: var(--radius-sm);
   padding: 12px;
   display: flex;
@@ -304,19 +304,19 @@
 .sm-bar-title {
   font-size: var(--font-body);
   font-weight: 600;
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
 }
 
 .sm-bar-value {
   font-size: var(--font-body);
   font-weight: 600;
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
   font-variant-numeric: tabular-nums;
 }
 
 .sm-bar-track {
   height: 8px;
-  background: var(--ovelis-card-bg);
+  background: var(--quirel-card-bg);
   border-radius: var(--radius-pill);
   overflow: hidden;
 }
@@ -329,7 +329,7 @@
 
 .sm-bar-detail {
   font-size: var(--font-small);
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   font-variant-numeric: tabular-nums;
 }
 
@@ -339,8 +339,8 @@
 }
 
 .sm-disk-item {
-  background: var(--ovelis-view-bg);
-  border: 1px solid var(--ovelis-border-color);
+  background: var(--quirel-view-bg);
+  border: 1px solid var(--quirel-border-color);
   border-radius: var(--radius-sm);
   padding: 10px 12px;
   display: flex;
@@ -363,18 +363,18 @@
 
 .sm-net-icon {
   font-size: 16px;
-  color: var(--ovelis-accent-bg);
+  color: var(--quirel-accent-bg);
 }
 
 .sm-net-label {
   font-size: var(--font-small);
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
 }
 
 .sm-net-value {
   font-size: var(--font-body);
   font-weight: 600;
-  color: var(--ovelis-text-primary);
+  color: var(--quirel-text-primary);
   font-variant-numeric: tabular-nums;
 }
 
@@ -390,11 +390,11 @@
   grid-template-columns: 100px 1fr 60px 80px 80px 80px;
   gap: 8px;
   padding: 6px 12px;
-  background: var(--ovelis-headerbar-bg);
-  border-bottom: 1px solid var(--ovelis-border-color);
+  background: var(--quirel-headerbar-bg);
+  border-bottom: 1px solid var(--quirel-border-color);
   font-size: var(--font-small);
   font-weight: 600;
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
   flex-shrink: 0;
 }
 
@@ -413,12 +413,12 @@
 }
 
 .sm-fs-row:hover {
-  background: var(--ovelis-card-bg);
+  background: var(--quirel-card-bg);
 }
 
 .sm-fs-device {
   font-size: var(--font-small);
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
 }
 
 .sm-fs-dir {
@@ -427,7 +427,7 @@
 
 .sm-fs-type {
   font-size: var(--font-small);
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
 }
 
 .sm-fs-total,
@@ -453,7 +453,7 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
-  background: var(--ovelis-view-bg);  /* 使用暖灰背景 */
+  background: var(--quirel-view-bg);  /* 使用暖灰背景 */
   opacity: 0.85;  /* 85% 透明度 */
   z-index: 10;
   animation: offlineOverlayIn 200ms var(--ease-out);
@@ -467,16 +467,16 @@
 .offline-badge {
   font-size: 13pt;
   font-weight: 700;
-  color: var(--ovelis-text-primary);
-  background: var(--ovelis-card-bg);
+  color: var(--quirel-text-primary);
+  background: var(--quirel-card-bg);
   padding: 6px 16px;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--ovelis-border-color);
+  border: 1px solid var(--quirel-border-color);
 }
 
 .offline-hint {
   font-size: var(--font-body);
-  color: var(--ovelis-text-secondary);
+  color: var(--quirel-text-secondary);
 }
 
 /* ── Stats Tab ─────────────────────────────────────────── */

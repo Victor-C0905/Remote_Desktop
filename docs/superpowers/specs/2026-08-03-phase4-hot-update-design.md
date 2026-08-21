@@ -109,7 +109,7 @@ pub enum ReloadTrigger {
 | 触发方式 | 实现机制 | 适用场景 |
 |---------|---------|---------|
 | QUIC 命令 | 客户端发送 `ReloadWorker` 消息 → Manager 收到后调用 `trigger_reload()` | 远程运维，Web UI |
-| SIGHUP 信号 | Manager 启动时注册 `signal::unix::signal(SignalKind::SIGHUP)` 监听 | `systemctl reload gnome-remote-agent` |
+| SIGHUP 信号 | Manager 启动时注册 `signal::unix::signal(SignalKind::SIGHUP)` 监听 | `systemctl reload quireld` |
 | CLI 工具 | `agent reload` 子命令通过 Unix Socket 发送命令给运行中的 Manager | 本地运维 |
 | apt postinst | 包安装脚本的 `postinst` 钩子执行 `systemctl reload` 或 `agent reload` | 包升级 |
 

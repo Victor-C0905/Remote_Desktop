@@ -583,7 +583,7 @@ mod tests {
     async fn test_ipc_server_creation() {
         let registry = Arc::new(PtyRegistry::new());
         let worker_manager = Arc::new(WorkerManager::new(
-            "/usr/bin/agent".to_string(),
+            "/usr/bin/quireld".to_string(),
             "/tmp/test.sock".to_string(),
             3
         ));
@@ -598,7 +598,7 @@ mod tests {
     async fn test_ipc_server_start_stop() {
         let registry = Arc::new(PtyRegistry::new());
         let worker_manager = Arc::new(WorkerManager::new(
-            "/usr/bin/agent".to_string(),
+            "/usr/bin/quireld".to_string(),
             "/tmp/test.sock".to_string(),
             3
         ));
@@ -617,7 +617,7 @@ mod tests {
     async fn test_worker_status_event_handling() {
         let registry = Arc::new(PtyRegistry::new());
         let worker_manager = Arc::new(WorkerManager::new(
-            "/usr/bin/agent".to_string(),
+            "/usr/bin/quireld".to_string(),
             "/tmp/test_worker.sock".to_string(),
             3
         ));
@@ -666,7 +666,7 @@ mod tests {
         // 2. 创建 IpcServer 实例（不调用 start/accept_and_set_pid，手动初始化内部状态）
         let registry = Arc::new(PtyRegistry::new());
         let worker_manager = Arc::new(WorkerManager::new(
-            "/usr/bin/agent".to_string(),
+            "/usr/bin/quireld".to_string(),
             "/tmp/test.sock".to_string(),
             3,
         ));

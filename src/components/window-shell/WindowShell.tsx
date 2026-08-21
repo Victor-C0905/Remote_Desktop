@@ -171,13 +171,13 @@ export function WindowShell({
     [onFocus, mode],
   );
 
-  // ── 双击标题栏最大化（GNOME 标准）────────────────────
+  // ── 双击标题栏最大化（Adwaita 标准）────────────────────
   const handleHeaderBarDoubleClick = useCallback(
     (e: React.MouseEvent) => {
       // frameless 模式下，不处理双击
       if (mode === 'frameless') return;
 
-      // ✅ GNOME 标准：双击 HeaderBar 触发最大化/取消最大化
+      // ✅ Adwaita 标准：双击 HeaderBar 触发最大化/取消最大化
       e.preventDefault();
       e.stopPropagation();
       onMaximize();

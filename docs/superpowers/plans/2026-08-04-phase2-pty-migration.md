@@ -41,7 +41,7 @@ message CreateSession {
 }
 ```
 
-**验证**: `wsl -e bash -l -c "cd /mnt/e/MyWork/gnome-remote/agent && cargo build --build 2>&1 | tail -5"`(重新生成 prost 代码并编译)
+**验证**: `wsl -e bash -l -c "cd /mnt/e/MyWork/quirel/agent && cargo build --build 2>&1 | tail -5"`(重新生成 prost 代码并编译)
 
 ### Task 2:Worker PtyFactory 增加用户隔离
 

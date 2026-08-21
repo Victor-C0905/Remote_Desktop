@@ -10,9 +10,9 @@
 #![cfg(unix)]
 
 use std::time::Duration;
-use gnome_remote_agent::config::AgentConfig;
-use gnome_remote_agent::manager::Manager;
-use gnome_remote_agent::auth::session::UserSession;
+use quireld::config::AgentConfig;
+use quireld::manager::Manager;
+use quireld::auth::session::UserSession;
 use std::path::PathBuf;
 
 /// 创建测试用的 UserSession(使用当前用户信息)
@@ -40,10 +40,10 @@ fn create_test_user_session() -> UserSession {
 async fn test_create_pty_session_via_worker() {
     let mut config = AgentConfig::default();
     config.worker.ipc_socket_path = format!(
-        "/tmp/gnome-remote-phase2-test-{}.sock",
+        "/tmp/quireld-phase2-test-{}.sock",
         std::process::id()
     );
-    config.worker.agent_binary = env!("CARGO_BIN_EXE_agent").to_string();
+    config.worker.agent_binary = env!("CARGO_BIN_EXE_quireld").to_string();
     config.worker.max_restarts = 1;
 
     let manager = std::sync::Arc::new(
@@ -68,7 +68,7 @@ async fn test_create_pty_session_via_worker() {
     let registry = manager.pty_registry();
     let session = registry.get(&session_id).await;
     assert!(session.is_some(), "PtyRegistry 中应能找到 session");
-    assert!(session.unwrap().connection.socket_name().contains("gnome-remote-session"), "应有有效的 socket_name");
+    assert!(session.unwrap().connection.socket_name().contains("quireld-session"), "应有有效的 socket_name");
 
     // 清理
     let removed = registry.unregister(&session_id).await;
@@ -86,10 +86,10 @@ async fn test_create_pty_session_via_worker() {
 async fn test_pty_read_write_via_worker() {
     let mut config = AgentConfig::default();
     config.worker.ipc_socket_path = format!(
-        "/tmp/gnome-remote-phase2-rw-{}.sock",
+        "/tmp/quireld-phase2-rw-{}.sock",
         std::process::id()
     );
-    config.worker.agent_binary = env!("CARGO_BIN_EXE_agent").to_string();
+    config.worker.agent_binary = env!("CARGO_BIN_EXE_quireld").to_string();
     config.worker.max_restarts = 1;
 
     let manager = std::sync::Arc::new(
@@ -145,10 +145,10 @@ async fn test_pty_read_write_via_worker() {
 async fn test_pty_resize_via_worker() {
     let mut config = AgentConfig::default();
     config.worker.ipc_socket_path = format!(
-        "/tmp/gnome-remote-phase2-resize-{}.sock",
+        "/tmp/quireld-phase2-resize-{}.sock",
         std::process::id()
     );
-    config.worker.agent_binary = env!("CARGO_BIN_EXE_agent").to_string();
+    config.worker.agent_binary = env!("CARGO_BIN_EXE_quireld").to_string();
     config.worker.max_restarts = 1;
 
     let manager = std::sync::Arc::new(
