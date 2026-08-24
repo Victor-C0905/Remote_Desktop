@@ -784,9 +784,11 @@ pub async fn handle_apply_diff(req: ApplyDiffReq) -> WorkerResponse {
             );
         }
 
-        // 读取原文件内容
-        let old_content = fs::read_to_string(&path)
+        // 读取原文件内容（按字节读取，避免非 UTF-8 文件 read_to_string 失败）
+        let old_bytes = fs::read(&path)
             .map_err(|e| anyhow::anyhow!("读取文件失败: {}", e))?;
+        let old_content = String::from_utf8(old_bytes)
+            .map_err(|e| anyhow::anyhow!("文件不是有效的 UTF-8 文本，无法应用差异: {}", e))?;
 
         // 应用差异
         let new_content = apply_diff(&old_content, &diffs);
