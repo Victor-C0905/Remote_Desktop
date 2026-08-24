@@ -1010,6 +1010,7 @@ async fn handle_connection(
         let session_inner = session.clone();
         let stats_manager_inner = stats_manager.clone();  // 克隆 stats_manager
         let audit_log_inner = audit_log.clone();  // 克隆 audit_log
+        let last_activity_inner = last_activity.clone();  // 传递 last_activity，事件推送成功时更新
         #[cfg(unix)]
         let manager_inner = manager.clone();
         tokio::spawn(async move {
@@ -1022,6 +1023,7 @@ async fn handle_connection(
                 &session_inner,
                 stats_manager_inner,  // 传递 stats_manager 参数
                 audit_log_inner,  // 传递 audit_log 参数
+                last_activity_inner,  // 传递 last_activity
                 #[cfg(unix)]
                 manager_inner,
             ).await {
@@ -1059,6 +1061,7 @@ async fn handle_stream(
     session: &UserSession,
     stats_manager: Arc<StatsManager>,  // 新增参数：统计管理器
     audit_log: Arc<AuditLogger>,  // 新增参数：审计日志记录器
+    last_activity: Arc<AtomicU64>,  // 事件推送成功时更新，防止误判空闲超时
     #[cfg(unix)]
     manager: Arc<crate::manager::Manager>,
 ) -> Result<()> {
@@ -1183,6 +1186,8 @@ async fn handle_stream(
                                                 tracing::warn!("事件推送失败: {}", e);
                                                 break;
                                             }
+                                            // 事件推送成功说明连接活跃，更新 last_activity 防止误判空闲超时
+                                            last_activity.store(current_timestamp_secs(), Ordering::Relaxed);
                                             tracing::debug!("事件推送成功: event_type={}", event.event_type);
                                         }
                                         Err(e) => {
