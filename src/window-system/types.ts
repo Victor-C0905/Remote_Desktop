@@ -7,7 +7,7 @@
 import { Window as AppWindow } from './core/Window';
 import type { SnapZone } from '../components/window-shell/aeroSnap';
 
-// Persistable window data (stored in localStorage)
+// Persistable window data (stored in Tauri Store)
 export interface PersistedWindowData {
   id: string;
   appId: string;

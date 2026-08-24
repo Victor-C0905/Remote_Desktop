@@ -8,6 +8,7 @@ import { ThemeId } from "../config/themes";
 import { createLogger } from '../utils/logger';
 import { AuthMethod } from '../types/server';
 import { StatsPanel } from '../components/StatsPanel';
+import { getSettingsStorage } from '../utils/storage';
 // import { useWindowState } from "../window-system/hooks/useWindowState"; // 未来集成时使用
 import "./Settings.css";
 
@@ -468,15 +469,24 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
   const [editingServer, setEditingServer] = useState<{ id: string; name: string; host: string; port: number; auth?: any } | null>(null);
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
 
-  // 终端默认路径配置
-  const [terminalDefaultPath, setTerminalDefaultPath] = useState(() => {
-    return localStorage.getItem("terminal-default-path") || "";
-  });
+  // 终端默认路径配置（通过 Tauri Store 异步加载）
+  const [terminalDefaultPath, setTerminalDefaultPath] = useState("");
 
-  const handleTerminalPathChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const storage = await getSettingsStorage();
+      const value = await storage.getItem("terminal-default-path");
+      if (!cancelled) setTerminalDefaultPath(value || "");
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleTerminalPathChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
     setTerminalDefaultPath(value);
-    localStorage.setItem("terminal-default-path", value);
+    const storage = await getSettingsStorage();
+    await storage.setItem("terminal-default-path", value);
   };
 
   const {

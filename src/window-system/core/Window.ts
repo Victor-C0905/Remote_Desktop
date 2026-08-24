@@ -11,7 +11,7 @@ export class Window {
   readonly id: string;
   readonly appId: string;
 
-  // Persistable state (saved to localStorage)
+  // Persistable state (saved to Tauri Store)
   private _position: { x: number; y: number };
   private _size: { width: number; height: number };
   private _minimized: boolean;

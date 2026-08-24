@@ -87,26 +87,33 @@ interface TransferProgressPayload {
  * 完成时自动显示通知并移除任务
  */
 export function useTransferProgress(connectionId?: string) {
-  // 从 localStorage 加载初始状态，只保留最近24小时的任务
-  const [transfers, setTransfers] = useState<TransferTask[]>(() => {
-    const saved = transferStorage.load();
-    const now = Date.now();
-    const oneDayMs = 24 * 60 * 60 * 1000;
-    
-    return saved.filter(task => {
-      // 只保留最近24小时的任务
-      const age = now - task.start_time;
-      return age < oneDayMs;
-    });
-  });
+  // 初始为空数组，通过 useEffect 异步从 Tauri Store 加载
+  const [transfers, setTransfers] = useState<TransferTask[]>([]);
 
-  // 监听变化并保存到 localStorage
+  // 异步从 Tauri Store 加载历史传输任务，只保留最近24小时的
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const saved = await transferStorage.load();
+      if (cancelled) return;
+      const now = Date.now();
+      const oneDayMs = 24 * 60 * 60 * 1000;
+      const filtered = saved.filter(task => {
+        const age = now - task.start_time;
+        return age < oneDayMs;
+      });
+      setTransfers(filtered);
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // 监听变化并保存到 Tauri Store
   useEffect(() => {
     transferStorage.save(transfers);
   }, [transfers]);
 
   useEffect(() => {
-    log.debug('初始化 localStorage 数据:', transfers.length, '个任务');
+    log.debug('初始化传输任务数据:', transfers.length, '个任务');
     transfers.forEach(t => {
       log.debug(`任务: id=${t.id}, file=${t.file_name}, status=${t.status}, progress=${t.progress}%`);
     });
