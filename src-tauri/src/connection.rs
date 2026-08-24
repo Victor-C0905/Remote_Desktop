@@ -1100,7 +1100,17 @@ pub async fn remote_read_file(server_id: String, path: String, app: tauri::AppHa
     tracing::debug!("[ReadFile] server_id={}, path={}", server_id, path);
     let resp = remote_send(server_id, Payload::ReadFileRequest { path }, app).await?;
     match resp.payload {
-        Payload::ReadFileResponse { path, content, mtime, size } => Ok(RemoteReadFileResponse { path, content, mtime, size }),
+        Payload::ReadFileResponse { path, content, mtime, size } => {
+            // Agent 返回 base64 编码的原始字节（支持二进制文件）
+            // 客户端文本编辑器需要 UTF-8 文本，这里解码 base64 并尝试 UTF-8 转换
+            use base64::Engine;
+            let content_bytes = base64::engine::general_purpose::STANDARD
+                .decode(content.as_bytes())
+                .map_err(|e| format!("base64 解码失败: {}", e))?;
+            let content_text = String::from_utf8(content_bytes)
+                .map_err(|e| format!("文件不是有效的 UTF-8 文本（可能为二进制或非 UTF-8 编码）: {}", e))?;
+            Ok(RemoteReadFileResponse { path, content: content_text, mtime, size })
+        }
         Payload::Error { message, .. } => Err(message),
         _ => Err("意外响应".into()),
     }
@@ -1118,7 +1128,11 @@ pub struct RemoteReadFileResponse {
 #[tracing::instrument(skip(content, app), fields(server_id = %server_id, path = %path))]
 pub async fn remote_write_file(server_id: String, path: String, content: String, app: tauri::AppHandle) -> Result<RemoteWriteFileResponse, String> {
     tracing::info!("[WriteFile] server_id={}, path={}", server_id, path);
-    let resp = remote_send(server_id, Payload::WriteFileRequest { path, content }, app).await?;
+    // Agent 协议要求 content 为 base64 编码（支持二进制文件）
+    // 前端传入的是 UTF-8 文本，这里编码为 base64
+    use base64::Engine;
+    let content_b64 = base64::engine::general_purpose::STANDARD.encode(content.as_bytes());
+    let resp = remote_send(server_id, Payload::WriteFileRequest { path, content: content_b64 }, app).await?;
     match resp.payload {
         Payload::WriteFileResponse { path, mtime, size } => Ok(RemoteWriteFileResponse { path, mtime, size }),
         Payload::Error { message, .. } => Err(message),
