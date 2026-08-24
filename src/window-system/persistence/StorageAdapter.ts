@@ -2,7 +2,7 @@
 
 /**
  * Storage adapter interface
- * Allows different storage backends (localStorage, Tauri file system, etc.)
+ * Allows different storage backends (Tauri Store, etc.)
  */
 export interface StorageAdapter {
   /**

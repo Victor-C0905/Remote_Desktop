@@ -6,128 +6,75 @@ import { createLogger } from '../../utils/logger';
 const log = createLogger('TauriStorageAdapter');
 
 /**
- * Tauri file system storage adapter
- * Uses Tauri's fs API for persistent storage
- * Falls back to localStorage when Tauri is not available
+ * Tauri Store 存储适配器
+ * 通过 @tauri-apps/plugin-store 实现 Rust 侧管理的持久化存储
+ * 不再提供 localStorage 降级 — 所有持久化存储必须由 Rust 管理
  */
 export class TauriStorageAdapter implements StorageAdapter {
-  private fallbackAdapter: LocalStorageAdapter;
-  private tauriAvailable: boolean;
+  private storePath: string;
 
-  constructor() {
-    this.fallbackAdapter = new LocalStorageAdapter();
-    this.tauriAvailable = this.checkTauriAvailable();
+  constructor(storePath: string = 'windows.bin') {
+    this.storePath = storePath;
   }
 
   /**
-   * Check if Tauri API is available
+   * 懒加载 Tauri Store 实例
    */
-  private checkTauriAvailable(): boolean {
-    try {
-      // Check if running in Tauri environment
-      return typeof window !== 'undefined' && '__TAURI__' in window;
-    } catch {
-      return false;
-    }
+  private async getStore() {
+    const { load } = await import('@tauri-apps/plugin-store');
+    return await load(this.storePath);
   }
 
   /**
-   * Save data to storage
+   * Save data to Tauri Store
    */
   async save(key: string, data: string): Promise<void> {
-    if (this.tauriAvailable) {
-      try {
-        // Use Tauri fs API when available
-        // Note: Requires @tauri-apps/plugin-fs to be installed
-        const { writeTextFile } = await import('@tauri-apps/plugin-fs');
-        const { appDataDir } = await import('@tauri-apps/api/path');
-        const appDataDirPath = await appDataDir();
-        await writeTextFile(`${appDataDirPath}/${key}.json`, data);
-      } catch (error) {
-        log.error('Failed to save to Tauri fs', error);
-        // Fallback to localStorage
-        this.fallbackAdapter.save(key, data);
-      }
-    } else {
-      // Use localStorage when Tauri is not available
-      this.fallbackAdapter.save(key, data);
+    try {
+      const store = await this.getStore();
+      await store.set(key, JSON.parse(data));
+      await store.save();
+    } catch (error) {
+      log.error('Failed to save to Tauri Store:', error);
     }
   }
 
   /**
-   * Load data from storage
+   * Load data from Tauri Store
    */
   async load(key: string): Promise<string | null> {
-    if (this.tauriAvailable) {
-      try {
-        // Use Tauri fs API when available
-        // Note: Requires @tauri-apps/plugin-fs to be installed
-        const { readTextFile } = await import('@tauri-apps/plugin-fs');
-        const { appDataDir } = await import('@tauri-apps/api/path');
-        const appDataDirPath = await appDataDir();
-        return await readTextFile(`${appDataDirPath}/${key}.json`);
-      } catch (error) {
-        // File doesn't exist or error reading
-        // Fallback to localStorage
-        log.warn('Tauri 存储加载失败，降级到内存:', key, error);
-        return this.fallbackAdapter.load(key);
-      }
-    } else {
-      // Use localStorage when Tauri is not available
-      return this.fallbackAdapter.load(key);
+    try {
+      const store = await this.getStore();
+      const value = await store.get<string>(key);
+      return value !== null && value !== undefined ? JSON.stringify(value) : null;
+    } catch (error) {
+      log.error('Failed to load from Tauri Store:', error);
+      return null;
     }
   }
 
   /**
-   * Remove data from storage
+   * Remove data from Tauri Store
    */
   async remove(key: string): Promise<void> {
-    if (this.tauriAvailable) {
-      try {
-        // Note: Requires @tauri-apps/plugin-fs to be installed
-        const { remove } = await import('@tauri-apps/plugin-fs');
-        const { appDataDir } = await import('@tauri-apps/api/path');
-        const appDataDirPath = await appDataDir();
-        await remove(`${appDataDirPath}/${key}.json`);
-      } catch (error) {
-        // Fallback to localStorage
-        log.warn('Tauri 存储删除失败，降级到内存:', key, error);
-        this.fallbackAdapter.remove(key);
-      }
-    } else {
-      this.fallbackAdapter.remove(key);
+    try {
+      const store = await this.getStore();
+      await store.delete(key);
+      await store.save();
+    } catch (error) {
+      log.error('Failed to remove from Tauri Store:', error);
     }
   }
 
   /**
-   * Clear all data from storage
+   * Clear all data from Tauri Store
    */
   async clear(): Promise<void> {
-    // Clear localStorage
-    this.fallbackAdapter.clear();
-
-    // Note: Tauri file system clear would require listing all files
-    // which is more complex, so we only clear localStorage
-  }
-}
-
-/**
- * LocalStorage adapter (fallback)
- */
-class LocalStorageAdapter implements StorageAdapter {
-  save(key: string, data: string): void {
-    localStorage.setItem(key, data);
-  }
-
-  load(key: string): string | null {
-    return localStorage.getItem(key);
-  }
-
-  remove(key: string): void {
-    localStorage.removeItem(key);
-  }
-
-  clear(): void {
-    localStorage.clear();
+    try {
+      const store = await this.getStore();
+      await store.clear();
+      await store.save();
+    } catch (error) {
+      log.error('Failed to clear Tauri Store:', error);
+    }
   }
 }

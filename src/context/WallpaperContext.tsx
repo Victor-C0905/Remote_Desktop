@@ -1,5 +1,4 @@
 import { createContext, useContext, useCallback, ReactNode } from "react";
-import { createLogger } from "../utils/logger";
 import {
   useWallpaperStore,
   PRESET_WALLPAPERS,
@@ -27,10 +26,6 @@ type WallpaperContextType = WallpaperState & WallpaperActions;
 
 const WallpaperContext = createContext<WallpaperContextType | null>(null);
 
-/* ── Logger ───────────────────────────────────────────── */
-
-const log = createLogger('WallpaperContext');
-
 /* ── Provider ────────────────────────────────────────── */
 
 export function WallpaperProvider({ children }: { children: ReactNode }) {
@@ -38,37 +33,23 @@ export function WallpaperProvider({ children }: { children: ReactNode }) {
   const { wallpaper, setPresetWallpaper, setCustomWallpaper, clearWallpaper } = useWallpaperStore();
 
   const importWallpaper = useCallback(async () => {
-    try {
-      const { open } = await import("@tauri-apps/plugin-dialog");
-      const selected = await open({
-        multiple: false,
-        filters: [
-          { name: "Images", extensions: ["jpg", "jpeg", "png", "webp", "gif", "bmp"] },
-        ],
-      });
-
-      if (selected && typeof selected === "string") {
-        setCustomWallpaper(selected);
+    // 统一通过 <input type="file"> + FileReader 读取图片为 dataURL
+    // dataURL 可直接作为 CSS url() 使用，无需 asset 协议或文件路径转换
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*";
+    input.onchange = (ev) => {
+      const file = (ev.target as HTMLInputElement).files?.[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const dataUrl = e.target?.result as string;
+          setCustomWallpaper(dataUrl);
+        };
+        reader.readAsDataURL(file);
       }
-    } catch (e) {
-      log.warn('Tauri dialog not available, using fallback');
-
-      const input = document.createElement("input");
-      input.type = "file";
-      input.accept = "image/*";
-      input.onchange = (ev) => {
-        const file = (ev.target as HTMLInputElement).files?.[0];
-        if (file) {
-          const reader = new FileReader();
-          reader.onload = (e) => {
-            const dataUrl = e.target?.result as string;
-            setCustomWallpaper(dataUrl);
-          };
-          reader.readAsDataURL(file);
-        }
-      };
-      input.click();
-    }
+    };
+    input.click();
   }, [setCustomWallpaper]);
 
   return (

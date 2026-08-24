@@ -13,6 +13,7 @@ import {
   PersistedWindowData,
 } from '../types';
 import { createLogger } from '../../utils/logger';
+import { getWindowsStorage } from '../../utils/storage';
 import type { SnapZone } from '../../components/window-shell/aeroSnap';
 
 const log = createLogger('WindowManager');
@@ -394,7 +395,7 @@ export class WindowManager implements IWindowManager {
   }
 
   /**
-   * Save window states to localStorage
+   * Save window states to Tauri Store (Rust-managed persistent storage)
    * ✅ 优化：异步延迟执行，避免频繁写入和阻塞 UI
    */
   save(): void {
@@ -407,32 +408,29 @@ export class WindowManager implements IWindowManager {
     this.saveTimer = setTimeout(() => {
       try {
         const data = this.windows.getAll().map(w => w.serialize());
-        localStorage.setItem('quirel-windows', JSON.stringify(data));
+        // 异步写入 Tauri Store，不阻塞 UI
+        getWindowsStorage().then(storage => {
+          storage.setItem('quirel-windows', JSON.stringify(data));
+        }).catch(error => {
+          log.error('Failed to save window states:', error);
+        });
       } catch (error) {
-        log.error('Failed to save window states:', error);
-        // ✅ 尝试清理旧数据后再保存
-        try {
-          const data = this.windows.getAll().map(w => w.serialize());
-          localStorage.removeItem('quirel-windows');
-          localStorage.setItem('quirel-windows', JSON.stringify(data));
-        } catch (retryError) {
-          log.error('Retry save failed:', retryError);
-          // 最终失败，不影响应用运行
-        }
+        log.error('Failed to serialize window states:', error);
       }
       this.saveTimer = null;
     }, 1000);
   }
 
   /**
-   * Load window states from localStorage
+   * Load window states from Tauri Store (Rust-managed persistent storage)
    * Applies boundary constraints to restored positions
    */
-  load(): void {
-    const stored = localStorage.getItem('quirel-windows');
-    if (!stored) return;
-
+  async load(): Promise<void> {
     try {
+      const storage = await getWindowsStorage();
+      const stored = await storage.getItem('quirel-windows');
+      if (!stored) return;
+
       const data = JSON.parse(stored) as PersistedWindowData[];
 
       // ── 边界约束逻辑（符合标准窗口设计）──────────────

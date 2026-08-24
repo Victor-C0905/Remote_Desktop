@@ -537,9 +537,18 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
 
   // ── 工作目录配置 ────────────────────────────────────────────────────
   // 优先使用 preloadData（从文件管理器打开），否则使用用户配置的默认路径
-  const [configuredDefaultPath] = useState(() => {
-    return localStorage.getItem("terminal-default-path") || null;
-  });
+  const [configuredDefaultPath, setConfiguredDefaultPath] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { getSettingsStorage } = await import('../utils/storage');
+      const storage = await getSettingsStorage();
+      const value = await storage.getItem("terminal-default-path");
+      if (!cancelled) setConfiguredDefaultPath(value || null);
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const workingDirectory = preloadData?.workingDirectory || configuredDefaultPath;
 
