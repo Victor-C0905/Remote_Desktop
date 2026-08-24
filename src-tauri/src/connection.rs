@@ -779,8 +779,41 @@ pub async fn remote_connect(
             let heartbeat_conn = conn_clone.clone();
             let heartbeat_task = tokio::spawn(async move {
                 let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+                let mut last_tick = std::time::Instant::now();
                 loop {
                     interval.tick().await;
+
+                    // 检测时间跳跃（电脑休眠/唤醒）：两次 tick 间隔远超设定值
+                    let tick_gap = last_tick.elapsed();
+                    last_tick = std::time::Instant::now();
+                    if tick_gap > std::time::Duration::from_secs(15) {
+                        tracing::warn!(
+                            "检测到时间跳跃 ({}s)，可能从休眠唤醒，主动检测连接状态",
+                            tick_gap.as_secs()
+                        );
+                        // 休眠唤醒后连接可能已失效，用短超时快速检测
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as u64;
+                        let envelope = Envelope::new(0, Payload::Ping { timestamp: now });
+                        match tokio::time::timeout(
+                            std::time::Duration::from_secs(3),
+                            send_and_receive_quic(&heartbeat_conn, 0, envelope.payload),
+                        ).await {
+                            Ok(Ok(_)) => {
+                                tracing::info!("休眠唤醒后连接仍存活");
+                                continue;
+                            }
+                            _ => {
+                                tracing::warn!("休眠唤醒后连接已失效，触发断开");
+                                let _ = heartbeat_tx.send(ClientRequest::ConnectionLost {
+                                    source: ConnectionLostSource::Heartbeat,
+                                }).await;
+                                break;
+                            }
+                        }
+                    }
 
                     // 快速退出：连接已关闭
                     if heartbeat_conn.close_reason().is_some() {
