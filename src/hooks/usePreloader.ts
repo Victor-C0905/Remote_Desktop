@@ -40,6 +40,7 @@ export interface SidebarSection {
  */
 export interface FileManagerInitialData {
   username: string | null;
+  homeDir: string | null;  // 用户真实家目录（root 为 /root，普通用户从 /etc/passwd 读取）
   currentPath: string;
   entries: FileEntry[];
   mounts: MountInfo[];
@@ -60,21 +61,22 @@ interface PreloaderResult {
 
 function buildSidebarSections(
   username: string | null,
+  homeDir: string | null,
   mounts: MountInfo[],
   activeServerId: string | null,
 ): SidebarSection[] {
-  if (activeServerId && username) {
-    // 远程模式侧边栏
+  if (activeServerId && username && homeDir) {
+    // 远程模式侧边栏：使用服务端返回的真实家目录
     return [
       {
         title: "位置",
         items: [
-          { icon: "🏠", label: "主目录", path: `/home/${username}`, type: "bookmark" },
-          { icon: "📄", label: "文档", path: `/home/${username}/Documents`, type: "bookmark" },
-          { icon: "⬇️", label: "下载", path: `/home/${username}/Downloads`, type: "bookmark" },
-          { icon: "🖼️", label: "图片", path: `/home/${username}/Pictures`, type: "bookmark" },
-          { icon: "🎵", label: "音乐", path: `/home/${username}/Music`, type: "bookmark" },
-          { icon: "🎬", label: "视频", path: `/home/${username}/Videos`, type: "bookmark" },
+          { icon: "🏠", label: "主目录", path: homeDir, type: "bookmark" },
+          { icon: "📄", label: "文档", path: `${homeDir}/Documents`, type: "bookmark" },
+          { icon: "⬇️", label: "下载", path: `${homeDir}/Downloads`, type: "bookmark" },
+          { icon: "🖼️", label: "图片", path: `${homeDir}/Pictures`, type: "bookmark" },
+          { icon: "🎵", label: "音乐", path: `${homeDir}/Music`, type: "bookmark" },
+          { icon: "🎬", label: "视频", path: `${homeDir}/Videos`, type: "bookmark" },
         ],
       },
       {
@@ -142,16 +144,16 @@ export function usePreloader(): PreloaderResult {
     setData(null);
 
     try {
-      // 并行获取 username 和 mounts
-      const [username, mounts] = await Promise.all([
-        invoke<string>("remote_get_current_user", { serverId })
-          .catch((e) => { log.warn('获取用户名失败，使用默认值:', e); return "user"; }),
+      // 并行获取用户信息和 mounts
+      const [user, mounts] = await Promise.all([
+        invoke<{ username: string; home_dir: string }>("remote_get_current_user", { serverId })
+          .catch((e) => { log.warn('获取用户信息失败，使用 / 作为回退:', e); return { username: "user", home_dir: "/" }; }),
         invoke<MountInfo[]>("remote_get_mounts", { serverId })
           .catch((e) => { log.warn('获取挂载点失败，返回空数组:', e); return []; }),
       ]);
 
-      // 用 username 加载初始目录
-      const homePath = `/home/${username}`;
+      // 用服务端返回的真实家目录加载初始目录
+      const homePath = user.home_dir;
       const dirResp = await invoke<{ path: string; entries: FileEntry[] }>(
         "remote_read_dir",
         { serverId, path: homePath }
@@ -163,9 +165,10 @@ export function usePreloader(): PreloaderResult {
       });
 
       // 组装完整数据
-      const sidebarSections = buildSidebarSections(username, mounts, serverId);
+      const sidebarSections = buildSidebarSections(user.username, user.home_dir, mounts, serverId);
       const result: FileManagerInitialData = {
-        username,
+        username: user.username,
+        homeDir: user.home_dir,
         currentPath: homePath,
         entries,
         mounts,

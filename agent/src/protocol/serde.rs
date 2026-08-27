@@ -255,7 +255,7 @@ pub enum Payload {
     GetCurrentUser,
 
     #[serde(rename = "current_user_resp")]
-    CurrentUserResponse { username: String },
+    CurrentUserResponse { username: String, home_dir: String },
 
     #[serde(rename = "get_mounts")]
     GetMounts,
