@@ -164,7 +164,7 @@ pub enum Payload {
     #[serde(rename = "get_current_user")]
     GetCurrentUser,
     #[serde(rename = "current_user_resp")]
-    CurrentUserResponse { username: String },
+    CurrentUserResponse { username: String, home_dir: String },
     #[serde(rename = "get_mounts")]
     GetMounts,
     #[serde(rename = "mounts_resp")]
@@ -1081,14 +1081,21 @@ pub struct RemoteReadDirResponse {
 
 #[tauri::command]
 #[tracing::instrument(skip(app), fields(server_id = %server_id))]
-pub async fn remote_get_current_user(server_id: String, app: tauri::AppHandle) -> Result<String, String> {
+pub async fn remote_get_current_user(server_id: String, app: tauri::AppHandle) -> Result<CurrentUser, String> {
     tracing::debug!("[GetCurrentUser] server_id={}", server_id);
     let resp = remote_send(server_id, Payload::GetCurrentUser, app).await?;
     match resp.payload {
-        Payload::CurrentUserResponse { username } => Ok(username),
+        Payload::CurrentUserResponse { username, home_dir } => Ok(CurrentUser { username, home_dir }),
         Payload::Error { message, .. } => Err(message),
         _ => Err("意外响应".into()),
     }
+}
+
+/// 当前用户信息（包含真实家目录，root 用户为 /root，普通用户从 /etc/passwd 读取）
+#[derive(Debug, Serialize)]
+pub struct CurrentUser {
+    pub username: String,
+    pub home_dir: String,
 }
 
 #[tauri::command]

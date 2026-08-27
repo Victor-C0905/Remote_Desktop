@@ -119,7 +119,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
   const isOffline = !activeServerId;
 
   // 路径系统：始终使用 Linux 远程路径格式（远程 Linux 服务器控制工具）
-  const [currentPath, setCurrentPath] = useState(() => "/home");
+  const [currentPath, setCurrentPath] = useState(() => "/");
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -128,6 +128,8 @@ export function FileManager({ preloadData }: FileManagerProps) {
   const [permissionDenied, setPermissionDenied] = useState<string | null>(null);
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
   const [username, setUsername] = useState<string | null>(null);
+  // 用户真实家目录（root 为 /root，普通用户从 /etc/passwd 读取，不再硬编码 /home/${username}）
+  const [homeDir, setHomeDir] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [history, setHistory] = useState<string[]>([currentPath]);
   const [historyIdx, setHistoryIdx] = useState(0);
@@ -353,6 +355,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
     if (initialData) {
       log.debug("使用父级注入的初始数据");
       setUsername(initialData.username);
+      setHomeDir(initialData.homeDir);
       setCurrentPath(initialData.currentPath);
       setEntries(initialData.entries);
       setMounts(initialData.mounts);
@@ -363,47 +366,46 @@ export function FileManager({ preloadData }: FileManagerProps) {
     }
   }, [initialData]);
 
-  // HOME_PATH：远程 Linux 默认路径
-  const HOME_PATH = "/home";
-
-  // 获取远程服务器用户名
+  // 获取远程服务器用户名和真实家目录
   useEffect(() => {
     if (initialData) return; // 有注入数据时跳过，已通过 initialData 初始化
     log.debug("获取用户名 useEffect, activeServerId:", activeServerId);
     if (activeServerId) {
-      // 连接建立后，获取用户名
+      // 连接建立后，获取用户名和真实家目录
       log.debug("调用 remote_get_current_user, serverId:", activeServerId);
-      invoke<string>("remote_get_current_user", { serverId: activeServerId })
-        .then((username) => {
-          log.info("获取用户名成功:", username);
-          setUsername(username);
+      invoke<{ username: string; home_dir: string }>("remote_get_current_user", { serverId: activeServerId })
+        .then((user) => {
+          log.info("获取用户信息成功:", user);
+          setUsername(user.username);
+          setHomeDir(user.home_dir);
         })
         .catch(err => {
-          log.error("获取用户名失败:", err);
+          log.error("获取用户信息失败:", err);
           setUsername("user");  // 默认值
+          setHomeDir(null);
         });
     } else {
       // 离线模式：清空用户名
       setUsername(null);
+      setHomeDir(null);
     }
   }, [activeServerId, initialData]);
 
   // Initial load
   useEffect(() => {
     if (initialData) return; // 有注入数据时跳过，已通过 initialData 初始化
-    log.debug("初始加载 useEffect, activeServerId:", activeServerId, "username:", username);
-    if (activeServerId && username) {
-      // 远程模式：有用户名后，加载初始目录
-      const homePath = `/home/${username}`;
-      log.debug("远程模式，加载路径:", homePath);
-      loadDir(homePath);
+    log.debug("初始加载 useEffect, activeServerId:", activeServerId, "username:", username, "homeDir:", homeDir);
+    if (activeServerId && homeDir) {
+      // 远程模式：使用服务端返回的真实家目录加载初始目录
+      log.debug("远程模式，加载路径:", homeDir);
+      loadDir(homeDir);
     } else if (!activeServerId) {
       // 离线模式：不加载（显示离线占位符）
       log.debug("离线模式，不加载");
     } else {
-      log.debug("等待用户名...");
+      log.debug("等待用户信息...");
     }
-  }, [activeServerId, username, loadDir, HOME_PATH, initialData]);
+  }, [activeServerId, homeDir, loadDir, initialData]);
 
   // 获取挂载点列表
   useEffect(() => {
@@ -430,19 +432,19 @@ export function FileManager({ preloadData }: FileManagerProps) {
   // 生成侧边栏
   useEffect(() => {
     if (initialData) return; // 有注入数据时跳过，已通过 initialData 初始化
-    log.debug("生成侧边栏 useEffect, activeServerId:", activeServerId, "username:", username, "mounts:", mounts.length);
-    if (activeServerId && username) {
-      // 远程模式：生成远程侧边栏
+    log.debug("生成侧边栏 useEffect, activeServerId:", activeServerId, "username:", username, "homeDir:", homeDir, "mounts:", mounts.length);
+    if (activeServerId && username && homeDir) {
+      // 远程模式：使用服务端返回的真实家目录生成侧边栏
       const sections: SidebarSection[] = [
         {
           title: "位置",
           items: [
-            { icon: "🏠", label: "主目录", path: `/home/${username}`, type: "bookmark" },
-            { icon: "📄", label: "文档", path: `/home/${username}/Documents`, type: "bookmark" },
-            { icon: "⬇️", label: "下载", path: `/home/${username}/Downloads`, type: "bookmark" },
-            { icon: "🖼️", label: "图片", path: `/home/${username}/Pictures`, type: "bookmark" },
-            { icon: "🎵", label: "音乐", path: `/home/${username}/Music`, type: "bookmark" },
-            { icon: "🎬", label: "视频", path: `/home/${username}/Videos`, type: "bookmark" },
+            { icon: "🏠", label: "主目录", path: homeDir, type: "bookmark" },
+            { icon: "📄", label: "文档", path: `${homeDir}/Documents`, type: "bookmark" },
+            { icon: "⬇️", label: "下载", path: `${homeDir}/Downloads`, type: "bookmark" },
+            { icon: "🖼️", label: "图片", path: `${homeDir}/Pictures`, type: "bookmark" },
+            { icon: "🎵", label: "音乐", path: `${homeDir}/Music`, type: "bookmark" },
+            { icon: "🎬", label: "视频", path: `${homeDir}/Videos`, type: "bookmark" },
           ]
         },
         {
@@ -486,7 +488,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
       ];
       setSidebarSections(sections);
     }
-  }, [activeServerId, username, mounts, initialData]);
+  }, [activeServerId, username, homeDir, mounts, initialData]);
 
   // ── 断连即时响应 ─────────────────────────────────────
   // 当 activeServerId 从有值变为 null（断连），立即清空数据并显示离线占位符
@@ -522,11 +524,11 @@ export function FileManager({ preloadData }: FileManagerProps) {
       setUsername(null);  // 清空，让 username useEffect 重新获取
       setMounts([]);
       setSidebarSections([]);
-      // 重置路径为 Linux 远程格式（避免 C:\ 残留）
-      setCurrentPath("/home");
-      setHistory(["/home"]);
+      // 重置路径为 Linux 根目录（避免 C:\ 残留，真实家目录由后续 homeDir useEffect 加载）
+      setCurrentPath("/");
+      setHistory(["/"]);
       setHistoryIdx(0);
-      setPathInput("/home");
+      setPathInput("/");
       log.debug("检测到新连接，已清空本地残留数据");
     }
     prevServerIdRef.current = activeServerId;

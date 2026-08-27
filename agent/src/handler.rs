@@ -68,10 +68,13 @@ pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &U
         Payload::GetCurrentUser => {
             tracing::info!("获取当前用户请求");
             let username = handle_get_current_user(session);
-            tracing::info!("当前用户: {}", username);
+            tracing::info!("当前用户: {}, home={}", username, session.home_dir.display());
             Envelope::new(
                 envelope.request_id,
-                Payload::CurrentUserResponse { username },
+                Payload::CurrentUserResponse {
+                    username,
+                    home_dir: session.home_dir.to_string_lossy().to_string(),
+                },
             )
         }
 
