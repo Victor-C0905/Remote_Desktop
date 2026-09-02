@@ -52,6 +52,21 @@ fn file_transfer_request_defaults_preserved() {
 }
 
 #[test]
+fn current_user_resp_without_home_dir_compat() {
+    // home_dir 为后加字段：旧版 Agent 响应不含此字段，必须可解码且回退为空串
+    // （前端据此按 Linux 惯例推导初始目录：root→/root，普通用户→/home/用户名）
+    let raw = r#"{"request_id":1,"payload":{"type":"current_user_resp","data":{"username":"root"}}}"#;
+    let env: Envelope = serde_json::from_str(raw).expect("旧格式必须可解码");
+    match env.payload {
+        Payload::CurrentUserResponse { username, home_dir } => {
+            assert_eq!(username, "root");
+            assert_eq!(home_dir, "");
+        }
+        _ => panic!("变体不匹配"),
+    }
+}
+
+#[test]
 fn read_file_resp_wire_format() {
     let env = Envelope::new(
         3,

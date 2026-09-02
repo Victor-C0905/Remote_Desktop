@@ -196,7 +196,12 @@ pub enum Payload {
     GetCurrentUser,
 
     #[serde(rename = "current_user_resp")]
-    CurrentUserResponse { username: String, home_dir: String },
+    // home_dir 为后加字段：旧版 Agent 响应不含此字段，必须有 default 才能向前兼容
+    CurrentUserResponse {
+        username: String,
+        #[serde(default)]
+        home_dir: String,
+    },
 
     #[serde(rename = "get_mounts")]
     GetMounts,
