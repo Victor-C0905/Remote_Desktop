@@ -1651,6 +1651,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "quirel-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "quireld"
 version = "0.1.0"
 dependencies = [
@@ -1671,6 +1679,7 @@ dependencies = [
  "prost-build",
  "prost-types",
  "quinn",
+ "quirel-protocol",
  "rand 0.8.7",
  "rcgen",
  "rsa",

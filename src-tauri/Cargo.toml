@@ -27,6 +27,9 @@ chrono = "0.4"
 uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
 
+# 线上协议单一真相源（与 agent 共享）
+quirel-protocol = { path = "../quirel-protocol" }
+
 # 远程连接
 quinn = "0.11"
 rustls = { version = "0.23", features = ["ring"] }

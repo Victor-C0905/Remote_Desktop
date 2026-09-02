@@ -3304,6 +3304,7 @@ dependencies = [
  "pkcs1",
  "pkcs8",
  "quinn",
+ "quirel-protocol",
  "rsa",
  "rustls",
  "serde",
@@ -3323,6 +3324,14 @@ dependencies = [
  "tracing-log",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "quirel-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
