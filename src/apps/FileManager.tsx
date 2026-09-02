@@ -377,7 +377,9 @@ export function FileManager({ preloadData }: FileManagerProps) {
         .then((user) => {
           log.info("获取用户信息成功:", user);
           setUsername(user.username);
-          setHomeDir(user.home_dir);
+          // 旧版 Agent 不返回 home_dir（空串）：按 Linux 惯例回退推导初始目录
+          const fallback = user.username === "root" ? "/root" : `/home/${user.username}`;
+          setHomeDir(user.home_dir || fallback);
         })
         .catch(err => {
           log.error("获取用户信息失败:", err);

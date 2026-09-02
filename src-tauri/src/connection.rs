@@ -638,11 +638,28 @@ pub struct RemoteReadDirResponse {
 #[tracing::instrument(skip(app), fields(server_id = %server_id))]
 pub async fn remote_get_current_user(server_id: String, app: tauri::AppHandle) -> Result<CurrentUser, String> {
     tracing::debug!("[GetCurrentUser] server_id={}", server_id);
-    let resp = remote_send(server_id, Payload::GetCurrentUser, app).await?;
+    // 诊断：此命令失败会静默导致前端 homeDir 为 null（文件管理器初始目录停留在 /），
+    // 必须在 Rust 侧记录具体原因（解码失败/变体不符/Agent 错误）
+    let resp = match remote_send(server_id, Payload::GetCurrentUser, app).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!("[GetCurrentUser] 请求失败: error={}", e);
+            return Err(e);
+        }
+    };
     match resp.payload {
-        Payload::CurrentUserResponse { username, home_dir } => Ok(CurrentUser { username, home_dir }),
-        Payload::Error { message, .. } => Err(message),
-        _ => Err("意外响应".into()),
+        Payload::CurrentUserResponse { username, home_dir } => {
+            tracing::debug!("[GetCurrentUser] 成功: username={}, home_dir={}", username, home_dir);
+            Ok(CurrentUser { username, home_dir })
+        }
+        Payload::Error { message, .. } => {
+            tracing::warn!("[GetCurrentUser] Agent 返回错误: message={}", message);
+            Err(message)
+        }
+        other => {
+            tracing::warn!("[GetCurrentUser] 意外响应类型: 实际类型={}", other.type_name());
+            Err("意外响应".into())
+        }
     }
 }
 
