@@ -1,5 +1,6 @@
 use crate::config::AgentConfig;
 use crate::protocol::{Envelope, MetricsSnapshot, MountInfo, Payload};
+use crate::protocol::serde::StatsResponse; // 统计响应（quirel-protocol newtype 变体所复用的结构体）
 use crate::transfer_session::{TransferSession, TransferStatus};
 use crate::file_stream::{PipeFileStreamReader, PipeFileStreamWriter, generate_temp_path};
 use crate::auth::{UserSession, UserExecutor, StatsManager}; // 新增：用户会话、执行器和统计管理器
@@ -175,11 +176,11 @@ pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &U
             let stats = match stats_type.as_str() {
                 "auth" => {
                     let snapshot = stats_manager.get_auth_stats();
-                    Payload::StatsResponse {
+                    Payload::StatsResponse(StatsResponse {
                         auth: Some(snapshot),
                         connection: ConnectionStatsSnapshot::default(),
                         performance: None,
-                    }
+                    })
                 },
                 "connection" => {
                     let snapshot = if session.uid == 0 {
@@ -187,19 +188,19 @@ pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &U
                     } else {
                         stats_manager.get_connection_stats_for_user(session)
                     };
-                    Payload::StatsResponse {
+                    Payload::StatsResponse(StatsResponse {
                         auth: None,
                         connection: snapshot,
                         performance: None,
-                    }
+                    })
                 },
                 "performance" => {
                     let snapshot = stats_manager.get_performance_stats().await;
-                    Payload::StatsResponse {
+                    Payload::StatsResponse(StatsResponse {
                         auth: None,
                         connection: ConnectionStatsSnapshot::default(),
                         performance: Some(snapshot),
-                    }
+                    })
                 },
                 "all" => {
                     // 只有 root 用户可以查看所有统计
@@ -217,11 +218,11 @@ pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &U
                     let auth = stats_manager.get_auth_stats();
                     let connection = stats_manager.get_connection_stats();
                     let performance = stats_manager.get_performance_stats().await;
-                    Payload::StatsResponse {
+                    Payload::StatsResponse(StatsResponse {
                         auth: Some(auth),
                         connection,
                         performance: Some(performance),
-                    }
+                    })
                 },
                 _ => {
                     tracing::warn!("未知的统计类型: {}", stats_type);
@@ -237,6 +238,19 @@ pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &U
 
             tracing::info!("统计查询成功: stats_type={}", stats_type);
             Envelope::new(envelope.request_id, stats)
+        }
+
+        // 路径建议请求（客户端在用但 Agent 端不支持：路径建议由客户端本地计算，
+        // 该请求到达 Agent 时明确返回 501，避免落入"未知的消息类型"兜底）
+        Payload::GetPathSuggestionsRequest { .. } => {
+            tracing::warn!("路径建议请求: Agent 端不支持该功能");
+            Envelope::new(
+                envelope.request_id,
+                Payload::Error {
+                    code: 501,
+                    message: "path suggestions not supported".to_string(),
+                },
+            )
         }
 
         other => {

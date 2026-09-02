@@ -1366,4 +1366,22 @@ fn validate_path(path: &str) -> Result<(), Error> {
 
 ---
 
+## 十一、线上协议变更守则（quirel-protocol）
+
+客户端↔Agent 线上协议类型统一维护于 `quirel-protocol` crate，
+两端（`src-tauri`、`agent`）通过 path dependency 引用，禁止任何一端
+重新本地定义协议类型。
+
+变更规则：
+
+1. 线上格式为 JSON（serde tag="type" content="data"），由
+   `quirel-protocol/tests/wire_compat.rs` 的 golden 用例锁死。
+2. 新增 Payload 变体：安全（旧端解码新消息会失败并返回 Error，
+   属于可接受行为）。
+3. 新增字段：必须带 `#[serde(default)]` 或 `#[serde(default = "...")]`。
+4. 删除变体/字段、修改 serde rename 字符串：破坏性变更，禁止。
+5. 修改后必须运行 `cd quirel-protocol && cargo test` 确认 golden 通过。
+
+---
+
 **文档结束**

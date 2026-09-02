@@ -13,6 +13,9 @@ name = "quireld"
 path = "src/main.rs"
 
 [dependencies]
+# 线上协议单一真相源（与 src-tauri 共享）
+quirel-protocol = { path = "../quirel-protocol" }
+
 # 异步运行时（精确特性，避免拉入 fs/process/signal 等不需要的模块）
 tokio = { version = "1.52", features = ["rt", "rt-multi-thread", "macros", "net", "io-util", "sync", "time", "process", "signal"] }
 

@@ -4,32 +4,9 @@
 //! Agent 只负责应用差异（无状态化架构）
 //! 差异计算由客户端完成（流量优化）
 
-use serde::{Deserialize, Serialize};
-
-/// 文件差异项
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileDiff {
-    /// 差异类型
-    pub diff_type: DiffType,
-    /// 行号（从 1 开始）
-    pub line_number: usize,
-    /// 原内容（replace/delete 时存在）
-    pub old_content: Option<String>,
-    /// 新内容（replace/insert 时存在）
-    pub new_content: Option<String>,
-}
-
-/// 差异类型
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum DiffType {
-    /// 插入新行
-    Insert,
-    /// 删除行
-    Delete,
-    /// 替换行
-    Replace,
-}
+// 差异类型定义已统一至 quirel-protocol crate（线上协议单一真相源），
+// 此处 re-export 维持 `crate::diff::*` 既有引用路径不变
+pub use quirel_protocol::{FileDiff, DiffType};
 
 /// 应用差异到原文本（Agent 侧，无状态化）
 ///

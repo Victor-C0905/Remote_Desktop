@@ -114,22 +114,12 @@ impl PerformanceMetrics {
     }
 }
 
-/// 响应时间百分位数
-#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ResponseTimePercentiles {
-    /// 中位数（50百分位）
-    pub p50: u64,
-    /// 95百分位
-    pub p95: u64,
-    /// 99百分位
-    pub p99: u64,
-    /// 最小值
-    pub min: u64,
-    /// 最大值
-    pub max: u64,
-    /// 样本数
-    pub count: u64,
-}
+// 统计快照类型已统一至 quirel-protocol crate（线上协议单一真相源），
+// 此处 re-export 维持 `crate::auth::stats::*` 既有引用路径不变
+pub use quirel_protocol::{
+    AuthStatsSnapshot, ConnectionStatsSnapshot, PerformanceStatsSnapshot,
+    ResponseTimePercentiles,
+};
 
 /// 统计管理器（全局单例）
 pub struct StatsManager {
@@ -333,37 +323,6 @@ pub enum ConnectionCloseReason {
     /// 错误关闭（异常断开）
     #[allow(dead_code)]
     Error,
-}
-
-/// 认证统计快照（用于API返回）
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct AuthStatsSnapshot {
-    pub total_attempts: u64,
-    pub successful: u64,
-    pub failed: u64,
-    pub locked: u64,
-    pub rate_limited: u64,
-    pub session_timeout: u64,
-    pub password_attempts: u64,
-    pub pubkey_attempts: u64,
-}
-
-/// 连接统计快照（用于API返回）
-#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ConnectionStatsSnapshot {
-    pub active_connections: u64,
-    pub total_connections: u64,
-    pub normal_disconnects: u64,
-    pub timeout_disconnects: u64,
-    pub error_disconnects: u64,
-}
-
-/// 性能指标快照（用于API返回）
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct PerformanceStatsSnapshot {
-    pub response_times: ResponseTimePercentiles,
-    pub total_bytes_transferred: u64,
-    pub total_terminal_bytes: u64,
 }
 
 // ============================================================================
