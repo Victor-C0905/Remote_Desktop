@@ -203,6 +203,19 @@ pub enum Payload {
         home_dir: String,
     },
 
+    // ===== SOCKS5 代理协议（服务器视角浏览）=====
+    // 代理流首帧：客户端告知目标地址（域名由 Agent 端解析，远程 DNS）
+    #[serde(rename = "proxy_open")]
+    ProxyOpen { host: String, port: u16 },
+
+    // 代理流第二帧：Agent 回报 TCP 连接结果，之后流内字节全部透传
+    #[serde(rename = "proxy_open_resp")]
+    ProxyOpenResponse {
+        success: bool,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        error: Option<String>,
+    },
+
     #[serde(rename = "get_mounts")]
     GetMounts,
 
@@ -436,6 +449,8 @@ impl Payload {
             Payload::TerminalData { .. } => "TerminalData",
             Payload::GetCurrentUser => "GetCurrentUser",
             Payload::CurrentUserResponse { .. } => "CurrentUserResponse",
+            Payload::ProxyOpen { .. } => "ProxyOpen",
+            Payload::ProxyOpenResponse { .. } => "ProxyOpenResponse",
             Payload::GetMounts => "GetMounts",
             Payload::MountsResponse { .. } => "MountsResponse",
             Payload::FileTransferRequest { .. } => "FileTransferRequest",

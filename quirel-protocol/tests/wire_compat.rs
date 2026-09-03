@@ -142,3 +142,61 @@ fn stats_response_newtype_wire_format() {
         r#"{"request_id":5,"payload":{"type":"stats_response","data":{"auth":null,"connection":{"active_connections":1,"total_connections":2,"normal_disconnects":3,"timeout_disconnects":4,"error_disconnects":5},"performance":null}}}"#
     );
 }
+
+#[test]
+fn proxy_open_wire_format() {
+    let env = Envelope::new(9, Payload::ProxyOpen { host: "example.com".to_string(), port: 443 });
+    let json = serde_json::to_string(&env).unwrap();
+    assert_eq!(
+        json,
+        r#"{"request_id":9,"payload":{"type":"proxy_open","data":{"host":"example.com","port":443}}}"#
+    );
+    // 线上往返：编码后必须可解码（代理流首帧的实际路径）
+    let env2 = roundtrip(&env);
+    match env2.payload {
+        Payload::ProxyOpen { host, port } => {
+            assert_eq!(host, "example.com");
+            assert_eq!(port, 443);
+        }
+        _ => panic!("变体不匹配"),
+    }
+}
+
+#[test]
+fn proxy_open_response_wire_format() {
+    let env = Envelope::new(9, Payload::ProxyOpenResponse { success: true, error: None });
+    let json = serde_json::to_string(&env).unwrap();
+    assert_eq!(
+        json,
+        r#"{"request_id":9,"payload":{"type":"proxy_open_resp","data":{"success":true}}}"#
+    );
+    // 失败场景：golden 锁定字节形状（含 error 键）+ 往返
+    let fail = Envelope::new(9, Payload::ProxyOpenResponse {
+        success: false,
+        error: Some("connection refused".to_string()),
+    });
+    let fail_json = serde_json::to_string(&fail).unwrap();
+    assert_eq!(
+        fail_json,
+        r#"{"request_id":9,"payload":{"type":"proxy_open_resp","data":{"success":false,"error":"connection refused"}}}"#
+    );
+    let fail2 = roundtrip(&fail);
+    match fail2.payload {
+        Payload::ProxyOpenResponse { success, error } => {
+            assert!(!success);
+            assert_eq!(error.as_deref(), Some("connection refused"));
+        }
+        _ => panic!("变体不匹配"),
+    }
+
+    // 缺 error 字段的裸 JSON 解码（default 回退为 None）
+    let raw = r#"{"request_id":9,"payload":{"type":"proxy_open_resp","data":{"success":false}}}"#;
+    let env3: Envelope = serde_json::from_str(raw).expect("缺 error 字段必须可解码");
+    match env3.payload {
+        Payload::ProxyOpenResponse { success, error } => {
+            assert!(!success);
+            assert_eq!(error, None);
+        }
+        _ => panic!("变体不匹配"),
+    }
+}

@@ -7,6 +7,7 @@ use tokio::sync::Mutex;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
 mod connection;
+mod proxy;
 mod terminal;
 mod transfer;
 
@@ -546,6 +547,7 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .manage(pty::PtyManager::new())
         .manage(connection::ConnectionManager::new())
+        .manage(proxy::ProxySessionManager::new())
         .manage(Arc::new(terminal::TerminalStreamManager::new()))
         .setup(|app| {
             // 初始化日志系统（必须在所有其他操作之前）
@@ -594,6 +596,8 @@ pub fn run() {
             connection::get_stats,
             connection::subscribe,
             connection::unsubscribe,
+            proxy::proxy_start_session,
+            proxy::proxy_stop_session,
             terminal::remote_spawn_terminal,
             terminal::remote_terminal_write,
             terminal::remote_terminal_close,
@@ -605,6 +609,13 @@ pub fn run() {
             transfer::cancel_transfer,
             transfer::check_file_exists,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // App 退出时清理全部代理会话（SOCKS5 监听 + 浏览器子进程），
+            // 否则浏览器作为独立系统进程会残留并指向已死的代理端口
+            if let tauri::RunEvent::Exit = event {
+                proxy::cleanup_all_sessions(app);
+            }
+        });
 }
