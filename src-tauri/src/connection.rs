@@ -474,7 +474,11 @@ pub async fn remote_connect(
             let tm = app_handle.state::<std::sync::Arc<crate::transfer::TransferManager>>();
             tm.cleanup_by_connection(&server_id_clone).await;
 
-            // 4. 从 ConnectionManager 移除连接条目
+            // 4. 清理代理会话（SOCKS5 监听任务 + 浏览器进程随连接死亡联动清理）
+            //    覆盖主动断开与 QUIC 连接丢失两条路径（统一清理块为唯一入口）
+            crate::proxy::cleanup_session(&app_handle, &server_id_clone);
+
+            // 5. 从 ConnectionManager 移除连接条目
             //    同时 abort subscription_task，避免被动断开时的残留读取日志
             if let Ok(mut conns) = app_handle.state::<ConnectionManager>().connections.lock() {
                 if let Some(active_conn) = conns.remove(&server_id_clone) {
@@ -484,7 +488,7 @@ pub async fn remote_connect(
                 }
             }
 
-            // 5. 通知前端（只 emit 一次）
+            // 6. 通知前端（只 emit 一次）
             let _ = app_handle.emit("connection-lost", &server_id_clone);
 
             tracing::info!("连接清理完成: {}", server_id_clone);

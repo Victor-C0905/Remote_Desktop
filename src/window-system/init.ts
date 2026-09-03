@@ -9,6 +9,7 @@ import { FileManager } from '../apps/FileManager';
 import { SystemMonitor } from '../apps/SystemMonitor';
 import { Settings } from '../apps/Settings';
 import { TextEditor } from '../apps/TextEditor/TextEditor';
+import { BrowserApp } from '../apps/BrowserApp';
 
 const log = createLogger('WindowInit');
 
@@ -77,6 +78,19 @@ export function initWindowRegistry(registry: WindowRegistry): void {
     minSize: { width: 500, height: 400 },
     allowMultipleInstances: false,
     component: Settings,
+  });
+
+  // Browser - 服务器视角网页浏览（SOCKS5 over QUIC 代理会话控制面板）
+  registry.register({
+    id: 'browser',
+    title: '浏览器',
+    icon: '🌐',
+    defaultSize: { width: 420, height: 380 },
+    minSize: { width: 360, height: 300 },
+    allowMultipleInstances: false,
+    component: BrowserApp,
+    desktopLabel: '远程浏览',
+    dockLabel: '浏览',
   });
 
   log.info('Registered apps:', registry.getAll().map(a => a.id));

@@ -1215,6 +1215,19 @@ async fn handle_stream(
             tracing::info!("停止事件推送: stream_id={}", stream_id);
         }
 
+        // ===== SOCKS5 代理流 =====
+        // 首帧为 ProxyOpen：连接目标后流内字节全部透传，不再走 envelope 解析
+        Payload::ProxyOpen { host, port } => {
+            // 先取得所需字段所有权，随后直接 return：代理流不走 envelope 响应模式
+            let host = host.clone();
+            let port = *port;
+            let req_id = envelope.request_id;
+            return crate::server::proxy::handle_proxy_relay(
+                send, recv, req_id, host, port, session, &last_activity,
+            )
+            .await;
+        }
+
         #[cfg(unix)]
         Payload::TerminalSpawnRequest { shell, cols, rows, working_directory } => {
             tracing::info!("终端创建请求: shell={}, cols={}, rows={}, cwd={:?}, user={}",
@@ -1604,7 +1617,7 @@ async fn read_message(recv: &mut RecvStream) -> Result<Option<Vec<u8>>> {
     }
 }
 
-async fn write_message(send: &mut SendStream, data: &[u8]) -> Result<()> {
+pub(crate) async fn write_message(send: &mut SendStream, data: &[u8]) -> Result<()> {
     let len = (data.len() as u32).to_le_bytes();
     send.write_all(&len).await
         .map_err(|e| {
