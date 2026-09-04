@@ -16,6 +16,12 @@ export interface SettingsState {
   // 新增主题设置
   themeId: ThemeId;
   accentColorId: AccentColorId | null;
+
+  // 远程浏览默认浏览器（"auto" 自动探测，或浏览器 id / 自定义路径）
+  browserId: string;
+
+  // 远程浏览 SOCKS5 固定端口（断线重连后浏览器无需重开的前提）
+  browserProxyPort: number;
 }
 
 export interface SettingsActions {
@@ -28,6 +34,12 @@ export interface SettingsActions {
   // 新增主题操作
   setThemeId: (themeId: ThemeId) => void;
   setAccentColorId: (accentColorId: AccentColorId | null) => void;
+
+  // 远程浏览默认浏览器
+  setBrowserId: (browserId: string) => void;
+
+  // 远程浏览 SOCKS5 固定端口
+  setBrowserProxyPort: (port: number) => void;
 }
 
 /* ── Default Settings ──────────────────────────────────── */
@@ -42,6 +54,12 @@ const DEFAULT_SETTINGS: SettingsState = {
   // 新增主题设置
   themeId: "paper", // 默认主题
   accentColorId: "paperAccent", // 纸张主题默认选中的强调色（绿色）
+
+  // 远程浏览默认浏览器：自动探测
+  browserId: "auto",
+
+  // SOCKS5 固定端口（SOCKS 惯用端口；被占用时可在设置中更换）
+  browserProxyPort: 1080,
 };
 
 /* ── Store ────────────────────────────────────────────── */
@@ -83,6 +101,14 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
 
       setAccentColorId: (accentColorId) => {
         set({ accentColorId });
+      },
+
+      setBrowserId: (browserId) => {
+        set({ browserId });
+      },
+
+      setBrowserProxyPort: (port) => {
+        set({ browserProxyPort: port });
       },
     }),
     {

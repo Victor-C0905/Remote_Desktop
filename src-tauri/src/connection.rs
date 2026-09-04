@@ -474,9 +474,9 @@ pub async fn remote_connect(
             let tm = app_handle.state::<std::sync::Arc<crate::transfer::TransferManager>>();
             tm.cleanup_by_connection(&server_id_clone).await;
 
-            // 4. 清理代理会话（SOCKS5 监听任务 + 浏览器进程随连接死亡联动清理）
-            //    覆盖主动断开与 QUIC 连接丢失两条路径（统一清理块为唯一入口）
-            crate::proxy::cleanup_session(&app_handle, &server_id_clone);
+            // 4. 挂起代理会话（仅停 SOCKS5 监听，浏览器保留——固定端口下
+            //    重连后自动恢复，无需重开浏览器；彻底清理在关浏览窗口/App 退出时）
+            crate::proxy::suspend_session(&app_handle, &server_id_clone);
 
             // 5. 从 ConnectionManager 移除连接条目
             //    同时 abort subscription_task，避免被动断开时的残留读取日志

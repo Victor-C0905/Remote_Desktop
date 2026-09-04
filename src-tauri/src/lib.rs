@@ -10,6 +10,7 @@ mod connection;
 mod proxy;
 mod terminal;
 mod transfer;
+mod ui_logging;
 
 /* ── 日志系统初始化 ───────────────────────────────────────── */
 
@@ -552,7 +553,13 @@ pub fn run() {
         .setup(|app| {
             // 初始化日志系统（必须在所有其他操作之前）
             init_logging(app);
-            tracing::info!("Quirel 客户端启动中...");
+            // 启动横幅：版本 + 构建模式 + 系统信息，用于从日志快速识别客户端版本
+            tracing::info!(
+                "[App] Quirel 客户端启动: version={} build={} os={}",
+                env!("CARGO_PKG_VERSION"),
+                if cfg!(debug_assertions) { "debug" } else { "release" },
+                std::env::consts::OS,
+            );
 
             // 注册关闭钩子
             setup_shutdown_hook(&app.handle());
@@ -572,6 +579,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             read_dir, stat_file, read_file_text,
             prepare_shutdown,
+            ui_logging::log_write,
+            ui_logging::get_app_version,
             pty::spawn_terminal,
             pty::terminal_write,
             pty::terminal_read,
@@ -598,6 +607,7 @@ pub fn run() {
             connection::unsubscribe,
             proxy::proxy_start_session,
             proxy::proxy_stop_session,
+            proxy::proxy_list_browsers,
             terminal::remote_spawn_terminal,
             terminal::remote_terminal_write,
             terminal::remote_terminal_close,

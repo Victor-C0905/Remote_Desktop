@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useServerManager, formatLastConnected, getStatusColor } from "../context/ServerManager";
 import { useWallpaper, getPresetWallpaperName, getWallpaperStyle } from "../context/WallpaperContext";
 import { PRESET_WALLPAPERS } from "../stores/wallpaperStore";
@@ -16,7 +17,14 @@ const log = createLogger('Settings');
 
 /* ── Types ─────────────────────────────────────────────── */
 
-type SettingsSection = "connection" | "appearance" | "keyboard" | "files" | "terminal" | "notifications" | "stats" | "about";
+type SettingsSection = "connection" | "appearance" | "keyboard" | "files" | "terminal" | "browser" | "notifications" | "stats" | "about";
+
+/** 本机可用浏览器（Rust 端 proxy_list_browsers 返回） */
+interface BrowserInfo {
+  id: string;
+  name: string;
+  path: string;
+}
 
 /* ── Sidebar Items ──────────────────────────────────── */
 
@@ -32,6 +40,7 @@ const SIDEBAR_ITEMS: SidebarItem[] = [
   { id: "keyboard", icon: "⌨️", label: "快捷键" },
   { id: "files", icon: "📁", label: "文件" },
   { id: "terminal", icon: "🖥️", label: "终端" },
+  { id: "browser", icon: "🌐", label: "浏览器" },
   { id: "notifications", icon: "🔔", label: "通知" },
   { id: "stats", icon: "📊", label: "系统监控" },
   { id: "about", icon: "ℹ️", label: "关于" },
@@ -472,6 +481,9 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
   // 终端默认路径配置（通过 Tauri Store 异步加载）
   const [terminalDefaultPath, setTerminalDefaultPath] = useState("");
 
+  // 版本号：从 Rust 端读取（编译期单一来源 Cargo.toml），不再前端硬编码
+  const [appVersion, setAppVersion] = useState("");
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -481,6 +493,29 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
     })();
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    invoke<string>("get_app_version")
+      .then((v) => { if (!cancelled) setAppVersion(v); })
+      .catch((e) => log.error("获取版本号失败:", e));
+    return () => { cancelled = true; };
+  }, []);
+
+  // 本机已安装浏览器列表（浏览器设置分区展示）
+  const [browserList, setBrowserList] = useState<BrowserInfo[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    invoke<BrowserInfo[]>("proxy_list_browsers")
+      .then((list) => { if (!cancelled) setBrowserList(list); })
+      .catch((e) => log.error("获取浏览器列表失败:", e));
+    return () => { cancelled = true; };
+  }, []);
+
+  // 默认浏览器（全局设置，远程浏览应用启动时使用）
+  const browserIdPref = useSettingsStore((s) => s.browserId);
+  // SOCKS5 固定端口（断线重连后浏览器无需重开）
+  const browserProxyPort = useSettingsStore((s) => s.browserProxyPort);
 
   const handleTerminalPathChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
@@ -976,6 +1011,56 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
           </div>
         );
 
+      case "browser": {
+        const setBrowserId = useSettingsStore.getState().setBrowserId;
+        return (
+          <div className="st-section">
+            <div className="st-section-title text-heading">浏览器设置</div>
+
+            <div className="st-card">
+              <div className="st-card-header text-title">默认浏览器</div>
+              <div className="st-option-row">
+                <span className="st-option-label text-body">远程浏览使用</span>
+                <select
+                  className="st-select"
+                  value={browserList.some((b) => b.id === browserIdPref) || browserIdPref === "auto" ? browserIdPref : "auto"}
+                  onChange={(e) => setBrowserId(e.target.value)}
+                >
+                  <option value="auto">自动（推荐）</option>
+                  {browserList.map((b) => (
+                    <option key={b.id} value={b.id}>{b.name}</option>
+                  ))}
+                </select>
+              </div>
+              {browserList.length === 0 && (
+                <div className="st-hint">未检测到已安装的浏览器</div>
+              )}
+              <div className="st-option-row">
+                <span className="st-option-label text-body">SOCKS5 端口</span>
+                <input
+                  type="number"
+                  className="st-input"
+                  min={1024}
+                  max={65535}
+                  value={browserProxyPort}
+                  onChange={(e) => {
+                    const v = parseInt(e.target.value, 10);
+                    if (!Number.isNaN(v) && v >= 1024 && v <= 65535) {
+                      useSettingsStore.getState().setBrowserProxyPort(v);
+                    }
+                  }}
+                  style={{ width: 100 }}
+                />
+              </div>
+              <div className="st-hint">
+                💡 远程浏览应用将以该浏览器打开，各浏览器登录状态独立保留。
+                固定端口使断线重连后浏览器自动恢复网络，无需重开（对已开始的会话在下一次启动时生效）
+              </div>
+            </div>
+          </div>
+        );
+      }
+
       case "notifications":
         return (
           <div className="st-section">
@@ -1039,7 +1124,7 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
             <div className="st-card st-about-card">
               <div className="st-about-logo">🖥️</div>
               <div className="st-about-name">Quirel</div>
-              <div className="st-about-version">版本 0.1.0</div>
+              <div className="st-about-version">版本 {appVersion || "…"}</div>
               <div className="st-about-desc">
                 基于 Adwaita 设计系统的远程 Linux 服务器控制客户端
               </div>
