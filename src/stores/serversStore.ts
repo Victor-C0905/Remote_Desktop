@@ -148,6 +148,7 @@ export function getStatusColor(status: ServerConfig["status"]): string {
   switch (status) {
     case "connected": return "#33d17a";
     case "connecting": return "#e8a416";
+    case "reconnecting": return "#ff7800";
     case "disconnected": return "#9a9996";
     case "error": return "#e01b24";
   }
@@ -157,6 +158,7 @@ export function getStatusIcon(status: ServerConfig["status"]): string {
   switch (status) {
     case "connected": return "🟢";
     case "connecting": return "🟡";
+    case "reconnecting": return "🟠";
     case "disconnected": return "⚫";
     case "error": return "🔴";
   }
