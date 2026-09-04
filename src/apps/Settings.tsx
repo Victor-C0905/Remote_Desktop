@@ -587,6 +587,10 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
     disconnectServer(id);
   };
 
+  // 断开后 activeServerId 已清空（activeServer 为 null），
+  // 回退到最近选择的服务器，保证"当前连接"卡片仍显示上下文与重连入口
+  const cardServer = activeServer || servers.find((s) => s.id === selectedServerId) || null;
+
   const handleRemove = (id: string) => {
     if (confirm("确定要删除此服务器配置吗？")) {
       removeServer(id);
@@ -607,13 +611,13 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                 <div className="st-conn-row">
                   <span className="st-conn-label text-label">主机</span>
                   <span className="st-conn-value st-conn-value-host">
-                    {activeServer?.host || <span className="st-conn-placeholder">未连接</span>}
+                    {cardServer?.host || <span className="st-conn-placeholder">未连接</span>}
                   </span>
                 </div>
                 <div className="st-conn-row">
                   <span className="st-conn-label text-label">端口</span>
                   <span className="st-conn-value st-conn-value-port">
-                    {activeServer?.port || <span className="st-conn-placeholder">—</span>}
+                    {cardServer?.port || <span className="st-conn-placeholder">—</span>}
                     <span className="st-conn-protocol">(QUIC)</span>
                   </span>
                 </div>
@@ -622,37 +626,38 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                   <span className="st-conn-value st-conn-value-status">
                     <span 
                       className="st-status-dot" 
-                      style={{ background: activeServer ? getStatusColor(activeServer.status) : "#9a9996" }}
+                      style={{ background: cardServer ? getStatusColor(cardServer.status) : "#9a9996" }}
                     />
-                    {activeServer?.status === "connected" ? "已连接" : 
-                     activeServer?.status === "connecting" ? "连接中..." :
-                     activeServer?.status === "error" ? "错误" : 
+                    {cardServer?.status === "connected" ? "已连接" : 
+                     cardServer?.status === "connecting" ? "连接中..." :
+                     cardServer?.status === "reconnecting" ? "自动重连中..." :
+                     cardServer?.status === "error" ? "错误" : 
                      <span className="st-conn-placeholder">未连接</span>}
                   </span>
                 </div>
-                {activeServer?.status === "connected" && (
+                {cardServer?.status === "connected" && (
                   <div className="st-conn-row">
                     <span className="st-conn-label text-label">延迟</span>
                     <span className="st-conn-value st-conn-value-latency">6 ms</span>
                   </div>
                 )}
-                {activeServer?.error && (
-                  <div className="st-conn-error">{activeServer.error}</div>
+                {cardServer?.error && (
+                  <div className="st-conn-error">{cardServer.error}</div>
                 )}
               </div>
               <div className="st-card-actions">
-                {activeServer?.status === "connected" && (
+                {cardServer?.status === "connected" && (
                   <button 
                     className="st-btn st-btn-danger"
-                    onClick={() => handleDisconnect(activeServer.id)}
+                    onClick={() => handleDisconnect(cardServer.id)}
                   >
                     断开连接
                   </button>
                 )}
-                {activeServer?.status === "error" && selectedServerId && (
+                {cardServer && (cardServer.status === "error" || cardServer.status === "disconnected") && (
                   <button 
                     className="st-btn st-btn-primary"
-                    onClick={() => handleConnect(selectedServerId)}
+                    onClick={() => handleConnect(cardServer.id)}
                   >
                     重试连接
                   </button>
@@ -697,6 +702,14 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                             className="st-server-action-btn st-server-action-connecting"
                             disabled
                             title="连接中..."
+                          >
+                            ◷
+                          </button>
+                        ) : server.status === "reconnecting" ? (
+                          <button 
+                            className="st-server-action-btn st-server-action-connecting"
+                            disabled
+                            title="自动重连中（最多 3 次、5 秒间隔）..."
                           >
                             ◷
                           </button>

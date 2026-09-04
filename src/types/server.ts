@@ -54,8 +54,11 @@ export interface ServerConfig {
   token?: string;
   /** 最后连接时间戳 */
   lastConnected?: number;
-  /** 连接状态 */
-  status: 'connected' | 'disconnected' | 'connecting' | 'error';
+  /**
+   * 连接状态
+   * - reconnecting: 网络断开后自动重连中（最多 3 次、5 秒间隔）
+   */
+  status: 'connected' | 'disconnected' | 'connecting' | 'reconnecting' | 'error';
   /** 错误信息（当status为error时） */
   error?: string;
   /** 往返时延（毫秒） */

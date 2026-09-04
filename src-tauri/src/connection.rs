@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
@@ -81,6 +82,9 @@ pub struct ActiveConnection {
     pub quic_conn: Option<Arc<quinn::Connection>>,
     // 持久 Stream 监听任务
     subscription_task: Option<tokio::task::JoinHandle<()>>,
+    // 用户主动断开标志：remote_disconnect 置位（先于 close，避免竞态误判），
+    // 统一清理块据此区分 connection-lost 事件来源，前端仅对网络断开自动重连
+    pub user_initiated: Arc<AtomicBool>,
 }
 
 /// 连接丢失的触发源（用于日志区分）
@@ -299,6 +303,8 @@ pub async fn remote_connect(
 
         // 启动消息循环（含心跳和连接状态监听）
         let (tx, mut rx) = mpsc::channel::<ClientRequest>(32);
+        // 用户主动断开标志（与 ActiveConnection 共享，见结构体注释）
+        let user_initiated = Arc::new(AtomicBool::new(false));
         {
             let mut conns = manager.connections.lock().unwrap();
             conns.insert(server_id.clone(), ActiveConnection {
@@ -306,13 +312,16 @@ pub async fn remote_connect(
                 tx: tx.clone(),
                 quic_conn: Some(Arc::new(conn.clone())),
                 subscription_task: None,
+                user_initiated: user_initiated.clone(),
             });
         }
 
         let server_id_clone = server_id.clone();
         let app_handle = app.clone();
         let conn_clone = conn.clone();
-        
+        // 主循环内捕获 user_initiated 标志，统一清理块据此分类事件来源
+        let user_initiated_clone = user_initiated.clone();
+
         tokio::spawn(async move {
             // ── 心跳任务（Watchdog）：快速检测连接断开 ────────
             // 业界标准（TeamViewer/AnyDesk 级别）：
@@ -424,6 +433,12 @@ pub async fn remote_connect(
             // 主循环需要 tx clone 用于 SendFailed 时通知自己
             let main_tx = tx.clone();
 
+            // 连接丢失来源（用于 connection-lost 事件分类）
+            // - Some(source)：心跳/status/发送失败明确触发
+            // - None：Send 分支检测到 close_reason 直接 break，或通道关闭自然退出
+            //   （此时由 user_initiated 标志区分用户主动/网络断开）
+            let mut lost_source: Option<ConnectionLostSource> = None;
+
             // 主消息循环
             while let Some(req) = rx.recv().await {
                 match req {
@@ -447,6 +462,7 @@ pub async fn remote_connect(
                     ClientRequest::Disconnect => break,
                     ClientRequest::ConnectionLost { source } => {
                         tracing::info!("连接丢失（{}）: {}", source, server_id_clone);
+                        lost_source = Some(source);
                         break;
                     }
                 }
@@ -489,7 +505,24 @@ pub async fn remote_connect(
             }
 
             // 6. 通知前端（只 emit 一次）
-            let _ = app_handle.emit("connection-lost", &server_id_clone);
+            //    事件携带来源：前端仅对网络断开（heartbeat/quic_closed/send_failed）
+            //    触发自动重连，用户主动断开（user_initiated）不重连
+            let source_str = if user_initiated_clone.load(Ordering::SeqCst) {
+                "user_initiated"
+            } else {
+                match lost_source {
+                    Some(ConnectionLostSource::Heartbeat) => "heartbeat",
+                    Some(ConnectionLostSource::QuicClosed) => "quic_closed",
+                    Some(ConnectionLostSource::SendFailed) => "send_failed",
+                    // Send 分支检测到 close_reason 直接 break / 通道关闭自然退出：
+                    // 非用户主动断开，一律视为网络断开
+                    None => "quic_closed",
+                }
+            };
+            let _ = app_handle.emit("connection-lost", serde_json::json!({
+                "server_id": &server_id_clone,
+                "source": source_str,
+            }));
 
             tracing::info!("连接清理完成: {}", server_id_clone);
         });
@@ -506,19 +539,23 @@ pub async fn remote_connect(
 pub async fn remote_disconnect(server_id: String, app: tauri::AppHandle) -> Result<(), String> {
     tracing::info!("[Connection] 主动断开: {}", server_id);
 
-    // 1. 获取连接句柄（quic_conn + tx）
+    // 1. 获取连接句柄（quic_conn + tx + user_initiated 标志）
     let manager = app.state::<ConnectionManager>();
     let conn_info = {
         let conns = manager.connections.lock().unwrap();
-        conns.get(&server_id).map(|c| (c.quic_conn.clone(), c.tx.clone()))
+        conns.get(&server_id).map(|c| (c.quic_conn.clone(), c.tx.clone(), c.user_initiated.clone()))
     };
 
-    let (quic_conn, tx) = match conn_info {
+    let (quic_conn, tx, user_initiated) = match conn_info {
         Some(v) => v,
         None => return Err("未找到该服务器的连接".into()),
     };
 
-    // 2. 发送 DisconnectRequest（fire-and-forget，不等待响应）
+    // 2. 标记用户主动断开（先于 close 置位，避免主循环 Send 分支
+    //    检测到 close_reason 提前退出时误判为网络断开，触发前端自动重连）
+    user_initiated.store(true, Ordering::SeqCst);
+
+    // 3. 发送 DisconnectRequest（fire-and-forget，不等待响应）
     //    Agent 收到后清理传输会话等资源；收不到则靠 conn.closed() 兜底
     let request_id = manager.next_request_id();
     let envelope = Envelope::new(request_id, Payload::DisconnectRequest {});
@@ -526,14 +563,14 @@ pub async fn remote_disconnect(server_id: String, app: tauri::AppHandle) -> Resu
     let _ = tx.try_send(ClientRequest::Send { envelope, response_tx });
     // 不等待 response_rx —— 立即关闭连接
 
-    // 3. 立即关闭 QUIC 连接
+    // 4. 立即关闭 QUIC 连接
     //    主循环会在下次 send 时检测到 close_reason，或 status_task 的
     //    conn.closed() 触发，任一都会通过统一清理块完成清理
     if let Some(conn) = quic_conn {
         conn.close(0u32.into(), b"client disconnect");
     }
 
-    // 4. 发送 Disconnect 通知主循环退出（触发统一清理块）
+    // 5. 发送 Disconnect 通知主循环退出（触发统一清理块）
     let _ = tx.send(ClientRequest::Disconnect).await;
 
     tracing::info!("[Connection] 主动断开完成: {}", server_id);

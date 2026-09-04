@@ -37,7 +37,10 @@ export const TopBar = memo(function TopBar({
   onActivitiesClick,
   onNotificationClick,
 }: TopBarProps) {
-  const { activeServer } = useServerManager();
+  const { activeServer, servers } = useServerManager();
+  // 网络断开自动重连期间 activeServerId 已清空（activeServer 为 null），
+  // 回退到 reconnecting 状态的服务器，保持状态指示可见
+  const statusServer = activeServer || servers.find((s) => s.status === "reconnecting") || null;
 
   return (
     <div className={styles.topBar} data-tauri-drag-region>
@@ -51,16 +54,17 @@ export const TopBar = memo(function TopBar({
       <div className={styles.connectionIndicator}>
         <div
           className={styles.connectionDot}
-          style={{ background: activeServer ? getStatusColor(activeServer.status) : "#9a9996" }}
+          style={{ background: statusServer ? getStatusColor(statusServer.status) : "#9a9996" }}
         />
         <span>
-          {activeServer?.status === "connected" ? "已连接" :
-           activeServer?.status === "connecting" ? "连接中..." :
-           activeServer?.status === "error" ? "连接失败" : "未连接"}
+          {statusServer?.status === "connected" ? "已连接" :
+           statusServer?.status === "connecting" ? "连接中..." :
+           statusServer?.status === "reconnecting" ? "重连中..." :
+           statusServer?.status === "error" ? "连接失败" : "未连接"}
         </span>
-        {activeServer && (
+        {statusServer && (
           <span className={styles.serverName}>
-            {activeServer.name || activeServer.host}
+            {statusServer.name || statusServer.host}
           </span>
         )}
       </div>

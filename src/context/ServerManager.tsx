@@ -22,6 +22,16 @@ interface ConnectionInfo {
   connectedAt: number;
 }
 
+/**
+ * connection-lost 事件负载（Rust 统一清理块 emit）
+ * - user_initiated: 用户主动断开，前端不自动重连
+ * - heartbeat / quic_closed / send_failed: 网络断开，前端自动重连
+ */
+interface ConnectionLostPayload {
+  server_id: string;
+  source: "user_initiated" | "heartbeat" | "quic_closed" | "send_failed";
+}
+
 interface ServerManagerState {
   servers: ServerConfig[];
   activeServerId: string | null;
@@ -42,6 +52,22 @@ type ServerManagerContextType = ServerManagerState & ServerManagerActions;
 /* ── Logger ──────────────────────────────────────────── */
 
 const log = createLogger('ServerManager');
+
+/* ── 自动重连策略（硬性约束：最多 3 次、5 秒间隔） ───────── */
+
+const MAX_RECONNECT_ATTEMPTS = 3;
+const RECONNECT_INTERVAL_MS = 5000;
+
+/**
+ * 判断连接错误是否为网络类（可重试）。
+ * 认证被拒/证书被拒等确定性失败不重试，避免反复撞密码
+ * 触发服务端认证失败锁定（5 次失败锁定 15 分钟）。
+ */
+const isRetryableConnectError = (msg: string): boolean =>
+  msg.includes("QUIC 连接失败") ||
+  msg.includes("认证请求失败") ||
+  msg.includes("超时") ||
+  msg.includes("timeout");
 
 /* ── Context ──────────────────────────────────────────── */
 
@@ -71,17 +97,22 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
   const activeServerIdRef = useRef(activeServerId);
   activeServerIdRef.current = activeServerId;
 
+  // 待自动重连的服务器集合（防止同一服务器重复调度重连定时器）
+  const pendingReconnectRef = useRef<Set<string>>(new Set());
+
+  // 连接核心逻辑的稳定引用（手动连接与自动重连共用，见 performConnect）
+  const performConnectRef = useRef<(server: ServerConfig) => Promise<void>>(async () => {});
+  // 调度重连的稳定引用（connection-lost 监听器与重连失败重试共用）
+  const scheduleReconnectRef = useRef<(serverId: string, attempt: number) => void>(() => {});
+
   // 监听连接丢失事件
   useEffect(() => {
     log.info("设置连接丢失监听器");
 
     const setupListener = async () => {
-      const unlisten = await listen<string>("connection-lost", (event) => {
-        const lostServerId = event.payload;
-        log.info("收到连接丢失事件:", lostServerId);
-
-        // 更新服务器状态为 disconnected
-        setServerStatus(lostServerId, "disconnected");
+      const unlisten = await listen<ConnectionLostPayload>("connection-lost", (event) => {
+        const { server_id: lostServerId, source } = event.payload;
+        log.info("收到连接丢失事件:", lostServerId, "来源:", source);
 
         // 通过 ref 读取最新值，而非闭包捕获
         if (activeServerIdRef.current === lostServerId) {
@@ -89,7 +120,19 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
           setActiveServerId(null);
         }
 
-        log.warn(`服务器 ${lostServerId} 连接已断开`);
+        if (source === "user_initiated") {
+          // 用户主动断开：不自动重连
+          setServerStatus(lostServerId, "disconnected");
+          log.warn(`服务器 ${lostServerId} 已主动断开`);
+          return;
+        }
+
+        // 网络断开：进入自动重连流程（最多 3 次、5 秒间隔）
+        // 状态置为 reconnecting，各应用依据 activeServerId 已清空显示离线占位，
+        // 重连成功后恢复 activeServerId，应用现有 effect 自动恢复
+        setServerStatus(lostServerId, "reconnecting");
+        log.warn(`服务器 ${lostServerId} 连接断开（${source}），开始自动重连`);
+        scheduleReconnectRef.current(lostServerId, 1);
       });
 
       return unlisten;
@@ -143,6 +186,67 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
   // 注意：不在这里重置状态，因为会干扰用户连接
   // onRehydrateStorage 已经在 serversStore 中处理了重置逻辑
 
+  // 连接核心逻辑：认证凭据 → remote_connect → 状态更新 → 订阅指标
+  // 手动连接（connectServer）与自动重连（attemptReconnect）共用
+  const performConnect = useCallback(async (server: ServerConfig) => {
+    // 准备认证凭据（使用 snake_case 命名以匹配 Rust 后端）
+    // 兼容旧配置：如果 server.auth 不存在，使用默认值
+    const defaultAuth = {
+      method: "password" as const,
+      username: "",
+      password: undefined,
+      privateKey: undefined,
+      passphrase: undefined,
+    };
+
+    const auth = server.auth || defaultAuth;
+
+    const credentials = {
+      method: auth.method,
+      username: auth.username,
+      password: auth.password,
+      private_key: auth.privateKey,
+      passphrase: auth.passphrase,
+    };
+
+    // 注意：不记录 credentials 中的敏感信息
+    log.info("调用 remote_connect:", {
+      serverId: server.id,
+      host: server.host,
+      port: server.port,
+      token: server.token || null,
+      authMethod: auth.method,
+      username: auth.username,
+    });
+
+    const info = await invoke<ConnectionInfo>("remote_connect", {
+      serverId: server.id,
+      host: server.host,
+      port: server.port,
+      token: server.token || null,
+      credentials,
+      certFingerprint: server.certFingerprint || null,
+    });
+
+    setServerStatus(server.id, "connected", undefined, info.rttMs >= 0 ? info.rttMs : undefined);
+    setActiveServerId(server.id);
+
+    // 连接成功后，自动订阅系统指标（长期状态）
+    try {
+      await invoke('subscribe', {
+        serverId: server.id,
+        types: [{ type: 'metrics', params: { interval_secs: 1 } }]
+      });
+    } catch (e) {
+      log.warn("系统指标订阅失败:", e);
+    }
+
+    log.info("连接成功:", info.transport, `RTT=${info.rttMs}ms`);
+  }, [setServerStatus, setActiveServerId]);
+
+  // 持有最新 performConnect 引用（供 setTimeout 回调使用，避免过时闭包）
+  performConnectRef.current = performConnect;
+
   const connectServer = useCallback(async (id: string) => {
     log.info("开始连接服务器:", id);
     const server = servers.find((s) => s.id === id);
@@ -162,74 +266,68 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
       }
     }
 
-    log.info("服务器信息:", server);
-
     // 设置连接中状态
     setServerStatus(id, "connecting");
 
     try {
-      // 准备认证凭据（使用 snake_case 命名以匹配 Rust 后端）
-      // 兼容旧配置：如果 server.auth 不存在，使用默认值
-      const defaultAuth = {
-        method: "password" as const,
-        username: "",
-        password: undefined,
-        privateKey: undefined,
-        passphrase: undefined,
-      };
-
-      const auth = server.auth || defaultAuth;
-
-      const credentials = {
-        method: auth.method,
-        username: auth.username,
-        password: auth.password,
-        private_key: auth.privateKey,
-        passphrase: auth.passphrase,
-      };
-
-      // 注意：不记录 credentials 中的敏感信息
-      log.info("调用 remote_connect:", {
-        serverId: id,
-        host: server.host,
-        port: server.port,
-        token: server.token || null,
-        authMethod: auth.method,
-        username: auth.username,
-      });
-
-      const info = await invoke<ConnectionInfo>("remote_connect", {
-        serverId: id,
-        host: server.host,
-        port: server.port,
-        token: server.token || null,
-        credentials,
-        certFingerprint: server.certFingerprint || null,
-      });
-
-      log.info("连接成功:", info);
-
-      setServerStatus(id, "connected", undefined, info.rttMs >= 0 ? info.rttMs : undefined);
-      setActiveServerId(id);
-
-      // 连接成功后，自动订阅系统指标（长期状态）
-      try {
-        await invoke('subscribe', {
-          serverId: id,
-          types: [{ type: 'metrics', params: { interval_secs: 1 } }]
-        });
-      } catch (e) {
-        log.warn("系统指标订阅失败:", e);
-      }
-
-      log.info("连接成功:", info.transport, `RTT=${info.rttMs}ms`);
+      await performConnect(server);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.error("连接失败:", msg);
 
       setServerStatus(id, "error", msg);
     }
-  }, [servers, activeServerId, setServerStatus, setActiveServerId]);
+  }, [servers, activeServerId, setServerStatus, setActiveServerId, performConnect]);
+
+  // ── 自动重连（网络断开时） ────────────────────────────────
+  // 策略：最多 3 次、5 秒间隔；凭据复用已保存配置，无需用户干预。
+  // 自动取消条件：服务器被删除、用户手动连接/断开（状态不再是
+  // reconnecting）、其他服务器已连接、认证被拒等确定性失败。
+
+  const attemptReconnect = useCallback(async (serverId: string, attempt: number) => {
+    pendingReconnectRef.current.delete(serverId);
+
+    // 读取最新 store 状态（setTimeout 回调内不能依赖组件闭包）
+    const state = useServersStore.getState();
+    const server = state.servers.find((s) => s.id === serverId);
+    if (!server) return; // 服务器已删除
+
+    // 仅在 reconnecting 状态继续：用户手动操作（连接/断开）会改变状态，即自动取消
+    if (server.status !== "reconnecting") return;
+
+    // 单连接模型：其他服务器已连接时放弃自动重连（用户已切换目标）
+    if (state.activeServerId && state.activeServerId !== serverId) return;
+    if (state.servers.some((s) => s.id !== serverId && s.status === "connected")) return;
+
+    log.info(`自动重连第 ${attempt}/${MAX_RECONNECT_ATTEMPTS} 次:`, serverId);
+    try {
+      await performConnectRef.current(server);
+      log.info("自动重连成功:", serverId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`自动重连失败 (${attempt}/${MAX_RECONNECT_ATTEMPTS}):`, msg);
+
+      // 确定性失败（认证被拒/证书被拒等）不重试，避免触发服务端认证锁定
+      if (!isRetryableConnectError(msg) || attempt >= MAX_RECONNECT_ATTEMPTS) {
+        setServerStatus(serverId, "error", `自动重连失败: ${msg}`);
+        return;
+      }
+      scheduleReconnectRef.current(serverId, attempt + 1);
+    }
+  }, [setServerStatus]);
+
+  const scheduleReconnect = useCallback((serverId: string, attempt: number) => {
+    // 同一服务器只保留一个待执行的重连定时器
+    if (pendingReconnectRef.current.has(serverId)) return;
+    pendingReconnectRef.current.add(serverId);
+
+    window.setTimeout(() => {
+      void attemptReconnect(serverId, attempt);
+    }, RECONNECT_INTERVAL_MS);
+  }, [attemptReconnect]);
+
+  // 持有最新调度引用（connection-lost 监听器空依赖，需通过 ref 访问）
+  scheduleReconnectRef.current = scheduleReconnect;
 
   const disconnectServer = useCallback(async (id: string) => {
     // 注意：不调用 unsubscribe。
