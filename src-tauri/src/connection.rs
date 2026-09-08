@@ -361,22 +361,29 @@ pub async fn remote_connect(
                             .unwrap_or_default()
                             .as_millis() as u64;
                         let envelope = Envelope::new(0, Payload::Ping { timestamp: now });
-                        match tokio::time::timeout(
-                            std::time::Duration::from_secs(3),
-                            send_and_receive_quic(&heartbeat_conn, 0, envelope.payload),
-                        ).await {
-                            Ok(Ok(_)) => {
-                                tracing::info!("休眠唤醒后连接仍存活");
-                                continue;
-                            }
-                            _ => {
-                                tracing::warn!("休眠唤醒后连接已失效，触发断开");
-                                let _ = heartbeat_tx.send(ClientRequest::ConnectionLost {
-                                    source: ConnectionLostSource::Heartbeat,
-                                }).await;
-                                break;
-                            }
+                        let alive = matches!(
+                            tokio::time::timeout(
+                                std::time::Duration::from_secs(3),
+                                send_and_receive_quic(&heartbeat_conn, 0, envelope.payload),
+                            ).await,
+                            Ok(Ok(_))
+                        );
+                        // 跨休眠的 QUIC 连接一律主动重建，即使小包 Ping 成功：
+                        // - 唤醒后网络路径状态已变（防火墙重载/网卡重置/MTU 变化），
+                        //   控制面小包通过不代表数据面健康（MTU 黑洞：小包通、大包丢）
+                        // - 休眠前挂起的旧代理流传输状态（拥塞窗口/重传队列）不可信
+                        // - 若不重建：连接显示"存活"但代理持续失败，且心跳 Ping
+                        //   一直成功导致连接永不判死、永不自愈
+                        // 走 ConnectionLost → 前端自动重连 → 新连接（状态干净）
+                        if alive {
+                            tracing::info!("休眠唤醒后连接仍可响应，但传输状态不可信，主动重建");
+                        } else {
+                            tracing::warn!("休眠唤醒后连接已失效，触发断开");
                         }
+                        let _ = heartbeat_tx.send(ClientRequest::ConnectionLost {
+                            source: ConnectionLostSource::Heartbeat,
+                        }).await;
+                        break;
                     }
 
                     // 快速退出：连接已关闭
@@ -424,7 +431,14 @@ pub async fn remote_connect(
             let status_server_id = server_id_clone.clone();
             let status_task = tokio::spawn(async move {
                 status_conn.closed().await;
-                tracing::warn!("QUIC 连接已关闭: {}", status_server_id);
+                // 记录关闭原因（区分：Agent 主动关闭如 idle/session 超时与重启、
+                // 网络中断超时、本地关闭等；缺此信息时 quic_closed 事件无法归因，
+                // 如 2026-09-05 15:19 的断开原因至今无法从日志确认）
+                let reason = status_conn
+                    .close_reason()
+                    .map(|e| e.to_string())
+                    .unwrap_or_else(|| "未知".to_string());
+                tracing::warn!("QUIC 连接已关闭: {}, 原因: {}", status_server_id, reason);
                 let _ = status_tx.send(ClientRequest::ConnectionLost {
                     source: ConnectionLostSource::QuicClosed,
                 }).await;
@@ -1275,6 +1289,12 @@ fn build_quic_client_config(
         transport.max_idle_timeout(Some(timeout));
     }
     transport.keep_alive_interval(Some(std::time::Duration::from_secs(5))); // 每5秒发送保持活跃包
+    // 并发双向流上限：quinn 默认仅 100 条，浏览器代理场景不够用——
+    // 1. 正常浏览：多主机 × 每主机多连接，重标签页时可瞬时超 100 条；
+    // 2. 历史 bug 曾让泄漏的代理流永不关闭，耗尽预算后 open_bi 无限等待，
+    //    心跳 Ping 同样卡死 → 5s 超时 → 误判连接死亡 → 监听挂起（2026-09-05 实录）。
+    // 1024 提供充足余量，配合中继收尾宽限（proxy 模块）双保险。
+    transport.max_concurrent_bidi_streams(quinn::VarInt::from_u32(1024));
     // 流控窗口：8MB per-stream / 64MB connection-wide，与服务端对称
     transport.stream_receive_window(quinn::VarInt::from_u32(8 * 1024 * 1024));  // 8MB
     transport.receive_window(quinn::VarInt::from_u32(64 * 1024 * 1024));         // 64MB

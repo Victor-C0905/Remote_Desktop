@@ -378,6 +378,10 @@ fn build_server_config(
     let mut transport = quinn::TransportConfig::default();
     transport.max_idle_timeout(None); // 禁用空闲超时，连接不会因无活动而关闭
     transport.keep_alive_interval(Some(std::time::Duration::from_secs(5))); // 每5秒发送保持活跃包
+    // 并发双向流上限：quinn 默认仅 100 条，浏览器代理场景不够用——
+    // 本端通告的限额直接约束客户端 open_bi；耗尽后客户端心跳 Ping 卡死
+    // → 5s 超时 → 误判连接死亡（2026-09-05 客户端实录）。1024 提供充足余量。
+    transport.max_concurrent_bidi_streams(quinn::VarInt::from_u32(1024));
     // 流控窗口：8MB per-stream / 64MB connection-wide，提升高 BDP 链路吞吐
     transport.stream_receive_window(quinn::VarInt::from_u32(8 * 1024 * 1024));  // 8MB
     transport.receive_window(quinn::VarInt::from_u32(64 * 1024 * 1024));         // 64MB

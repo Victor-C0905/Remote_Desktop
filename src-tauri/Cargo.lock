@@ -3311,6 +3311,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "signature",
+ "socket2",
  "ssh-key",
  "tauri",
  "tauri-build",

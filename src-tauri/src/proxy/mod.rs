@@ -5,6 +5,9 @@
 //! - QUIC 断开：suspend_session 仅停监听，浏览器保留（固定端口保证重连后浏览器无需重开）
 //! - 重连后再次 start：检测到陈旧会话 → 沿用原端口重启监听，浏览器无感恢复
 //! - proxy_stop_session（关浏览窗口）/ App 退出：停监听 + kill 浏览器
+//! - 残留自愈（spawn_primary_browser）：App 异常退出后浏览器残留（占用
+//!   profile 且代理参数指向死端口），新 spawn 会退化为转发进程 → 探测到
+//!   后清理残留实例并重开真正的主进程
 
 pub mod browser;
 pub mod socks5;
@@ -14,10 +17,11 @@ use std::path::PathBuf;
 use std::process::Child;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use tauri::{AppHandle, Manager, State};
 use tokio::io::AsyncWriteExt;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpStream;
 
 use crate::connection::ConnectionManager;
 use quirel_protocol::{Envelope, Payload};
@@ -154,6 +158,10 @@ async fn read_frame(recv: &mut quinn::RecvStream) -> Result<Option<Vec<u8>>, Str
 ///
 /// 契约：任何 Err 返回后调用方必须让 TcpStream 被 drop（关闭连接），
 /// 避免浏览器侧挂等。
+///
+/// 握手阶段（open_bi + ProxyOpen 响应）限时 10 秒：僵尸/病态连接
+/// （如休眠唤醒后未判死的连接）下快速失败，让浏览器立即收到
+/// 连接关闭而非无限转圈等自身超时。
 async fn handle_socks5_conn(
     mut tcp: TcpStream,
     quic_conn: Arc<quinn::Connection>,
@@ -162,11 +170,14 @@ async fn handle_socks5_conn(
     socks5::socks5_greeting(&mut tcp).await?;
     let target = socks5::socks5_read_connect(&mut tcp).await?;
 
-    // 2. 开 QUIC 双向流，发 ProxyOpen 首帧
-    let (mut quic_tx, mut quic_rx) = quic_conn
-        .open_bi()
-        .await
-        .map_err(|e| format!("开代理流失败: {}", e))?;
+    // 2. 开 QUIC 双向流，发 ProxyOpen 首帧（限时，防病态连接挂死）
+    let (mut quic_tx, mut quic_rx) = tokio::time::timeout(
+        Duration::from_secs(10),
+        quic_conn.open_bi(),
+    )
+    .await
+    .map_err(|_| "开代理流超时".to_string())?
+    .map_err(|e| format!("开代理流失败: {}", e))?;
     // 代理流内 request_id 无匹配语义，固定 0
     let open = Envelope::new(
         0,
@@ -174,8 +185,15 @@ async fn handle_socks5_conn(
     );
     write_frame(&mut quic_tx, &open.encode()?).await?;
 
-    // 3. 读 ProxyOpenResponse
-    let resp_data = read_frame(&mut quic_rx).await?.ok_or("代理流提前关闭")?;
+    // 3. 读 ProxyOpenResponse（限时，防病态连接挂死）
+    // 双 ?：外层解 timeout 的 Elapsed（已转 String），内层解 read_frame 的 String 错误
+    let resp_data = tokio::time::timeout(
+        Duration::from_secs(10),
+        read_frame(&mut quic_rx),
+    )
+    .await
+    .map_err(|_| "等待代理响应超时".to_string())??
+    .ok_or("代理流提前关闭")?;
     let resp = Envelope::decode(&resp_data).map_err(|e| format!("解码响应失败: {}", e))?;
     match resp.payload {
         Payload::ProxyOpenResponse { success: true, .. } => {}
@@ -193,7 +211,15 @@ async fn handle_socks5_conn(
     // 4. 回 SOCKS5 成功，之后双向透传
     socks5::socks5_reply(&mut tcp, 0x00).await?;
     let (mut tcp_rx, mut tcp_tx) = tcp.into_split();
-    // 双向透传：join! 两方向独立跑完（与 Agent 端一致，半关闭互不截断）
+    // 双向透传：两方向并发（保留半关闭排空语义）+ 收尾宽限。
+    // 不限时的问题：浏览器关闭连接（FIN）后，浏览器→Agent 方向结束，但
+    // Agent→浏览器方向在对端为 HTTP keep-alive 目标时永不 EOF → 任务与
+    // TcpStream 永久泄漏 → CLOSE_WAIT 无限堆积。Windows 下（std 监听不带
+    // SO_REUSEADDR）残留 Socket 会阻塞同端口重新 bind（10048），表现为
+    // "端口绑定失败且重试无效"（泄漏任务随 QUIC 连接存活，重启 App 才消失）。
+    // 宽限 10s：足够排空对端剩余数据；活跃传输（下载中）不会触发——
+    // 计时仅在某一方向已经结束时才启动。
+    const RELAY_LINGER_SECS: u64 = 10;
     let a = async {
         let r = tokio::io::copy(&mut tcp_rx, &mut quic_tx).await;
         let _ = quic_tx.finish();
@@ -208,20 +234,60 @@ async fn handle_socks5_conn(
             tracing::debug!("[Proxy] Agent→浏览器 透传结束: {}", e);
         }
     };
-    tokio::join!(a, b);
+    tokio::pin!(a, b);
+    let linger = Duration::from_secs(RELAY_LINGER_SECS);
+    tokio::select! {
+        _ = &mut a => {
+            // 浏览器方向先结束：给 Agent 方向宽限期排空，超时强制关闭防泄漏
+            if tokio::time::timeout(linger, &mut b).await.is_err() {
+                tracing::debug!("[Proxy] 收尾宽限超时，强制关闭（防 CLOSE_WAIT 泄漏）");
+            }
+        }
+        _ = &mut b => {
+            // Agent 方向先结束：同理给浏览器方向宽限（浏览器可能仍在发送）
+            if tokio::time::timeout(linger, &mut a).await.is_err() {
+                tracing::debug!("[Proxy] 收尾宽限超时，强制关闭（防 CLOSE_WAIT 泄漏）");
+            }
+        }
+    }
     Ok(())
 }
 
 /// 在指定端口启动 SOCKS5 监听任务（port=0 时系统随机分配）
 ///
 /// 返回实际绑定端口与监听任务句柄。
+///
+/// bind 使用 socket2 设置 SO_REUSEADDR：会话停止/挂起后立即重绑同端口。
+/// Windows 下 std/tokio 的 TcpListener::bind 默认不带该选项，旧会话残留的
+/// CLOSE_WAIT/TIME_WAIT Socket（中继泄漏或 TCP 收尾延迟）会让重新 bind
+/// 失败（10048），表现为"端口绑定失败且重试无效"。与 Agent 端
+/// WebSocket/QUIC 监听的项目惯例一致（见 agent quic.rs / websocket.rs）。
 async fn spawn_socks5_listener(
     quic_conn: Arc<quinn::Connection>,
     port: u16,
 ) -> Result<(u16, tokio::task::JoinHandle<()>), String> {
-    let listener = TcpListener::bind(("127.0.0.1", port))
-        .await
+    let sock_addr: std::net::SocketAddr = (std::net::Ipv4Addr::LOCALHOST, port).into();
+    let socket = socket2::Socket::new(
+        socket2::Domain::IPV4,
+        socket2::Type::STREAM,
+        Some(socket2::Protocol::TCP),
+    )
+    .map_err(|e| format!("创建 SOCKS5 socket 失败: {}", e))?;
+    socket
+        .set_reuse_address(true)
+        .map_err(|e| format!("设置 SO_REUSEADDR 失败: {}", e))?;
+    socket
+        .set_nonblocking(true)
+        .map_err(|e| format!("设置非阻塞模式失败: {}", e))?;
+    socket
+        .bind(&sock_addr.into())
         .map_err(|e| format!("SOCKS5 监听绑定端口 {} 失败: {}", port, e))?;
+    socket
+        .listen(1024)
+        .map_err(|e| format!("SOCKS5 监听启动失败: {}", e))?;
+    // socket2 → std → tokio（非阻塞已设置，from_std 不会阻塞注册）
+    let listener = tokio::net::TcpListener::from_std(std::net::TcpListener::from(socket))
+        .map_err(|e| format!("SOCKS5 监听注册失败: {}", e))?;
     let actual_port = listener.local_addr().map_err(|e| e.to_string())?.port();
 
     // 监听循环
@@ -258,6 +324,92 @@ fn port_conflict_with(app: &AppHandle, server_id: &str, port: u16) -> Option<Str
     guard.iter()
         .find(|(id, s)| **id != server_id && s.listener_alive && s.port == port)
         .map(|(id, _)| id.clone())
+}
+
+/// 误杀保护：其他活跃会话是否正在使用同一浏览器（同 profile 主进程）
+///
+/// 同 profile 单实例下，其他活跃会话的浏览器主进程必须保留（其窗口依赖它）。
+/// 残留清理前必须检查，否则会杀掉其他会话正在使用的浏览器。
+fn other_active_session_uses_browser(app: &AppHandle, server_id: &str, browser_name: &str) -> bool {
+    let sessions: State<ProxySessionManager> = app.state();
+    let guard = sessions.sessions.lock().unwrap();
+    guard.iter().any(|(id, s)| {
+        *id != server_id
+            && s.listener_alive
+            && s.browser_name == browser_name
+            // 浏览器主进程仍在运行（try_wait 出错时保守视为存活）
+            && s.browser_child.lock().unwrap().as_mut()
+                .map(|c| c.try_wait().map(|st| st.is_none()).unwrap_or(true))
+                .unwrap_or(false)
+    })
+}
+
+/// 探测 spawn 出的浏览器进程是否"快速退出"（转发进程特征）
+///
+/// 同 profile 已有实例（如上次 App 异常退出残留的浏览器）时，新 spawn 的
+/// 进程只是转发器：把 --new-window 请求转给已运行实例后数百毫秒内退出；
+/// 真正的主进程持续存活。探测窗口 ~750ms（150ms × 5 轮）：
+/// - 期间任一时刻发现已退出 → 转发进程
+/// - 全程存活 → 主进程（正常启动最多增加 150ms 首轮等待）
+async fn exited_quickly(child: &mut Child) -> bool {
+    for _ in 0..5 {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            return true;
+        }
+    }
+    false
+}
+
+/// spawn 浏览器并确保其为 profile 的主进程（非转发进程）
+///
+/// 残留场景自愈：上次 App 异常退出后浏览器残留（代理参数指向已死端口，
+/// 无法接管），新 spawn 会退化为转发进程。探测到后：
+/// 1. 误杀保护：其他活跃会话在用同浏览器 → 报错（同 profile 单实例，
+///    本会话无法获得独立主进程）
+/// 2. 清理残留实例（按 profile 路径精确匹配，见 browser::terminate_profile_processes）
+/// 3. 等待 profile 单实例锁随进程退出释放，重新 spawn 真正的主进程
+async fn spawn_primary_browser(
+    app: &AppHandle,
+    server_id: &str,
+    browser_path: &PathBuf,
+    browser_name: &str,
+    port: u16,
+    profile: &PathBuf,
+) -> Result<Child, String> {
+    let mut child = browser::spawn_browser(browser_path, port, profile)?;
+
+    if !exited_quickly(&mut child).await {
+        // 持续存活 → 真正的主进程
+        return Ok(child);
+    }
+
+    // 快速退出 → profile 被其他实例占用
+    if other_active_session_uses_browser(app, server_id, browser_name) {
+        return Err(format!(
+            "浏览器 {} 正被其他服务器的浏览会话使用，请先关闭其浏览窗口",
+            browser_name
+        ));
+    }
+
+    // 残留实例带着旧代理参数（指向已死端口），清理后重开
+    tracing::info!(
+        "[Proxy] 检测到 profile 被残留浏览器占用，清理后重开: {}",
+        profile.display()
+    );
+    browser::terminate_profile_processes(browser_path, profile)?;
+    // 等待 profile 单实例锁随残留进程退出释放（子进程句柄释放有延迟）
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let mut child = browser::spawn_browser(browser_path, port, profile)?;
+    if exited_quickly(&mut child).await {
+        // 二次验证仍快速退出：清理未生效或锁未释放，报错让用户手动处理
+        return Err(format!(
+            "浏览器启动后立即退出（profile 可能仍被占用: {}），请手动关闭相关浏览器进程后重试",
+            profile.display()
+        ));
+    }
+    Ok(child)
 }
 
 /// 启动代理会话：SOCKS5 监听（支持固定端口）+ 浏览器
@@ -335,8 +487,17 @@ pub async fn proxy_start_session(
                 None
             } else {
                 let profile = browser_profile_dir(&app, &browser_name)?;
-                Some(browser::spawn_browser(&browser_path, actual_port, &profile)
-                    .map_err(|e| { listener_task.abort(); e })?)
+                // spawn_primary_browser：残留实例占用 profile 时清理后重开
+                // （否则新进程退化为转发进程，浏览器仍用旧代理参数连不上）
+                Some(match spawn_primary_browser(
+                    &app, &server_id, &browser_path, &browser_name, actual_port, &profile,
+                ).await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        listener_task.abort();
+                        return Err(e);
+                    }
+                })
             };
 
             // 更新会话条目（期间条目被并发替换的概率极低，覆盖即可）
@@ -370,7 +531,13 @@ pub async fn proxy_start_session(
 
         // 监听活着但浏览器被手动关闭：连接没变，无需重绑端口，补 spawn 浏览器即可
         let profile = browser_profile_dir(&app, &browser_name)?;
-        let child = browser::spawn_browser(&browser_path, sess_port, &profile)?;
+        // spawn_primary_browser：残留实例占用 profile 时清理后重开（同上）
+        let child = match spawn_primary_browser(
+            &app, &server_id, &browser_path, &browser_name, sess_port, &profile,
+        ).await {
+            Ok(c) => c,
+            Err(e) => return Err(e),
+        };
         let sessions: State<ProxySessionManager> = app.state();
         let mut guard = sessions.sessions.lock().unwrap();
         if let Some(sess) = guard.get_mut(&server_id) {
@@ -402,7 +569,12 @@ pub async fn proxy_start_session(
             return Err(e);
         }
     };
-    let child = match browser::spawn_browser(&browser_path, port, &profile) {
+    // spawn_primary_browser：残留实例占用 profile 时清理后重开
+    // （App 异常退出后浏览器残留场景，新 spawn 否则退化为转发进程，
+    //   残留浏览器仍用旧代理参数 → 页面连接错误且重试无效）
+    let child = match spawn_primary_browser(
+        &app, &server_id, &browser_path, &browser_name, port, &profile,
+    ).await {
         Ok(c) => c,
         Err(e) => {
             listener_task.abort();
