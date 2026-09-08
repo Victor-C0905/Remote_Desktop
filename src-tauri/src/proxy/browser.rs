@@ -102,6 +102,78 @@ pub fn spawn_browser(
         .map_err(|e| format!("启动浏览器失败: {}", e))
 }
 
+/// 终止占用指定 profile 的所有浏览器进程（残留实例清理）
+///
+/// 使用场景：上次 App 异常退出（崩溃/被强杀/dev 重启，RunEvent::Exit 未执行）后
+/// 浏览器残留。残留实例的代理参数指向已死端口（无法被新会话接管），且占用
+/// profile 单实例锁，导致新 spawn 的进程退化为"转发器"立即退出。
+/// 匹配规则：进程名 = 浏览器可执行文件名 且 命令行包含 profile 路径，
+/// 不会误杀用户日常浏览器实例（其 profile 路径不同）。
+#[cfg(windows)]
+pub fn terminate_profile_processes(
+    browser_path: &PathBuf,
+    profile_dir: &PathBuf,
+) -> Result<(), String> {
+    let exe_name = browser_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .ok_or_else(|| "浏览器路径缺少可执行文件名".to_string())?;
+    // PowerShell 单引号字符串转义：' → ''（profile 路径来自 app_cache_dir，正常无引号，防御性处理）
+    let exe_pat = exe_name.replace('\'', "''");
+    let profile_pat = profile_dir.to_string_lossy().replace('\'', "''");
+    // Get-CimInstance 枚举进程（含命令行）→ 按进程名 + 命令行匹配 → 强制终止。
+    // -like 通配符匹配默认不区分大小写；全程单引号避免嵌套双引号转义问题
+    let script = format!(
+        "Get-CimInstance Win32_Process | Where-Object {{ $_.Name -eq '{}' -and $_.CommandLine -like '*{}*' }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}",
+        exe_pat, profile_pat
+    );
+    let status = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .status()
+        .map_err(|e| format!("调用 PowerShell 清理残留浏览器失败: {}", e))?;
+    if !status.success() {
+        return Err(format!(
+            "清理残留浏览器进程失败（exit={}）",
+            status.code().unwrap_or(-1)
+        ));
+    }
+    Ok(())
+}
+
+/// Unix 版残留清理：pkill -f 按完整命令行匹配 profile 路径
+#[cfg(unix)]
+pub fn terminate_profile_processes(
+    browser_path: &PathBuf,
+    profile_dir: &PathBuf,
+) -> Result<(), String> {
+    let _ = browser_path; // pkill -f 直接按命令行匹配，无需进程名
+    // pkill -f 的模式为扩展正则，路径特殊字符（. 等）需转义为字面量
+    let pattern = profile_dir
+        .to_string_lossy()
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '/' || c == '_' || c == '-' {
+                c.to_string()
+            } else {
+                format!(r"\{}", c)
+            }
+        })
+        .collect::<String>();
+    let status = Command::new("pkill")
+        .arg("-f")
+        .arg(&pattern)
+        .status()
+        .map_err(|e| format!("调用 pkill 清理残留浏览器失败: {}", e))?;
+    // pkill 退出码 1 = 无匹配进程（本就是干净状态），不算错误
+    if !status.success() && status.code() != Some(1) {
+        return Err(format!(
+            "清理残留浏览器进程失败（exit={}）",
+            status.code().unwrap_or(-1)
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
