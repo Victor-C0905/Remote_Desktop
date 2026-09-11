@@ -609,6 +609,41 @@ pub async fn proxy_stop_session(server_id: String, app: AppHandle) -> Result<(),
     Ok(())
 }
 
+/// 会话状态（proxy_session_status 返回）
+#[derive(serde::Serialize)]
+pub struct ProxySessionStatus {
+    pub port: u16,
+    pub browser: String,
+    /// 监听是否存活（false = 断线挂起，需重建）
+    pub listener_alive: bool,
+    /// 浏览器主进程是否仍在运行
+    pub browser_alive: bool,
+}
+
+/// 查询代理会话状态（无会话返回 null）
+///
+/// 前端据此区分重连后的恢复策略：浏览器还活着 → 调 proxy_start_session
+/// 仅重建监听（无感恢复网络，不弹新浏览器窗口）；浏览器已关或无会话 →
+/// 等待用户主动点击"打开浏览器"，连接服务器本身不自动 spawn 浏览器。
+#[tauri::command]
+pub fn proxy_session_status(server_id: String, app: AppHandle) -> Option<ProxySessionStatus> {
+    let sessions: State<ProxySessionManager> = app.state();
+    let guard = sessions.sessions.lock().unwrap();
+    guard.get(&server_id).map(|s| ProxySessionStatus {
+        port: s.port,
+        browser: s.browser_name.clone(),
+        listener_alive: s.listener_alive,
+        // 浏览器主进程是否仍在运行（try_wait 出错时保守视为存活）
+        browser_alive: s
+            .browser_child
+            .lock()
+            .unwrap()
+            .as_mut()
+            .map(|c| c.try_wait().map(|st| st.is_none()).unwrap_or(true))
+            .unwrap_or(false),
+    })
+}
+
 /// 代理浏览器的独立 profile 目录，按浏览器分离
 ///
 /// Edge/Chrome/Firefox 的 profile 数据互不兼容，共用同一目录会导致

@@ -607,6 +607,7 @@ pub fn run() {
             connection::unsubscribe,
             proxy::proxy_start_session,
             proxy::proxy_stop_session,
+            proxy::proxy_session_status,
             proxy::proxy_list_browsers,
             terminal::remote_spawn_terminal,
             terminal::remote_terminal_write,

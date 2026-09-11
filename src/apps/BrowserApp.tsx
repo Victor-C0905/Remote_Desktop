@@ -15,12 +15,22 @@ interface ProxySessionInfo {
   browser: string;
 }
 
+/** 代理会话状态（Rust 端 ProxySessionStatus，无会话时为 null） */
+interface ProxySessionStatus {
+  port: number;
+  browser: string;
+  listener_alive: boolean;
+  browser_alive: boolean;
+}
+
 /**
  * 浏览器应用（服务器视角网页浏览）
  *
  * 窗口即会话控制面板：
- * - 打开窗口自动启动代理会话（SOCKS5 监听 + 系统浏览器）
+ * - 浏览器只在用户主动点击"打开浏览器"时启动（连接服务器不自动打开）
  * - 关闭窗口即停止会话（浏览器与监听一并关闭）
+ * - 断线重连后：已打开的浏览器自动恢复网络（仅重建监听，不弹新窗口）；
+ *   浏览器已关则等待用户再次主动打开
  * - 浏览器是独立系统进程，窗口内只展示状态与操作
  * - 可选择用哪个浏览器打开（自动 / Edge / Chrome / Firefox / 自定义路径）
  */
@@ -66,7 +76,7 @@ export function BrowserApp() {
     [activeServer, busy, proxyPort],
   );
 
-  // 打开窗口且已连接 → 自动启动会话；服务器断开 → 状态归位
+  // 服务器切换 → 状态归位（会话随窗口/服务器维度，切换后需重新查询或手动打开）
   useEffect(() => {
     const serverId = activeServer?.id ?? null;
     if (serverId !== activeServerIdRef.current) {
@@ -74,13 +84,41 @@ export function BrowserApp() {
       setSession(null);
       setError(null);
     }
-    if (connected && !session && !busy && !error) {
-      startSession(pref);
-    }
-  }, [connected, session, busy, error, startSession, pref]);
+  }, [activeServer?.id]);
+
+  // 连接后查询会话状态：浏览器还活着 → 恢复网络（重建监听，不弹新窗口）；
+  // 无会话/浏览器已关 → 等待用户主动点击"打开浏览器"，连接本身不自动 spawn
+  useEffect(() => {
+    if (!connected || !activeServer) return;
+    const serverId = activeServer.id;
+    let cancelled = false;
+    (async () => {
+      try {
+        const st = await invoke<ProxySessionStatus | null>("proxy_session_status", {
+          serverId,
+        });
+        if (cancelled || !st) return;
+        if (!st.browser_alive) return; // 浏览器已关：不自动重开，等用户主动操作
+        if (st.listener_alive) {
+          // 会话完好（如窗口重挂载）：直接采纳状态
+          setSession({ port: st.port, browser: st.browser });
+        } else {
+          // 断线挂起：仅重建监听，浏览器在固定端口上无感恢复
+          startSession(pref);
+        }
+      } catch (e) {
+        log.error("查询浏览会话状态失败:", e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // startSession 身份随 busy/session 变化，重跑只会重复查询（幂等）：
+    // 恢复期间 busy=true 会挡住 startSession 的重复调用
+  }, [connected, activeServer, startSession, pref]);
 
   // 断线 → 清空前端会话态（Rust 端浏览器保留、监听已挂起）；
-  // 重连后上方 effect 自动重启监听，浏览器在固定端口上无感恢复
+  // 重连后上方 effect 查询状态，浏览器还开着则自动恢复网络
   useEffect(() => {
     if (!connected) setSession(null);
   }, [connected]);
@@ -134,7 +172,25 @@ export function BrowserApp() {
           </div>
         )}
 
-        {!error && (
+        {!error && !session && (
+          <>
+            <div className="ba-hint">
+              点击下方按钮，将使用系统浏览器经服务器网络打开独立浏览窗口
+              （目标网站看到的是服务器 IP）。默认浏览器与端口可在 设置 → 浏览器 中修改。
+            </div>
+
+            <button
+              type="button"
+              className="ba-btn"
+              onClick={() => startSession(pref)}
+              disabled={busy}
+            >
+              {busy ? "启动中…" : "打开浏览器"}
+            </button>
+          </>
+        )}
+
+        {!error && session && (
           <>
             <div className="ba-status">
               <div className="ba-status-row">
@@ -144,30 +200,25 @@ export function BrowserApp() {
               <div className="ba-status-row">
                 <span className="ba-status-label">浏览器</span>
                 <span className="ba-status-value">
-                  {session
-                    ? session.browser === "existing"
-                      ? "已打开"
-                      : session.browser
-                    : "—"}
+                  {session.browser === "existing" ? "已打开" : session.browser}
                 </span>
               </div>
               <div className="ba-status-row">
                 <span className="ba-status-label">SOCKS5 端口</span>
-                <span className="ba-status-value">{session ? session.port : "—"}</span>
+                <span className="ba-status-value">{session.port}</span>
               </div>
             </div>
 
             <div className="ba-hint">
-              浏览器以独立窗口打开，流量经服务器网络转发（目标网站看到的是服务器 IP）。
-              断线重连后浏览器自动恢复网络，无需重开；关闭本窗口将同时关闭浏览器与代理。
-              默认浏览器与端口可在 设置 → 浏览器 中修改。
+              浏览器以独立窗口打开，流量经服务器网络转发。断线重连后浏览器自动恢复网络，
+              无需重开；关闭本窗口将同时关闭浏览器与代理。
             </div>
 
             <button
               type="button"
               className="ba-btn"
               onClick={() => startSession(pref)}
-              disabled={busy || !session}
+              disabled={busy}
             >
               再开一个浏览器窗口
             </button>
