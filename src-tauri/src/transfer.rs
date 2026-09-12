@@ -1253,6 +1253,15 @@ impl Drop for FileWriter {
     }
 }
 
+/// Tauri Command: 判断本地路径是否为普通文件
+///
+/// 拖拽上传事件只提供路径（不区分文件/目录），目录无法按文件传输，
+/// 前端在创建传输任务前调用此命令过滤掉目录与不存在的路径
+#[command]
+pub fn local_path_is_file(path: String) -> bool {
+    std::fs::metadata(&path).map(|m| m.is_file()).unwrap_or(false)
+}
+
 /// Tauri Command: 开始文件传输
 ///
 /// # 参数

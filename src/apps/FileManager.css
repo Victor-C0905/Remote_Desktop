@@ -10,6 +10,55 @@
   min-height: 0; /* ✅ 建立 flex 约束链，确保子元素滚动正常 */
   background: var(--quirel-window-bg);
   outline: none; /* 移除焦点样式，避免黑框 */
+  position: relative; /* 拖拽覆盖层的定位基准 */
+}
+
+/* ── 拖拽上传覆盖层（Adwaita 风格）────────────────────── */
+/* 覆盖整个应用区域；Tauri 拖放在 webview 层处理，覆盖层纯提示、不拦截释放 */
+.fm-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 200; /* 高于内容区，低于右键菜单/对话框层级 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--quirel-accent-bg) 12%, transparent);
+  border: 2px dashed var(--quirel-accent-bg);
+  border-radius: 8px;
+  pointer-events: none; /* 不拦截释放事件 */
+}
+
+.fm-drop-overlay-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 24px 32px;
+  border-radius: 12px;
+  background: var(--quirel-view-bg);
+  border: 1px solid var(--quirel-border-color);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+
+.fm-drop-overlay-icon {
+  font-size: 32px;
+  line-height: 1;
+}
+
+.fm-drop-overlay-title {
+  font-size: var(--font-body);
+  font-weight: 700;
+  color: var(--quirel-text-primary);
+}
+
+.fm-drop-overlay-path {
+  font-size: var(--font-small);
+  color: var(--quirel-text-secondary);
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl; /* 路径过长时优先保留末尾（当前目录名） */
 }
 
 /* ── Toolbar（替代原HeaderBar）───────────────────────── */
