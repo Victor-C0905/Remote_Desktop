@@ -774,8 +774,19 @@ pub async fn remote_read_file(server_id: String, path: String, app: tauri::AppHa
             let content_bytes = base64::engine::general_purpose::STANDARD
                 .decode(content.as_bytes())
                 .map_err(|e| format!("base64 解码失败: {}", e))?;
-            let content_text = String::from_utf8(content_bytes)
-                .map_err(|e| format!("文件不是有效的 UTF-8 文本（可能为二进制或非 UTF-8 编码）: {}", e))?;
+            // UTF-8 优先；失败时回退 GB18030（GBK 超集，覆盖中文服务器常见编码）
+            // 注：二进制文件不会走到这里——FileOpener 先经 file_info 路由，is_text=false 不进编辑器
+            let content_text = match String::from_utf8(content_bytes) {
+                Ok(s) => s,
+                Err(e) => {
+                    let (decoded, _, had_errors) = encoding_rs::GB18030.decode(e.as_bytes());
+                    if had_errors {
+                        return Err(format!("文件不是有效的 UTF-8 文本（可能为二进制文件）: {}", e));
+                    }
+                    tracing::info!("[ReadFile] UTF-8 解码失败，已按 GB18030 回退解码");
+                    decoded.into_owned()
+                }
+            };
             Ok(RemoteReadFileResponse { path, content: content_text, mtime, size })
         }
         Payload::Error { message, .. } => Err(message),
@@ -789,6 +800,62 @@ pub struct RemoteReadFileResponse {
     pub content: String,
     pub mtime: u64, // 文件修改时间（Unix timestamp）
     pub size: u64,
+}
+
+/// 文件格式探测结果（camelCase 序列化，与前端风格对齐）
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteFileInfo {
+    pub path: String,
+    pub size: u64,
+    pub is_dir: bool,
+    pub is_text: bool,
+    pub extension: String,
+    /// 文件头部字节（JSON 数组传输，前端用于 magic number 检测）
+    pub magic_bytes: Vec<u8>,
+}
+
+/// 文件格式探测（双击文件时的格式路由依据）
+#[tauri::command]
+#[tracing::instrument(skip(app), fields(server_id = %server_id, path = %path))]
+pub async fn remote_file_info(server_id: String, path: String, app: tauri::AppHandle) -> Result<RemoteFileInfo, String> {
+    tracing::debug!("[FileInfo] server_id={}, path={}", server_id, path);
+    let resp = remote_send(server_id, Payload::FileInfoRequest { path }, app).await?;
+    match resp.payload {
+        Payload::FileInfoResponse { path, size, is_dir, is_text, extension, magic_bytes } => {
+            Ok(RemoteFileInfo { path, size, is_dir, is_text, extension, magic_bytes })
+        }
+        Payload::Error { message, .. } => Err(message),
+        _ => Err("意外响应".into()),
+    }
+}
+
+/// 二进制文件读取响应（base64 传输，图片/PDF/十六进制查看器使用）
+#[derive(Debug, Serialize)]
+pub struct RemoteBinaryFile {
+    pub path: String,
+    /// 文件原始字节的 base64 编码（前端 atob 解码）
+    pub base64: String,
+    pub mtime: u64,
+    pub size: u64,
+}
+
+/// 读取二进制文件（图片/PDF/十六进制视图）
+///
+/// 与 remote_read_file 的区别：不做 UTF-8 转换，直接透传 base64，
+/// 前端按用途解码（data URI / pdfjs Uint8Array / hex dump）。
+#[tauri::command]
+#[tracing::instrument(skip(app), fields(server_id = %server_id, path = %path))]
+pub async fn remote_read_file_binary(server_id: String, path: String, app: tauri::AppHandle) -> Result<RemoteBinaryFile, String> {
+    tracing::debug!("[ReadFileBinary] server_id={}, path={}", server_id, path);
+    let resp = remote_send(server_id, Payload::ReadFileRequest { path }, app).await?;
+    match resp.payload {
+        Payload::ReadFileResponse { path, content, mtime, size } => {
+            Ok(RemoteBinaryFile { path, base64: content, mtime, size })
+        }
+        Payload::Error { message, .. } => Err(message),
+        _ => Err("意外响应".into()),
+    }
 }
 
 #[tauri::command]

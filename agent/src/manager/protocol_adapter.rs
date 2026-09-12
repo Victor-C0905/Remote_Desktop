@@ -19,7 +19,7 @@ use crate::protocol::generated::{
     ReadDir, ReadFile, WriteFile,
     Delete, Mkdir, Rename, Copy, Move,
     FileExists as FileExistsReq, ApplyDiff as ApplyDiffReq,
-    FileDiff as ProtoFileDiff,
+    FileDiff as ProtoFileDiff, FileInfo, FileInfoResult,
 };
 use crate::protocol::{Payload, FileEntry};
 
@@ -70,6 +70,17 @@ pub fn serde_to_worker_request(payload: &Payload, user: &UserContext) -> Option<
         Payload::ReadFileRequest { path } => {
             tracing::debug!("适配 ReadFileRequest: path={}", path);
             Some(manager_request::Payload::ReadFile(ReadFile {
+                path: path.clone(),
+                uid: user.uid,
+                gid: user.gid,
+                username: user.username.clone(),
+                home_dir: user.home_dir.clone(),
+            }))
+        }
+
+        Payload::FileInfoRequest { path } => {
+            tracing::debug!("适配 FileInfoRequest: path={}", path);
+            Some(manager_request::Payload::FileInfo(FileInfo {
                 path: path.clone(),
                 uid: user.uid,
                 gid: user.gid,
@@ -234,6 +245,19 @@ pub fn worker_response_to_serde(response: &crate::protocol::generated::WorkerRes
                 content: content_b64,
                 mtime: content.mtime,
                 size: content.size,
+            })
+        }
+
+        Some(worker_response::Payload::FileInfoResult(r)) => {
+            tracing::debug!("适配 FileInfoResult: path={}, size={}, is_dir={}", r.path, r.size, r.is_dir);
+
+            Some(Payload::FileInfoResponse {
+                path: r.path.clone(),
+                size: r.size,
+                is_dir: r.is_dir,
+                is_text: r.is_text,
+                extension: r.extension.clone(),
+                magic_bytes: r.magic_bytes.to_vec(),
             })
         }
 
@@ -616,6 +640,56 @@ mod tests {
                 assert_eq!(mtime, None);
             }
             _ => panic!("Expected FileExistsResponse"),
+        }
+    }
+
+    #[test]
+    fn test_file_info_request_conversion() {
+        let payload = Payload::FileInfoRequest { path: "/a.png".to_string() };
+        let user = test_user_context();
+
+        let result = serde_to_worker_request(&payload, &user);
+
+        match result {
+            Some(manager_request::Payload::FileInfo(req)) => {
+                assert_eq!(req.path, "/a.png");
+                assert_eq!(req.uid, user.uid);
+                assert_eq!(req.gid, user.gid);
+                assert_eq!(req.username, user.username);
+                assert_eq!(req.home_dir, user.home_dir);
+            }
+            _ => panic!("Expected FileInfo conversion"),
+        }
+    }
+
+    #[test]
+    fn test_file_info_result_response_conversion() {
+        use crate::protocol::generated::WorkerResponse;
+
+        let resp = WorkerResponse {
+            request_id: 1,
+            payload: Some(worker_response::Payload::FileInfoResult(FileInfoResult {
+                path: "/a.png".to_string(),
+                size: 1024,
+                is_dir: false,
+                is_text: false,
+                extension: "png".to_string(),
+                magic_bytes: vec![0x89, 0x50, 0x4E, 0x47],
+            })),
+        };
+
+        let result = worker_response_to_serde(&resp);
+
+        match result {
+            Some(Payload::FileInfoResponse { path, size, is_dir, is_text, extension, magic_bytes }) => {
+                assert_eq!(path, "/a.png");
+                assert_eq!(size, 1024);
+                assert!(!is_dir);
+                assert!(!is_text);
+                assert_eq!(extension, "png");
+                assert_eq!(magic_bytes, vec![0x89, 0x50, 0x4E, 0x47]);
+            }
+            _ => panic!("Expected FileInfoResponse"),
         }
     }
 }

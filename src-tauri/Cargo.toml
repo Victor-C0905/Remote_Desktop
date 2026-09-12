@@ -26,6 +26,8 @@ serde_json = "1"
 chrono = "0.4"
 uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
+# GBK/GB18030 文本解码回退（中文服务器常见编码）
+encoding_rs = "0.8"
 
 # 线上协议单一真相源（与 agent 共享）
 quirel-protocol = { path = "../quirel-protocol" }

@@ -10,6 +10,9 @@ import { SystemMonitor } from '../apps/SystemMonitor';
 import { Settings } from '../apps/Settings';
 import { TextEditor } from '../apps/TextEditor/TextEditor';
 import { BrowserApp } from '../apps/BrowserApp';
+import { ImageViewer } from '../apps/ImageViewer/ImageViewer';
+import { HexViewer } from '../apps/HexViewer/HexViewer';
+import { PDFViewer } from '../apps/PDFViewer/PDFViewer';
 
 const log = createLogger('WindowInit');
 
@@ -91,6 +94,45 @@ export function initWindowRegistry(registry: WindowRegistry): void {
     component: BrowserApp,
     desktopLabel: '远程浏览',
     dockLabel: '浏览',
+  });
+
+  // Image Viewer - 远程图片查看（文件格式路由目标，非主动入口）
+  registry.register({
+    id: 'image-viewer',
+    title: '图片查看器',
+    icon: '🖼️',
+    defaultSize: { width: 800, height: 600 },
+    minSize: { width: 400, height: 300 },
+    allowMultipleInstances: true,
+    component: ImageViewer,
+    showOnDesktop: false,
+    showOnDock: false,
+  });
+
+  // Hex Viewer - 十六进制查看（未知格式回退，非主动入口）
+  registry.register({
+    id: 'hex-viewer',
+    title: '十六进制查看器',
+    icon: '🔢',
+    defaultSize: { width: 800, height: 550 },
+    minSize: { width: 500, height: 350 },
+    allowMultipleInstances: true,
+    component: HexViewer,
+    showOnDesktop: false,
+    showOnDock: false,
+  });
+
+  // PDF Viewer - 远程 PDF 阅读（文件格式路由目标，非主动入口）
+  registry.register({
+    id: 'pdf-viewer',
+    title: 'PDF 阅读器',
+    icon: '📄',
+    defaultSize: { width: 900, height: 700 },
+    minSize: { width: 500, height: 400 },
+    allowMultipleInstances: true,
+    component: PDFViewer,
+    showOnDesktop: false,
+    showOnDock: false,
   });
 
   log.info('Registered apps:', registry.getAll().map(a => a.id));

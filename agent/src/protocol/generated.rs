@@ -5,7 +5,7 @@
 pub struct ManagerRequest {
     #[prost(uint64, tag = "1")]
     pub request_id: u64,
-    #[prost(oneof = "manager_request::Payload", tags = "2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17")]
+    #[prost(oneof = "manager_request::Payload", tags = "2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18")]
     pub payload: ::core::option::Option<manager_request::Payload>,
 }
 /// Nested message and enum types in `ManagerRequest`.
@@ -42,6 +42,9 @@ pub mod manager_request {
         FileExists(super::FileExists),
         #[prost(message, tag = "17")]
         ApplyDiff(super::ApplyDiff),
+        /// 新增：文件格式探测
+        #[prost(message, tag = "18")]
+        FileInfo(super::FileInfo),
         /// 新增：优雅关闭请求
         #[prost(message, tag = "10")]
         GracefulShutdown(super::GracefulShutdown),
@@ -53,7 +56,7 @@ pub mod manager_request {
 pub struct WorkerResponse {
     #[prost(uint64, tag = "1")]
     pub request_id: u64,
-    #[prost(oneof = "worker_response::Payload", tags = "2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16")]
+    #[prost(oneof = "worker_response::Payload", tags = "2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17")]
     pub payload: ::core::option::Option<worker_response::Payload>,
 }
 /// Nested message and enum types in `WorkerResponse`.
@@ -89,6 +92,9 @@ pub mod worker_response {
         FileExistsResult(super::FileExistsResult),
         #[prost(message, tag = "16")]
         ApplyDiffResult(super::ApplyDiffResult),
+        /// 新增：文件格式探测结果
+        #[prost(message, tag = "17")]
+        FileInfoResult(super::FileInfoResult),
         /// 新增：关闭确认
         #[prost(message, tag = "9")]
         ShutdownAck(super::ShutdownAck),
@@ -218,6 +224,38 @@ pub struct FileContent {
     pub mtime: u64,
     #[prost(uint64, tag = "4")]
     pub size: u64,
+}
+/// 文件格式探测（读取元数据 + 头部字节，用于客户端格式路由）
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FileInfo {
+    #[prost(string, tag = "1")]
+    pub path: ::prost::alloc::string::String,
+    /// 用户上下文（与其他文件操作一致）
+    #[prost(uint32, tag = "2")]
+    pub uid: u32,
+    #[prost(uint32, tag = "3")]
+    pub gid: u32,
+    #[prost(string, tag = "4")]
+    pub username: ::prost::alloc::string::String,
+    #[prost(string, tag = "5")]
+    pub home_dir: ::prost::alloc::string::String,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FileInfoResult {
+    #[prost(string, tag = "1")]
+    pub path: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "2")]
+    pub size: u64,
+    #[prost(bool, tag = "3")]
+    pub is_dir: bool,
+    #[prost(bool, tag = "4")]
+    pub is_text: bool,
+    #[prost(string, tag = "5")]
+    pub extension: ::prost::alloc::string::String,
+    #[prost(bytes = "vec", tag = "6")]
+    pub magic_bytes: ::prost::alloc::vec::Vec<u8>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

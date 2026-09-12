@@ -172,6 +172,9 @@ async fn handle_request(
         Some(crate::protocol::generated::manager_request::Payload::ReadFile(req)) => {
             handlers::file::handle_read_file(req).await
         }
+        Some(crate::protocol::generated::manager_request::Payload::FileInfo(req)) => {
+            handlers::file::handle_file_info(req).await
+        }
         Some(crate::protocol::generated::manager_request::Payload::WriteFile(req)) => {
             handlers::file::handle_write_file(req).await
         }

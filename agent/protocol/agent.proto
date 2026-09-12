@@ -25,6 +25,7 @@ message ManagerRequest {
         Move move = 15;
         FileExists file_exists = 16;
         ApplyDiff apply_diff = 17;
+        FileInfo file_info = 18;  // 新增：文件格式探测
         GracefulShutdown graceful_shutdown = 10;  // 新增：优雅关闭请求
     }
 }
@@ -47,6 +48,7 @@ message WorkerResponse {
         MoveResult move_result = 14;
         FileExistsResult file_exists_result = 15;
         ApplyDiffResult apply_diff_result = 16;
+        FileInfoResult file_info_result = 17;  // 新增：文件格式探测结果
         ShutdownAck shutdown_ack = 9;  // 新增：关闭确认
     }
 }
@@ -126,6 +128,25 @@ message FileContent {
     bytes content = 2;
     uint64 mtime = 3;
     uint64 size = 4;
+}
+
+// 文件格式探测（读取元数据 + 头部字节，用于客户端格式路由）
+message FileInfo {
+    string path = 1;
+    // 用户上下文（与其他文件操作一致）
+    uint32 uid = 2;
+    uint32 gid = 3;
+    string username = 4;
+    string home_dir = 5;
+}
+
+message FileInfoResult {
+    string path = 1;
+    uint64 size = 2;
+    bool is_dir = 3;
+    bool is_text = 4;
+    string extension = 5;
+    bytes magic_bytes = 6;
 }
 
 message WriteFile {

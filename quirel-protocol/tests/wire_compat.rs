@@ -200,3 +200,50 @@ fn proxy_open_response_wire_format() {
         _ => panic!("变体不匹配"),
     }
 }
+
+#[test]
+fn file_info_request_wire_format() {
+    let env = Envelope::new(
+        11,
+        Payload::FileInfoRequest { path: "/a.png".to_string() },
+    );
+    let json = serde_json::to_string(&env).unwrap();
+    assert_eq!(
+        json,
+        r#"{"request_id":11,"payload":{"type":"file_info","data":{"path":"/a.png"}}}"#
+    );
+}
+
+#[test]
+fn file_info_resp_wire_format() {
+    // magic_bytes 为 Vec<u8>：serde_json 序列化为字节数值数组
+    let env = Envelope::new(
+        12,
+        Payload::FileInfoResponse {
+            path: "/a.png".to_string(),
+            size: 1024,
+            is_dir: false,
+            is_text: false,
+            extension: "png".to_string(),
+            magic_bytes: vec![0x89, 0x50, 0x4E, 0x47],
+        },
+    );
+    let json = serde_json::to_string(&env).unwrap();
+    assert_eq!(
+        json,
+        r#"{"request_id":12,"payload":{"type":"file_info_resp","data":{"path":"/a.png","size":1024,"is_dir":false,"is_text":false,"extension":"png","magic_bytes":[137,80,78,71]}}}"#
+    );
+    // 线上往返：编码后必须可解码
+    let env2 = roundtrip(&env);
+    match env2.payload {
+        Payload::FileInfoResponse { path, size, is_dir, is_text, extension, magic_bytes } => {
+            assert_eq!(path, "/a.png");
+            assert_eq!(size, 1024);
+            assert!(!is_dir);
+            assert!(!is_text);
+            assert_eq!(extension, "png");
+            assert_eq!(magic_bytes, vec![0x89, 0x50, 0x4E, 0x47]);
+        }
+        _ => panic!("变体不匹配"),
+    }
+}
