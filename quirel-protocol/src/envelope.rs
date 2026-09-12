@@ -132,6 +132,23 @@ pub enum Payload {
         size: u64,
     },
 
+    /// 文件格式探测请求（双击文件时先于 read_file 调用，用于格式路由）
+    #[serde(rename = "file_info")]
+    FileInfoRequest { path: String },
+
+    /// 文件格式探测响应
+    /// - magic_bytes: 文件头部字节（前 512 字节），用于 magic number 检测
+    /// - is_text: Agent 端启发式判定（BOM/NUL/控制字符比例）
+    #[serde(rename = "file_info_resp")]
+    FileInfoResponse {
+        path: String,
+        size: u64,
+        is_dir: bool,
+        is_text: bool,
+        extension: String,
+        magic_bytes: Vec<u8>,
+    },
+
     #[serde(rename = "write_file")]
     WriteFileRequest { path: String, content: String },
 
@@ -430,6 +447,8 @@ impl Payload {
             Payload::ReadDirResponse { .. } => "ReadDirResponse",
             Payload::ReadFileRequest { .. } => "ReadFileRequest",
             Payload::ReadFileResponse { .. } => "ReadFileResponse",
+            Payload::FileInfoRequest { .. } => "FileInfoRequest",
+            Payload::FileInfoResponse { .. } => "FileInfoResponse",
             Payload::WriteFileRequest { .. } => "WriteFileRequest",
             Payload::WriteFileResponse { .. } => "WriteFileResponse",
             Payload::DeleteRequest { .. } => "DeleteRequest",

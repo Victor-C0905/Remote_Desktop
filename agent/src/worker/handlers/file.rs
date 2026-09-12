@@ -3,6 +3,7 @@
 //! 该模块负责：
 //! - 读取目录列表（ReadDir）
 //! - 读取文件内容（ReadFile）
+//! - 探测文件格式（FileInfo）
 //! - 写入文件（WriteFile）
 //! - 删除文件/目录（Delete）
 //! - 创建目录（Mkdir）
@@ -30,7 +31,7 @@ use crate::auth::{UserSession, UserExecutor};
 use crate::diff::{FileDiff, DiffType, apply_diff};
 use crate::protocol::generated::{
     ReadDir, DirListing, FileEntry,
-    ReadFile, FileContent,
+    ReadFile, FileContent, FileInfo, FileInfoResult,
     WriteFile, WriteResult,
     Delete, DeleteResult,
     Mkdir, MkdirResult,
@@ -245,6 +246,127 @@ pub async fn handle_read_file(req: ReadFile) -> WorkerResponse {
         }
         Err(e) => {
             tracing::error!("读取文件失败: path={}, error={}", req.path, e);
+
+            let (code, message) = error_to_code_message(&e);
+            WorkerResponse {
+                payload: Some(worker_response::Payload::Error(Error { code, message })),
+                ..Default::default()
+            }
+        }
+    }
+}
+
+/// is_text 启发式判定（参考 git 的 binary 检测思路）
+///
+/// 规则（检查前 8000 字节）：
+/// 1. UTF-8/UTF-16 BOM → 文本
+/// 2. 含 NUL(0x00) → 二进制
+/// 3. 控制字符（除 \t \n \r）占比 >= 5% → 二进制
+/// 4. 其余 → 文本（空文件视为文本）
+fn detect_is_text(bytes: &[u8]) -> bool {
+    // BOM 检测：UTF-8 (EF BB BF)、UTF-16LE (FF FE)、UTF-16BE (FE FF)
+    if bytes.starts_with(&[0xEF, 0xBB, 0xBF])
+        || bytes.starts_with(&[0xFF, 0xFE])
+        || bytes.starts_with(&[0xFE, 0xFF])
+    {
+        return true;
+    }
+
+    let check_len = bytes.len().min(8000);
+    if check_len == 0 {
+        return true; // 空文件视为文本
+    }
+
+    let mut control_count = 0usize;
+    for &b in &bytes[..check_len] {
+        if b == 0 {
+            return false; // NUL 字节 → 二进制
+        }
+        // 非法控制字符（除 Tab/LF/CR）
+        if b < 32 && b != b'\t' && b != b'\n' && b != b'\r' {
+            control_count += 1;
+        }
+    }
+
+    // 控制字符占比 < 5% 视为文本
+    control_count * 100 / check_len < 5
+}
+
+/// 处理 FileInfo 请求：读取文件元数据 + 头部 512 字节
+///
+/// 在目标用户上下文中执行（fork+setuid 用户隔离），
+/// 返回格式路由所需的全部信息（size/is_text/extension/magic_bytes）。
+#[tracing::instrument(fields(path = %req.path, uid = req.uid))]
+pub async fn handle_file_info(req: FileInfo) -> WorkerResponse {
+    tracing::info!("处理 FileInfo 请求: path={}, uid={}", req.path, req.uid);
+
+    // 构造用户会话
+    let session = build_user_session(req.uid, req.gid, &req.username, &req.home_dir);
+    // 路径安全校验：防目录穿越、限制用户家目录、防符号链接攻击
+    let safe_path = match crate::auth::validate_path(&req.path, session.home_dir.as_path(), session.uid) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("路径校验失败: path={}, error={}", req.path, e);
+            let (code, message) = error_to_code_message(&e);
+            return WorkerResponse {
+                payload: Some(worker_response::Payload::Error(Error { code, message })),
+                ..Default::default()
+            };
+        }
+    };
+    let executor = UserExecutor::new(&session);
+
+    // 序列化中间结果：(size, is_dir, extension, magic_bytes)
+    let path = safe_path.as_str().to_string();
+    let result: AnyhowResult<(u64, bool, String, Vec<u8>)> = executor.execute_as_user(move || {
+        let p = Path::new(&path);
+
+        let metadata = fs::metadata(p)
+            .map_err(|e| anyhow::anyhow!("无法访问文件 '{}': {}", path, e))?;
+
+        if !metadata.is_file() {
+            // 目录或特殊文件（FIFO/socket/device）：返回目录标记，无头部字节
+            return Ok((metadata.len(), metadata.is_dir(), String::new(), Vec::new()));
+        }
+
+        // 扩展名（小写、不含点）
+        let extension = p
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_lowercase())
+            .unwrap_or_default();
+
+        // 读取头部 512 字节（所有常见 magic number 都在前 16 字节内，512 留足余量）
+        let mut file = fs::File::open(p)
+            .map_err(|e| anyhow::anyhow!("打开文件失败 '{}': {}", path, e))?;
+        let mut head = vec![0u8; 512];
+        use std::io::Read;
+        let n = file.read(&mut head)
+            .map_err(|e| anyhow::anyhow!("读取文件头失败 '{}': {}", path, e))?;
+        head.truncate(n);
+
+        Ok((metadata.len(), false, extension, head))
+    });
+
+    match result {
+        Ok((size, is_dir, extension, head)) => {
+            let is_text = if is_dir { false } else { detect_is_text(&head) };
+            tracing::debug!("探测完成: path={}, size={}, is_dir={}, is_text={}, ext={}", req.path, size, is_dir, is_text, extension);
+
+            WorkerResponse {
+                payload: Some(worker_response::Payload::FileInfoResult(FileInfoResult {
+                    path: req.path,
+                    size,
+                    is_dir,
+                    is_text,
+                    extension,
+                    magic_bytes: head,
+                })),
+                ..Default::default()
+            }
+        }
+        Err(e) => {
+            tracing::error!("FileInfo 处理失败: path={}, error={}", req.path, e);
 
             let (code, message) = error_to_code_message(&e);
             WorkerResponse {

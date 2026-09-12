@@ -9,6 +9,7 @@ import { useWindowManager, useWindowState } from "../window-system/WindowManager
 import { AppLayout } from "../components/app-shell";
 import { TransferStatusBar } from "../components/TransferStatusBar";
 import { createLogger } from '../utils/logger';
+import { detectFileFormat, decideOpenTarget, createDefaultRegistry } from '../file-formats/FileOpener';
 import "./FileManager.css";
 
 const log = createLogger('FileManager');
@@ -755,26 +756,73 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   }, [history, historyIdx, loadDir]);
 
   // Double-click entry
-  const handleOpen = useCallback((entry: FileEntry) => {
+  // 双击/上下文菜单打开条目
+  // 文件：经 FileOpener 网关探测格式后路由到对应应用（图片/PDF/文本/十六进制）
+  const handleOpen = useCallback(async (entry: FileEntry) => {
+    const sep = "/";
+    const fullPath = currentPath === "/"
+      ? `${currentPath}${sep}${entry.name}`
+      : `${currentPath}${sep}${entry.name}`;
+
+    // 目录：保持原有导航逻辑
     if (entry.is_dir) {
-      const sep = "/";
-      const newPath = currentPath === "/"
-        ? `${currentPath}${sep}${entry.name}`
-        : `${currentPath}${sep}${entry.name}`;
-      navigateTo(newPath);
-    } else {
-      // 双击文件时，打开编辑器窗口
-      const sep = "/";
-      const filePath = currentPath === "/"
-        ? `${currentPath}${sep}${entry.name}`
-        : `${currentPath}${sep}${entry.name}`;
+      navigateTo(fullPath);
+      return;
+    }
 
-      log.debug(`Open file in editor: ${filePath}`);
+    // 未连接服务器：回退旧行为（直接开编辑器，由编辑器报错）
+    if (!activeServerId) {
+      manager.create('editor', { preloadData: { path: fullPath, serverId: undefined } });
+      return;
+    }
 
-      // 创建编辑器窗口，传递文件路径和服务器 ID
+    try {
+      // 数据层：探测格式 → 网关决策
+      const info = await detectFileFormat(activeServerId, fullPath);
+      const decision = decideOpenTarget(info, createDefaultRegistry());
+
+      // 大文件确认（全量 base64 加载，内存峰值约为文件大小 × 2.3）
+      if (decision.needsSizeConfirm) {
+        const mb = (info.size / 1024 / 1024).toFixed(1);
+        const ok = confirm(`文件较大（${mb} MB），加载可能需要一些时间。仍要打开吗？`);
+        if (!ok) return;
+      }
+
+      switch (decision.kind) {
+        case 'text':
+          // 文本/代码 → TextEditor（保持原有行为）
+          manager.create('editor', {
+            serverId: activeServerId,
+            preloadData: { path: fullPath, serverId: activeServerId },
+          });
+          break;
+        case 'image':
+          manager.create('image-viewer', {
+            serverId: activeServerId,
+            preloadData: { path: fullPath, serverId: activeServerId, mimeType: decision.mimeType },
+          });
+          break;
+        case 'pdf':
+          manager.create('pdf-viewer', {
+            serverId: activeServerId,
+            preloadData: { path: fullPath, serverId: activeServerId },
+          });
+          break;
+        case 'hex':
+          // 未知格式回退：十六进制查看器
+          log.debug(`未知格式，回退十六进制查看器: ${fullPath} (${decision.reason})`);
+          manager.create('hex-viewer', {
+            serverId: activeServerId,
+            preloadData: { path: fullPath, serverId: activeServerId },
+          });
+          break;
+      }
+    } catch (err) {
+      log.error("格式探测失败，回退编辑器打开:", err);
+      // 探测失败（如旧版 Agent 不支持 file_info）：回退旧行为，保证可用性
       manager.create('editor', {
-        serverId: activeServerId || undefined,
-        preloadData: { path: filePath, serverId: activeServerId || undefined }
+        serverId: activeServerId,
+        preloadData: { path: fullPath, serverId: activeServerId },
       });
     }
   }, [currentPath, navigateTo, manager, activeServerId]);
