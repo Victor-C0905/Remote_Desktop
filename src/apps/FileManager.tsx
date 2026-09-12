@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open, save, ask } from "@tauri-apps/plugin-dialog";
 import { useServerManager } from "../context/ServerManager";
 import { PLACEHOLDER } from "../utils/offlineDefaults";
-import { useWindowManager } from "../window-system/WindowManagerContext";
+import { useWindowManager, useWindowState } from "../window-system/WindowManagerContext";
 import { AppLayout } from "../components/app-shell";
 import { TransferStatusBar } from "../components/TransferStatusBar";
 import { createLogger } from '../utils/logger';
@@ -104,10 +105,15 @@ interface FileManagerProps {
   preloadData?: any;  // 由 Desktop 通过窗口状态注入
 }
 
-export function FileManager({ preloadData }: FileManagerProps) {
+export function FileManager({ windowId, preloadData }: FileManagerProps) {
   // ── 窗口系统集成 ─────────────────────────────────────
   // 获取窗口管理器
   const { manager } = useWindowManager();
+
+  // 窗口状态：拖拽上传仅在活动（非最小化）窗口响应——
+  // 最小化窗口 display:none 但组件仍挂载，不加以限定会导致拖放误触发隐藏窗口的上传
+  const windowState = useWindowState(windowId);
+  const isWindowActive = !!windowState?.isActive && !windowState?.minimized;
 
   // 从 props 获取预加载数据
   const initialData = preloadData;
@@ -168,6 +174,9 @@ export function FileManager({ preloadData }: FileManagerProps) {
     newName: string;
     maxBytes: number;
   } | null>(null);
+
+  // 拖拽上传：文件拖入窗口时显示覆盖层提示（Tauri webview 级拖放事件驱动）
+  const [dragActive, setDragActive] = useState(false);
 
   // 重命名输入框 ref
   const renameInputRef = useRef<HTMLInputElement>(null);
@@ -971,11 +980,110 @@ export function FileManager({ preloadData }: FileManagerProps) {
 
   // ── 文件传输功能 ──────────────────────────────────────────
 
+  /** Linux 文件名最大 255 字节；临时文件会追加 ".{random}.tmp" 后缀（约 13 字节），实际限制 242 */
+  const MAX_NAME_BYTES = 242;
+
   /**
-   * 处理文件上传
+   * 以指定文件名上传单个文件到当前目录（文件选择与拖拽共用路径）
    *
-   * 触发 Windows 文件选择对话框，支持多选
-   * 上传前检查文件是否存在，如果存在则询问用户是否覆盖
+   * 上传前检查远程文件是否存在，存在则询问用户是否覆盖
+   */
+  const uploadFileWithName = useCallback(async (localPath: string, fileName: string) => {
+    if (!activeServerId) {
+      alert("请先连接到远程服务器");
+      return;
+    }
+
+    const remotePath = currentPath === "/"
+      ? `/${fileName}`
+      : `${currentPath}/${fileName}`;
+
+    log.debug(`检查文件是否存在: ${remotePath}`);
+
+    // 检查远程文件是否存在
+    try {
+      const fileInfo = await invoke<{ exists: boolean; size?: number; mtime?: number } | null>(
+        "check_file_exists",
+        { serverId: activeServerId, path: remotePath }
+      );
+
+      // 如果文件存在，询问用户是否覆盖
+      if (fileInfo && fileInfo.exists) {
+        const size = fileInfo.size ? formatSize(fileInfo.size) : '未知';
+        const mtime = fileInfo.mtime
+          ? new Date(fileInfo.mtime * 1000).toLocaleString('zh-CN')
+          : '未知';
+
+        const confirmed = await ask(
+          `文件已存在：${fileName}\n\n大小：${size}\n修改时间：${mtime}\n\n是否覆盖？`,
+          {
+            title: '确认覆盖',
+            kind: 'warning',
+            okLabel: '是',
+            cancelLabel: '否',
+          }
+        );
+
+        // 用户选择"否"，跳过该文件
+        if (!confirmed) {
+          log.debug(`用户取消覆盖: ${fileName}`);
+          return;
+        }
+
+        log.debug(`用户确认覆盖: ${fileName}`);
+      }
+    } catch (checkErr) {
+      // 检查失败，记录错误但继续上传（向后兼容）
+      log.warn(`检查文件存在失败，直接上传:`, checkErr);
+    }
+
+    log.debug(`上传文件: ${localPath} -> ${remotePath}`);
+
+    // 调用 Tauri 后端开始上传
+    await invoke("transfer_file", {
+      serverId: activeServerId,
+      direction: "upload",
+      remotePath,
+      localPath,
+    });
+  }, [activeServerId, currentPath]);
+
+  /**
+   * 上传单个本地文件（文件选择对话框与拖拽共用入口）
+   *
+   * 文件名超过 Linux 字节限制时弹出重命名对话框（用户确认后经
+   * handleUploadWithNewName 续传），其余文件不受影响继续上传
+   */
+  const uploadSingleFile = useCallback(async (localPath: string) => {
+    if (!activeServerId) {
+      alert("请先连接到远程服务器");
+      return;
+    }
+
+    const fileName = localPath.split(/[\\/]/).pop() || 'unknown';
+
+    // 检查文件名长度（Linux 最大 255 字节，预留临时后缀）
+    const fileNameBytes = new TextEncoder().encode(fileName).length;
+    if (fileNameBytes > MAX_NAME_BYTES) {
+      // 文件名超长，弹出重命名对话框；已有对话框打开时跳过该文件（一次只处理一个）
+      log.warn(`文件名超长（${fileNameBytes} 字节），需重命名: ${fileName}`);
+      setRenameDialog(prev => prev ? prev : {
+        localPath,
+        originalName: fileName,
+        newName: fileName, // 显示完整原始文件名
+        maxBytes: MAX_NAME_BYTES,
+      });
+      return;
+    }
+
+    await uploadFileWithName(localPath, fileName);
+  }, [activeServerId, uploadFileWithName]);
+
+  /**
+   * 处理文件上传（右键菜单 / 工具栏入口）
+   *
+   * 触发 Windows 文件选择对话框，支持多选；
+   * 逐个走 uploadSingleFile（含重命名检查与覆盖确认）
    */
   const handleUpload = useCallback(async () => {
     // 检查是否有活跃服务器
@@ -1003,80 +1111,13 @@ export function FileManager({ preloadData }: FileManagerProps) {
       // selectedFiles 是字符串数组（多选）或字符串（单选）
       const files = Array.isArray(selectedFiles) ? selectedFiles : [selectedFiles];
 
-      // 为每个文件创建传输任务
+      // 为每个文件创建传输任务（单个文件失败不影响其余文件）
       for (const localPath of files) {
-        let fileName = localPath.split(/[\\/]/).pop() || 'unknown';
-
-        // 检查文件名长度（Linux 最大 255 字节）
-        // 注意：临时文件会添加 ".{random}.tmp" 后缀（约 13 字节），所以实际限制为 242 字节
-        const MAX_NAME_BYTES = 242;
-        const getByteLength = (str: string) => new TextEncoder().encode(str).length;
-        const fileNameBytes = getByteLength(fileName);
-
-        if (fileNameBytes > MAX_NAME_BYTES) {
-          // 文件名超长，弹出重命名对话框
-          // 默认显示完整原始文件名，让用户自己修改
-          setRenameDialog({
-            localPath,
-            originalName: fileName,
-            newName: fileName, // 显示完整原始文件名
-            maxBytes: MAX_NAME_BYTES,
-          });
-          return; // 暂停上传流程，等待用户处理
-        }
-
-        const remotePath = currentPath === "/"
-          ? `/${fileName}`
-          : `${currentPath}/${fileName}`;
-
-        log.debug(`检查文件是否存在: ${remotePath}`);
-
-        // 检查远程文件是否存在
         try {
-          const fileInfo = await invoke<{ exists: boolean; size?: number; mtime?: number } | null>(
-            "check_file_exists",
-            { serverId: activeServerId, path: remotePath }
-          );
-
-          // 如果文件存在，询问用户是否覆盖
-          if (fileInfo && fileInfo.exists) {
-            const size = fileInfo.size ? formatSize(fileInfo.size) : '未知';
-            const mtime = fileInfo.mtime
-              ? new Date(fileInfo.mtime * 1000).toLocaleString('zh-CN')
-              : '未知';
-
-            const confirmed = await ask(
-              `文件已存在：${fileName}\n\n大小：${size}\n修改时间：${mtime}\n\n是否覆盖？`,
-              {
-                title: '确认覆盖',
-                kind: 'warning',
-                okLabel: '是',
-                cancelLabel: '否',
-              }
-            );
-
-            // 用户选择"否"，跳过该文件
-            if (!confirmed) {
-              log.debug(`用户取消覆盖: ${fileName}`);
-              continue;
-            }
-
-            log.debug(`用户确认覆盖: ${fileName}`);
-          }
-        } catch (checkErr) {
-          // 检查失败，记录错误但继续上传（向后兼容）
-          log.warn(`检查文件存在失败，直接上传:`, checkErr);
+          await uploadSingleFile(localPath);
+        } catch (err) {
+          log.error(`上传失败: ${localPath}`, err);
         }
-
-        log.debug(`上传文件: ${localPath} -> ${remotePath}`);
-
-        // 调用 Tauri 后端开始上传
-        await invoke("transfer_file", {
-          serverId: activeServerId,
-          direction: "upload",
-          remotePath,
-          localPath,
-        });
       }
 
       // 关闭右键菜单
@@ -1085,7 +1126,39 @@ export function FileManager({ preloadData }: FileManagerProps) {
       log.error('上传失败:', err);
       alert(`上传失败: ${err}`);
     }
-  }, [activeServerId, currentPath]);
+  }, [activeServerId, uploadSingleFile]);
+
+  /**
+   * 处理拖拽上传（Tauri webview 级拖放事件）
+   *
+   * 拖放事件只提供本地路径（不区分文件/目录），目录无法按文件传输，
+   * 调用 Rust 端 local_path_is_file 过滤后再逐个上传
+   */
+  const handleFilesDropped = useCallback(async (paths: string[]) => {
+    if (!activeServerId) {
+      alert("请先连接到远程服务器");
+      return;
+    }
+    if (paths.length === 0) return;
+
+    log.info(`拖拽上传 ${paths.length} 个文件到 ${currentPath}`);
+
+    for (const localPath of paths) {
+      try {
+        // 过滤目录与不存在的路径（拖入文件夹时给出明确提示而非创建必败任务）
+        const isFile = await invoke<boolean>("local_path_is_file", { path: localPath });
+        if (!isFile) {
+          const name = localPath.split(/[\\/]/).pop() || localPath;
+          log.warn(`拖拽项不是文件，已跳过: ${name}`);
+          alert(`暂不支持上传文件夹：${name}\n\n请仅拖入文件。`);
+          continue;
+        }
+        await uploadSingleFile(localPath);
+      } catch (err) {
+        log.error(`拖拽上传失败: ${localPath}`, err);
+      }
+    }
+  }, [activeServerId, currentPath, uploadSingleFile]);
 
   /**
    * 处理重命名后的文件上传
@@ -1100,58 +1173,7 @@ export function FileManager({ preloadData }: FileManagerProps) {
     }
 
     try {
-      const remotePath = currentPath === "/"
-        ? `/${newName}`
-        : `${currentPath}/${newName}`;
-
-      log.debug(`检查文件是否存在: ${remotePath}`);
-
-      // 检查远程文件是否存在
-      try {
-        const fileInfo = await invoke<{ exists: boolean; size?: number; mtime?: number } | null>(
-          "check_file_exists",
-          { serverId: activeServerId, path: remotePath }
-        );
-
-        // 如果文件存在，询问用户是否覆盖
-        if (fileInfo && fileInfo.exists) {
-          const size = fileInfo.size ? formatSize(fileInfo.size) : '未知';
-          const mtime = fileInfo.mtime
-            ? new Date(fileInfo.mtime * 1000).toLocaleString('zh-CN')
-            : '未知';
-
-          const confirmed = await ask(
-            `文件已存在：${newName}\n\n大小：${size}\n修改时间：${mtime}\n\n是否覆盖？`,
-            {
-              title: '确认覆盖',
-              kind: 'warning',
-              okLabel: '是',
-              cancelLabel: '否',
-            }
-          );
-
-          // 用户选择"否"，取消上传
-          if (!confirmed) {
-            log.debug(`用户取消覆盖: ${newName}`);
-            return;
-          }
-
-          log.debug(`用户确认覆盖: ${newName}`);
-        }
-      } catch (checkErr) {
-        // 检查失败，记录错误但继续上传（向后兼容）
-        log.warn(`检查文件存在失败，直接上传:`, checkErr);
-      }
-
-      log.info(`上传文件（重命名）: ${localPath} -> ${remotePath}`);
-
-      // 调用 Tauri 后端开始上传
-      await invoke("transfer_file", {
-        serverId: activeServerId,
-        direction: "upload",
-        remotePath,
-        localPath,
-      });
+      await uploadFileWithName(localPath, newName);
 
       // 关闭右键菜单
       setContextMenu(null);
@@ -1159,7 +1181,53 @@ export function FileManager({ preloadData }: FileManagerProps) {
       log.error('上传失败:', err);
       alert(`上传失败: ${err}`);
     }
-  }, [activeServerId, currentPath]);
+  }, [activeServerId, uploadFileWithName]);
+
+  // 拖拽上传监听：Tauri v2 webview 级拖放（HTML5 拖放事件被 dragDropEnabled 拦截，
+  // 系统文件拖入时以 tauri://drag-* 事件提供文件路径，天然避开浏览器安全限制）
+  // 回调经 ref 转发，目录切换（currentPath 变化）时无需重注册监听
+  const uploadFnsRef = useRef({ uploadSingleFile, handleFilesDropped });
+  useEffect(() => {
+    uploadFnsRef.current = { uploadSingleFile, handleFilesDropped };
+  }, [uploadSingleFile, handleFilesDropped]);
+
+  useEffect(() => {
+    // 未连接服务器或窗口非活动（最小化/失焦）时不响应拖拽（不显示覆盖层、不注册监听）
+    if (!activeServerId || !isWindowActive) return;
+
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+
+    getCurrentWebview().onDragDropEvent((event) => {
+      if (event.payload.type === 'enter' || event.payload.type === 'over') {
+        // enter 携带 paths：空数组表示非文件拖拽（如窗口内文本），不显示覆盖层
+        if (event.payload.type === 'enter' && event.payload.paths.length === 0) return;
+        setDragActive(true);
+      } else if (event.payload.type === 'leave') {
+        setDragActive(false);
+      } else if (event.payload.type === 'drop') {
+        setDragActive(false);
+        const paths = event.payload.paths;
+        if (paths.length === 0) return;
+        // 异步处理：事件回调内不 await，避免阻塞 webview 事件循环
+        void uploadFnsRef.current.handleFilesDropped(paths);
+      }
+    }).then((fn) => {
+      if (disposed) {
+        fn(); // effect 已卸载（如断开连接/窗口失焦），立即注销
+      } else {
+        unlisten = fn;
+      }
+    }).catch((e) => {
+      log.error("注册拖放监听失败:", e);
+    });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+      setDragActive(false); // 兜底清除覆盖层
+    };
+  }, [activeServerId, isWindowActive]);
 
   /**
    * 处理文件下载
@@ -1323,6 +1391,16 @@ export function FileManager({ preloadData }: FileManagerProps) {
 
   return (
     <div className="fm-app" onKeyDown={handleKeyDown} tabIndex={0}>
+      {/* 拖拽上传覆盖层：文件拖入窗口时提示上传目标目录（pointer-events:none 不拦截释放） */}
+      {dragActive && (
+        <div className="fm-drop-overlay">
+          <div className="fm-drop-overlay-card">
+            <div className="fm-drop-overlay-icon">⬆️</div>
+            <div className="fm-drop-overlay-title">释放以上传到当前目录</div>
+            <div className="fm-drop-overlay-path">{currentPath}</div>
+          </div>
+        </div>
+      )}
       {/* ✅ 使用AppLayout抽象层，简化CSS层级 */}
       <AppLayout
         sidebar={

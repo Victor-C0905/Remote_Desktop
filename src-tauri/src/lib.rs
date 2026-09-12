@@ -614,6 +614,7 @@ pub fn run() {
             terminal::remote_terminal_close,
             terminal::remote_terminal_resize,
             transfer::transfer_file,
+            transfer::local_path_is_file,
             transfer::pause_transfer,
             transfer::resume_transfer,
             transfer::retry_transfer,
