@@ -7,6 +7,9 @@ import { describe, it, expect } from 'vitest';
 import { pdfPlugin } from '../plugins/pdf';
 import { imagePlugin } from '../plugins/image';
 import { textPlugin } from '../plugins/text';
+import { archivePlugin, buildExtractCommand } from '../plugins/archive';
+import { htmlPlugin } from '../plugins/html';
+import { executablePlugin } from '../plugins/executable';
 import type { RemoteFileInfo } from '../types';
 
 function makeInfo(overrides: Partial<RemoteFileInfo> = {}): RemoteFileInfo {
@@ -84,5 +87,121 @@ describe('textPlugin', () => {
 
   it('isText=false 不匹配', () => {
     expect(textPlugin.detect(makeInfo({ isText: false, extension: 'txt' }))).toBeNull();
+  });
+
+  it('isText=true 但扩展名为 html → 不匹配（交给 html 插件）', () => {
+    expect(textPlugin.detect(makeInfo({ isText: true, extension: 'html' }))).toBeNull();
+  });
+});
+
+describe('archivePlugin', () => {
+  it.each(['zip', 'tar', '7z', 'rar', 'tgz'].map((ext) => [ext]))(
+    '扩展名 .%s 命中 archive',
+    (ext) => {
+      const match = archivePlugin.detect(makeInfo({ extension: ext, path: `/tmp/a.${ext}` }));
+      expect(match).toMatchObject({ pluginId: 'archive', category: 'archive' });
+    },
+  );
+
+  it('复合扩展名 .tar.gz 从 path 判断（extension 只取最后一段 gz）', () => {
+    const match = archivePlugin.detect(makeInfo({ extension: 'gz', path: '/tmp/a.tar.gz' }));
+    expect(match).toMatchObject({ pluginId: 'archive', category: 'archive' });
+  });
+
+  it.each(['.tar.bz2', '.tar.xz'])('复合扩展名 %s 命中', (suffix) => {
+    const match = archivePlugin.detect(
+      makeInfo({ extension: suffix.split('.').pop()!, path: `/tmp/a${suffix}` }),
+    );
+    expect(match).toMatchObject({ pluginId: 'archive', category: 'archive' });
+  });
+
+  it('纯 .gz（非 .tar.gz）不命中（gzip 单文件流解压不在支持范围）', () => {
+    expect(archivePlugin.detect(makeInfo({ extension: 'gz', path: '/tmp/a.gz' }))).toBeNull();
+  });
+
+  it('ZIP magic 兜底命中（改错扩展名的 zip）', () => {
+    const match = archivePlugin.detect(
+      makeInfo({ extension: 'dat', path: '/tmp/a.dat', magicBytes: [0x50, 0x4b, 0x03, 0x04, 0x00] }),
+    );
+    expect(match).toEqual({ pluginId: 'archive', category: 'archive', confidence: 0.95 });
+  });
+
+  it('普通文件不匹配', () => {
+    expect(archivePlugin.detect(makeInfo({ extension: 'txt', isText: true }))).toBeNull();
+  });
+});
+
+describe('buildExtractCommand', () => {
+  it('.zip → unzip -o <archive> -d <target>', () => {
+    const cmd = buildExtractCommand('/tmp/a.zip', '/tmp/out', 'a.zip');
+    expect(cmd).toEqual({ command: 'unzip', args: ['-o', '/tmp/a.zip', '-d', '/tmp/out'] });
+  });
+
+  it('.tar → tar -xf <archive> -C <target>', () => {
+    const cmd = buildExtractCommand('/tmp/a.tar', '/tmp/out', 'a.tar');
+    expect(cmd).toEqual({ command: 'tar', args: ['-xf', '/tmp/a.tar', '-C', '/tmp/out'] });
+  });
+
+  it('.tar.gz → tar（自动识别压缩格式）', () => {
+    const cmd = buildExtractCommand('/tmp/a.tar.gz', '/tmp/out', 'a.tar.gz');
+    expect(cmd).toEqual({ command: 'tar', args: ['-xf', '/tmp/a.tar.gz', '-C', '/tmp/out'] });
+  });
+
+  it('.tgz → tar', () => {
+    const cmd = buildExtractCommand('/tmp/a.tgz', '/tmp/out', 'a.tgz');
+    expect(cmd.command).toBe('tar');
+  });
+
+  it('.7z → 7z x -o<target> -y', () => {
+    const cmd = buildExtractCommand('/tmp/a.7z', '/tmp/out', 'a.7z');
+    expect(cmd).toEqual({ command: '7z', args: ['x', '/tmp/a.7z', '-o/tmp/out', '-y'] });
+  });
+
+  it('.rar → unrar x -o+', () => {
+    const cmd = buildExtractCommand('/tmp/a.rar', '/tmp/out', 'a.rar');
+    expect(cmd).toEqual({ command: 'unrar', args: ['x', '-o+', '/tmp/a.rar', '/tmp/out/'] });
+  });
+
+  it('路径含空格无需转义（argv 直执行，不经 shell）', () => {
+    const cmd = buildExtractCommand('/tmp/my dir/a.zip', '/tmp/my dir/out', 'a.zip');
+    expect(cmd.args).toContain('/tmp/my dir/a.zip');
+  });
+});
+
+describe('htmlPlugin', () => {
+  it.each(['html', 'htm'])('扩展名 .%s 命中 browser-local', (ext) => {
+    const match = htmlPlugin.detect(makeInfo({ extension: ext, path: `/tmp/a.${ext}` }));
+    expect(match).toEqual({ pluginId: 'html', category: 'browser-local', confidence: 0.9 });
+  });
+
+  it('其他扩展名不命中', () => {
+    expect(htmlPlugin.detect(makeInfo({ extension: 'js', isText: true }))).toBeNull();
+  });
+});
+
+describe('executablePlugin', () => {
+  it('.sh 且含 shebang 命中 run-script', () => {
+    const match = executablePlugin.detect(
+      makeInfo({ extension: 'sh', path: '/tmp/a.sh', magicBytes: [0x23, 0x21, 0x2f, 0x62, 0x69, 0x6e] }), // "#!/bin"
+    );
+    expect(match).toEqual({ pluginId: 'executable', category: 'run-script', confidence: 0.95 });
+  });
+
+  it('.sh 无 shebang 不命中（文本编辑器兜底）', () => {
+    const match = executablePlugin.detect(
+      makeInfo({ extension: 'sh', path: '/tmp/a.sh', magicBytes: [0x65, 0x63, 0x68, 0x6f] }), // "echo"
+    );
+    expect(match).toBeNull();
+  });
+
+  it('非 .sh 不命中（.py 走文本编辑器）', () => {
+    const match = executablePlugin.detect(
+      makeInfo({ extension: 'py', path: '/tmp/a.py', magicBytes: [0x23, 0x21] }),
+    );
+    expect(match).toBeNull();
+  });
+
+  it('无 magicBytes 的 .sh 不命中（保守判定）', () => {
+    expect(executablePlugin.detect(makeInfo({ extension: 'sh', path: '/tmp/a.sh' }))).toBeNull();
   });
 });

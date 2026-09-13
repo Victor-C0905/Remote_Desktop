@@ -10,6 +10,7 @@ import { AppLayout } from "../components/app-shell";
 import { TransferStatusBar } from "../components/TransferStatusBar";
 import { createLogger } from '../utils/logger';
 import { detectFileFormat, decideOpenTarget, createDefaultRegistry } from '../file-formats/FileOpener';
+import { buildExtractCommand } from '../file-formats/plugins/archive';
 import "./FileManager.css";
 
 const log = createLogger('FileManager');
@@ -808,6 +809,70 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
             preloadData: { path: fullPath, serverId: activeServerId },
           });
           break;
+        case 'archive': {
+          // 压缩包：弹窗选目标 → 服务器原生命令解压 → 刷新目录
+          const stem = entry.name.replace(/\.(zip|tar|tar\.gz|tgz|tar\.bz2|tar\.xz|7z|rar)$/i, '');
+          const toFolder = confirm(`解压 "${entry.name}" 到独立文件夹 "${stem}/"？\n目标位置同名文件将被覆盖。`);
+          let targetDir: string;
+          if (toFolder) {
+            targetDir = currentPath === '/' ? `/${stem}` : `${currentPath}/${stem}`;
+            try {
+              // tar -C 要求目标目录存在；unzip/7z/unrar 自动创建。已存在时 mkdir 返回成功
+              await invoke('remote_mkdir', { serverId: activeServerId, path: targetDir });
+            } catch (err) {
+              log.warn(`创建目标文件夹失败（可能已存在）: ${targetDir}`, err);
+            }
+          } else {
+            const here = confirm(`改为解压到当前位置 "${currentPath}"？\n同名文件将被覆盖。`);
+            if (!here) return;
+            targetDir = currentPath;
+          }
+          const cmd = buildExtractCommand(fullPath, targetDir, entry.name);
+          try {
+            const output = await invoke<{ stdout: string; stderr: string; exitCode: number }>(
+              'remote_execute_command', {
+                serverId: activeServerId,
+                command: cmd.command,
+                args: cmd.args,
+                workingDirectory: currentPath,
+                timeoutSecs: 600,
+              });
+            if (output.exitCode === 0) {
+              loadDir(currentPath);  // 解压成功：刷新目录
+            } else {
+              alert(`解压失败（退出码 ${output.exitCode}）：\n\n${output.stderr || output.stdout || '无输出'}`);
+            }
+          } catch (err) {
+            const msg = String(err);
+            // spawn 失败（如服务器未装 7z/unrar）走此分支
+            const hint = msg.includes('No such file') || msg.includes('not found')
+              ? '\n\n服务器未安装对应的解压工具，请安装后重试（如 apt install p7zip-full）'
+              : '';
+            alert(`解压失败: ${msg}${hint}`);
+          }
+          break;
+        }
+        case 'browser-local':
+          // HTML：下载到本地临时目录 → 系统默认浏览器打开（Rust 端一体完成）
+          try {
+            await invoke('remote_open_locally', { serverId: activeServerId, remotePath: fullPath });
+          } catch (err) {
+            log.error('本地打开失败:', err);
+            alert(`打开失败: ${err}`);
+          }
+          break;
+        case 'run-script': {
+          // 脚本：确认后打开终端自动执行（类 Windows 双击运行脚本）
+          const cmd = `bash ${fullPath}`;
+          const ok = confirm(`运行脚本？\n\n${fullPath}\n\n将在终端中执行: ${cmd}`);
+          if (!ok) return;
+          const dir = fullPath.slice(0, fullPath.lastIndexOf('/')) || '/';
+          manager.create('terminal', {
+            serverId: activeServerId,
+            preloadData: { workingDirectory: dir, initialCommand: cmd },
+          });
+          break;
+        }
         case 'hex':
           // 未知格式回退：十六进制查看器
           log.debug(`未知格式，回退十六进制查看器: ${fullPath} (${decision.reason})`);
@@ -825,7 +890,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         preloadData: { path: fullPath, serverId: activeServerId },
       });
     }
-  }, [currentPath, navigateTo, manager, activeServerId]);
+  }, [currentPath, navigateTo, manager, activeServerId, loadDir]);
 
   // ── Properties Dialog ────────────────────────────────
   const showProperties = useCallback((entry: FileEntry) => {

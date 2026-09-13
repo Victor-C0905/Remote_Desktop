@@ -149,6 +149,26 @@ pub enum Payload {
         magic_bytes: Vec<u8>,
     },
 
+    /// 白名单命令执行请求（解压等文件操作；Worker 端白名单强制）
+    /// command 是命令名（如 "unzip"），不是 shell 语句——Worker 端 argv 直执行，路径无需转义
+    #[serde(rename = "execute_command")]
+    ExecuteCommandRequest {
+        command: String,
+        args: Vec<String>,
+        #[serde(default)]
+        working_directory: Option<String>,
+        #[serde(default)]
+        timeout_secs: u32, // 0 = Agent 端默认（300s）
+    },
+
+    /// 命令执行响应（stdout/stderr 为 base64，兼容非 UTF-8 输出）
+    #[serde(rename = "command_output_resp")]
+    CommandOutputResponse {
+        stdout: String,
+        stderr: String,
+        exit_code: i32,
+    },
+
     #[serde(rename = "write_file")]
     WriteFileRequest { path: String, content: String },
 
@@ -449,6 +469,8 @@ impl Payload {
             Payload::ReadFileResponse { .. } => "ReadFileResponse",
             Payload::FileInfoRequest { .. } => "FileInfoRequest",
             Payload::FileInfoResponse { .. } => "FileInfoResponse",
+            Payload::ExecuteCommandRequest { .. } => "ExecuteCommandRequest",
+            Payload::CommandOutputResponse { .. } => "CommandOutputResponse",
             Payload::WriteFileRequest { .. } => "WriteFileRequest",
             Payload::WriteFileResponse { .. } => "WriteFileResponse",
             Payload::DeleteRequest { .. } => "DeleteRequest",

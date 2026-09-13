@@ -858,6 +858,133 @@ pub async fn remote_read_file_binary(server_id: String, path: String, app: tauri
     }
 }
 
+// ── 远程命令执行（解压等文件操作）──────────────────────────
+
+/// 远程命令执行结果（stdout/stderr 已转文本：UTF-8 优先，GB18030 回退）
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteCommandOutput {
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: i32,
+}
+
+/// 执行服务器白名单命令（unzip/tar/7z/unrar；Worker 端强制白名单）
+///
+/// 解压等文件操作走此通道：argv 直执行不经 shell，路径无需转义。
+/// 超时独立于 remote_send 的 30s Stream 超时（大压缩包解压耗时长），
+/// 故不直接复用 remote_send，而是内联其发送模式 + 自定义外层超时。
+#[tauri::command]
+#[tracing::instrument(skip(app), fields(server_id = %server_id))]
+pub async fn remote_execute_command(
+    server_id: String,
+    command: String,
+    args: Vec<String>,
+    working_directory: Option<String>,
+    timeout_secs: Option<u32>,
+    app: tauri::AppHandle,
+) -> Result<RemoteCommandOutput, String> {
+    use base64::Engine;
+    tracing::info!("[ExecuteCommand] server_id={}, command={}, args={:?}", server_id, command, args);
+
+    // 外层超时兜底：比命令自身 timeout 多 30s（Agent 端负责 kill 命令进程并回错误）
+    let cmd_timeout = timeout_secs.unwrap_or(600);
+    let outer_timeout = std::time::Duration::from_secs(cmd_timeout as u64 + 30);
+
+    let manager = app.state::<ConnectionManager>();
+    let (tx, request_id) = {
+        let conns = manager.connections.lock().unwrap();
+        let conn = conns.get(&server_id).ok_or("未找到连接")?;
+        (conn.tx.clone(), manager.next_request_id())
+    };
+
+    let envelope = Envelope::new(request_id, Payload::ExecuteCommandRequest {
+        command,
+        args,
+        working_directory,
+        timeout_secs: cmd_timeout,
+    });
+    let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+
+    tx.send(ClientRequest::Send { envelope, response_tx }).await
+        .map_err(|_| "发送请求失败".to_string())?;
+
+    let data = tokio::time::timeout(outer_timeout, response_rx)
+        .await
+        .map_err(|_| {
+            tracing::warn!("[ExecuteCommand] 命令执行超时: server_id={}", server_id);
+            "命令执行超时".to_string()
+        })?
+        .map_err(|_| "等待响应通道关闭".to_string())??;
+
+    let resp = Envelope::decode(&data)?;
+    match resp.payload {
+        Payload::CommandOutputResponse { stdout, stderr, exit_code } => {
+            // base64 → 字节 → UTF-8 优先，GB18030 回退（服务器命令输出可能是中文 GBK）
+            let decode_text = |b64: String| -> String {
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(b64.as_bytes())
+                    .unwrap_or_default();
+                match String::from_utf8(bytes) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        let (decoded, _, _) = encoding_rs::GB18030.decode(e.as_bytes());
+                        decoded.into_owned()
+                    }
+                }
+            };
+            Ok(RemoteCommandOutput {
+                stdout: decode_text(stdout),
+                stderr: decode_text(stderr),
+                exit_code,
+            })
+        }
+        Payload::Error { message, .. } => Err(message),
+        _ => Err("意外响应".into()),
+    }
+}
+
+/// 下载远程文件到本地临时目录并用系统默认应用打开（HTML → 浏览器）
+///
+/// 数据流：ReadFileRequest（base64 全量）→ %TEMP%/quirel-view/<文件名> → opener
+/// 临时文件不主动清理（系统 temp 自然回收）
+#[tauri::command]
+#[tracing::instrument(skip(app), fields(server_id = %server_id, remote_path = %remote_path))]
+pub async fn remote_open_locally(
+    server_id: String,
+    remote_path: String,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    use base64::Engine;
+    use tauri_plugin_opener::OpenerExt;
+    tracing::info!("[OpenLocally] server_id={}, path={}", server_id, remote_path);
+
+    // 1. 读取远程文件（base64 全量；SIZE_LIMITS.browserLocal 20MB 确认在前端完成）
+    let resp = remote_send(server_id, Payload::ReadFileRequest { path: remote_path.clone() }, app.clone()).await?;
+    let base64_content = match resp.payload {
+        Payload::ReadFileResponse { content, .. } => content,
+        Payload::Error { message, .. } => return Err(message),
+        _ => return Err("意外响应".into()),
+    };
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(base64_content.as_bytes())
+        .map_err(|e| format!("base64 解码失败: {}", e))?;
+
+    // 2. 写入本地临时目录（%TEMP%/quirel-view/，不存在则创建，同名覆盖）
+    let file_name = remote_path.rsplit('/').next().filter(|s| !s.is_empty()).unwrap_or("download.html");
+    let dir = std::env::temp_dir().join("quirel-view");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建临时目录失败: {}", e))?;
+    let local_path = dir.join(file_name);
+    std::fs::write(&local_path, &bytes).map_err(|e| format!("写入临时文件失败: {}", e))?;
+
+    // 3. 系统默认应用打开（HTML 的默认应用即浏览器）
+    app.opener()
+        .open_path(local_path.to_string_lossy().to_string(), None::<&str>)
+        .map_err(|e| format!("调用本地应用失败: {}", e))?;
+
+    Ok(local_path.to_string_lossy().to_string())
+}
+
 #[tauri::command]
 #[tracing::instrument(skip(content, app), fields(server_id = %server_id, path = %path))]
 pub async fn remote_write_file(server_id: String, path: String, content: String, app: tauri::AppHandle) -> Result<RemoteWriteFileResponse, String> {

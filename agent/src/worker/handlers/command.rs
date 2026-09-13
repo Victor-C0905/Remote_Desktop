@@ -39,6 +39,14 @@ struct CommandResult {
     exit_code: i32,
 }
 
+/// 允许远程执行的命令白名单（安全关键：在执行点强制）
+/// 客户端构造的命令永远无法越权——即使客户端被完全控制
+/// 语法：命令名（argv[0]）；绝对路径调用按最后一段匹配（/usr/bin/unzip → unzip）
+const ALLOWED_COMMANDS: &[&str] = &["unzip", "tar", "7z", "unrar"];
+
+/// timeout_secs 为 0 时的默认超时（秒）
+const DEFAULT_TIMEOUT_SECS: u64 = 300;
+
 /// 处理 ExecuteCommand 请求
 ///
 /// 在目标用户上下文中执行命令（通过 fork + setuid/setgid）。
@@ -53,9 +61,9 @@ struct CommandResult {
 ///
 /// # 安全性
 ///
+/// - 命令白名单强制（ALLOWED_COMMANDS，执行点校验，客户端无法越权）
 /// - 通过 UserExecutor 在子进程中降权执行
-/// - 不检查命令是否在黑名单中（由 Agent 配置文件控制）
-/// - 不限制执行时间（无 timeout）
+/// - 超时 kill（timeout_secs，0 = 默认 300s）
 #[tracing::instrument(fields(command = %req.command, args = ?req.args, uid = req.uid))]
 pub async fn handle_execute_command(req: ExecuteCommand) -> WorkerResponse {
     tracing::info!(
@@ -78,6 +86,22 @@ pub async fn handle_execute_command(req: ExecuteCommand) -> WorkerResponse {
         }
     }
 
+    // 白名单校验（执行点强制；命令可能以绝对路径传入，取最后一段匹配）
+    let base_name = Path::new(&req.command)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    if !ALLOWED_COMMANDS.contains(&base_name) {
+        tracing::warn!("命令不在白名单，拒绝执行: {}", req.command);
+        return WorkerResponse {
+            payload: Some(worker_response::Payload::Error(Error {
+                code: 403,
+                message: format!("Command not allowed: {}", req.command),
+            })),
+            ..Default::default()
+        };
+    }
+
     // 构建用户会话
     let session = build_user_session(req.uid, req.gid, &req.username, &req.home_dir);
     let executor = UserExecutor::new(&session);
@@ -87,29 +111,72 @@ pub async fn handle_execute_command(req: ExecuteCommand) -> WorkerResponse {
     let args = req.args.clone();
     let working_directory = req.working_directory.clone();
 
-    // 在目标用户上下文中执行命令
-    let result = executor.execute_as_user(move || {
-        let mut cmd = std::process::Command::new(&command);
+    // 超时 + 子进程 PID 追踪：超时 kill 命令进程，避免死循环命令占住通道
+    let timeout_secs = if req.timeout_secs > 0 { req.timeout_secs as u64 } else { DEFAULT_TIMEOUT_SECS };
+    let child_pid = std::sync::Arc::new(std::sync::Mutex::new(None::<u32>));
+    let pid_slot = child_pid.clone();
 
-        if !args.is_empty() {
-            cmd.args(&args);
-        }
+    // spawn_blocking：execute_as_user 是同步阻塞（fork+wait），放入阻塞线程池
+    let exec_handle = tokio::task::spawn_blocking(move || {
+        executor.execute_as_user(move || {
+            let mut cmd = std::process::Command::new(&command);
 
-        if !working_directory.is_empty() {
-            cmd.current_dir(&working_directory);
-        }
+            if !args.is_empty() {
+                cmd.args(&args);
+            }
 
-        cmd.stdout(std::process::Stdio::piped());
-        cmd.stderr(std::process::Stdio::piped());
+            if !working_directory.is_empty() {
+                cmd.current_dir(&working_directory);
+            }
 
-        let output = cmd.output()?;
+            cmd.stdout(std::process::Stdio::piped());
+            cmd.stderr(std::process::Stdio::piped());
 
-        Ok(CommandResult {
-            stdout: output.stdout,
-            stderr: output.stderr,
-            exit_code: output.status.code().unwrap_or(-1),
+            // 先 spawn 再记录 PID（供超时 kill），随后等待输出
+            let child = cmd.spawn()?;
+            *pid_slot.lock().unwrap() = Some(child.id());
+            let output = child.wait_with_output()?;
+
+            Ok(CommandResult {
+                stdout: output.stdout,
+                stderr: output.stderr,
+                exit_code: output.status.code().unwrap_or(-1),
+            })
         })
     });
+
+    let result = match tokio::time::timeout(
+        std::time::Duration::from_secs(timeout_secs),
+        exec_handle,
+    ).await {
+        Ok(Ok(inner)) => inner,          // spawn_blocking 正常完成
+        Ok(Err(e)) => {                  // spawn_blocking panic / JoinError
+            tracing::error!("命令执行线程异常: command={}, error={}", req.command, e);
+            return WorkerResponse {
+                payload: Some(worker_response::Payload::Error(Error {
+                    code: 500,
+                    message: format!("Command execution thread failed: {}", e),
+                })),
+                ..Default::default()
+            };
+        }
+        Err(_) => {                      // 超时：kill 子进程后返回错误
+            if let Some(pid) = *child_pid.lock().unwrap() {
+                let _ = nix::sys::signal::kill(
+                    nix::unistd::Pid::from_raw(pid as i32),
+                    nix::sys::signal::Signal::SIGKILL,
+                );
+            }
+            tracing::warn!("命令执行超时（{}s），已 kill: command={}", timeout_secs, req.command);
+            return WorkerResponse {
+                payload: Some(worker_response::Payload::Error(Error {
+                    code: 408,
+                    message: format!("Command timed out after {}s", timeout_secs),
+                })),
+                ..Default::default()
+            };
+        }
+    };
 
     match result {
         Ok(result) => {

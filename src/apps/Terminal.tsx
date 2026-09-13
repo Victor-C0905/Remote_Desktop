@@ -49,6 +49,8 @@ interface TerminalInstanceProps {
   fontSize: number;
   cursorBlink: boolean;
   workingDirectory?: string | null;
+  /** 窗口创建后自动执行的命令（脚本运行：双击 .sh 由 FileManager 注入） */
+  initialCommand?: string | null;
   // callback: terminal 实例创建后通知父组件（用于复制/粘贴）
   onTerminalReady?: (terminal: Terminal, sessionId: string | null, searchAddon: SearchAddon) => void;
 }
@@ -61,6 +63,7 @@ function TerminalInstance({
   fontSize,
   cursorBlink,
   workingDirectory,
+  initialCommand,
   onTerminalReady,
 }: TerminalInstanceProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -202,7 +205,7 @@ function TerminalInstance({
           // 6. 尝试连接远程 PTY 或启动演示模式
           if (activeServerId) {
             setInitializationStatus('连接远程终端...');
-            await connectRemotePty(terminal, activeServerId, activeServerName, activeServerHost, activeServerPort, sessionIdRef, unlistenRefs, workingDirectory);
+            await connectRemotePty(terminal, activeServerId, activeServerName, activeServerHost, activeServerPort, sessionIdRef, unlistenRefs, workingDirectory, initialCommand);
           } else {
             setInitializationStatus('演示模式');
             terminal.write('[演示模式] 未连接远程服务器\r\n');
@@ -369,6 +372,7 @@ async function connectRemotePty(
   sessionIdRef: React.MutableRefObject<string | null>,
   unlistenRefs: React.MutableRefObject<UnlistenFn[]>,
   workingDirectory?: string | null,
+  initialCommand?: string | null,
 ): Promise<string> {
   // 1. 创建远程终端会话
   const result = await invoke<{ session_id: string }>('remote_spawn_terminal', {
@@ -440,6 +444,16 @@ async function connectRemotePty(
     log.debug('本地 resize:', cols, 'x', rows);
   });
   unlistenRefs.current.push(() => onResizeDisposable.dispose());
+
+  // 7. 注入初始命令（脚本运行：PTY stdin 有内核缓冲，shell 就绪后自然读走，无需等待）
+  if (initialCommand) {
+    const bytes = new TextEncoder().encode(initialCommand + '\n');
+    invoke('remote_terminal_write', {
+      sessionId: sessionId,
+      data: Array.from(bytes),
+      serverId: serverId,
+    }).catch(e => log.warn('初始命令写入失败:', e));
+  }
 
   return sessionId;
 }
@@ -524,6 +538,8 @@ interface TerminalAppProps {
   windowId: string;
   preloadData?: {
     workingDirectory?: string;
+    /** 窗口创建后自动执行的命令（脚本运行：双击 .sh 由 FileManager 注入） */
+    initialCommand?: string;
   };
 }
 
@@ -567,10 +583,13 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
   const activeSessionIdRef = useRef<string | null>(null);
   const activeSearchAddonRef = useRef<SearchAddon | null>(null);
 
-  // ── 首次打开：创建第一个 tab ─────────────────────────────────
+  // ── 首次打开：创建第一个 tab ─────────────────────────
+  // 记录初始 tab id：initialCommand 仅对它生效（新建 tab 不重复执行脚本）
+  const initialTabIdRef = useRef<string | null>(null);
   useEffect(() => {
     if (tabs.length === 0) {
       const id = newTabId();
+      initialTabIdRef.current = id;
       setTabs([{ id, label: activeServer?.name || '本地演示' }]);
       setActiveTabId(id);
     }
@@ -857,6 +876,7 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
               fontSize={fontSize}
               cursorBlink={cursorBlink}
               workingDirectory={workingDirectory}
+              initialCommand={tab.id === initialTabIdRef.current ? (preloadData?.initialCommand ?? null) : null}
               onTerminalReady={(terminal, sessionId, searchAddon) => {
                 // 更新 refs（所有 tab 都更新，但只有活动 tab 的 terminal 可见）
                 activeTerminalRef.current = terminal;

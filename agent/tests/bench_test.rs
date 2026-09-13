@@ -90,6 +90,8 @@ async fn bench_execute_command() {
                 gid: 0,
                 username: "test".to_string(),
                 home_dir: "/tmp".to_string(),
+                env: Default::default(),
+                timeout_secs: 0,
             };
             let _ = command::handle_execute_command(req).await;
         }
