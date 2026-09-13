@@ -638,7 +638,10 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                 {cardServer?.status === "connected" && (
                   <div className="st-conn-row">
                     <span className="st-conn-label text-label">延迟</span>
-                    <span className="st-conn-value st-conn-value-latency">6 ms</span>
+                    <span className="st-conn-value st-conn-value-latency">
+                      {/* 心跳 RTT 回传（每 5s 刷新）；连接瞬间显示握手 RTT，首个 5s 内由心跳接管 */}
+                      {cardServer.rttMs != null ? `${Math.round(cardServer.rttMs)} ms` : "—"}
+                    </span>
                   </div>
                 )}
                 {cardServer?.error && (

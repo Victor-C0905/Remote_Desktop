@@ -341,6 +341,7 @@ pub async fn remote_connect(
             let heartbeat_tx = tx.clone();
             let heartbeat_server_id = server_id_clone.clone();
             let heartbeat_conn = conn_clone.clone();
+            let heartbeat_app = app_handle.clone();  // RTT 回传事件用（每 5s emit 一次）
             let heartbeat_task = tokio::spawn(async move {
                 let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
                 let mut last_tick = std::time::Instant::now();
@@ -398,11 +399,20 @@ pub async fn remote_connect(
                     let envelope = Envelope::new(0, Payload::Ping { timestamp: now });
 
                     // 独立通道：直接调用 send_and_receive_quic，不走主循环队列
+                    // ping_start：RTT 测量起点（Instant 单调时钟，不受系统时间跳变影响）
+                    let ping_start = std::time::Instant::now();
                     match tokio::time::timeout(
                         std::time::Duration::from_secs(5),
                         send_and_receive_quic(&heartbeat_conn, 0, envelope.payload),
                     ).await {
-                        Ok(Ok(_)) => { /* Pong 正常收到，连接存活 */ }
+                        Ok(Ok(_)) => {
+                            // Pong 正常收到，连接存活；
+                            // 顺便回传真实 RTT（Settings 延迟显示，免额外的 ping 请求）
+                            let _ = heartbeat_app.emit("server_rtt", serde_json::json!({
+                                "server_id": heartbeat_server_id,
+                                "rtt_ms": ping_start.elapsed().as_millis() as u64,
+                            }));
+                        }
                         Ok(Err(e)) => {
                             tracing::warn!("心跳发送失败，连接可能已断开: {}", e);
                             let _ = heartbeat_tx.send(ClientRequest::ConnectionLost {

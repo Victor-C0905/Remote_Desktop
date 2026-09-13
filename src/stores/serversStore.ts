@@ -24,6 +24,8 @@ export interface ServersActions {
   updateServer: (id: string, updates: Partial<ServerConfig>) => void;
   setActiveServerId: (id: string | null) => void;
   setServerStatus: (id: string, status: ServerConfig["status"], error?: string, rttMs?: number) => void;
+  /** 仅更新 RTT（心跳 server_rtt 事件）：不动 status/error，避免覆盖重连中等中间状态 */
+  setServerRtt: (id: string, rttMs: number) => void;
   resetAllStatus: () => void;
 }
 
@@ -91,6 +93,14 @@ export const useServersStore = create<ServersState & ServersActions>()(
                   lastConnected: status === "connected" ? Date.now() : s.lastConnected,
                 }
               : s
+          ),
+        });
+      },
+
+      setServerRtt: (id, rttMs) => {
+        set({
+          servers: get().servers.map((s) =>
+            s.id === id ? { ...s, rttMs } : s
           ),
         });
       },
