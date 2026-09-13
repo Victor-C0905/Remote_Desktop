@@ -13,8 +13,9 @@ export const textPlugin: FileFormatPlugin = {
     if (!info.isText) {
       return null;
     }
-    // SVG 是文本，但应路由到图片查看器
-    if (info.extension === 'svg') {
+    // SVG 是文本，但应路由到图片查看器；
+    // HTML 也是文本，但应路由到本地浏览器打开（html 插件）
+    if (info.extension === 'svg' || info.extension === 'html' || info.extension === 'htm') {
       return null;
     }
     return { pluginId: 'text', category: 'text', confidence: 0.9 };

@@ -20,6 +20,7 @@ use crate::protocol::generated::{
     Delete, Mkdir, Rename, Copy, Move,
     FileExists as FileExistsReq, ApplyDiff as ApplyDiffReq,
     FileDiff as ProtoFileDiff, FileInfo, FileInfoResult,
+    ExecuteCommand,
 };
 use crate::protocol::{Payload, FileEntry};
 
@@ -82,6 +83,21 @@ pub fn serde_to_worker_request(payload: &Payload, user: &UserContext) -> Option<
             tracing::debug!("适配 FileInfoRequest: path={}", path);
             Some(manager_request::Payload::FileInfo(FileInfo {
                 path: path.clone(),
+                uid: user.uid,
+                gid: user.gid,
+                username: user.username.clone(),
+                home_dir: user.home_dir.clone(),
+            }))
+        }
+
+        Payload::ExecuteCommandRequest { command, args, working_directory, timeout_secs } => {
+            tracing::debug!("适配 ExecuteCommandRequest: command={}, args={:?}, timeout={}s", command, args, timeout_secs);
+            Some(manager_request::Payload::ExecuteCommand(ExecuteCommand {
+                command: command.clone(),
+                args: args.clone(),
+                working_directory: working_directory.clone().unwrap_or_default(),
+                env: Default::default(),
+                timeout_secs: *timeout_secs,
                 uid: user.uid,
                 gid: user.gid,
                 username: user.username.clone(),
@@ -258,6 +274,15 @@ pub fn worker_response_to_serde(response: &crate::protocol::generated::WorkerRes
                 is_text: r.is_text,
                 extension: r.extension.clone(),
                 magic_bytes: r.magic_bytes.to_vec(),
+            })
+        }
+
+        Some(worker_response::Payload::CommandOutput(output)) => {
+            tracing::debug!("适配 CommandOutput: exit_code={}", output.exit_code);
+            Some(Payload::CommandOutputResponse {
+                stdout: BASE64.encode(&output.stdout),
+                stderr: BASE64.encode(&output.stderr),
+                exit_code: output.exit_code,
             })
         }
 
@@ -690,6 +715,58 @@ mod tests {
                 assert_eq!(magic_bytes, vec![0x89, 0x50, 0x4E, 0x47]);
             }
             _ => panic!("Expected FileInfoResponse"),
+        }
+    }
+
+    #[test]
+    fn test_execute_command_request_conversion() {
+        let payload = Payload::ExecuteCommandRequest {
+            command: "unzip".to_string(),
+            args: vec!["-o".to_string(), "/tmp/a.zip".to_string()],
+            working_directory: Some("/tmp".to_string()),
+            timeout_secs: 600,
+        };
+        let user = test_user_context();
+
+        let result = serde_to_worker_request(&payload, &user);
+
+        match result {
+            Some(manager_request::Payload::ExecuteCommand(req)) => {
+                assert_eq!(req.command, "unzip");
+                assert_eq!(req.args, vec!["-o".to_string(), "/tmp/a.zip".to_string()]);
+                assert_eq!(req.working_directory, "/tmp");
+                assert_eq!(req.timeout_secs, 600);
+                assert_eq!(req.uid, user.uid);
+                assert_eq!(req.gid, user.gid);
+                assert_eq!(req.username, user.username);
+                assert_eq!(req.home_dir, user.home_dir);
+            }
+            _ => panic!("Expected ExecuteCommand conversion"),
+        }
+    }
+
+    #[test]
+    fn test_command_output_response_conversion() {
+        use crate::protocol::generated::{CommandOutput, WorkerResponse};
+
+        let resp = WorkerResponse {
+            request_id: 1,
+            payload: Some(worker_response::Payload::CommandOutput(CommandOutput {
+                stdout: b"hi".to_vec(),
+                stderr: Vec::new(),
+                exit_code: 0,
+            })),
+        };
+
+        let result = worker_response_to_serde(&resp);
+
+        match result {
+            Some(Payload::CommandOutputResponse { stdout, stderr, exit_code }) => {
+                assert_eq!(stdout, "aGk="); // base64("hi")
+                assert_eq!(stderr, "");
+                assert_eq!(exit_code, 0);
+            }
+            _ => panic!("Expected CommandOutputResponse"),
         }
     }
 }

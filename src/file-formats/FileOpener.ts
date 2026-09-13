@@ -7,6 +7,9 @@
 import { invoke } from '@tauri-apps/api/core';
 import { FileFormatRegistry } from './registry';
 import { pdfPlugin } from './plugins/pdf';
+import { archivePlugin } from './plugins/archive';
+import { htmlPlugin } from './plugins/html';
+import { executablePlugin } from './plugins/executable';
 import { imagePlugin } from './plugins/image';
 import { textPlugin } from './plugins/text';
 import type { FormatCategory, RemoteFileInfo } from './types';
@@ -19,6 +22,8 @@ export const SIZE_LIMITS = {
   pdf: 30 * 1024 * 1024,
   /** 文本：5MB（编辑器全量加载 + 差异计算） */
   text: 5 * 1024 * 1024,
+  /** 本地打开（HTML 下载）：20MB（下载到本地临时目录） */
+  'browser-local': 20 * 1024 * 1024,
 } as const;
 
 /** 打开决策结果 */
@@ -27,6 +32,9 @@ export interface OpenDecision {
    * 目标类型：
    * - 'directory'：目录（FileManager 自行导航）
    * - 'image' | 'pdf' | 'text' | 'hex'：对应应用
+   * - 'archive'：压缩包（FileManager 解压流程）
+   * - 'browser-local'：HTML（下载本地，系统浏览器打开）
+   * - 'run-script'：脚本（终端自动执行）
    */
   kind: 'directory' | FormatCategory;
   /** 图片类的 MIME 类型（构造 data URI 用） */
@@ -37,12 +45,15 @@ export interface OpenDecision {
   reason?: string;
 }
 
-/** 创建默认注册表（插件顺序即优先级：magic 精度高的在前） */
+/** 创建默认注册表（插件顺序即优先级：magic 精度高的在前，text 兜底在最后） */
 export function createDefaultRegistry(): FileFormatRegistry {
   const registry = new FileFormatRegistry();
-  registry.register(pdfPlugin);    // %PDF- magic，最精确
-  registry.register(imagePlugin);  // 图片 magic 表
-  registry.register(textPlugin);   // isText 启发式兜底
+  registry.register(pdfPlugin);        // %PDF- magic，最精确
+  registry.register(archivePlugin);    // 压缩包（zip magic + 扩展名）
+  registry.register(htmlPlugin);       // HTML（browser-local）
+  registry.register(executablePlugin); // .sh + shebang（run-script）
+  registry.register(imagePlugin);      // 图片 magic 表
+  registry.register(textPlugin);       // isText 启发式兜底
   return registry;
 }
 
@@ -65,10 +76,11 @@ export function decideOpenTarget(info: RemoteFileInfo, registry: FileFormatRegis
     return { kind: 'hex', needsSizeConfirm: false, reason: `未知格式（扩展名 .${info.extension || '无'}）` };
   }
 
+  // archive/run-script 无大小确认（解压结果大小不可预知，脚本与大小无关）
   const limit = SIZE_LIMITS[match.category as keyof typeof SIZE_LIMITS];
   return {
     kind: match.category,
     mimeType: match.mimeType,
-    needsSizeConfirm: info.size > limit,
+    needsSizeConfirm: limit !== undefined && info.size > limit,
   };
 }

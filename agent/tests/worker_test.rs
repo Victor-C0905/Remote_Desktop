@@ -195,27 +195,29 @@ mod file_operation_tests {
 // ============================================================================
 
 mod command_and_system_tests {
-    use super::*;
     use quireld::worker::handlers::{command, system};
     use quireld::protocol::generated::{ExecuteCommand, GetSystemInfo, worker_response};
 
     #[tokio::test]
     async fn test_handle_execute_command_echo() {
+        // 白名单命令 tar：验证 stdout 捕获 + exit 0
         let req = ExecuteCommand {
-            command: "echo".to_string(),
-            args: vec!["hello".to_string()],
+            command: "tar".to_string(),
+            args: vec!["--version".to_string()],
             working_directory: "/tmp".to_string(),
             uid: 0,
             gid: 0,
             username: "test".to_string(),
             home_dir: "/tmp".to_string(),
+            env: Default::default(),
+            timeout_secs: 0,
         };
         let response = command::handle_execute_command(req).await;
 
         match response.payload {
             Some(worker_response::Payload::CommandOutput(output)) => {
                 let stdout = String::from_utf8_lossy(&output.stdout);
-                assert!(stdout.contains("hello"), "stdout should contain 'hello', got: {}", stdout);
+                assert!(stdout.contains("tar"), "stdout should contain 'tar', got: {}", stdout);
                 assert_eq!(output.exit_code, 0);
             }
             _ => panic!("Expected CommandOutput, got {:?}", response.payload),
@@ -224,23 +226,25 @@ mod command_and_system_tests {
 
     #[tokio::test]
     async fn test_handle_execute_command_with_stderr() {
-        // 使用 sh -c 'echo error >&2' 来产生 stderr
+        // 白名单命令 tar 对不存在文件：stderr 有内容 + 非零退出码
         let req = ExecuteCommand {
-            command: "sh".to_string(),
-            args: vec!["-c".to_string(), "echo error >&2".to_string()],
+            command: "tar".to_string(),
+            args: vec!["-tf".to_string(), "/nonexistent-quirel-test.tar".to_string()],
             working_directory: "/tmp".to_string(),
             uid: 0,
             gid: 0,
             username: "test".to_string(),
             home_dir: "/tmp".to_string(),
+            env: Default::default(),
+            timeout_secs: 0,
         };
         let response = command::handle_execute_command(req).await;
 
         match response.payload {
             Some(worker_response::Payload::CommandOutput(output)) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                assert!(stderr.contains("error"), "stderr should contain 'error', got: {}", stderr);
-                assert_eq!(output.exit_code, 0);
+                assert!(!stderr.is_empty(), "stderr should not be empty");
+                assert_ne!(output.exit_code, 0, "tar on nonexistent file should return non-zero exit code");
             }
             _ => panic!("Expected CommandOutput, got {:?}", response.payload),
         }
@@ -248,6 +252,7 @@ mod command_and_system_tests {
 
     #[tokio::test]
     async fn test_handle_execute_command_nonzero_exit() {
+        // 白名单外的命令必须被拒绝（403）——安全关键行为
         let req = ExecuteCommand {
             command: "false".to_string(),
             args: vec![],
@@ -256,14 +261,41 @@ mod command_and_system_tests {
             gid: 0,
             username: "test".to_string(),
             home_dir: "/tmp".to_string(),
+            env: Default::default(),
+            timeout_secs: 0,
+        };
+        let response = command::handle_execute_command(req).await;
+
+        match response.payload {
+            Some(worker_response::Payload::Error(error)) => {
+                assert_eq!(error.code, 403, "non-whitelisted command should be rejected with 403");
+                assert!(error.message.contains("not allowed"), "error message: {}", error.message);
+            }
+            _ => panic!("Expected Error 403, got {:?}", response.payload),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_execute_command_absolute_path_whitelist() {
+        // 绝对路径调用按最后一段匹配白名单（/usr/bin/tar → tar）
+        let req = ExecuteCommand {
+            command: "/usr/bin/tar".to_string(),
+            args: vec!["--version".to_string()],
+            working_directory: "/tmp".to_string(),
+            uid: 0,
+            gid: 0,
+            username: "test".to_string(),
+            home_dir: "/tmp".to_string(),
+            env: Default::default(),
+            timeout_secs: 0,
         };
         let response = command::handle_execute_command(req).await;
 
         match response.payload {
             Some(worker_response::Payload::CommandOutput(output)) => {
-                assert_ne!(output.exit_code, 0, "false command should return non-zero exit code");
+                assert_eq!(output.exit_code, 0);
             }
-            _ => panic!("Expected CommandOutput, got {:?}", response.payload),
+            _ => panic!("Expected CommandOutput for absolute-path whitelisted command, got {:?}", response.payload),
         }
     }
 

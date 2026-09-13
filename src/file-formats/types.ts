@@ -19,8 +19,15 @@ export interface RemoteFileInfo {
   magicBytes: number[];
 }
 
-/** 格式分类（决定路由到哪个应用） */
-export type FormatCategory = 'image' | 'pdf' | 'text' | 'hex';
+/** 格式分类（决定路由到哪个应用/流程） */
+export type FormatCategory =
+  | 'image'
+  | 'pdf'
+  | 'text'
+  | 'hex'
+  | 'archive'          // 压缩包 → 解压流程（FileManager，服务器原生命令）
+  | 'browser-local'    // HTML → 下载到本地用系统浏览器打开
+  | 'run-script';      // 脚本 → 终端自动执行（类 Windows 双击运行脚本）
 
 /** 单个插件的检测结果 */
 export interface FormatMatch {

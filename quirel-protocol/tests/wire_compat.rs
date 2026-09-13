@@ -247,3 +247,73 @@ fn file_info_resp_wire_format() {
         _ => panic!("变体不匹配"),
     }
 }
+
+#[test]
+fn execute_command_wire_format() {
+    let env = Envelope::new(
+        21,
+        Payload::ExecuteCommandRequest {
+            command: "unzip".to_string(),
+            args: vec!["-o".to_string(), "/tmp/a.zip".to_string(), "-d".to_string(), "/tmp/out".to_string()],
+            working_directory: Some("/tmp".to_string()),
+            timeout_secs: 600,
+        },
+    );
+    let json = serde_json::to_string(&env).unwrap();
+    assert_eq!(
+        json,
+        r#"{"request_id":21,"payload":{"type":"execute_command","data":{"command":"unzip","args":["-o","/tmp/a.zip","-d","/tmp/out"],"working_directory":"/tmp","timeout_secs":600}}}"#
+    );
+    // 线上往返：编码后必须可解码
+    let env2 = roundtrip(&env);
+    match env2.payload {
+        Payload::ExecuteCommandRequest { command, args, working_directory, timeout_secs } => {
+            assert_eq!(command, "unzip");
+            assert_eq!(args, vec!["-o", "/tmp/a.zip", "-d", "/tmp/out"]);
+            assert_eq!(working_directory.as_deref(), Some("/tmp"));
+            assert_eq!(timeout_secs, 600);
+        }
+        _ => panic!("变体不匹配"),
+    }
+}
+
+#[test]
+fn execute_command_defaults_compat() {
+    // working_directory/timeout_secs 带 #[serde(default)]：缺失字段可解码
+    let raw = r#"{"request_id":22,"payload":{"type":"execute_command","data":{"command":"tar","args":["-xf","/a.tar"]}}}"#;
+    let env: Envelope = serde_json::from_str(raw).expect("缺省字段必须可解码");
+    match env.payload {
+        Payload::ExecuteCommandRequest { working_directory, timeout_secs, .. } => {
+            assert_eq!(working_directory, None);
+            assert_eq!(timeout_secs, 0);
+        }
+        _ => panic!("变体不匹配"),
+    }
+}
+
+#[test]
+fn command_output_resp_wire_format() {
+    let env = Envelope::new(
+        23,
+        Payload::CommandOutputResponse {
+            stdout: "aGk=".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+        },
+    );
+    let json = serde_json::to_string(&env).unwrap();
+    assert_eq!(
+        json,
+        r#"{"request_id":23,"payload":{"type":"command_output_resp","data":{"stdout":"aGk=","stderr":"","exit_code":0}}}"#
+    );
+    // 线上往返：编码后必须可解码
+    let env2 = roundtrip(&env);
+    match env2.payload {
+        Payload::CommandOutputResponse { stdout, stderr, exit_code } => {
+            assert_eq!(stdout, "aGk=");
+            assert_eq!(stderr, "");
+            assert_eq!(exit_code, 0);
+        }
+        _ => panic!("变体不匹配"),
+    }
+}

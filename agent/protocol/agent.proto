@@ -262,6 +262,10 @@ message ExecuteCommand {
     uint32 gid = 5;
     string username = 6;
     string home_dir = 7;
+    // 额外环境变量(可选,当前未使用)
+    map<string, string> env = 8;
+    // 超时秒数(0 = Worker 端默认 300s;超时 kill 子进程)
+    uint32 timeout_secs = 9;
 }
 
 message CommandOutput {

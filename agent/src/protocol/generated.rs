@@ -444,6 +444,12 @@ pub struct ExecuteCommand {
     /// 用户上下文(阶段 3 新增):家目录
     #[prost(string, tag = "7")]
     pub home_dir: ::prost::alloc::string::String,
+    /// 额外环境变量(可选,当前未使用)
+    #[prost(map = "string, string", tag = "8")]
+    pub env: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
+    /// 超时秒数(0 = Worker 端默认 300s;超时 kill 子进程)
+    #[prost(uint32, tag = "9")]
+    pub timeout_secs: u32,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
