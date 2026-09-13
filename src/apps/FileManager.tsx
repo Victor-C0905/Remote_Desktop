@@ -92,6 +92,15 @@ function formatDate(iso: string): string {
   });
 }
 
+/** 从 file_info 返回的头部字节（前 512B）解码脚本内容预览：前 8 行，超出截断标记 */
+function previewHead(bytes: number[]): string {
+  if (!bytes.length) return "（无法读取内容）";
+  const text = new TextDecoder().decode(new Uint8Array(bytes)).replace(/\r/g, "");
+  const lines = text.split("\n");
+  const shown = lines.slice(0, 8).join("\n").trimEnd();
+  return lines.length > 8 ? `${shown}\n...（更多内容未显示）` : shown;
+}
+
 /* ── Component ─────────────────────────────────────────── */
 
 type ViewMode = "list" | "grid";
@@ -148,6 +157,23 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     entry?: FileEntry;       // 文件信息（仅文件菜单）
   } | null>(null);
   const [propertiesEntry, setPropertiesEntry] = useState<FileEntry | null>(null);
+  // 解压对话框：三选项确认 → 解压中（loading，不可关闭）→ 成功关闭/失败显示错误
+  const [extractDialog, setExtractDialog] = useState<{
+    fullPath: string;      // 压缩包完整路径
+    name: string;          // 文件名（决定解压命令类型）
+    stem: string;          // 去掉压缩扩展名后的主体（独立文件夹名）
+    status: 'confirm' | 'extracting' | 'error';
+    error?: string;        // status=error 时的错误信息
+  } | null>(null);
+  // 脚本运行确认对话框：双击运行前展示内容预览（防误触未审查代码）
+  const [scriptRunDialog, setScriptRunDialog] = useState<{
+    path: string;
+    name: string;
+    size: number;
+    mtime: string;
+    permissions: string;
+    preview: string;       // 头部字节解码的前 8 行
+  } | null>(null);
   const [editingEntry, setEditingEntry] = useState<FileEntry | null>(null);  // 正在编辑的文件
   const [editingName, setEditingName] = useState<string>("");  // 编辑中的新名称
   // ✅ 移除 mainRef，因为fm-main容器已被AppLayout替代
@@ -810,46 +836,10 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
           });
           break;
         case 'archive': {
-          // 压缩包：弹窗选目标 → 服务器原生命令解压 → 刷新目录
+          // 压缩包：弹三选项对话框（独立文件夹/当前位置/取消）→ 服务器原生命令解压 → 刷新目录
+          // 解压执行与状态流转（extracting/error）在对话框组件内（runExtract）
           const stem = entry.name.replace(/\.(zip|tar|tar\.gz|tgz|tar\.bz2|tar\.xz|7z|rar)$/i, '');
-          const toFolder = confirm(`解压 "${entry.name}" 到独立文件夹 "${stem}/"？\n目标位置同名文件将被覆盖。`);
-          let targetDir: string;
-          if (toFolder) {
-            targetDir = currentPath === '/' ? `/${stem}` : `${currentPath}/${stem}`;
-            try {
-              // tar -C 要求目标目录存在；unzip/7z/unrar 自动创建。已存在时 mkdir 返回成功
-              await invoke('remote_mkdir', { serverId: activeServerId, path: targetDir });
-            } catch (err) {
-              log.warn(`创建目标文件夹失败（可能已存在）: ${targetDir}`, err);
-            }
-          } else {
-            const here = confirm(`改为解压到当前位置 "${currentPath}"？\n同名文件将被覆盖。`);
-            if (!here) return;
-            targetDir = currentPath;
-          }
-          const cmd = buildExtractCommand(fullPath, targetDir, entry.name);
-          try {
-            const output = await invoke<{ stdout: string; stderr: string; exitCode: number }>(
-              'remote_execute_command', {
-                serverId: activeServerId,
-                command: cmd.command,
-                args: cmd.args,
-                workingDirectory: currentPath,
-                timeoutSecs: 600,
-              });
-            if (output.exitCode === 0) {
-              loadDir(currentPath);  // 解压成功：刷新目录
-            } else {
-              alert(`解压失败（退出码 ${output.exitCode}）：\n\n${output.stderr || output.stdout || '无输出'}`);
-            }
-          } catch (err) {
-            const msg = String(err);
-            // spawn 失败（如服务器未装 7z/unrar）走此分支
-            const hint = msg.includes('No such file') || msg.includes('not found')
-              ? '\n\n服务器未安装对应的解压工具，请安装后重试（如 apt install p7zip-full）'
-              : '';
-            alert(`解压失败: ${msg}${hint}`);
-          }
+          setExtractDialog({ fullPath, name: entry.name, stem, status: 'confirm' });
           break;
         }
         case 'browser-local':
@@ -862,14 +852,24 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
           }
           break;
         case 'run-script': {
-          // 脚本：确认后打开终端自动执行（类 Windows 双击运行脚本）
-          const cmd = `bash ${fullPath}`;
-          const ok = confirm(`运行脚本？\n\n${fullPath}\n\n将在终端中执行: ${cmd}`);
-          if (!ok) return;
-          const dir = fullPath.slice(0, fullPath.lastIndexOf('/')) || '/';
-          manager.create('terminal', {
-            serverId: activeServerId,
-            preloadData: { workingDirectory: dir, initialCommand: cmd },
+          // 脚本：x 位检查 + 内容预览确认（防误触未审查代码直接执行）
+          // permissions 为 9 字符 rwx 串（如 "rwxr-xr-x"），第 4 位是 owner 执行位；
+          // 无 x 位 → 编辑器打开（Linux 桌面惯例：不可执行文件默认查看，想运行先 chmod +x）
+          if (!entry.permissions || entry.permissions[3] !== 'x') {
+            log.info(`脚本无执行权限（${entry.permissions || '未知'}），改用编辑器打开:`, fullPath);
+            manager.create('editor', {
+              serverId: activeServerId,
+              preloadData: { path: fullPath, serverId: activeServerId },
+            });
+            break;
+          }
+          setScriptRunDialog({
+            path: fullPath,
+            name: entry.name,
+            size: info.size,
+            mtime: entry.mtime,
+            permissions: entry.permissions,
+            preview: previewHead(info.magicBytes),
           });
           break;
         }
@@ -896,6 +896,66 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   const showProperties = useCallback((entry: FileEntry) => {
     setPropertiesEntry(entry);
   }, []);
+
+  // ── Script Run Dialog：确认后打开终端并注入命令 ────
+  const confirmRunScript = useCallback(() => {
+    if (!scriptRunDialog || !activeServerId) return;
+    const { path } = scriptRunDialog;
+    setScriptRunDialog(null);
+    const cmd = `bash ${path}`;
+    const dir = path.slice(0, path.lastIndexOf('/')) || '/';
+    manager.create('terminal', {
+      serverId: activeServerId,
+      preloadData: { workingDirectory: dir, initialCommand: cmd },
+    });
+  }, [scriptRunDialog, manager, activeServerId]);
+
+  // ── Extract Dialog：解压执行（状态流转 confirm → extracting → 关闭|error）──
+  // mode: 'folder' 解压到独立文件夹（tar -C 需先建目录）；'here' 解压到当前位置
+  const runExtract = useCallback(async (mode: 'folder' | 'here') => {
+    if (!extractDialog) return;
+    const targetDir = mode === 'folder'
+      ? (currentPath === '/' ? `/${extractDialog.stem}` : `${currentPath}/${extractDialog.stem}`)
+      : currentPath;
+    setExtractDialog(d => d ? { ...d, status: 'extracting' } : null);
+
+    if (mode === 'folder') {
+      try {
+        // tar -C 要求目标目录存在；unzip/7z/unrar 自动创建。已存在时 mkdir 返回成功
+        await invoke('remote_mkdir', { serverId: activeServerId, path: targetDir });
+      } catch (err) {
+        log.warn(`创建目标文件夹失败（可能已存在）: ${targetDir}`, err);
+      }
+    }
+    const cmd = buildExtractCommand(extractDialog.fullPath, targetDir, extractDialog.name);
+    try {
+      const output = await invoke<{ stdout: string; stderr: string; exitCode: number }>(
+        'remote_execute_command', {
+          serverId: activeServerId,
+          command: cmd.command,
+          args: cmd.args,
+          workingDirectory: currentPath,
+          timeoutSecs: 600,
+        });
+      if (output.exitCode === 0) {
+        setExtractDialog(null);
+        loadDir(currentPath);  // 解压成功：关闭对话框 + 刷新目录
+      } else {
+        setExtractDialog(d => d ? {
+          ...d,
+          status: 'error',
+          error: `退出码 ${output.exitCode}：${output.stderr || output.stdout || '无输出'}`,
+        } : null);
+      }
+    } catch (err) {
+      const msg = String(err);
+      // spawn 失败（如服务器未装 7z/unrar）走此分支
+      const hint = msg.includes('No such file') || msg.includes('not found')
+        ? '\n\n服务器未安装对应的解压工具，请安装后重试（如 apt install p7zip-full）'
+        : '';
+      setExtractDialog(d => d ? { ...d, status: 'error', error: msg + hint } : null);
+    }
+  }, [extractDialog, currentPath, activeServerId, loadDir]);
 
   // ── File Operations ───────────────────────────────────
   const handleMkdir = useCallback(async () => {
@@ -2074,6 +2134,70 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
           </div>
           <div className="pd-footer">
             <button onClick={() => setPropertiesEntry(null)}>关闭</button>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Extract Dialog - 解压目标选择/进度/错误（使用 Portal） */}
+      {extractDialog && createPortal(
+        <div className="ed-overlay" onClick={(e) => {
+          // 解压进行中不允许点遮罩关闭（防丢失反馈）；其余状态点击遮罩 = 取消
+          if (extractDialog.status !== 'extracting' && e.target === e.currentTarget) {
+            setExtractDialog(null);
+          }
+        }}>
+          <div className="ed-dialog">
+            {extractDialog.status === 'confirm' && (<>
+              <div className="ed-title">解压压缩包</div>
+              <div className="ed-file">{extractDialog.name}</div>
+              <div className="ed-note">目标位置的同名文件将被覆盖</div>
+              <div className="ed-footer">
+                <button className="ed-btn" onClick={() => setExtractDialog(null)}>取消</button>
+                <button className="ed-btn" onClick={() => runExtract('here')}>解压到当前位置</button>
+                <button className="ed-btn ed-btn-primary" onClick={() => runExtract('folder')}>
+                  解压到 "{extractDialog.stem}/"
+                </button>
+              </div>
+            </>)}
+            {extractDialog.status === 'extracting' && (
+              <div className="ed-progress">
+                <span className="spinner" />
+                正在解压 {extractDialog.name}，大文件可能需要较长时间...
+              </div>
+            )}
+            {extractDialog.status === 'error' && (<>
+              <div className="ed-title ed-title-error">解压失败</div>
+              <pre className="ed-error">{extractDialog.error}</pre>
+              <div className="ed-footer">
+                <button className="ed-btn ed-btn-primary" onClick={() => setExtractDialog(null)}>关闭</button>
+              </div>
+            </>)}
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Script Run Dialog - 运行前内容预览确认（使用 Portal） */}
+      {scriptRunDialog && createPortal(
+        <div className="ed-overlay" onClick={(e) => {
+          if (e.target === e.currentTarget) setScriptRunDialog(null);
+        }}>
+          <div className="ed-dialog">
+            <div className="srd-title">运行脚本</div>
+            <div className="srd-file">{scriptRunDialog.name}</div>
+            <div className="srd-rows">
+              <div className="srd-row"><span>大小</span><span>{formatSize(scriptRunDialog.size)}</span></div>
+              <div className="srd-row"><span>修改时间</span><span>{formatDate(scriptRunDialog.mtime)}</span></div>
+              <div className="srd-row"><span>权限</span><span>{scriptRunDialog.permissions}</span></div>
+            </div>
+            <div className="srd-preview-label">内容预览（前 8 行，请确认无危险操作）</div>
+            <pre className="srd-preview">{scriptRunDialog.preview}</pre>
+            <div className="srd-cmd">将执行: <code>bash {scriptRunDialog.path}</code></div>
+            <div className="ed-footer">
+              <button className="ed-btn" onClick={() => setScriptRunDialog(null)}>取消</button>
+              <button className="ed-btn ed-btn-primary" onClick={confirmRunScript}>在终端中运行</button>
+            </div>
           </div>
         </div>,
         document.body

@@ -89,6 +89,7 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
     updateServer,
     setActiveServerId,
     setServerStatus,
+    setServerRtt,
   } = useServersStore();
 
   const activeServer = servers.find((s) => s.id === activeServerId) || null;
@@ -182,6 +183,31 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
       }
     };
   }, [updateServer]);
+
+  // 监听心跳 RTT 回传事件（Rust 端心跳每 5s Ping-Pong 顺便测量，免额外请求）
+  // 高频低价值事件：不打日志，静默更新 store
+  useEffect(() => {
+    const setupListener = async () => {
+      const unlisten = await listen<{ server_id: string; rtt_ms: number }>(
+        "server_rtt",
+        (event) => {
+          setServerRtt(event.payload.server_id, event.payload.rtt_ms);
+        }
+      );
+      return unlisten;
+    };
+
+    let unlistenFn: (() => void) | undefined;
+    setupListener().then((fn) => {
+      unlistenFn = fn;
+    }).catch((e) => log.error('RTT 监听设置失败:', e));
+
+    return () => {
+      if (unlistenFn) {
+        unlistenFn();
+      }
+    };
+  }, [setServerRtt]);
 
   // 注意：不在这里重置状态，因为会干扰用户连接
   // onRehydrateStorage 已经在 serversStore 中处理了重置逻辑

@@ -1023,3 +1023,188 @@
   font-size: var(--font-body);
   flex: 1;
 }
+
+/* ── Extract / Script-Run Dialogs（解压 & 脚本运行确认） ─────────────────── */
+/* 遮罩层：与 fm-path-error-overlay 同模式，阻止点击穿透 */
+.ed-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: var(--z-app-modal); /* ✅ Layer 70: 应用内部模态对话框遮罩 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 弹窗本体（解压/脚本运行共用容器） */
+.ed-dialog {
+  position: relative;
+  width: 440px;
+  max-width: calc(100vw - 48px);
+  background: var(--quirel-card-bg);
+  border: 1px solid var(--quirel-border-color);
+  border-radius: var(--radius-md);
+  padding: 20px;
+  box-shadow: var(--shadow-popup);
+}
+
+/* 标题 */
+.ed-title,
+.srd-title {
+  font-size: 14pt;
+  font-weight: 600;
+  color: var(--quirel-text-primary);
+  margin-bottom: 12px;
+}
+
+.ed-title-error {
+  color: #e01b24; /* Adwaita error 红 */
+}
+
+/* 文件名 */
+.ed-file,
+.srd-file {
+  font-size: var(--font-body);
+  color: var(--quirel-text-primary);
+  word-break: break-all;
+  margin-bottom: 8px;
+  font-weight: 500;
+}
+
+/* 覆盖提示 */
+.ed-note {
+  font-size: var(--font-small);
+  color: var(--quirel-text-secondary);
+  margin-bottom: 16px;
+}
+
+/* 按钮区（对齐 rd-footer 模式） */
+.ed-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--quirel-border-color);
+}
+
+/* 次级按钮（取消/当前位置）— 对齐 rd-btn-cancel 模式 */
+.ed-btn {
+  padding: 8px 20px;
+  background: transparent;
+  color: var(--quirel-text-secondary);
+  border: 1px solid var(--quirel-border-color);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  font-size: var(--font-body);
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.ed-btn:hover {
+  background: var(--quirel-view-bg);
+  color: var(--quirel-text-primary);
+}
+
+/* 主按钮（运行/独立文件夹/关闭）— 对齐 rd-btn-confirm 模式 */
+.ed-btn-primary {
+  background: var(--quirel-accent-bg);
+  color: var(--quirel-accent-fg);
+  border: none;
+  font-weight: 500;
+}
+
+.ed-btn-primary:hover {
+  background: var(--quirel-accent-hover);
+}
+
+/* 解压进行中：loading（复用 fm-loading 的 spinner 动画） */
+.ed-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 0;
+  color: var(--quirel-text-primary);
+  font-size: var(--font-body);
+}
+
+.ed-progress .spinner {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  border: 2px solid var(--quirel-border-color);
+  border-top-color: var(--quirel-accent-bg);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+/* 解压失败错误输出 */
+.ed-error {
+  max-height: 200px;
+  overflow: auto;
+  background: var(--quirel-view-bg);
+  border: 1px solid var(--quirel-border-color);
+  border-radius: var(--radius-xs);
+  padding: 10px 12px;
+  font-family: Consolas, "Source Code Pro", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--quirel-text-primary);
+  margin: 0;
+}
+
+/* ── Script Run Dialog 专属 ─────────────────── */
+/* 元信息行（大小/时间/权限） */
+.srd-rows {
+  margin-bottom: 12px;
+}
+
+.srd-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--quirel-border-color);
+  font-size: 13px;
+  color: var(--quirel-text-secondary);
+}
+
+.srd-row span:last-child {
+  color: var(--quirel-text-primary);
+}
+
+/* 内容预览区：等宽深底代码块 */
+.srd-preview-label {
+  font-size: var(--font-small);
+  color: var(--quirel-text-secondary);
+  margin-bottom: 6px;
+}
+
+.srd-preview {
+  max-height: 180px;
+  overflow: auto;
+  background: var(--quirel-view-bg);
+  border: 1px solid var(--quirel-border-color);
+  border-radius: var(--radius-xs);
+  padding: 10px 12px;
+  font-family: Consolas, "Source Code Pro", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--quirel-text-primary);
+  margin: 0;
+}
+
+/* 将执行的命令行 */
+.srd-cmd {
+  margin-top: 10px;
+  font-size: var(--font-small);
+  color: var(--quirel-text-secondary);
+}
+
+.srd-cmd code {
+  font-family: Consolas, "Source Code Pro", monospace;
+  color: var(--quirel-text-primary);
+  word-break: break-all;
+}
