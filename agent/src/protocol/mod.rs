@@ -29,6 +29,7 @@ pub mod serde;
 pub use serde::{
     Envelope, Payload, SubscriptionType, MetricsSnapshot,
     MountInfo, FileEntry, DiskInfo,
+    AuthErrorCode,
 };
 
 /// 辅助函数：创建错误 Payload

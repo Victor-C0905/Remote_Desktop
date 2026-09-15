@@ -841,6 +841,8 @@
   padding: 8px 12px;
   border-radius: var(--radius-xs);
   margin-top: 8px;
+  /* 展示文本含 \n 分隔的标题/消息/建议/对比提示，需多行显示 */
+  white-space: pre-line;
 }
 
 /* ── Wallpaper ──────────────────────────────────────── */

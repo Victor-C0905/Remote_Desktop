@@ -14,7 +14,7 @@ pub mod stats;
 pub mod subscription;
 pub mod types;
 
-pub use envelope::{Envelope, Payload};
+pub use envelope::{AuthErrorCode, Envelope, Payload};
 pub use stats::{
     AuthStatsSnapshot, ConnectionStatsSnapshot, PerformanceStatsSnapshot,
     ResponseTimePercentiles, StatsResponse,

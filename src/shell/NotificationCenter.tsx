@@ -1,71 +1,7 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import "./NotificationCenter.css";
-
-/* ── Types ─────────────────────────────────────────────── */
-
-type Urgency = "low" | "normal" | "critical";
-
-interface Notification {
-  id: string;
-  title: string;
-  body: string;
-  timestamp: number;
-  urgency: Urgency;
-  source: string;
-  read: boolean;
-}
-
-/* ── Demo Notifications ───────────────────────────────── */
-
-function generateDemoNotifications(): Notification[] {
-  return [
-    {
-      id: "notif-1",
-      title: "CPU 使用率过高",
-      body: "CPU 使用率达到 85%，超过阈值 80%",
-      timestamp: Date.now() - 1000 * 60 * 2,
-      urgency: "critical",
-      source: "系统监控",
-      read: false,
-    },
-    {
-      id: "notif-2",
-      title: "文件下载完成",
-      body: "config.tar.gz (256MB) 已下载到本地",
-      timestamp: Date.now() - 1000 * 60 * 5,
-      urgency: "normal",
-      source: "文件管理",
-      read: false,
-    },
-    {
-      id: "notif-3",
-      title: "连接已恢复",
-      body: "prod-server 连接已恢复，延迟 6ms",
-      timestamp: Date.now() - 1000 * 60 * 10,
-      urgency: "normal",
-      source: "连接",
-      read: true,
-    },
-    {
-      id: "notif-4",
-      title: "磁盘空间不足",
-      body: "/var 分区使用率达到 92%",
-      timestamp: Date.now() - 1000 * 60 * 30,
-      urgency: "critical",
-      source: "系统监控",
-      read: true,
-    },
-    {
-      id: "notif-5",
-      title: "终端会话创建",
-      body: "新终端会话已启动 (pty-abc123)",
-      timestamp: Date.now() - 1000 * 60 * 60,
-      urgency: "low",
-      source: "终端",
-      read: true,
-    },
-  ];
-}
+import { useNotificationStore } from "../stores/notificationStore";
+import type { NotificationUrgency } from "../stores/notificationStore";
 
 /* ── Utility Functions ───────────────────────────────── */
 
@@ -79,7 +15,7 @@ function formatTime(timestamp: number): string {
   return `${Math.floor(diff / 86400000)} 天前`;
 }
 
-function getUrgencyIcon(urgency: Urgency): string {
+function getUrgencyIcon(urgency: NotificationUrgency): string {
   switch (urgency) {
     case "critical": return "🔴";
     case "normal": return "🟡";
@@ -87,7 +23,7 @@ function getUrgencyIcon(urgency: Urgency): string {
   }
 }
 
-function getUrgencyClass(urgency: Urgency): string {
+function getUrgencyClass(urgency: NotificationUrgency): string {
   return `nc-notif-urgency-${urgency}`;
 }
 
@@ -99,8 +35,9 @@ interface NotificationCenterProps {
 }
 
 export function NotificationCenter({ isOpen, onClose }: NotificationCenterProps) {
-  const [notifications, setNotifications] = useState<Notification[]>(generateDemoNotifications());
-  const [filter, setFilter] = useState<Urgency | "all">("all");
+  // 真实数据源：zustand 内存 store（连接失败/断连/恢复通知）
+  const { notifications, markAsRead, dismiss, clearAll, markAllRead } = useNotificationStore();
+  const [filter, setFilter] = useState<NotificationUrgency | "all">("all");
 
   const unreadCount = notifications.filter(n => !n.read).length;
   const criticalCount = notifications.filter(n => n.urgency === "critical" && !n.read).length;
@@ -109,22 +46,6 @@ export function NotificationCenter({ isOpen, onClose }: NotificationCenterProps)
     if (filter === "all") return true;
     return n.urgency === filter;
   }).sort((a, b) => b.timestamp - a.timestamp);
-
-  const markAsRead = useCallback((id: string) => {
-    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
-  }, []);
-
-  const dismissNotification = useCallback((id: string) => {
-    setNotifications(prev => prev.filter(n => n.id !== id));
-  }, []);
-
-  const clearAll = useCallback(() => {
-    setNotifications([]);
-  }, []);
-
-  const markAllRead = useCallback(() => {
-    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
-  }, []);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -209,11 +130,12 @@ export function NotificationCenter({ isOpen, onClose }: NotificationCenterProps)
                     <span className="nc-notif-source">{notif.source}</span>
                   </div>
                   <div className="nc-notif-body">{notif.body}</div>
+                  {notif.action && <div className="nc-notif-action">💡 {notif.action}</div>}
                   <div className="nc-notif-time">{formatTime(notif.timestamp)}</div>
                 </div>
                 <button
                   className="nc-notif-dismiss"
-                  onClick={(e) => { e.stopPropagation(); dismissNotification(notif.id); }}
+                  onClick={(e) => { e.stopPropagation(); dismiss(notif.id); }}
                   title="删除"
                 >
                   ×

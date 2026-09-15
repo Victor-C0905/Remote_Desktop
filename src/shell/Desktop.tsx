@@ -6,6 +6,7 @@ import { ServerManagerProvider, useServerManager } from "../context/ServerManage
 
 import { WallpaperProvider, useWallpaper, getWallpaperStyle } from "../context/WallpaperContext";
 import { useSettingsStore } from "../stores/settingsStore";
+import { useNotificationStore } from "../stores/notificationStore";
 import { useTheme } from "../hooks/useTheme";
 import { useContrastColor } from "../hooks/useContrastColor";
 import { WindowShell } from "../components/window-shell";
@@ -141,8 +142,9 @@ export function Desktop() {
 function DesktopContent() {
   const [overviewVisible, setOverviewVisible] = useState(false);
   const [notificationOpen, setNotificationOpen] = useState(false);
-  const unreadNotifications = 2;
-  const criticalNotifications = 1;
+  const notifications = useNotificationStore((s) => s.notifications);
+  const unreadNotifications = notifications.filter((n) => !n.read).length;
+  const criticalNotifications = notifications.filter((n) => n.urgency === "critical" && !n.read).length;
   const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
   const [clock, setClock] = useState("");
 

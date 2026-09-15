@@ -16,6 +16,88 @@ use crate::stats::StatsResponse;
 use crate::subscription::SubscriptionType;
 use crate::types::{default_frame_mode, one, FileDiff, FileEntry, MetricsSnapshot, MountInfo};
 
+/// 认证/连接错误码（客户端↔Agent 线上协议的组成部分）
+///
+/// 数值分段（语义一旦发布不可变更，新增只能追加）：
+/// - 1-99：客户端本地错误（不经过网络，仅本地分类）
+/// - 100-199：网络/传输阶段
+/// - 200-299：Agent 认证拒绝
+/// - 300-399：会话生命周期（登录后）
+/// - 999：兜底
+///
+/// 双通道使用方式：
+/// - `AuthResponse.code`：Option<AuthErrorCode>（serde 序列化为变体名字符串）
+/// - `Payload::Error.code`：保持 i32，填 `as_i32()` 数值
+///   （与既有 HTTP 风格码 400+ 数值空间不重叠）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u16)]
+pub enum AuthErrorCode {
+    // 1-99：客户端本地错误
+    MissingCredentials = 1,          // 缺少认证凭据
+    InvalidKeyFormat = 2,           // 私钥格式不支持
+    KeyParseFailed = 3,             // 私钥解析失败（含密码错误）
+    CertificateRejected = 4,        // 用户拒绝信任服务器证书
+
+    // 100-199：网络/传输阶段
+    DnsFailed = 101,                // 域名解析失败
+    ConnectTimeout = 102,           // 连接超时
+    TlsHandshakeFailed = 103,       // 安全握手失败
+    NetworkUnreachable = 104,       // 网络不可达
+    StreamTimeout = 105,            // 认证数据交换超时
+    ConnectionLost = 106,           // 连接中断
+
+    // 200-299：Agent 认证拒绝
+    RateLimited = 200,              // IP 速率限制
+    AccountLocked = 201,            // 账户锁定（15 分钟）
+    InvalidCredentials = 202,       // 用户名或密码错误
+    PubkeyNotAuthorized = 203,      // 公钥未授权
+    SignatureVerificationFailed = 204, // 签名验证失败
+    ChallengeExpired = 205,        // 挑战过期
+    AuthServiceUnavailable = 206,   // 认证服务不可用
+    ProtocolError = 207,           // 协议格式错误
+
+    // 300-399：会话生命周期（登录后）
+    SessionExpired = 301,          // 会话超时（24 小时不活动）
+
+    // 999：兜底
+    Unknown = 999,
+}
+
+impl AuthErrorCode {
+    /// 数值形式（用于 Payload::Error.code 的 i32 字段）
+    pub fn as_i32(self) -> i32 {
+        self as u16 as i32
+    }
+
+    /// 从数值解析（未识别返回 None，含既有 HTTP 风格码 ≥400）
+    pub fn from_i32(v: i32) -> Option<Self> {
+        use AuthErrorCode::*;
+        Some(match v {
+            1 => MissingCredentials,
+            2 => InvalidKeyFormat,
+            3 => KeyParseFailed,
+            4 => CertificateRejected,
+            101 => DnsFailed,
+            102 => ConnectTimeout,
+            103 => TlsHandshakeFailed,
+            104 => NetworkUnreachable,
+            105 => StreamTimeout,
+            106 => ConnectionLost,
+            200 => RateLimited,
+            201 => AccountLocked,
+            202 => InvalidCredentials,
+            203 => PubkeyNotAuthorized,
+            204 => SignatureVerificationFailed,
+            205 => ChallengeExpired,
+            206 => AuthServiceUnavailable,
+            207 => ProtocolError,
+            301 => SessionExpired,
+            999 => Unknown,
+            _ => return None,
+        })
+    }
+}
+
 /// 消息信封,包含请求 ID 和 payload
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Envelope {
@@ -94,6 +176,9 @@ pub enum Payload {
         error: Option<String>,
         /// 会话ID（成功时返回）
         session_id: Option<String>,
+        /// 结构化错误码（失败时；旧版 Agent 不携带此字段，回退 None）
+        #[serde(default)]
+        code: Option<AuthErrorCode>,
     },
 
     /// 统计查询请求

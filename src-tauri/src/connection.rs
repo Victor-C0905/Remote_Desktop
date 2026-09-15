@@ -65,6 +65,7 @@ pub use quirel_protocol::{
     FileDiff, DiffType, FileEntry, MetricsSnapshot, DiskInfo, MountInfo,
     AuthStatsSnapshot, ConnectionStatsSnapshot, PerformanceStatsSnapshot,
     ResponseTimePercentiles, StatsResponse,
+    AuthErrorCode,
 };
 
 // ── 连接管理器 ───────────────────────────────────────
@@ -105,6 +106,60 @@ impl std::fmt::Display for ConnectionLostSource {
             ConnectionLostSource::QuicClosed => write!(f, "QUIC 连接关闭"),
             ConnectionLostSource::SendFailed => write!(f, "发送失败"),
         }
+    }
+}
+
+/// 连接失败的结构化错误（remote_connect 的错误通道）
+///
+/// code：分类（必填）；detail：用户可读上下文（如主机名/操作指引），
+/// 不含实现细节。完整技术细节只进 tracing 日志（{:?} 记录源错误）。
+/// 前端按 code 查映射表得到标题/消息/行动建议/retryable。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ConnectError {
+    /// 数值形式序列化（前端 parseConnectError 契约：{"code":201,...}）；
+    /// 协议线上 AuthResponse.code 仍为变体名字符串，两处通道互不影响
+    #[serde(serialize_with = "serialize_code_as_i32")]
+    pub code: AuthErrorCode,
+    pub detail: Option<String>,
+}
+
+/// ConnectError.code 的数值序列化（AuthErrorCode 默认序列化为变体名字符串）
+fn serialize_code_as_i32<S: serde::Serializer>(code: &AuthErrorCode, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_i32(code.as_i32())
+}
+
+impl ConnectError {
+    fn new(code: AuthErrorCode) -> Self {
+        Self { code, detail: None }
+    }
+
+    fn with_detail(code: AuthErrorCode, detail: impl Into<String>) -> Self {
+        Self { code, detail: Some(detail.into()) }
+    }
+}
+
+/// 旧版 Agent（无结构化 code）的错误文案分类。
+/// 覆盖 Agent 侧已知中文文案 + 原有 4 关键词白名单语义；
+/// 无法识别 → Unknown。
+fn classify_legacy_error(msg: &str) -> AuthErrorCode {
+    if msg.contains("请求过于频繁") {
+        AuthErrorCode::RateLimited
+    } else if msg.contains("锁定") {
+        AuthErrorCode::AccountLocked
+    } else if msg.contains("用户名或密码错误") {
+        AuthErrorCode::InvalidCredentials
+    } else if msg.contains("公钥未授权") {
+        AuthErrorCode::PubkeyNotAuthorized
+    } else if msg.contains("签名验证失败") || msg.contains("公钥验证失败") {
+        AuthErrorCode::SignatureVerificationFailed
+    } else if msg.contains("认证服务暂时不可用") {
+        AuthErrorCode::AuthServiceUnavailable
+    } else if msg.contains("超时") || msg.contains("timeout") || msg.contains("timed out") {
+        AuthErrorCode::StreamTimeout
+    } else if msg.contains("QUIC 连接失败") || msg.contains("认证请求失败") {
+        AuthErrorCode::ConnectTimeout
+    } else {
+        AuthErrorCode::Unknown
     }
 }
 
@@ -153,7 +208,7 @@ pub async fn remote_connect(
     credentials: Option<Credentials>,
     cert_fingerprint: Option<String>,
     app: tauri::AppHandle,
-) -> Result<ConnectionInfo, String> {
+) -> Result<ConnectionInfo, ConnectError> {
     let manager = app.state::<ConnectionManager>();
 
     // 安装 CryptoProvider
@@ -161,10 +216,6 @@ pub async fn remote_connect(
 
     // 先尝试 QUIC
     let quic_result = try_quic_connect(&host, port).await;
-    let quic_err_msg = match &quic_result {
-        Err(e) => e.clone(),
-        Ok(_) => String::new(),
-    };
 
     if let Ok((conn, rtt, server_cert_fingerprint)) = quic_result {
         tracing::info!("QUIC 连接成功: {}:{} (RTT={}ms)", host, port, rtt);
@@ -232,26 +283,29 @@ pub async fn remote_connect(
 
             if !accepted {
                 conn.close(0u32.into(), b"cert rejected");
-                return Err("用户拒绝信任服务器证书".to_string());
+                return Err(ConnectError::new(AuthErrorCode::CertificateRejected));
             }
 
             // 通知前端存储证书指纹
             app.emit("cert-trusted", serde_json::json!({
                 "server_id": &server_id,
                 "fingerprint": &server_cert_fingerprint,
-            })).map_err(|e| format!("发送证书信任事件失败: {}", e))?;
+            })).map_err(|e| {
+                tracing::warn!("[TLS] 发送证书信任事件失败: {}", e);
+                ConnectError::new(AuthErrorCode::Unknown)
+            })?;
 
             tracing::info!("[TLS] 证书已信任并存储: server_id={}", server_id);
         }
 
         // 认证
-        let creds = credentials.ok_or_else(|| "缺少认证凭据".to_string())?;
+        let creds = credentials.ok_or_else(|| ConnectError::new(AuthErrorCode::MissingCredentials))?;
 
         // 根据 method 执行不同的认证流程
         match creds.method {
             AuthMethod::Password => {
                 // 密码认证流程（单步）
-                let password = creds.password.ok_or_else(|| "密码认证需要提供密码".to_string())?;
+                let password = creds.password.ok_or_else(|| ConnectError::new(AuthErrorCode::MissingCredentials))?;
                 let auth_payload = Payload::AuthPasswordRequest {
                     username: creds.username.clone(),
                     password,
@@ -259,29 +313,44 @@ pub async fn remote_connect(
 
                 // 发送认证请求（增加错误处理）
                 let resp = send_and_receive_quic(&conn, manager.next_request_id(), auth_payload).await
-                    .map_err(|e| format!("认证请求失败: {}", e))?;
+                    .map_err(|e| {
+                        tracing::warn!("[Connection] 认证请求失败: {:?}", e);
+                        // 传输层错误：超时类与断连类区分
+                        if e.contains("超时") || e.contains("timeout") {
+                            ConnectError::new(AuthErrorCode::StreamTimeout)
+                        } else {
+                            ConnectError::new(AuthErrorCode::ConnectionLost)
+                        }
+                    })?;
 
                 let envelope = Envelope::decode(&resp)
-                    .map_err(|e| format!("解析认证响应失败: {}", e))?;
+                    .map_err(|e| {
+                        tracing::warn!("[Connection] 解析认证响应失败: {:?}", e);
+                        ConnectError::new(AuthErrorCode::ProtocolError)
+                    })?;
 
                 // 验证返回类型（增加类型检查）
                 match envelope.payload {
-                    Payload::AuthResponse { success, error, session_id: _ } => {
+                    Payload::AuthResponse { success, error, session_id: _, code } => {
                         if !success {
-                            // 关闭连接
+                            // 优先结构化 code；旧版 Agent 按文案 fallback 分类
+                            let err_code = code
+                                .unwrap_or_else(|| classify_legacy_error(error.as_deref().unwrap_or("")));
+                            // 关闭连接（Agent 确认拒绝，close reason 如实标注）
                             conn.close(0u32.into(), b"authentication failed");
-                            return Err(error.unwrap_or_else(|| "认证失败".to_string()));
+                            return Err(ConnectError::with_detail(err_code, error.unwrap_or_else(|| "认证失败".to_string())));
                         }
                     }
                     other => {
                         conn.close(0u32.into(), b"unexpected response");
-                        return Err(format!("期望 AuthResponse，收到: {:?}", other));
+                        tracing::warn!("[Connection] 期望 AuthResponse，收到: {:?}", other);
+                        return Err(ConnectError::new(AuthErrorCode::ProtocolError));
                     }
                 }
             }
             AuthMethod::PubKey => {
                 // 公钥认证流程（多步挑战-响应）
-                let private_key = creds.private_key.ok_or_else(|| "公钥认证需要提供私钥".to_string())?;
+                let private_key = creds.private_key.ok_or_else(|| ConnectError::new(AuthErrorCode::MissingCredentials))?;
 
                 tracing::info!("[Connection] 开始公钥认证: username={}", creds.username);
 
@@ -292,8 +361,15 @@ pub async fn remote_connect(
                     private_key,
                     creds.passphrase,
                 ).await.map_err(|e| {
-                    tracing::error!("[Connection] 公钥认证失败: {}", e);
-                    conn.close(0u32.into(), b"authentication failed");
+                    tracing::error!("[Connection] 公钥认证失败: {:?}", e);
+                    // close reason 真实化：网络类（100-199）与 Agent 确认拒绝区分，
+                    // 避免服务端日志将网络超时误判为认证失败
+                    let reason: &'static [u8] = if (100..=199).contains(&e.code.as_i32()) {
+                        b"auth network timeout"
+                    } else {
+                        b"authentication failed"
+                    };
+                    conn.close(0u32.into(), reason);
                     e
                 })?;
 
@@ -543,9 +619,22 @@ pub async fn remote_connect(
                     None => "quic_closed",
                 }
             };
+            // 断连原因分类（close code 0x01 idle / 0x02 session；其余网络断）
+            // 计算须在主动 close 之前已定型：close_reason() 为 None 时（本地主动关闭）
+            // 不携带 code，前端按通用网络断开展示
+            let lost_code = match conn_clone.close_reason() {
+                Some(quinn::ConnectionError::ApplicationClosed(close)) => match close.error_code.into_inner() {
+                    1 => Some(AuthErrorCode::StreamTimeout),
+                    2 => Some(AuthErrorCode::SessionExpired),
+                    _ => None,
+                },
+                Some(quinn::ConnectionError::TimedOut) => Some(AuthErrorCode::StreamTimeout),
+                _ => None,
+            };
             let _ = app_handle.emit("connection-lost", serde_json::json!({
                 "server_id": &server_id_clone,
                 "source": source_str,
+                "code": lost_code.map(|c| c.as_i32()),
             }));
 
             tracing::info!("连接清理完成: {}", server_id_clone);
@@ -554,8 +643,8 @@ pub async fn remote_connect(
         return Ok(info);
     }
 
-    // QUIC 失败，返回错误
-    Err(format!("QUIC 连接失败: {}", quic_err_msg))
+    // QUIC 失败，返回结构化错误
+    Err(quic_result.unwrap_err())
 }
 
 #[tauri::command]
@@ -1397,7 +1486,7 @@ pub async fn unsubscribe(
 
 // ── QUIC 客户端 ───────────────────────────────────────
 
-async fn try_quic_connect(host: &str, port: u16) -> Result<(quinn::Connection, f64, String), String> {
+async fn try_quic_connect(host: &str, port: u16) -> Result<(quinn::Connection, f64, String), ConnectError> {
     // 安装 CryptoProvider
     let _ = rustls::crypto::ring::default_provider().install_default();
 
@@ -1405,8 +1494,8 @@ async fn try_quic_connect(host: &str, port: u16) -> Result<(quinn::Connection, f
     let addr = if host.contains(':') || host.parse::<std::net::IpAddr>().is_ok() {
         // 已经是 IP 地址格式
         format!("{}:{}", host, port).parse().map_err(|e| {
-            tracing::warn!("[QUIC] 地址解析失败: host={}:{}, error={}", host, port, e);
-            format!("地址解析失败: {}", e)
+            tracing::warn!("[QUIC] 地址解析失败: host={}:{}, error={:?}", host, port, e);
+            ConnectError::with_detail(AuthErrorCode::DnsFailed, host)
         })?
     } else {
         // 需要解析域名，优先使用 IPv4
@@ -1414,8 +1503,8 @@ async fn try_quic_connect(host: &str, port: u16) -> Result<(quinn::Connection, f
         let resolved_addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host(&addr_str)
             .await
             .map_err(|e| {
-                tracing::warn!("[QUIC] DNS 解析失败: host={}, error={}", host, e);
-                format!("DNS 解析失败: {}", e)
+                tracing::warn!("[QUIC] DNS 解析失败: host={}, error={:?}", host, e);
+                ConnectError::with_detail(AuthErrorCode::DnsFailed, host)
             })?
             .collect();
 
@@ -1425,42 +1514,46 @@ async fn try_quic_connect(host: &str, port: u16) -> Result<(quinn::Connection, f
             .find(|addr| addr.is_ipv4())
             .copied()
             .or_else(|| resolved_addrs.first().copied())
-            .ok_or_else(|| "DNS 解析无结果".to_string())?
+            .ok_or_else(|| ConnectError::with_detail(AuthErrorCode::DnsFailed, host))?
     };
 
     // 创建客户端配置（证书钉扎：提取指纹供后续校验）
     let observed_fingerprint = Arc::new(Mutex::new(None));
-    let client_config = build_quic_client_config(observed_fingerprint.clone())?;
+    let client_config = build_quic_client_config(observed_fingerprint.clone())
+        .map_err(|e| {
+            tracing::warn!("[QUIC] 客户端配置构建失败: {}", e);
+            ConnectError::new(AuthErrorCode::NetworkUnreachable)
+        })?;
 
     // 创建 Endpoint
     let mut endpoint = quinn::Endpoint::client("0.0.0.0:0".parse().unwrap())
         .map_err(|e| {
             tracing::warn!("[QUIC] 创建 Endpoint 失败: {}", e);
-            format!("创建 Endpoint 失败: {}", e)
+            ConnectError::new(AuthErrorCode::NetworkUnreachable)
         })?;
-    
+
     endpoint.set_default_client_config(client_config);
 
     let start = std::time::Instant::now();
-    
+
     // 添加超时机制（5 秒）
     let conn = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         endpoint
             .connect(addr, "quirel")
             .map_err(|e| {
-                tracing::warn!("[QUIC] 发起连接失败: addr={}, error={}", addr, e);
-                format!("发起连接失败: {}", e)
+                tracing::warn!("[QUIC] 发起连接失败: addr={}, error={:?}", addr, e);
+                ConnectError::new(AuthErrorCode::NetworkUnreachable)
             })?
     )
     .await
     .map_err(|_| {
         tracing::warn!("[QUIC] 连接超时 (5秒): addr={}", addr);
-        "QUIC 连接超时 (5秒)".to_string()
+        ConnectError::new(AuthErrorCode::ConnectTimeout)
     })?
     .map_err(|e| {
-        tracing::warn!("[QUIC] 握手失败: addr={}, error={}", addr, e);
-        format!("QUIC 握手失败: {}", e)
+        tracing::warn!("[QUIC] 握手失败: addr={}, error={:?}", addr, e);
+        ConnectError::new(AuthErrorCode::TlsHandshakeFailed)
     })?;
 
     // 提取握手过程中观测到的服务器证书指纹
@@ -1468,7 +1561,10 @@ async fn try_quic_connect(host: &str, port: u16) -> Result<(quinn::Connection, f
         .lock()
         .unwrap()
         .clone()
-        .ok_or_else(|| "未能获取服务器证书指纹".to_string())?;
+        .ok_or_else(|| {
+            tracing::warn!("[QUIC] 未能获取服务器证书指纹");
+            ConnectError::new(AuthErrorCode::TlsHandshakeFailed)
+        })?;
 
     Ok((conn, start.elapsed().as_secs_f64() * 1000.0, fingerprint))
 }
@@ -1626,7 +1722,7 @@ async fn perform_pubkey_auth(
     username: String,
     private_key: String,
     passphrase: Option<String>,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>, ConnectError> {
     use tokio::io::AsyncWriteExt;
 
     tracing::info!("[PubKeyAuth] 开始公钥认证流程: username={}", username);
@@ -1673,7 +1769,10 @@ async fn perform_pubkey_auth(
             "[PubKeyAuth] 不支持的私钥格式（应以 -----BEGIN 开头），当前开头: {}",
             &private_key_cleaned[..std::cmp::min(50, private_key_cleaned.len())]
         );
-        return Err("不支持的私钥格式。请使用OpenSSH格式的私钥文件（通常以 -----BEGIN OPENSSH PRIVATE KEY----- 开头）".to_string());
+        return Err(ConnectError::with_detail(
+            AuthErrorCode::InvalidKeyFormat,
+            "不支持的私钥格式。请使用OpenSSH格式的私钥文件（通常以 -----BEGIN OPENSSH PRIVATE KEY----- 开头）",
+        ));
     }
 
     // ── 第二步：自动检测私钥格式并解析 ─────────────────────
@@ -1683,7 +1782,7 @@ async fn perform_pubkey_auth(
     let key = parse_private_key_auto(&private_key_cleaned, passphrase.as_deref())
         .map_err(|e| {
             tracing::error!("[PubKeyAuth] 私钥解析失败: {}", e);
-            e
+            ConnectError::with_detail(AuthErrorCode::KeyParseFailed, e)
         })?;
 
     tracing::info!("[PubKeyAuth] 私钥解析成功: 算法={}", key.algorithm());
@@ -1692,7 +1791,7 @@ async fn perform_pubkey_auth(
     tracing::info!("[PubKeyAuth] 尝试提取公钥...");
     let public_key_str = key.public_key().to_openssh().map_err(|e| {
         tracing::error!("[PubKeyAuth] 公钥 SSH 格式转换失败: {}", e);
-        format!("公钥 SSH 格式转换失败: {}", e)
+        ConnectError::new(AuthErrorCode::KeyParseFailed)
     })?;
 
     tracing::info!("[PubKeyAuth] 公钥 SSH 格式: {}", &public_key_str[..std::cmp::min(50, public_key_str.len())]);
@@ -1707,8 +1806,11 @@ async fn perform_pubkey_auth(
     let timeout_duration = std::time::Duration::from_secs(STREAM_TIMEOUT_SECS);
     let (mut send, mut recv) = tokio::time::timeout(timeout_duration, conn.open_bi())
         .await
-        .map_err(|_| "创建 Stream 超时".to_string())?
-        .map_err(|e| format!("创建 Stream 失败: {}", e))?;
+        .map_err(|_| ConnectError::new(AuthErrorCode::StreamTimeout))?
+        .map_err(|e| {
+            tracing::warn!("[PubKeyAuth] 创建 Stream 失败: {:?}", e);
+            ConnectError::new(AuthErrorCode::ConnectionLost)
+        })?;
 
     // 发送 AuthPubKeyRequest
     let request_id = 0; // 使用固定的 request_id（认证请求）
@@ -1717,48 +1819,72 @@ async fn perform_pubkey_auth(
         public_key: public_key.clone(),
     });
 
-    let bytes = envelope.encode()?;
+    let bytes = envelope.encode().map_err(|e| {
+        tracing::warn!("[PubKeyAuth] 请求编码失败: {}", e);
+        ConnectError::new(AuthErrorCode::ProtocolError)
+    })?;
     let len = (bytes.len() as u32).to_le_bytes();
 
     tracing::debug!("[PubKeyAuth] 发送公钥请求（{}字节）...", bytes.len());
 
     tokio::time::timeout(timeout_duration, async {
-        send.write_all(&len).await.map_err(|e| format!("发送长度失败: {}", e))?;
-        send.write_all(&bytes).await.map_err(|e| format!("发送数据失败: {}", e))?;
-        send.flush().await.map_err(|e| format!("刷新发送缓冲区失败: {}", e))?;
-        Ok::<(), String>(())
+        send.write_all(&len).await.map_err(|e| {
+            tracing::warn!("[PubKeyAuth] 发送长度失败: {:?}", e);
+            ConnectError::new(AuthErrorCode::ConnectionLost)
+        })?;
+        send.write_all(&bytes).await.map_err(|e| {
+            tracing::warn!("[PubKeyAuth] 发送数据失败: {:?}", e);
+            ConnectError::new(AuthErrorCode::ConnectionLost)
+        })?;
+        send.flush().await.map_err(|e| {
+            tracing::warn!("[PubKeyAuth] 刷新发送缓冲区失败: {:?}", e);
+            ConnectError::new(AuthErrorCode::ConnectionLost)
+        })?;
+        Ok::<(), ConnectError>(())
     })
     .await
-    .map_err(|_| "发送公钥请求超时".to_string())??;
+    .map_err(|_| ConnectError::new(AuthErrorCode::StreamTimeout))??;
 
     tracing::debug!("[PubKeyAuth] 公钥请求已发送，等待挑战...");
 
     // ── 第三步：接收挑战 ─────────────────────────────────
     let challenge_data = tokio::time::timeout(timeout_duration, async {
         let mut len_buf = [0u8; 4];
-        recv.read_exact(&mut len_buf).await.map_err(|e| format!("读取挑战长度失败: {}", e))?;
+        recv.read_exact(&mut len_buf).await.map_err(|e| {
+            tracing::warn!("[PubKeyAuth] 读取挑战长度失败: {:?}", e);
+            ConnectError::new(AuthErrorCode::ConnectionLost)
+        })?;
         let resp_len = u32::from_le_bytes(len_buf) as usize;
 
         let mut data = vec![0u8; resp_len];
-        recv.read_exact(&mut data).await.map_err(|e| format!("读取挑战数据失败: {}", e))?;
-        Ok::<Vec<u8>, String>(data)
+        recv.read_exact(&mut data).await.map_err(|e| {
+            tracing::warn!("[PubKeyAuth] 读取挑战数据失败: {:?}", e);
+            ConnectError::new(AuthErrorCode::ConnectionLost)
+        })?;
+        Ok::<Vec<u8>, ConnectError>(data)
     })
     .await
-    .map_err(|_| "接收挑战超时".to_string())??;
+    .map_err(|_| ConnectError::new(AuthErrorCode::StreamTimeout))??;
 
-    let challenge_envelope = Envelope::decode(&challenge_data)?;
+    let challenge_envelope = Envelope::decode(&challenge_data)
+        .map_err(|e| {
+            tracing::warn!("[PubKeyAuth] 挑战解码失败: {:?}", e);
+            ConnectError::new(AuthErrorCode::ProtocolError)
+        })?;
     let (challenge, challenge_id) = match challenge_envelope.payload {
         Payload::AuthPubKeyChallenge { challenge, challenge_id } => {
             tracing::debug!("[PubKeyAuth] 收到挑战（长度={}字节，id={}）", challenge.len(), challenge_id);
             (challenge, challenge_id)
         }
-        Payload::Error { message, .. } => {
-            tracing::error!("[PubKeyAuth] Agent 返回错误: {}", message);
-            return Err(format!("Agent 错误: {}", message));
+        Payload::Error { code, message } => {
+            // 归因黑洞补丁：Agent 主动通知的失败（区别于裸网络断开）
+            tracing::warn!("[PubKeyAuth] Agent 返回错误: code={}, message={}", code, message);
+            let err_code = AuthErrorCode::from_i32(code).unwrap_or(AuthErrorCode::Unknown);
+            return Err(ConnectError::with_detail(err_code, message));
         }
         other => {
             tracing::error!("[PubKeyAuth] 期望挑战，收到: {:?}", other);
-            return Err(format!("期望 AuthPubKeyChallenge，收到: {:?}", other));
+            return Err(ConnectError::new(AuthErrorCode::ProtocolError));
         }
     };
 
@@ -1775,7 +1901,7 @@ async fn perform_pubkey_auth(
             // 获取 RSA 私钥的原始数据
             let rsa_keypair = match key.key_data() {
                 ssh_key::private::KeypairData::Rsa(rsa) => rsa,
-                _ => return Err("密钥数据不是 RSA 格式".to_string()),
+                _ => return Err(ConnectError::new(AuthErrorCode::KeyParseFailed)),
             };
 
             // 构造 RSA 私钥用于签名
@@ -1803,7 +1929,7 @@ async fn perform_pubkey_auth(
                 ],
             ).map_err(|e| {
                 tracing::error!("[PubKeyAuth] RSA 密钥构造失败: {}", e);
-                format!("RSA 密钥构造失败: {}", e)
+                ConnectError::new(AuthErrorCode::KeyParseFailed)
             })?;
 
             // 使用 PKCS#1 v1.5 签名（SSH 标准使用的方式）
@@ -1834,19 +1960,19 @@ async fn perform_pubkey_auth(
             // 使用 ssh_key 的标准签名
             let sshsig = key.sign("quirel", ssh_key::HashAlg::default(), &challenge).map_err(|e| {
                 tracing::error!("[PubKeyAuth] Ed25519 签名失败: {}", e);
-                format!("Ed25519 签名失败: {}", e)
+                ConnectError::new(AuthErrorCode::KeyParseFailed)
             })?;
 
             let sig_pem = sshsig.to_pem(ssh_key::LineEnding::default()).map_err(|e| {
                 tracing::error!("[PubKeyAuth] 签名 PEM 编码失败: {}", e);
-                format!("签名 PEM 编码失败: {}", e)
+                ConnectError::new(AuthErrorCode::KeyParseFailed)
             })?;
 
             sig_pem.into_bytes()
         }
         other => {
             tracing::error!("[PubKeyAuth] 不支持的密钥算法: {:?}", other);
-            return Err(format!("不支持的密钥算法: {:?}", other));
+            return Err(ConnectError::new(AuthErrorCode::InvalidKeyFormat));
         }
     };
 
@@ -1858,8 +1984,11 @@ async fn perform_pubkey_auth(
 
     let (mut resp_send, mut resp_recv) = tokio::time::timeout(timeout_duration, conn.open_bi())
         .await
-        .map_err(|_| "创建响应 Stream 超时".to_string())?
-        .map_err(|e| format!("创建响应 Stream 失败: {}", e))?;
+        .map_err(|_| ConnectError::new(AuthErrorCode::StreamTimeout))?
+        .map_err(|e| {
+            tracing::warn!("[PubKeyAuth] 创建响应 Stream 失败: {:?}", e);
+            ConnectError::new(AuthErrorCode::ConnectionLost)
+        })?;
 
     let response_envelope = Envelope::new(request_id, Payload::AuthPubKeyResponse {
         challenge_id: challenge_id.clone(),
@@ -1867,53 +1996,79 @@ async fn perform_pubkey_auth(
         public_key: public_key.clone(),
     });
 
-    let bytes = response_envelope.encode()?;
+    let bytes = response_envelope.encode().map_err(|e| {
+        tracing::warn!("[PubKeyAuth] 响应编码失败: {}", e);
+        ConnectError::new(AuthErrorCode::ProtocolError)
+    })?;
     let len = (bytes.len() as u32).to_le_bytes();
 
     tracing::info!("[PubKeyAuth] 发送签名响应...");
 
     tokio::time::timeout(timeout_duration, async {
-        resp_send.write_all(&len).await.map_err(|e| format!("发送签名长度失败: {}", e))?;
-        resp_send.write_all(&bytes).await.map_err(|e| format!("发送签名数据失败: {}", e))?;
-        resp_send.flush().await.map_err(|e| format!("刷新发送缓冲区失败: {}", e))?;
-        Ok::<(), String>(())
+        resp_send.write_all(&len).await.map_err(|e| {
+            tracing::warn!("[PubKeyAuth] 发送签名长度失败: {:?}", e);
+            ConnectError::new(AuthErrorCode::ConnectionLost)
+        })?;
+        resp_send.write_all(&bytes).await.map_err(|e| {
+            tracing::warn!("[PubKeyAuth] 发送签名数据失败: {:?}", e);
+            ConnectError::new(AuthErrorCode::ConnectionLost)
+        })?;
+        resp_send.flush().await.map_err(|e| {
+            tracing::warn!("[PubKeyAuth] 刷新发送缓冲区失败: {:?}", e);
+            ConnectError::new(AuthErrorCode::ConnectionLost)
+        })?;
+        Ok::<(), ConnectError>(())
     })
     .await
-    .map_err(|_| "发送签名响应超时".to_string())??;
+    .map_err(|_| ConnectError::new(AuthErrorCode::StreamTimeout))??;
 
     tracing::info!("[PubKeyAuth] 签名响应已发送，等待最终认证结果...");
 
     // ── 第六步：接收最终认证结果 ───────────────────────
     let final_data = tokio::time::timeout(timeout_duration, async {
         let mut len_buf = [0u8; 4];
-        resp_recv.read_exact(&mut len_buf).await.map_err(|e| format!("读取认证结果长度失败: {}", e))?;
+        resp_recv.read_exact(&mut len_buf).await.map_err(|e| {
+            tracing::warn!("[PubKeyAuth] 读取认证结果长度失败: {:?}", e);
+            ConnectError::new(AuthErrorCode::ConnectionLost)
+        })?;
         let resp_len = u32::from_le_bytes(len_buf) as usize;
 
         let mut data = vec![0u8; resp_len];
-        resp_recv.read_exact(&mut data).await.map_err(|e| format!("读取认证结果数据失败: {}", e))?;
-        Ok::<Vec<u8>, String>(data)
+        resp_recv.read_exact(&mut data).await.map_err(|e| {
+            tracing::warn!("[PubKeyAuth] 读取认证结果数据失败: {:?}", e);
+            ConnectError::new(AuthErrorCode::ConnectionLost)
+        })?;
+        Ok::<Vec<u8>, ConnectError>(data)
     })
     .await
-    .map_err(|_| "接收认证结果超时".to_string())??;
+    .map_err(|_| ConnectError::new(AuthErrorCode::StreamTimeout))??;
 
-    let final_envelope = Envelope::decode(&final_data)?;
+    let final_envelope = Envelope::decode(&final_data)
+        .map_err(|e| {
+            tracing::warn!("[PubKeyAuth] 认证结果解码失败: {:?}", e);
+            ConnectError::new(AuthErrorCode::ProtocolError)
+        })?;
     match final_envelope.payload {
-        Payload::AuthResponse { success, error, session_id } => {
+        Payload::AuthResponse { success, error, session_id, code } => {
             if success {
                 tracing::info!("[PubKeyAuth] 公钥认证成功: username={}, session_id={:?}", username, session_id);
                 Ok(session_id)
             } else {
-                tracing::error!("[PubKeyAuth] 公钥认证失败: {:?}", error);
-                Err(error.unwrap_or_else(|| "公钥认证失败".to_string()))
+                // 优先使用结构化 code；旧版 Agent 无 code 时按文案 fallback 分类
+                let err_code = code
+                    .unwrap_or_else(|| classify_legacy_error(error.as_deref().unwrap_or("")));
+                tracing::error!("[PubKeyAuth] 公钥认证失败: code={:?}, error={:?}", err_code, error);
+                Err(ConnectError::with_detail(err_code, error.unwrap_or_else(|| "公钥认证失败".to_string())))
             }
         }
-        Payload::Error { message, .. } => {
-            tracing::error!("[PubKeyAuth] Agent 返回错误: {}", message);
-            Err(format!("Agent 错误: {}", message))
+        Payload::Error { code, message } => {
+            tracing::error!("[PubKeyAuth] Agent 返回错误: code={}, message={}", code, message);
+            let err_code = AuthErrorCode::from_i32(code).unwrap_or(AuthErrorCode::Unknown);
+            Err(ConnectError::with_detail(err_code, message))
         }
         other => {
             tracing::error!("[PubKeyAuth] 期望认证结果，收到: {:?}", other);
-            Err(format!("期望 AuthResponse，收到: {:?}", other))
+            Err(ConnectError::new(AuthErrorCode::ProtocolError))
         }
     }
 }
@@ -2121,4 +2276,33 @@ fn generate_key_parse_error(key_data: &str) -> String {
     }
 
     error_msg
+}
+
+#[cfg(test)]
+mod connect_error_tests {
+    use super::*;
+
+    /// 旧版 Agent（无结构化 code）的中文文案 → 最近似 AuthErrorCode
+    #[test]
+    fn classify_legacy_error_maps_known_agent_texts() {
+        assert_eq!(classify_legacy_error("请求过于频繁，请稍后再试"), AuthErrorCode::RateLimited);
+        assert_eq!(classify_legacy_error("账户暂时锁定，请15分钟后再试"), AuthErrorCode::AccountLocked);
+        assert_eq!(classify_legacy_error("用户名或密码错误"), AuthErrorCode::InvalidCredentials);
+        assert_eq!(classify_legacy_error("公钥未授权"), AuthErrorCode::PubkeyNotAuthorized);
+        assert_eq!(classify_legacy_error("签名验证失败"), AuthErrorCode::SignatureVerificationFailed);
+        assert_eq!(classify_legacy_error("公钥验证失败"), AuthErrorCode::SignatureVerificationFailed);
+        assert_eq!(classify_legacy_error("认证服务暂时不可用"), AuthErrorCode::AuthServiceUnavailable);
+        assert_eq!(classify_legacy_error("QUIC 连接超时 (5秒)"), AuthErrorCode::StreamTimeout);
+        assert_eq!(classify_legacy_error("QUIC 连接失败: QUIC 握手失败: ..."), AuthErrorCode::ConnectTimeout);
+        assert_eq!(classify_legacy_error("任何未识别的文本"), AuthErrorCode::Unknown);
+    }
+
+    /// ConnectError 序列化形状（前端 parseConnectError 的解析契约）
+    #[test]
+    fn connect_error_serializes_code_and_detail() {
+        let e = ConnectError::with_detail(AuthErrorCode::AccountLocked, "prod-1");
+        assert_eq!(serde_json::to_string(&e).unwrap(), r#"{"code":201,"detail":"prod-1"}"#);
+        let e2 = ConnectError::new(AuthErrorCode::ConnectionLost);
+        assert_eq!(serde_json::to_string(&e2).unwrap(), r#"{"code":106,"detail":null}"#);
+    }
 }

@@ -7,4 +7,5 @@ pub use quirel_protocol::{
     FileDiff, DiffType,
     AuthStatsSnapshot, ConnectionStatsSnapshot, PerformanceStatsSnapshot,
     ResponseTimePercentiles, StatsResponse,
+    AuthErrorCode,
 };

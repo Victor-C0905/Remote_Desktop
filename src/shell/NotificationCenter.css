@@ -262,6 +262,15 @@
   color: var(--quirel-text-secondary);
   margin-bottom: 4px;
   line-height: 1.4;
+  white-space: pre-line;
+}
+
+/* ── 行动建议行 ──────────────────────────────────────── */
+.nc-notif-action {
+  font-size: 12px;
+  color: #99c1f1;
+  margin-top: 2px;
+  white-space: pre-line;
 }
 
 .nc-notif-time {
