@@ -131,6 +131,9 @@
 }
 
 .nc-filter-btn {
+  display: inline-flex;   /* 圆点与文字垂直居中对齐 */
+  align-items: center;
+  gap: 4px;
   font-size: var(--font-small);
   color: var(--quirel-text-secondary);
   background: var(--quirel-card-bg);
@@ -408,8 +411,6 @@
   width: 11px;
   height: 11px;
   border-radius: 50%;
-  margin-right: 4px;
-  vertical-align: middle;
   flex: none;
   /* 底部内阴影暗弧 + 微外投影：还原 emoji 圆点的立体感 */
   box-shadow: inset 0 -1px 1.5px rgba(0, 0, 0, 0.22), 0 1px 1px rgba(0, 0, 0, 0.14);
