@@ -93,7 +93,7 @@
 }
 
 .nc-action-danger:hover {
-  background: #e01b24;
+  background: var(--quirel-danger-fg);
   color: #ffffff;
 }
 
@@ -113,7 +113,7 @@
 }
 
 .nc-close-btn:hover {
-  background: #e01b24;
+  background: var(--quirel-danger-fg);
   color: #ffffff;
 }
 
@@ -169,7 +169,7 @@
 }
 
 .nc-filters::-webkit-scrollbar-thumb:hover {
-  background: rgba(0,0,0,0.2);
+  background: var(--quirel-border-color);
 }
 
 /* ── Notification List ──────────────────────────────── */
@@ -190,7 +190,7 @@
 }
 
 .nc-empty-icon {
-  font-size: 32px;
+  color: var(--quirel-text-disabled);
 }
 
 .nc-empty-text {
@@ -206,6 +206,8 @@
   cursor: pointer;
   transition: background var(--duration-fast) var(--ease-out);
   position: relative;
+  /* 严重度左边框（未读时着色，已读中性；色值见下方 Urgency Styles） */
+  border-left: 3px solid transparent;
 }
 
 .nc-notif:hover {
@@ -220,11 +222,11 @@
   background: var(--quirel-card-hover);  /* 暖灰悬停 */
 }
 
-.nc-notif-icon {
-  font-size: 20px;
-  flex-shrink: 0;
+/* Symbolic 严重度图标（继承 urgency 语义色，见文件末尾着色规则） */
+.nc-notif-sev-icon {
+  flex: none;
+  margin-top: 2px;
   width: 24px;
-  text-align: center;
 }
 
 .nc-notif-content {
@@ -268,7 +270,7 @@
 /* ── 行动建议行 ──────────────────────────────────────── */
 .nc-notif-action {
   font-size: 12px;
-  color: #99c1f1;
+  color: var(--quirel-text-secondary);
   margin-top: 2px;
   white-space: pre-line;
 }
@@ -302,21 +304,21 @@
 }
 
 .nc-notif-dismiss:hover {
-  background: #e01b24;
+  background: var(--quirel-danger-fg);
   color: #ffffff;
 }
 
-/* ── Urgency Styles ─────────────────────────────────── */
-.nc-notif-urgency-critical {
-  border-left: 3px solid #e01b24;
+/* ── Urgency Styles（未读时左边框着色，已读中性） ───── */
+.nc-unread.nc-notif-urgency-critical {
+  border-left-color: var(--quirel-danger-fg);
 }
 
-.nc-notif-urgency-normal {
-  border-left: 3px solid #e8a416;
+.nc-unread.nc-notif-urgency-normal {
+  border-left-color: var(--quirel-warning-fg);
 }
 
-.nc-notif-urgency-low {
-  border-left: 3px solid #33d17a;
+.nc-unread.nc-notif-urgency-low {
+  border-left-color: var(--quirel-success-fg);
 }
 
 /* ── Footer ─────────────────────────────────────────── */
@@ -332,7 +334,7 @@
 }
 
 .nc-footer-warning {
-  color: #e01b24;
+  color: var(--quirel-danger-fg);
   font-weight: 600;
 }
 
@@ -355,7 +357,7 @@
 }
 
 .nc-badge-critical {
-  background: #e01b24;
+  background: var(--quirel-danger-fg);
   animation: ncPulse 1s ease-in-out infinite;
 }
 
@@ -364,11 +366,42 @@
   50% { transform: scale(1.1); }
 }
 
-/* ── Dark Mode Adjustments ─────────────────────────── */
-[data-theme="dark"] .nc-unread {
-  background: rgba(98, 160, 234, 0.15);
+/* ── Symbolic 图标着色（条目，按 urgency） ──────────── */
+.nc-notif-urgency-critical .nc-notif-sev-icon { color: var(--quirel-danger-fg); }
+.nc-notif-urgency-normal .nc-notif-sev-icon { color: var(--quirel-warning-fg); }
+.nc-notif-urgency-low .nc-notif-sev-icon { color: var(--quirel-success-fg); }
+
+/* 删除按钮 hover 显示（降低视觉噪音；.nc-notif-dismiss 原有 opacity 过渡保留） */
+.nc-notif:hover .nc-notif-dismiss,
+.nc-notif-dismiss:focus-visible {
+  opacity: 1;
 }
 
-[data-theme="dark"] .nc-unread:hover {
-  background: rgba(98, 160, 234, 0.25);
+/* 筛选行语义色点 */
+.nc-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
+.nc-dot-critical { background: var(--quirel-danger-fg); }
+.nc-dot-normal { background: var(--quirel-warning-fg); }
+.nc-dot-low { background: var(--quirel-success-fg); }
+
+/* 头部操作按钮图标 */
+.nc-action-btn .symbolic-icon {
+  vertical-align: -2px;
+  margin-right: 2px;
+  color: var(--quirel-text-secondary);
+}
+
+.nc-action-danger .symbolic-icon {
+  color: var(--quirel-danger-fg);
+}
+
+.nc-close-btn .symbolic-icon {
+  color: var(--quirel-text-secondary);
 }

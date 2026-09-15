@@ -465,6 +465,9 @@
 }
 
 .offline-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: 13pt;
   font-weight: 700;
   color: var(--quirel-text-primary);
@@ -472,6 +475,10 @@
   padding: 6px 16px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--quirel-border-color);
+}
+
+.offline-badge-icon {
+  color: var(--quirel-text-secondary);
 }
 
 .offline-hint {

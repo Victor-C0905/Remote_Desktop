@@ -12,6 +12,10 @@ import {
 import { MonitorSkeleton } from "../components/skeleton/MonitorSkeleton";
 import { createLogger } from '../utils/logger';
 import { StatsPanel } from "../components/StatsPanel";
+import { SymbolicIcon } from "../components/symbolic";
+import { ConnectionErrorState, ReconnectingState } from "../components/ConnectionState";
+import { getServerErrorInfo } from "../stores/serversStore";
+import { useOpenApp } from "../window-system/hooks/useOpenApp";
 // import { useWindowState } from "../window-system/hooks/useWindowState"; // 未来集成时使用
 import "./SystemMonitor.css";
 
@@ -138,7 +142,14 @@ function MiniChart({ data, color, height, max }: MiniChartProps) {
 export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
   // 窗口系统集成（未来可能需要使用 windowState）
   // const windowState = useWindowState(windowId);
-  const { activeServerId, activeServer } = useServerManager();
+  const { activeServerId, activeServer, servers, connectServer } = useServerManager();
+  const openApp = useOpenApp();
+
+  // 断连故障服务器（activeServerId 已清空，按状态识别；reconnecting 优先于 error）
+  const troubledServer =
+    servers.find((s) => s.status === "reconnecting") ||
+    servers.find((s) => s.status === "error") ||
+    null;
 
   const [activeTab, setActiveTab] = useState<TabId>("resources");
   // 永远不为 null：离线时 = OFFLINE_METRICS，在线时 = 真实数据
@@ -303,14 +314,35 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
       {/* Content — 三层状态门控 */}
       <div className="sm-content">
         {showOffline ? (
-          /* 层 3: 离线占位符（无连接/断连后） */
+          troubledServer ? (
+            /* 连接中断：自动重连轻量态 / 最终失败错误态 */
+            <div className="sm-offline-state">
+              <MonitorSkeleton />
+              <div className="sm-offline-overlay">
+                {troubledServer.status === "reconnecting" ? (
+                  <ReconnectingState serverName={troubledServer.name || troubledServer.host} />
+                ) : (
+                  <ConnectionErrorState
+                    {...getServerErrorInfo(troubledServer)}
+                    onRetry={() => connectServer(troubledServer.id)}
+                    onOpenSettings={() => openApp("settings")}
+                  />
+                )}
+              </div>
+            </div>
+          ) : (
+          /* 层 3: 离线占位符（从未连接/用户主动断开） */
           <div className="sm-offline-state">
             <MonitorSkeleton />
             <div className="sm-offline-overlay">
-              <div className="offline-badge">📡 未连接</div>
+              <div className="offline-badge">
+                <SymbolicIcon name="network-offline" size={16} className="offline-badge-icon" />
+                未连接
+              </div>
               <div className="offline-hint">连接到远程服务器以查看系统监控数据</div>
             </div>
           </div>
+          )
         ) : showSkeleton ? (
           /* 层 1: 骨架屏（有连接但等待首条数据） */
           <MonitorSkeleton />

@@ -34,6 +34,19 @@
   --quirel-error-color:      #e01b24;      /* Adwaita Red - 错误状态 */
   --quirel-warning-color:    #f5c211;      /* Adwaita Yellow - 警告状态 */
 
+  /* ── 语义严重度令牌（通知/错误 UI 统一）────────────── */
+  /* urgency 映射：critical→danger / normal→warning / low→success */
+  /* 单套定义（与 Status Colors 同模式）；-bg 半透明，亮暗主题通用 */
+  --quirel-danger-fg:        #c01c28;      /* 深红，亮背景可读 */
+  --quirel-danger-bg:       rgba(224, 27, 36, 0.08);
+  --quirel-danger-border:   rgba(224, 27, 36, 0.35);
+  --quirel-warning-fg:      #9c5b00;      /* 深橙，亮背景可读 */
+  --quirel-warning-bg:      rgba(245, 194, 17, 0.14);
+  --quirel-warning-border:  rgba(245, 194, 17, 0.45);
+  --quirel-success-fg:      #1b7f4d;      /* 深绿，亮背景可读 */
+  --quirel-success-bg:      rgba(38, 162, 105, 0.10);
+  --quirel-success-border:  rgba(38, 162, 105, 0.35);
+
   /* Borders */
   --quirel-border-color:   rgba(0, 0, 0, 0.15);
   --quirel-border-focus:   #3584e4;

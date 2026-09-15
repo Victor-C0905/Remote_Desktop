@@ -107,6 +107,10 @@
   position: relative;
 }
 
+.notificationBtn svg {
+  display: block;
+}
+
 .notificationBtn:hover {
   background: var(--quirel-border-color);
 }

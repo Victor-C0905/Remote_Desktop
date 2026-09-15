@@ -5,6 +5,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { useServerManager } from "../context/ServerManager";
 import { useSettingsStore } from "../stores/settingsStore";
 import { createLogger } from "../utils/logger";
+import { SymbolicIcon } from "../components/symbolic";
+import { ConnectionErrorState, ReconnectingState } from "../components/ConnectionState";
+import { getServerErrorInfo } from "../stores/serversStore";
+import { useOpenApp } from "../window-system/hooks/useOpenApp";
 import "./BrowserApp.css";
 
 const log = createLogger("BrowserApp");
@@ -35,7 +39,8 @@ interface ProxySessionStatus {
  * - 可选择用哪个浏览器打开（自动 / Edge / Chrome / Firefox / 自定义路径）
  */
 export function BrowserApp() {
-  const { activeServer } = useServerManager();
+  const { activeServer, servers, connectServer } = useServerManager();
+  const openApp = useOpenApp();
   // 默认浏览器取全局设置（设置 → 浏览器 中配置，此处只读）
   const pref = useSettingsStore((s) => s.browserId);
   // SOCKS5 固定端口（断线重连后浏览器无需重开）
@@ -137,10 +142,36 @@ export function BrowserApp() {
 
   // ── 未连接：占位提示 ────────────────────────────────────
   if (!connected) {
+    // 断连故障服务器（activeServerId 已清空，按状态识别；reconnecting 优先于 error）
+    const troubledServer =
+      servers.find((s) => s.status === "reconnecting") ||
+      servers.find((s) => s.status === "error") ||
+      null;
+
+    if (troubledServer) {
+      return (
+        <div className="ba">
+          <div className="ba-empty">
+            {troubledServer.status === "reconnecting" ? (
+              <ReconnectingState serverName={troubledServer.name || troubledServer.host} />
+            ) : (
+              <ConnectionErrorState
+                {...getServerErrorInfo(troubledServer)}
+                onRetry={() => connectServer(troubledServer.id)}
+                onOpenSettings={() => openApp("settings")}
+              />
+            )}
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="ba">
         <div className="ba-empty">
-          <div className="ba-empty-icon">🌐</div>
+          <div className="ba-empty-icon">
+            <SymbolicIcon name="network-offline" size={32} />
+          </div>
           <div className="ba-empty-title">未连接服务器</div>
           <div className="ba-empty-desc">连接服务器后，可通过服务器网络浏览网页</div>
         </div>
