@@ -835,14 +835,42 @@
 
 /* ── Connection Error ───────────────────────────────── */
 .st-conn-error {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
   font-size: var(--font-small);
-  color: #e01b24;
-  background: rgba(224, 27, 36, 0.1);
+  color: var(--quirel-danger-fg);
+  background: var(--quirel-danger-bg);
+  border: 1px solid var(--quirel-danger-border);
   padding: 8px 12px;
   border-radius: var(--radius-xs);
   margin-top: 8px;
-  /* 展示文本含 \n 分隔的标题/消息/建议/对比提示，需多行显示 */
+}
+
+.st-conn-error-icon {
+  flex: none;
+  margin-top: 1px;
+  color: var(--quirel-danger-fg);
+}
+
+.st-conn-error-body {
+  min-width: 0;
+}
+
+.st-conn-error-title {
+  font-weight: 600;
+}
+
+.st-conn-error-message {
+  color: var(--quirel-text-secondary);
   white-space: pre-line;
+}
+
+.st-conn-error-hint {
+  color: var(--quirel-text-secondary);
+  opacity: 0.85;
+  white-space: pre-line;
+  margin-top: 2px;
 }
 
 /* ── Wallpaper ──────────────────────────────────────── */

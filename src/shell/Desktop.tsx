@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, memo, useRef } from "react";
 import { NotificationCenter } from "./NotificationCenter";
+import { ArrivalToast } from "./ArrivalToast";
 import { TopBar } from "./TopBar/TopBar";
 import { useGlobalShortcuts, createAppShortcuts } from "../hooks/useGlobalShortcuts";
 import { ServerManagerProvider, useServerManager } from "../context/ServerManager";
@@ -386,6 +387,9 @@ function DesktopContent() {
         isOpen={notificationOpen}
         onClose={() => setNotificationOpen(false)}
       />
+
+      {/* 新通知到达预览条（TopBar 下方居中，点击打开通知中心） */}
+      <ArrivalToast onOpen={() => setNotificationOpen(true)} />
     </div>
   );
 }

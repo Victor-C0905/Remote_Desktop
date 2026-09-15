@@ -338,7 +338,8 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
       const display = buildConnectFailureText(err, others);
       log.error("连接失败:", display);
 
-      setServerStatus(id, "error", display);
+      // store 存结构化错误（Settings/应用错误态查表渲染）；display 完整文本仅用于日志与通知
+      setServerStatus(id, "error", parseConnectError(err));
       notifyConnectFailure(server, err);
     }
   }, [servers, activeServerId, setServerStatus, setActiveServerId, performConnect, notifyConnectFailure]);
@@ -387,7 +388,7 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
           .servers.filter((s) => s.id !== serverId && s.status === "connected").length;
         const display = `自动重连失败: ${buildConnectFailureText(err, others)}`;
         log.warn(display);
-        setServerStatus(serverId, "error", display);
+        setServerStatus(serverId, "error", parseConnectError(err));
         useNotificationStore.getState().pushNotification({
           title: "自动重连失败",
           body: buildConnectFailureText(err, others),

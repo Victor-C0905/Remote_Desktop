@@ -2,7 +2,8 @@ import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import { serversStorage } from "../utils/storage";
 import { createLogger } from "../utils/logger";
-import { ServerConfig, AuthMethod } from "../types/server";
+import { ServerConfig, AuthMethod, StructuredError } from "../types/server";
+import { getErrorInfo, parseConnectError } from "../types/errors";
 
 const log = createLogger('ServersStore');
 
@@ -23,7 +24,7 @@ export interface ServersActions {
   removeServer: (id: string) => void;
   updateServer: (id: string, updates: Partial<ServerConfig>) => void;
   setActiveServerId: (id: string | null) => void;
-  setServerStatus: (id: string, status: ServerConfig["status"], error?: string, rttMs?: number) => void;
+  setServerStatus: (id: string, status: ServerConfig["status"], error?: StructuredError | string, rttMs?: number) => void;
   /** 仅更新 RTT（心跳 server_rtt 事件）：不动 status/error，避免覆盖重连中等中间状态 */
   setServerRtt: (id: string, rttMs: number) => void;
   resetAllStatus: () => void;
@@ -156,11 +157,11 @@ export function formatLastConnected(timestamp?: number): string {
 
 export function getStatusColor(status: ServerConfig["status"]): string {
   switch (status) {
-    case "connected": return "#33d17a";
-    case "connecting": return "#e8a416";
+    case "connected": return "var(--quirel-success-color)";
+    case "connecting": return "var(--quirel-warning-color)";
     case "reconnecting": return "#ff7800";
     case "disconnected": return "#9a9996";
-    case "error": return "#e01b24";
+    case "error": return "var(--quirel-error-color)";
   }
 }
 
@@ -172,4 +173,39 @@ export function getStatusIcon(status: ServerConfig["status"]): string {
     case "disconnected": return "⚫";
     case "error": return "🔴";
   }
+}
+
+/** getServerErrorInfo 的返回结构（供 Settings/应用错误态渲染） */
+export interface ServerErrorDisplay {
+  title: string;
+  message: string;
+  action: string;
+  detail?: string;
+  /** 其他服务器连接正常时的对比提示（多行） */
+  hint?: string;
+}
+
+/**
+ * 组装服务器的结构化错误展示信息。
+ * - 结构化 error → 查 ERROR_MAP 映射
+ * - 字符串 error（旧格式）→ Unknown 映射 + detail
+ * - hint 为「其他 N 台服务器连接正常」对比提示（读取当前 store，零探测）
+ */
+export function getServerErrorInfo(server: ServerConfig): ServerErrorDisplay {
+  const parsed = server.error
+    ? parseConnectError(server.error)
+    : { code: 999, detail: undefined };
+  const info = getErrorInfo(parsed.code);
+  const others = useServersStore
+    .getState()
+    .servers.filter((s) => s.id !== server.id && s.status === "connected").length;
+  return {
+    title: info.title,
+    message: info.message,
+    action: info.action,
+    detail: parsed.detail,
+    hint: others > 0
+      ? `ℹ️ 其他 ${others} 台服务器连接正常，仅此台无法连接\n可能是本机与该服务器之间的网络问题，建议更换网络环境后重试`
+      : undefined,
+  };
 }

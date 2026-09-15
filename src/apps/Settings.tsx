@@ -9,6 +9,8 @@ import { ThemeId } from "../config/themes";
 import { createLogger } from '../utils/logger';
 import { AuthMethod } from '../types/server';
 import { StatsPanel } from '../components/StatsPanel';
+import { SymbolicIcon } from '../components/symbolic';
+import { getServerErrorInfo } from '../stores/serversStore';
 import { getSettingsStorage } from '../utils/storage';
 // import { useWindowState } from "../window-system/hooks/useWindowState"; // 未来集成时使用
 import "./Settings.css";
@@ -644,9 +646,22 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                     </span>
                   </div>
                 )}
-                {cardServer?.error && (
-                  <div className="st-conn-error">{cardServer.error}</div>
-                )}
+                {(() => {
+                  if (!cardServer?.error) return null;
+                  const ei = getServerErrorInfo(cardServer);
+                  return (
+                    <div className="st-conn-error">
+                      <SymbolicIcon name="dialog-error" size={14} className="st-conn-error-icon" />
+                      <div className="st-conn-error-body">
+                        <div className="st-conn-error-title">{ei.title}</div>
+                        <div className="st-conn-error-message">
+                          {ei.message}{ei.detail ? `（${ei.detail}）` : ""}
+                        </div>
+                        {ei.hint && <div className="st-conn-error-hint">{ei.hint}</div>}
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
               <div className="st-card-actions">
                 {cardServer?.status === "connected" && (

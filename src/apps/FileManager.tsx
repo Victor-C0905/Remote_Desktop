@@ -11,6 +11,10 @@ import { TransferStatusBar } from "../components/TransferStatusBar";
 import { createLogger } from '../utils/logger';
 import { detectFileFormat, decideOpenTarget, createDefaultRegistry } from '../file-formats/FileOpener';
 import { buildExtractCommand } from '../file-formats/plugins/archive';
+import { SymbolicIcon } from "../components/symbolic";
+import { ConnectionErrorState, ReconnectingState } from "../components/ConnectionState";
+import { getServerErrorInfo } from "../stores/serversStore";
+import { useOpenApp } from "../window-system/hooks/useOpenApp";
 import "./FileManager.css";
 
 const log = createLogger('FileManager');
@@ -130,10 +134,17 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   const initialData = preloadData;
 
   const { activeServerId, servers, connectServer } = useServerManager();
+  const openApp = useOpenApp();
 
   // ── 离线状态判断 ─────────────────────────────────────
   // 无活跃连接 = 离线模式（显示空状态占位符，而非空白或本地文件）
   const isOffline = !activeServerId;
+
+  // 断连故障服务器（activeServerId 已清空，按状态识别；reconnecting 优先于 error）
+  const troubledServer =
+    servers.find((s) => s.status === "reconnecting") ||
+    servers.find((s) => s.status === "error") ||
+    null;
 
   // 路径系统：始终使用 Linux 远程路径格式（远程 Linux 服务器控制工具）
   const [currentPath, setCurrentPath] = useState(() => "/");
@@ -1706,11 +1717,27 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       >
         {/* File List Content（AppLayout自动处理滚动） */}
         {isOffline ? (
-            /* ── 离线空状态 ─────────────────────────────── */
+          troubledServer ? (
+            /* 连接中断：自动重连轻量态 / 最终失败错误态 */
             <div className="fm-offline">
-              <div className="offline-icon">📡</div>
-              <div className="offline-title">无远程连接</div>
-              <div className="offline-desc">请先连接到远程服务器以浏览远程文件系统。</div>
+              {troubledServer.status === "reconnecting" ? (
+                <ReconnectingState serverName={troubledServer.name || troubledServer.host} />
+              ) : (
+                <ConnectionErrorState
+                  {...getServerErrorInfo(troubledServer)}
+                  onRetry={() => connectServer(troubledServer.id)}
+                  onOpenSettings={() => openApp("settings")}
+                />
+              )}
+            </div>
+          ) : (
+          /* ── 离线空状态 ─────────────────────────────── */
+          <div className="fm-offline">
+            <div className="offline-icon">
+              <SymbolicIcon name="network-offline" size={32} />
+            </div>
+            <div className="offline-title">无远程连接</div>
+            <div className="offline-desc">请先连接到远程服务器以浏览远程文件系统。</div>
 
               {servers.length > 0 ? (
                 <div className="offline-servers">
@@ -1723,9 +1750,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                       disabled={server.status === "connecting"}
                     >
                       <span className="osb-status">
-                        {server.status === "connected" ? "🟢" :
-                         server.status === "connecting" ? "🟡" :
-                         server.status === "error" ? "🔴" : "⚪"}
+                        <span className={`osb-dot osb-dot-${server.status}`} />
                       </span>
                       <span className="osb-info">
                         <span className="osb-name">{server.name || server.host}</span>
@@ -1744,7 +1769,8 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                 </div>
               )}
             </div>
-          ) : loading ? (
+          )
+        ) : loading ? (
             <div className="fm-loading">
               <div className="spinner" />
               加载中...

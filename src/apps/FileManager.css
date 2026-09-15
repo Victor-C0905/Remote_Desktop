@@ -926,6 +926,21 @@
   text-align: center;
 }
 
+/* 服务器状态色点（替代 emoji，令牌化） */
+.osb-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.osb-dot-connected { background: var(--quirel-success-color); }
+.osb-dot-connecting { background: var(--quirel-warning-color); }
+.osb-dot-reconnecting { background: #ff7800; }
+.osb-dot-error { background: var(--quirel-error-color); }
+.osb-dot-disconnected { background: #9a9996; }
+
 .fm-offline .offline-server-btn .osb-info {
   display: flex;
   flex-direction: column;

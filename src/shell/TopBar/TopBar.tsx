@@ -2,6 +2,7 @@ import { memo } from "react";
 import { useServerManager, getStatusColor } from "../../context/ServerManager";
 import { formatBytesSafe, formatPercentSafe } from "../../utils/offlineDefaults";
 import { NotificationBadge } from "../NotificationCenter";
+import { SymbolicIcon } from "../../components/symbolic";
 import styles from "./TopBar.module.css";
 
 // 完整的 MetricsSnapshot 类型（匹配 Agent）
@@ -82,8 +83,8 @@ export const TopBar = memo(function TopBar({
       <div className={styles.clock}>{clock}</div>
       
       {/* Notification */}
-      <button className={styles.notificationBtn} onClick={onNotificationClick}>
-        🔔
+      <button className={styles.notificationBtn} onClick={onNotificationClick} aria-label="通知">
+        <SymbolicIcon name={unreadNotifications > 0 ? "bell" : "bell-outline"} size={14} />
         <NotificationBadge
           count={unreadNotifications}
           criticalCount={criticalNotifications}
