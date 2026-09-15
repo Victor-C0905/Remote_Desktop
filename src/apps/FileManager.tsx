@@ -12,9 +12,6 @@ import { createLogger } from '../utils/logger';
 import { detectFileFormat, decideOpenTarget, createDefaultRegistry } from '../file-formats/FileOpener';
 import { buildExtractCommand } from '../file-formats/plugins/archive';
 import { SymbolicIcon } from "../components/symbolic";
-import { ConnectionErrorState, ReconnectingState } from "../components/ConnectionState";
-import { getServerErrorInfo } from "../stores/serversStore";
-import { useOpenApp } from "../window-system/hooks/useOpenApp";
 import "./FileManager.css";
 
 const log = createLogger('FileManager');
@@ -134,17 +131,11 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   const initialData = preloadData;
 
   const { activeServerId, servers, connectServer } = useServerManager();
-  const openApp = useOpenApp();
 
   // ── 离线状态判断 ─────────────────────────────────────
-  // 无活跃连接 = 离线模式（显示空状态占位符，而非空白或本地文件）
+  // 无活跃连接 = 离线模式（显示服务器列表登录界面，而非空白或本地文件）
+  // 注：连接失败已通过通知中心 + Settings 错误行呈现，此处不展示错误态
   const isOffline = !activeServerId;
-
-  // 断连故障服务器（activeServerId 已清空，按状态识别；reconnecting 优先于 error）
-  const troubledServer =
-    servers.find((s) => s.status === "reconnecting") ||
-    servers.find((s) => s.status === "error") ||
-    null;
 
   // 路径系统：始终使用 Linux 远程路径格式（远程 Linux 服务器控制工具）
   const [currentPath, setCurrentPath] = useState(() => "/");
@@ -1717,21 +1708,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       >
         {/* File List Content（AppLayout自动处理滚动） */}
         {isOffline ? (
-          troubledServer ? (
-            /* 连接中断：自动重连轻量态 / 最终失败错误态 */
-            <div className="fm-offline">
-              {troubledServer.status === "reconnecting" ? (
-                <ReconnectingState serverName={troubledServer.name || troubledServer.host} />
-              ) : (
-                <ConnectionErrorState
-                  {...getServerErrorInfo(troubledServer)}
-                  onRetry={() => connectServer(troubledServer.id)}
-                  onOpenSettings={() => openApp("settings")}
-                />
-              )}
-            </div>
-          ) : (
-          /* ── 离线空状态 ─────────────────────────────── */
+          /* ── 离线空状态：服务器列表登录界面 ───────────── */
           <div className="fm-offline">
             <div className="offline-icon">
               <SymbolicIcon name="network-offline" size={32} />
@@ -1769,7 +1746,6 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                 </div>
               )}
             </div>
-          )
         ) : loading ? (
             <div className="fm-loading">
               <div className="spinner" />
