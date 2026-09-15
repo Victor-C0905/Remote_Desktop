@@ -47,6 +47,19 @@
   --quirel-success-bg:      rgba(38, 162, 105, 0.10);
   --quirel-success-border:  rgba(38, 162, 105, 0.35);
 
+  /* ── 通知严重度圆点色板（emoji 观感球体）────────────── */
+  /* 三段径向渐变：hi 左上高光 / mid 主色 / lo 边缘暗色 */
+  /* 默认值 = 中性主题（Adwaita 三色）；运行时由 applyThemeColors 按主题覆盖 */
+  --quirel-dot-critical-hi:  #ff9c9c;
+  --quirel-dot-critical-mid: #e01b24;
+  --quirel-dot-critical-lo:  #a5121a;
+  --quirel-dot-normal-hi:    #ffe26b;
+  --quirel-dot-normal-mid:   #f5c211;
+  --quirel-dot-normal-lo:    #b3870a;
+  --quirel-dot-low-hi:       #8ff0b4;
+  --quirel-dot-low-mid:      #33d17a;
+  --quirel-dot-low-lo:       #1c7a4a;
+
   /* Borders */
   --quirel-border-color:   rgba(0, 0, 0, 0.15);
   --quirel-border-focus:   #3584e4;

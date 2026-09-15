@@ -114,6 +114,17 @@ export function applyThemeColors(
     root.style.setProperty('--quirel-text-secondary', colors.textSecondary);
     root.style.setProperty('--quirel-text-disabled', colors.textDisabled);
     root.style.setProperty('--quirel-border-color', colors.borderColor);
+
+    // 设置通知严重度圆点色板（quirel前缀，emoji 观感球体三段渐变）
+    root.style.setProperty('--quirel-dot-critical-hi', colors.dotCriticalHi);
+    root.style.setProperty('--quirel-dot-critical-mid', colors.dotCriticalMid);
+    root.style.setProperty('--quirel-dot-critical-lo', colors.dotCriticalLo);
+    root.style.setProperty('--quirel-dot-normal-hi', colors.dotNormalHi);
+    root.style.setProperty('--quirel-dot-normal-mid', colors.dotNormalMid);
+    root.style.setProperty('--quirel-dot-normal-lo', colors.dotNormalLo);
+    root.style.setProperty('--quirel-dot-low-hi', colors.dotLowHi);
+    root.style.setProperty('--quirel-dot-low-mid', colors.dotLowMid);
+    root.style.setProperty('--quirel-dot-low-lo', colors.dotLowLo);
   } catch (error) {
     log.error('应用主题颜色失败:', error);
   }

@@ -133,6 +133,26 @@ export interface ThemeColors {
   textDisabled: string;
   /** 边框颜色 */
   borderColor: string;
+
+  // 通知严重度圆点色板（emoji 观感球体：hi 高光 / mid 主色 / lo 边缘暗色）
+  /** 紧急（红）圆点：高光色 */
+  dotCriticalHi: string;
+  /** 紧急（红）圆点：主色 */
+  dotCriticalMid: string;
+  /** 紧急（红）圆点：边缘暗色 */
+  dotCriticalLo: string;
+  /** 普通（黄）圆点：高光色 */
+  dotNormalHi: string;
+  /** 普通（黄）圆点：主色 */
+  dotNormalMid: string;
+  /** 普通（黄）圆点：边缘暗色 */
+  dotNormalLo: string;
+  /** 低（绿）圆点：高光色 */
+  dotLowHi: string;
+  /** 低（绿）圆点：主色 */
+  dotLowMid: string;
+  /** 低（绿）圆点：边缘暗色 */
+  dotLowLo: string;
 }
 
 // ============================================================
@@ -191,6 +211,16 @@ export const themes: Record<ThemeId, Theme> = {
       textSecondary: 'rgba(0, 0, 0, 0.60)',
       textDisabled: 'rgba(0, 0, 0, 0.38)',
       borderColor: 'rgba(0, 0, 0, 0.15)',
+      // 圆点色板（暖纸张）：与米色暖背景和谐的暖调三色
+      dotCriticalHi: '#ff9c9c',        // 高光
+      dotCriticalMid: '#e01b24',       // 主色
+      dotCriticalLo: '#a5121a',        // 边缘暗色
+      dotNormalHi: '#ffe066',
+      dotNormalMid: '#f5c211',
+      dotNormalLo: '#b3870a',
+      dotLowHi: '#7ce3a0',
+      dotLowMid: '#26a269',
+      dotLowLo: '#15764b',
     },
     darkColors: {
       windowBg: '#242424',           // 中性暗色
@@ -210,6 +240,16 @@ export const themes: Record<ThemeId, Theme> = {
       textSecondary: 'rgba(255, 255, 255, 0.60)',
       textDisabled: 'rgba(255, 255, 255, 0.38)',
       borderColor: 'rgba(255, 255, 255, 0.12)',
+      // 圆点色板（暗色）：GNOME 暗色调色板，暗背景上更亮、有发光感
+      dotCriticalHi: '#ffb3ab',
+      dotCriticalMid: '#f66151',
+      dotCriticalLo: '#c0272d',
+      dotNormalHi: '#fff29a',
+      dotNormalMid: '#f8e45c',
+      dotNormalLo: '#c5a10e',
+      dotLowHi: '#a5f0c3',
+      dotLowMid: '#57e389',
+      dotLowLo: '#24a360',
     },
     accentColorOptions: ['warmBlue', 'paperAccent'],
   },
@@ -242,6 +282,16 @@ export const themes: Record<ThemeId, Theme> = {
       textSecondary: 'rgba(0, 0, 0, 0.60)',
       textDisabled: 'rgba(0, 0, 0, 0.38)',
       borderColor: 'rgba(0, 0, 0, 0.15)',
+      // 圆点色板（中性）：Adwaita 官方三色，与中性灰背景和谐
+      dotCriticalHi: '#ff9c9c',
+      dotCriticalMid: '#e01b24',
+      dotCriticalLo: '#a5121a',
+      dotNormalHi: '#ffe26b',
+      dotNormalMid: '#f5c211',
+      dotNormalLo: '#b3870a',
+      dotLowHi: '#8ff0b4',
+      dotLowMid: '#33d17a',
+      dotLowLo: '#1c7a4a',
     },
     darkColors: {
       windowBg: '#242424',           // 中性暗色
@@ -261,6 +311,16 @@ export const themes: Record<ThemeId, Theme> = {
       textSecondary: 'rgba(255, 255, 255, 0.60)',
       textDisabled: 'rgba(255, 255, 255, 0.38)',
       borderColor: 'rgba(255, 255, 255, 0.12)',
+      // 圆点色板（暗色）：GNOME 暗色调色板，暗背景上更亮、有发光感
+      dotCriticalHi: '#ffb3ab',
+      dotCriticalMid: '#f66151',
+      dotCriticalLo: '#c0272d',
+      dotNormalHi: '#fff29a',
+      dotNormalMid: '#f8e45c',
+      dotNormalLo: '#c5a10e',
+      dotLowHi: '#a5f0c3',
+      dotLowMid: '#57e389',
+      dotLowLo: '#24a360',
     },
     // 无可选强调色，使用固定的 Adwaita Blue
   },
@@ -294,6 +354,16 @@ export const themes: Record<ThemeId, Theme> = {
       textSecondary: 'rgba(255, 255, 255, 0.60)',
       textDisabled: 'rgba(255, 255, 255, 0.38)',
       borderColor: 'rgba(255, 255, 255, 0.12)',
+      // 圆点色板（暗色）：GNOME 暗色调色板，暗背景上更亮、有发光感
+      dotCriticalHi: '#ffb3ab',
+      dotCriticalMid: '#f66151',
+      dotCriticalLo: '#c0272d',
+      dotNormalHi: '#fff29a',
+      dotNormalMid: '#f8e45c',
+      dotNormalLo: '#c5a10e',
+      dotLowHi: '#a5f0c3',
+      dotLowMid: '#57e389',
+      dotLowLo: '#24a360',
     },
     darkColors: {
       windowBg: '#242424',           // 与 lightColors 相同
@@ -313,6 +383,16 @@ export const themes: Record<ThemeId, Theme> = {
       textSecondary: 'rgba(255, 255, 255, 0.60)',
       textDisabled: 'rgba(255, 255, 255, 0.38)',
       borderColor: 'rgba(255, 255, 255, 0.12)',
+      // 圆点色板（暗色）：与 lightColors 相同
+      dotCriticalHi: '#ffb3ab',
+      dotCriticalMid: '#f66151',
+      dotCriticalLo: '#c0272d',
+      dotNormalHi: '#fff29a',
+      dotNormalMid: '#f8e45c',
+      dotNormalLo: '#c5a10e',
+      dotLowHi: '#a5f0c3',
+      dotLowMid: '#57e389',
+      dotLowLo: '#24a360',
     },
     // 无可选强调色，使用固定的 Adwaita Blue
   },
