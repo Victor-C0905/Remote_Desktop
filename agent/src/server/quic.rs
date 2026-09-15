@@ -12,7 +12,7 @@ use tokio::time::Duration;
 use crate::config::AgentConfig;
 use crate::subscription::SubscriptionManager;
 use crate::event_bus::EventBus;
-use crate::protocol::{Envelope, Payload};
+use crate::protocol::{AuthErrorCode, Envelope, Payload};
 use crate::auth::{Authenticator, CompositeAuthenticator, UserSession, UserExecutor, ChallengeManager, AuthRateLimiter, StatsManager, ConnectionCloseReason};
 use crate::audit::AuditLogger;
 
@@ -432,7 +432,7 @@ async fn handle_connection(
         tracing::warn!("认证流已关闭: remote={}", remote);
 
         // 发送明确的错误响应
-        if let Err(e) = send_auth_response(&mut auth_send, 0, false, Some("认证流异常关闭"), None).await {
+        if let Err(e) = send_auth_response(&mut auth_send, 0, false, Some("认证流异常关闭"), None, Some(AuthErrorCode::ProtocolError)).await {
             tracing::debug!("发送认证流关闭响应失败: {}", e);
         }
 
@@ -452,7 +452,7 @@ async fn handle_connection(
                 e,
                 auth_data.len()
             );
-            send_auth_response(&mut auth_send, 0, false, Some("协议格式错误"), None).await?;
+            send_auth_response(&mut auth_send, 0, false, Some("协议格式错误"), None, Some(AuthErrorCode::ProtocolError)).await?;
             connection.close(0u32.into(), b"invalid protocol");
             return Ok(());
         }
@@ -490,6 +490,7 @@ async fn handle_connection(
                     false,
                     Some("请求过于频繁，请稍后再试"),
                     None,
+                    Some(AuthErrorCode::RateLimited),
                 ).await?;
 
                 connection.close(0u32.into(), b"rate limited");
@@ -512,6 +513,7 @@ async fn handle_connection(
                     false,
                     Some("账户暂时锁定，请15分钟后再试"),
                     None,
+                    Some(AuthErrorCode::AccountLocked),
                 ).await?;
 
                 connection.close(0u32.into(), b"account locked");
@@ -537,7 +539,7 @@ async fn handle_connection(
                     stats_manager.record_auth_success("password");
 
                     // 发送认证成功响应
-                    send_auth_response(&mut auth_send, auth_envelope.request_id, true, None, Some(&session.session_id)).await?;
+                    send_auth_response(&mut auth_send, auth_envelope.request_id, true, None, Some(&session.session_id), None).await?;
 
                     tracing::info!("✅ 密码认证成功: remote={}, user={}", remote, session.username);
                     session
@@ -553,7 +555,7 @@ async fn handle_connection(
                     stats_manager.record_auth_failure("password");
 
                     // 发送认证失败响应
-                    send_auth_response(&mut auth_send, auth_envelope.request_id, false, Some("用户名或密码错误"), None).await?;
+                    send_auth_response(&mut auth_send, auth_envelope.request_id, false, Some("用户名或密码错误"), None, Some(AuthErrorCode::InvalidCredentials)).await?;
 
                     tracing::warn!("❌ 密码认证失败: remote={}, username={}", remote, username);
                     connection.close(0u32.into(), b"authentication failed");
@@ -571,7 +573,7 @@ async fn handle_connection(
                     stats_manager.record_auth_failure("password");
 
                     // 返回通用错误（不暴露细节）
-                    send_auth_response(&mut auth_send, auth_envelope.request_id, false, Some("认证服务暂时不可用"), None).await?;
+                    send_auth_response(&mut auth_send, auth_envelope.request_id, false, Some("认证服务暂时不可用"), None, Some(AuthErrorCode::AuthServiceUnavailable)).await?;
                     connection.close(0u32.into(), b"authentication failed");
                     return Ok(());
                 }
@@ -603,6 +605,7 @@ async fn handle_connection(
                     false,
                     Some("请求过于频繁，请稍后再试"),
                     None,
+                    Some(AuthErrorCode::RateLimited),
                 ).await?;
 
                 connection.close(0u32.into(), b"rate limited");
@@ -625,6 +628,7 @@ async fn handle_connection(
                     false,
                     Some("账户暂时锁定，请15分钟后再试"),
                     None,
+                    Some(AuthErrorCode::AccountLocked),
                 ).await?;
 
                 connection.close(0u32.into(), b"account locked");
@@ -645,6 +649,7 @@ async fn handle_connection(
                         false,
                         Some("认证服务暂时不可用"),
                         None,
+                        Some(AuthErrorCode::AuthServiceUnavailable),
                     ).await?;
 
                     connection.close(0u32.into(), b"authentication failed");
@@ -673,6 +678,7 @@ async fn handle_connection(
                     false,
                     Some("公钥未授权"),
                     None,
+                    Some(AuthErrorCode::PubkeyNotAuthorized),
                 ).await?;
 
                 connection.close(0u32.into(), b"authentication failed");
@@ -706,13 +712,13 @@ async fn handle_connection(
                 Ok(challenge_bytes) => {
                     if let Err(e) = write_message(&mut auth_send, &challenge_bytes).await {
                         tracing::error!("发送公钥认证挑战失败: {}", e);
-                        connection.close(0u32.into(), b"challenge send failed");
+                        send_error_then_close(&connection, &mut auth_send, AuthErrorCode::ConnectionLost, "网络连接异常", b"challenge send failed").await;
                         return Ok(());
                     }
                 }
                 Err(e) => {
                     tracing::error!("编码公钥认证挑战失败: {}", e);
-                    connection.close(0u32.into(), b"challenge encode failed");
+                    send_error_then_close(&connection, &mut auth_send, AuthErrorCode::AuthServiceUnavailable, "认证服务暂时不可用", b"challenge encode failed").await;
                     return Ok(());
                 }
             }
@@ -731,7 +737,7 @@ async fn handle_connection(
                     let resp_data = read_message(&mut resp_recv).await?;
                     if resp_data.is_none() {
                         tracing::warn!("公钥认证响应流已关闭: remote={}", remote);
-                        connection.close(0u32.into(), b"response stream closed");
+                        send_error_then_close(&connection, &mut auth_send, AuthErrorCode::StreamTimeout, "认证响应超时", b"response stream closed").await;
                         return Ok(());
                     }
 
@@ -784,6 +790,7 @@ async fn handle_connection(
                                             false,
                                             Some("公钥验证失败"),
                                             None,
+                                            Some(AuthErrorCode::SignatureVerificationFailed),
                                         ).await?;
 
                                         connection.close(0u32.into(), b"authentication failed");
@@ -812,6 +819,7 @@ async fn handle_connection(
                                                         false,
                                                         Some("认证服务暂时不可用"),
                                                         None,
+                                                        Some(AuthErrorCode::AuthServiceUnavailable),
                                                     ).await?;
 
                                                     connection.close(0u32.into(), b"authentication failed");
@@ -837,6 +845,7 @@ async fn handle_connection(
                                                 true,
                                                 None,
                                                 Some(&session.session_id),
+                                                None,
                                             ).await?;
 
                                             tracing::info!(
@@ -866,6 +875,7 @@ async fn handle_connection(
                                                 false,
                                                 Some("签名验证失败"),
                                                 None,
+                                                Some(AuthErrorCode::SignatureVerificationFailed),
                                             ).await?;
 
                                             connection.close(0u32.into(), b"authentication failed");
@@ -890,6 +900,7 @@ async fn handle_connection(
                                                 false,
                                                 Some("签名验证失败"),
                                                 None,
+                                                Some(AuthErrorCode::SignatureVerificationFailed),
                                             ).await?;
 
                                             connection.close(0u32.into(), b"authentication failed");
@@ -920,6 +931,7 @@ async fn handle_connection(
                                         false,
                                         Some("公钥验证失败"),
                                         None,
+                                        Some(AuthErrorCode::ChallengeExpired),
                                     ).await?;
 
                                     connection.close(0u32.into(), b"authentication failed");
@@ -929,14 +941,14 @@ async fn handle_connection(
                         }
                         other => {
                             tracing::warn!("期望公钥认证响应，收到: {:?}", other);
-                            connection.close(0u32.into(), b"expected pubkey response");
+                            send_error_then_close(&connection, &mut resp_send, AuthErrorCode::ProtocolError, "协议格式错误", b"expected pubkey response").await;
                             return Ok(());
                         }
                     }
                 }
                 Err(e) => {
                     tracing::warn!("接受公钥认证响应流失败: {}", e);
-                    connection.close(0u32.into(), b"response stream failed");
+                    send_error_then_close(&connection, &mut auth_send, AuthErrorCode::StreamTimeout, "认证响应超时", b"response stream failed").await;
                     return Ok(());
                 }
             }
@@ -944,7 +956,7 @@ async fn handle_connection(
 
         other => {
             tracing::warn!("期望认证请求,收到: {:?}", other);
-            connection.close(0u32.into(), b"expected auth request");
+            send_error_then_close(&connection, &mut auth_send, AuthErrorCode::ProtocolError, "协议格式错误", b"expected auth request").await;
             return Ok(());
         }
     };
@@ -1643,6 +1655,7 @@ async fn send_auth_response(
     success: bool,
     error: Option<&str>,
     session_id: Option<&str>,
+    code: Option<AuthErrorCode>,
 ) -> Result<()> {
     let response = Envelope::new(
         request_id,
@@ -1650,6 +1663,7 @@ async fn send_auth_response(
             success,
             error: error.map(|s| s.to_string()),
             session_id: session_id.map(|s| s.to_string()),
+            code,
         },
     );
 
@@ -1657,6 +1671,27 @@ async fn send_auth_response(
     write_message(send, &resp_bytes).await?;
 
     Ok(())
+}
+
+/// 归因黑洞补丁：先发一帧 Payload::Error 再 close。
+/// 此前这些失败点直接 close，客户端只能看到裸 connection lost，
+/// 无法区分「Agent 主动通知的失败」与「网络断开」。
+/// close code 0x03 = auth-rejected（0x01 idle / 0x02 session 已占用）。
+async fn send_error_then_close(
+    connection: &quinn::Connection,
+    send: &mut SendStream,
+    code: AuthErrorCode,
+    message: &str,
+    close_reason: &'static [u8],
+) {
+    let env = Envelope::new(
+        0,
+        Payload::Error { code: code.as_i32(), message: message.to_string() },
+    );
+    if let Ok(bytes) = env.encode() {
+        let _ = write_message(send, &bytes).await;
+    }
+    connection.close(3u32.into(), close_reason);
 }
 
 /// 处理终端持久 Stream（双向数据隧道）
@@ -2348,4 +2383,27 @@ async fn handle_multi_stream_part_upload(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod auth_error_tests {
+    use quirel_protocol::{AuthErrorCode, Envelope, Payload};
+
+    /// 归因黑洞补丁的错误帧构造规则：
+    /// Payload::Error.code 必须能往返解析为 AuthErrorCode（客户端据此归因）
+    #[test]
+    fn error_frame_carries_auth_error_code() {
+        let env = Envelope::new(0, Payload::Error {
+            code: AuthErrorCode::ConnectionLost.as_i32(),
+            message: "网络连接异常".to_string(),
+        });
+        let bytes = env.encode().unwrap();
+        let back = Envelope::decode(&bytes).unwrap();
+        match back.payload {
+            Payload::Error { code, .. } => {
+                assert_eq!(AuthErrorCode::from_i32(code), Some(AuthErrorCode::ConnectionLost));
+            }
+            _ => panic!("变体不匹配"),
+        }
+    }
 }

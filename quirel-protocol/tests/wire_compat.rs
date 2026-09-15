@@ -317,3 +317,91 @@ fn command_output_resp_wire_format() {
         _ => panic!("变体不匹配"),
     }
 }
+
+// ── 登录通知回应体系：AuthResponse.code 字段（2026-09-15 设计） ──
+
+use quirel_protocol::AuthErrorCode;
+
+#[test]
+fn auth_response_with_code_wire_format() {
+    // 新版 Agent 发送带结构化错误码的认证失败响应
+    let env = Envelope::new(
+        7,
+        Payload::AuthResponse {
+            success: false,
+            error: Some("用户名或密码错误".to_string()),
+            session_id: None,
+            code: Some(AuthErrorCode::InvalidCredentials),
+        },
+    );
+    let json = serde_json::to_string(&env).unwrap();
+    assert_eq!(
+        json,
+        r#"{"request_id":7,"payload":{"type":"auth_response","data":{"success":false,"error":"用户名或密码错误","session_id":null,"code":"InvalidCredentials"}}}"#
+    );
+}
+
+#[test]
+fn auth_response_without_code_compat() {
+    // 旧版 Agent 的响应不含 code 字段 → 新客户端必须可解码且回退 None
+    let raw = r#"{"request_id":7,"payload":{"type":"auth_response","data":{"success":false,"error":"账户暂时锁定，请15分钟后再试","session_id":null}}}"#;
+    let env: Envelope = serde_json::from_str(raw).expect("旧格式必须可解码");
+    match env.payload {
+        Payload::AuthResponse { success, error, session_id: _, code } => {
+            assert!(!success);
+            assert_eq!(error.as_deref(), Some("账户暂时锁定，请15分钟后再试"));
+            assert_eq!(code, None);
+        }
+        _ => panic!("变体不匹配"),
+    }
+}
+
+#[test]
+fn auth_error_code_numeric_roundtrip() {
+    // AuthErrorCode 数值一旦发布不可变更：as_i32/from_i32 必须稳定往返
+    for code in [
+        AuthErrorCode::MissingCredentials,
+        AuthErrorCode::InvalidKeyFormat,
+        AuthErrorCode::KeyParseFailed,
+        AuthErrorCode::CertificateRejected,
+        AuthErrorCode::DnsFailed,
+        AuthErrorCode::ConnectTimeout,
+        AuthErrorCode::TlsHandshakeFailed,
+        AuthErrorCode::NetworkUnreachable,
+        AuthErrorCode::StreamTimeout,
+        AuthErrorCode::ConnectionLost,
+        AuthErrorCode::RateLimited,
+        AuthErrorCode::AccountLocked,
+        AuthErrorCode::InvalidCredentials,
+        AuthErrorCode::PubkeyNotAuthorized,
+        AuthErrorCode::SignatureVerificationFailed,
+        AuthErrorCode::ChallengeExpired,
+        AuthErrorCode::AuthServiceUnavailable,
+        AuthErrorCode::ProtocolError,
+        AuthErrorCode::SessionExpired,
+        AuthErrorCode::Unknown,
+    ] {
+        assert_eq!(AuthErrorCode::from_i32(code.as_i32()), Some(code), "code={:?}", code);
+    }
+    // 既有 HTTP 风格码（≥400）不属于 AuthErrorCode 空间
+    for legacy in [400, 401, 403, 404, 408, 500, 501] {
+        assert_eq!(AuthErrorCode::from_i32(legacy), None);
+    }
+}
+
+#[test]
+fn payload_error_code_carries_auth_error_code() {
+    // Payload::Error.code 保持 i32 类型：归因黑洞补丁复用该字段填 AuthErrorCode 数值
+    let env = Envelope::new(0, Payload::Error {
+        code: AuthErrorCode::ConnectionLost.as_i32(),
+        message: "网络连接异常".to_string(),
+    });
+    let back = roundtrip(&env);
+    match back.payload {
+        Payload::Error { code, message } => {
+            assert_eq!(AuthErrorCode::from_i32(code), Some(AuthErrorCode::ConnectionLost));
+            assert_eq!(message, "网络连接异常");
+        }
+        _ => panic!("变体不匹配"),
+    }
+}

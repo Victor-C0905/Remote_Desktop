@@ -8,6 +8,8 @@ import {
   getStatusColor,
 } from "../stores/serversStore";
 import type { ServerConfig } from "../stores/serversStore";
+import { useNotificationStore } from "../stores/notificationStore";
+import { parseConnectError, getErrorInfo, buildConnectFailureText, isRetryableConnectError } from "../types/errors";
 import { createLogger } from "../utils/logger";
 
 /* ── Types ─────────────────────────────────────────────── */
@@ -26,10 +28,12 @@ interface ConnectionInfo {
  * connection-lost 事件负载（Rust 统一清理块 emit）
  * - user_initiated: 用户主动断开，前端不自动重连
  * - heartbeat / quic_closed / send_failed: 网络断开，前端自动重连
+ * - code: 断连原因分类（AuthErrorCode 数值；null 为通用网络断开）
  */
 interface ConnectionLostPayload {
   server_id: string;
   source: "user_initiated" | "heartbeat" | "quic_closed" | "send_failed";
+  code?: number | null;
 }
 
 interface ServerManagerState {
@@ -58,16 +62,9 @@ const log = createLogger('ServerManager');
 const MAX_RECONNECT_ATTEMPTS = 3;
 const RECONNECT_INTERVAL_MS = 5000;
 
-/**
- * 判断连接错误是否为网络类（可重试）。
- * 认证被拒/证书被拒等确定性失败不重试，避免反复撞密码
- * 触发服务端认证失败锁定（5 次失败锁定 15 分钟）。
- */
-const isRetryableConnectError = (msg: string): boolean =>
-  msg.includes("QUIC 连接失败") ||
-  msg.includes("认证请求失败") ||
-  msg.includes("超时") ||
-  msg.includes("timeout");
+// 可重试判定由 errors.ts 的映射表接管（isRetryableConnectError）：
+// 认证被拒/证书被拒等确定性失败不重试，避免反复撞密码
+// 触发服务端认证失败锁定（5 次失败锁定 15 分钟）。
 
 /* ── Context ──────────────────────────────────────────── */
 
@@ -112,8 +109,8 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
 
     const setupListener = async () => {
       const unlisten = await listen<ConnectionLostPayload>("connection-lost", (event) => {
-        const { server_id: lostServerId, source } = event.payload;
-        log.info("收到连接丢失事件:", lostServerId, "来源:", source);
+        const { server_id: lostServerId, source, code } = event.payload;
+        log.info("收到连接丢失事件:", lostServerId, "来源:", source, "code:", code);
 
         // 通过 ref 读取最新值，而非闭包捕获
         if (activeServerIdRef.current === lostServerId) {
@@ -133,6 +130,19 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
         // 重连成功后恢复 activeServerId，应用现有 effect 自动恢复
         setServerStatus(lostServerId, "reconnecting");
         log.warn(`服务器 ${lostServerId} 连接断开（${source}），开始自动重连`);
+
+        // 断连通知（code 携带分类：如认证超时/会话超时等明确原因）
+        const lostServer = useServersStore.getState().servers.find((s) => s.id === lostServerId);
+        const lostInfo = code != null ? getErrorInfo(code) : null;
+        useNotificationStore.getState().pushNotification({
+          title: lostInfo?.title ?? "网络连接中断",
+          body: lostInfo?.message ?? "与服务器的连接已中断，正在自动重连",
+          action: "自动重连中（最多 3 次）",
+          urgency: "normal",
+          source: lostServer ? lostServer.name || lostServer.host : "连接",
+          serverId: lostServerId,
+        });
+
         scheduleReconnectRef.current(lostServerId, 1);
       });
 
@@ -211,6 +221,31 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
 
   // 注意：不在这里重置状态，因为会干扰用户连接
   // onRehydrateStorage 已经在 serversStore 中处理了重置逻辑
+
+  // ── 连接通知派发（通知中心数据源） ──────────────────────
+  const pushNotification = useNotificationStore((s) => s.pushNotification);
+
+  /** 连接失败通知（含多服务器对比提示——只读已有状态，零探测） */
+  const notifyConnectFailure = useCallback((server: ServerConfig, err: unknown) => {
+    const { code, detail } = parseConnectError(err);
+    const info = getErrorInfo(code);
+    const others = useServersStore
+      .getState()
+      .servers.filter((s) => s.id !== server.id && s.status === "connected").length;
+    const body =
+      `${info.message}${detail && detail !== info.title ? `\n${detail}` : ""}` +
+      (others > 0
+        ? `\n\nℹ️ 其他 ${others} 台服务器连接正常，仅此台无法连接\n可能是本机与该服务器之间的网络问题，建议更换网络环境后重试`
+        : "");
+    pushNotification({
+      title: info.title,
+      body,
+      action: info.action,
+      urgency: info.severity,
+      source: server.name || server.host,
+      serverId: server.id,
+    });
+  }, [pushNotification]);
 
   // 连接核心逻辑：认证凭据 → remote_connect → 状态更新 → 订阅指标
   // 手动连接（connectServer）与自动重连（attemptReconnect）共用
@@ -298,12 +333,15 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
     try {
       await performConnect(server);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log.error("连接失败:", msg);
+      // 结构化解析 → 映射表文案（含对比提示）→ 状态 + 通知双通道
+      const others = servers.filter((s) => s.id !== id && s.status === "connected").length;
+      const display = buildConnectFailureText(err, others);
+      log.error("连接失败:", display);
 
-      setServerStatus(id, "error", msg);
+      setServerStatus(id, "error", display);
+      notifyConnectFailure(server, err);
     }
-  }, [servers, activeServerId, setServerStatus, setActiveServerId, performConnect]);
+  }, [servers, activeServerId, setServerStatus, setActiveServerId, performConnect, notifyConnectFailure]);
 
   // ── 自动重连（网络断开时） ────────────────────────────────
   // 策略：最多 3 次、5 秒间隔；凭据复用已保存配置，无需用户干预。
@@ -329,13 +367,35 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
     try {
       await performConnectRef.current(server);
       log.info("自动重连成功:", serverId);
+      // 重连成功通知（连接恢复）
+      useNotificationStore.getState().pushNotification({
+        title: "连接已恢复",
+        body: `服务器 ${server.name || server.host} 已重新连接`,
+        urgency: "low",
+        source: server.name || server.host,
+        serverId,
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(`自动重连失败 (${attempt}/${MAX_RECONNECT_ATTEMPTS}):`, msg);
 
       // 确定性失败（认证被拒/证书被拒等）不重试，避免触发服务端认证锁定
-      if (!isRetryableConnectError(msg) || attempt >= MAX_RECONNECT_ATTEMPTS) {
-        setServerStatus(serverId, "error", `自动重连失败: ${msg}`);
+      // 门控从字符串白名单升级为映射表查表（isRetryableConnectError 来自 errors.ts）
+      if (!isRetryableConnectError(err) || attempt >= MAX_RECONNECT_ATTEMPTS) {
+        const others = useServersStore
+          .getState()
+          .servers.filter((s) => s.id !== serverId && s.status === "connected").length;
+        const display = `自动重连失败: ${buildConnectFailureText(err, others)}`;
+        log.warn(display);
+        setServerStatus(serverId, "error", display);
+        useNotificationStore.getState().pushNotification({
+          title: "自动重连失败",
+          body: buildConnectFailureText(err, others),
+          action: getErrorInfo(parseConnectError(err).code).action,
+          urgency: "critical",
+          source: server.name || server.host,
+          serverId,
+        });
         return;
       }
       scheduleReconnectRef.current(serverId, attempt + 1);

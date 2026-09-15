@@ -13,6 +13,7 @@ import '@xterm/xterm/css/xterm.css';
 import { useServerManager } from '../context/ServerManager';
 // import { useWindowState } from '../window-system/hooks/useWindowState'; // 未来集成时使用
 import { useWindowEvent } from '../window-system/hooks/useWindowEvent';
+import { describeTerminalFailure } from '../types/errors';
 import { createLogger } from '../utils/logger';
 import './Terminal.css';
 
@@ -224,7 +225,7 @@ function TerminalInstance({
           log.error('❌ 初始化失败:', err);
           setInitializationStatus('❌ 初始化失败: ' + err);
           // 回退到演示模式
-          terminal.write(`\x1b[31m[连接失败]\x1b[0m ${err}\r\n`);
+          terminal.write(`\x1b[31m[连接失败]\x1b[0m ${describeTerminalFailure(err)}\r\n`);
           terminal.write('[演示模式] 输入 help 查看可用命令\r\n');
           runDemoShell(terminal);
           // 即使失败也通知父组件（演示模式可用）
