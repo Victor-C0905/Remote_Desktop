@@ -11,13 +11,23 @@ import { SymbolicIcon } from "../components/symbolic";
 /* ── Utility Functions ───────────────────────────────── */
 
 function formatTime(timestamp: number): string {
-  const now = Date.now();
-  const diff = now - timestamp;
+  const now = new Date();
+  const date = new Date(timestamp);
+  const diff = now.getTime() - timestamp;
 
   if (diff < 1000 * 60) return "刚刚";
   if (diff < 1000 * 60 * 60) return `${Math.floor(diff / 60000)} 分钟前`;
-  if (diff < 1000 * 60 * 60 * 24) return `${Math.floor(diff / 3600000)} 小时前`;
-  return `${Math.floor(diff / 86400000)} 天前`;
+
+  // 非今天：显示具体日期（跨年带年份）
+  if (date.toDateString() !== now.toDateString()) {
+    const sameYear = date.getFullYear() === now.getFullYear();
+    return sameYear
+      ? `${date.getMonth() + 1}月${date.getDate()}日`
+      : `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
+  }
+
+  // 今天且超过 1 小时
+  return `${Math.floor(diff / 3600000)} 小时前`;
 }
 
 /** urgency → Symbolic 图标名 */
@@ -63,6 +73,11 @@ export function NotificationCenter({ isOpen, onClose }: NotificationCenterProps)
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isOpen, onClose]);
+
+  // 打开面板即清除未读标签（badge 归零、卡片未读样式消失；期间新到通知保持未读）
+  useEffect(() => {
+    if (isOpen) markAllRead();
+  }, [isOpen, markAllRead]);
 
   if (!isOpen) return null;
 
@@ -137,31 +152,37 @@ export function NotificationCenter({ isOpen, onClose }: NotificationCenterProps)
                 className={`nc-notif ${getUrgencyClass(notif.urgency)} ${!notif.read ? "nc-unread" : ""}`}
                 onClick={() => markAsRead(notif.id)}
               >
-                <SymbolicIcon
-                  name={getUrgencyIcon(notif.urgency)}
-                  size={16}
-                  className="nc-notif-sev-icon"
-                />
-                <div className="nc-notif-content">
-                  <div className="nc-notif-header">
-                    <span className="nc-notif-title">{notif.title}</span>
-                    <span className="nc-notif-source">{notif.source}</span>
-                  </div>
-                  <div className="nc-notif-body">{notif.body}</div>
-                  {notif.action && <div className="nc-notif-action">{notif.action}</div>}
-                  <div className="nc-notif-time">{formatTime(notif.timestamp)}</div>
+                {/* 卡片头部行：时间（左上）+ 关闭按钮（右上） */}
+                <div className="nc-notif-top">
+                  <span className="nc-notif-time">{formatTime(notif.timestamp)}</span>
+                  <button
+                    className="nc-notif-dismiss"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      dismiss(notif.id);
+                    }}
+                    aria-label="删除通知"
+                    title="删除"
+                  >
+                    <SymbolicIcon name="window-close" size={12} />
+                  </button>
                 </div>
-                <button
-                  className="nc-notif-dismiss"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    dismiss(notif.id);
-                  }}
-                  aria-label="删除通知"
-                  title="删除"
-                >
-                  <SymbolicIcon name="window-close" size={12} />
-                </button>
+                {/* 主体行：严重度图标 + 标题/来源/正文/建议 */}
+                <div className="nc-notif-main">
+                  <SymbolicIcon
+                    name={getUrgencyIcon(notif.urgency)}
+                    size={16}
+                    className="nc-notif-sev-icon"
+                  />
+                  <div className="nc-notif-content">
+                    <div className="nc-notif-header">
+                      <span className="nc-notif-title">{notif.title}</span>
+                      <span className="nc-notif-source">{notif.source}</span>
+                    </div>
+                    <div className="nc-notif-body">{notif.body}</div>
+                    {notif.action && <div className="nc-notif-action">{notif.action}</div>}
+                  </div>
+                </div>
               </div>
             ))
           )}
