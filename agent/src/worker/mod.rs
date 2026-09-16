@@ -202,6 +202,12 @@ async fn handle_request(
         Some(crate::protocol::generated::manager_request::Payload::Move(req)) => {
             handlers::file::handle_move(req).await
         }
+        Some(crate::protocol::generated::manager_request::Payload::Chmod(req)) => {
+            handlers::file::handle_chmod(req).await
+        }
+        Some(crate::protocol::generated::manager_request::Payload::Chown(req)) => {
+            handlers::file::handle_chown(req).await
+        }
         Some(crate::protocol::generated::manager_request::Payload::FileExists(req)) => {
             handlers::file::handle_file_exists(req).await
         }

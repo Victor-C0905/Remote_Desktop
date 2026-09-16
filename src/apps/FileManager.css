@@ -543,17 +543,27 @@
 }
 
 /* ── Properties Dialog ─────────────────────────────────── */
-.fm-properties-dialog {
+/* 遮罩层：与 ed-overlay 同模式，阻止点击穿透；保存进行中点击不关闭 */
+.pd-overlay {
   position: fixed;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 400px;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: var(--z-app-modal); /* ✅ Layer 70: 应用内部模态对话框遮罩 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.fm-properties-dialog {
+  position: relative;
+  width: 440px;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
   background: var(--quirel-card-bg);
   border: 1px solid var(--quirel-border-color);
   border-radius: var(--radius-md);
-  padding: 16px;
-  z-index: var(--z-app-modal); /* ✅ Layer 70: 应用内部模态对话框 */
+  padding: 20px;
   box-shadow: var(--shadow-popup);
 }
 
@@ -595,24 +605,202 @@
   font-size: var(--font-body);
 }
 
+/* 分区标题（权限 / 所有者） */
+.pd-section-title {
+  font-size: var(--font-small);
+  font-weight: 600;
+  color: var(--quirel-text-secondary);
+  margin: 14px 0 8px;
+}
+
+/* 权限区：3×3 矩阵 + 八进制并排 */
+.pd-perm {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+/* 3×3 复选框矩阵（CSS grid：首列行标签 + 读取/写入/执行三列，紧凑行高） */
+.pd-perm-grid {
+  display: grid;
+  grid-template-columns: minmax(48px, auto) repeat(3, 44px);
+  row-gap: 2px;
+  align-items: center;
+}
+
+/* 列头（读取/写入/执行） */
+.pd-perm-head {
+  font-size: var(--font-small);
+  color: var(--quirel-text-secondary);
+  text-align: center;
+}
+
+/* 行标签（所有者/组/其他） */
+.pd-perm-rowlabel {
+  font-size: var(--font-small);
+  color: var(--quirel-text-secondary);
+}
+
+/* 复选框格子（点击区域放大，便于勾选） */
+.pd-perm-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  cursor: pointer;
+}
+
+.pd-perm-cell input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--quirel-accent-bg);
+  cursor: pointer;
+}
+
+/* 八进制只读展示（含对应符号串，随矩阵联动） */
+.pd-perm-octal {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  padding: 8px 14px;
+  background: var(--quirel-view-bg);
+  border-radius: var(--radius-xs);
+}
+
+.pd-perm-octal-value {
+  font-size: 16pt;
+  font-weight: 600;
+  color: var(--quirel-text-primary);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.pd-perm-octal-symbolic {
+  font-family: Consolas, "Source Code Pro", monospace;
+  font-size: 12px;
+  color: var(--quirel-text-secondary);
+}
+
+/* 所有者区：owner / group 两个输入框并排 */
+.pd-owner-row {
+  display: flex;
+  gap: 12px;
+}
+
+.pd-owner-field {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pd-owner-label {
+  font-size: var(--font-small);
+  color: var(--quirel-text-secondary);
+}
+
+/* 输入框：对齐 rd-input 的 Adwaita 输入样式 */
+.pd-input {
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--quirel-input-bg);
+  border: 1px solid var(--quirel-border-color);
+  border-radius: var(--radius-xs);
+  color: var(--quirel-text-primary);
+  font-size: var(--font-body);
+  outline: none;
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+.pd-input:focus {
+  border-color: var(--quirel-accent-bg);
+}
+
+.pd-input:disabled {
+  opacity: 0.6;
+}
+
+/* root 权限提示小字 */
+.pd-hint {
+  margin-top: 6px;
+  font-size: var(--font-small);
+  color: var(--quirel-text-secondary);
+}
+
+/* 递归应用复选框（仅目录显示） */
+.pd-recursive {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: var(--font-body);
+  color: var(--quirel-text-primary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.pd-recursive input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--quirel-accent-bg);
+  cursor: pointer;
+}
+
+/* 内联错误提示（Adwaita error 红，同 ed-title-error） */
+.pd-error {
+  color: #e01b24;
+  font-size: var(--font-small);
+  word-break: break-all;
+  margin-bottom: 12px;
+}
+
 .pd-footer {
   display: flex;
   justify-content: flex-end;
+  gap: 10px;
 }
 
-.pd-footer button {
-  padding: 6px 16px;
+/* 次级按钮（关闭）— 对齐 ed-btn 模式 */
+.pd-btn {
+  padding: 8px 20px;
+  background: transparent;
+  color: var(--quirel-text-secondary);
+  border: 1px solid var(--quirel-border-color);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  font-size: var(--font-body);
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.pd-btn:hover:not(:disabled) {
+  background: var(--quirel-view-bg);
+  color: var(--quirel-text-primary);
+}
+
+/* 主按钮（应用）— 对齐 ed-btn-primary 模式 */
+.pd-btn-primary {
+  padding: 8px 20px;
   background: var(--quirel-accent-bg);
   color: var(--quirel-accent-fg);
   border: none;
   border-radius: var(--radius-xs);
   cursor: pointer;
   font-size: var(--font-body);
+  font-weight: 500;
   transition: background var(--duration-fast) var(--ease-out);
 }
 
-.pd-footer button:hover {
+.pd-btn-primary:hover:not(:disabled) {
   background: var(--quirel-accent-hover);
+}
+
+/* 请求进行中禁用按钮 */
+.pd-btn:disabled,
+.pd-btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* ── Path Error Dialog (路径不存在弹窗 - 模态) ─────────────────── */

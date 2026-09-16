@@ -294,6 +294,35 @@ pub enum Payload {
     #[serde(rename = "move_resp")]
     MoveResponse { success: bool, src: String, dst: String },
 
+    /// 修改文件/目录权限（chmod）
+    #[serde(rename = "chmod")]
+    ChmodRequest {
+        path: String,
+        /// 权限位，八进制数值（如 0o755 = 493），避免字符串解析歧义
+        mode: u32,
+        /// 递归应用于目录下所有内容
+        recursive: bool,
+    },
+
+    #[serde(rename = "chmod_resp")]
+    ChmodResponse { success: bool },
+
+    /// 修改文件/目录属主/属组（chown）
+    /// owner/group 为用户名/组名字符串（如 "www-data"），Agent 端解析为 uid/gid
+    #[serde(rename = "chown")]
+    ChownRequest {
+        path: String,
+        /// 目标用户名
+        owner: String,
+        /// 目标组名
+        group: String,
+        /// 递归应用于目录下所有内容
+        recursive: bool,
+    },
+
+    #[serde(rename = "chown_resp")]
+    ChownResponse { success: bool },
+
     #[serde(rename = "terminal_spawn")]
     TerminalSpawnRequest {
         shell: String,
@@ -568,6 +597,10 @@ impl Payload {
             Payload::CopyResponse { .. } => "CopyResponse",
             Payload::MoveRequest { .. } => "MoveRequest",
             Payload::MoveResponse { .. } => "MoveResponse",
+            Payload::ChmodRequest { .. } => "ChmodRequest",
+            Payload::ChmodResponse { .. } => "ChmodResponse",
+            Payload::ChownRequest { .. } => "ChownRequest",
+            Payload::ChownResponse { .. } => "ChownResponse",
             Payload::TerminalSpawnRequest { .. } => "TerminalSpawnRequest",
             Payload::TerminalSpawnResponse { .. } => "TerminalSpawnResponse",
             Payload::TerminalResizeRequest { .. } => "TerminalResizeRequest",

@@ -1168,6 +1168,51 @@ pub async fn remote_copy(
     }
 }
 
+/// 修改远程文件/目录权限（chmod）
+/// - `mode`: 八进制数值（如 755）
+/// - `recursive`: 目录场景下递归应用到子文件与子目录
+#[tauri::command]
+pub async fn remote_chmod(
+    server_id: String,
+    path: String,
+    mode: u32,
+    recursive: bool,
+    app: tauri::AppHandle
+) -> Result<bool, String> {
+    tracing::debug!("[Connection] remote_chmod: server_id={}, path={}, mode={:o}, recursive={}", server_id, path, mode, recursive);
+
+    let resp = remote_send(server_id, Payload::ChmodRequest { path, mode, recursive }, app).await?;
+
+    match resp.payload {
+        Payload::ChmodResponse { success, .. } => Ok(success),
+        Payload::Error { message, .. } => Err(message),
+        _ => Err("意外响应".into()),
+    }
+}
+
+/// 修改远程文件/目录所有者（chown）
+/// - `owner`/`group`: 目标用户名/组名
+/// - `recursive`: 目录场景下递归应用到子文件与子目录
+#[tauri::command]
+pub async fn remote_chown(
+    server_id: String,
+    path: String,
+    owner: String,
+    group: String,
+    recursive: bool,
+    app: tauri::AppHandle
+) -> Result<bool, String> {
+    tracing::debug!("[Connection] remote_chown: server_id={}, path={}, owner={}, group={}, recursive={}", server_id, path, owner, group, recursive);
+
+    let resp = remote_send(server_id, Payload::ChownRequest { path, owner, group, recursive }, app).await?;
+
+    match resp.payload {
+        Payload::ChownResponse { success, .. } => Ok(success),
+        Payload::Error { message, .. } => Err(message),
+        _ => Err("意外响应".into()),
+    }
+}
+
 /// 应用差异到远程文件（流量优化）
 ///
 /// # 参数

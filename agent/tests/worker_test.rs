@@ -112,6 +112,12 @@ mod file_operation_tests {
                 assert!(names.contains(&"file1.txt"));
                 assert!(names.contains(&"file2.txt"));
                 assert!(names.contains(&"subdir"));
+
+                // 验证 owner/group:名称解析成功或回退数字字符串,两者都非空
+                for e in &listing.entries {
+                    assert!(!e.owner.is_empty(), "entry {} owner should not be empty", e.name);
+                    assert!(!e.group.is_empty(), "entry {} group should not be empty", e.name);
+                }
             }
             _ => panic!("Expected DirListing, got {:?}", response.payload),
         }
@@ -187,6 +193,153 @@ mod file_operation_tests {
         // 验证文件内容
         let content = fs::read(&file_path).expect("Failed to read file");
         assert_eq!(content, test_data);
+    }
+}
+
+// ============================================================================
+// chmod/chown 测试（文件属主/权限管理）
+// ============================================================================
+
+mod chmod_chown_tests {
+    use quireld::worker::handlers::file;
+    use quireld::protocol::generated::{Chmod, Chown, worker_response};
+    use tempfile;
+    use std::fs;
+
+    /// 构造 root 用户上下文的 Chmod 请求(与现有测试一致的用户字段)
+    fn chmod_req(path: String, mode: u32, recursive: bool) -> Chmod {
+        Chmod {
+            path,
+            mode,
+            recursive,
+            uid: 0,
+            gid: 0,
+            username: "test".to_string(),
+            home_dir: "/tmp".to_string(),
+        }
+    }
+
+    /// 构造 root 用户上下文的 Chown 请求
+    fn chown_req(path: String, owner: &str, group: &str, recursive: bool) -> Chown {
+        Chown {
+            path,
+            owner: owner.to_string(),
+            group: group.to_string(),
+            recursive,
+            uid: 0,
+            gid: 0,
+            username: "test".to_string(),
+            home_dir: "/tmp".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_chmod_success() {
+        // chmod 自己创建的临时文件成功且权限生效
+        let tmpdir = tempfile::tempdir().expect("Failed to create temp dir");
+        let file_path = tmpdir.path().join("chmod_target.txt");
+        fs::write(&file_path, "hello").expect("Failed to write file");
+
+        let response = file::handle_chmod(chmod_req(
+            file_path.to_string_lossy().to_string(),
+            0o600,
+            false,
+        )).await;
+
+        match response.payload {
+            Some(worker_response::Payload::ChmodResult(result)) => {
+                assert!(result.success, "chmod should succeed");
+            }
+            _ => panic!("Expected ChmodResult, got {:?}", response.payload),
+        }
+
+        // 验证权限已生效(低 9 位应为 0o600)
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(&file_path)
+            .expect("Failed to read metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "permission bits should be 0o600, got {:o}", mode & 0o777);
+    }
+
+    #[tokio::test]
+    async fn test_handle_chmod_recursive_directory() {
+        // recursive chmod:目录树下所有文件与子目录都应用新权限
+        let tmpdir = tempfile::tempdir().expect("Failed to create temp dir");
+        let root = tmpdir.path();
+        fs::write(root.join("f1.txt"), "a").expect("Failed to write f1");
+        fs::create_dir(root.join("sub")).expect("Failed to create sub");
+        fs::write(root.join("sub").join("f2.txt"), "b").expect("Failed to write f2");
+
+        let response = file::handle_chmod(chmod_req(
+            root.to_string_lossy().to_string(),
+            0o755,
+            true,
+        )).await;
+
+        match response.payload {
+            Some(worker_response::Payload::ChmodResult(result)) => {
+                assert!(result.success, "recursive chmod should succeed");
+            }
+            _ => panic!("Expected ChmodResult, got {:?}", response.payload),
+        }
+
+        // 验证目录树全部生效:顶层/文件/子目录/子文件均为 0o755
+        use std::os::unix::fs::PermissionsExt;
+        for p in [root, &root.join("f1.txt"), &root.join("sub"), &root.join("sub").join("f2.txt")] {
+            let mode = fs::metadata(p).expect("Failed to read metadata").permissions().mode();
+            assert_eq!(mode & 0o777, 0o755, "path {:?} should be 0o755", p);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_chmod_not_found() {
+        // chmod 不存在路径报错(确定性 404)
+        let response = file::handle_chmod(chmod_req(
+            "/nonexistent/quirel-chmod-path-12345".to_string(),
+            0o755,
+            false,
+        )).await;
+
+        match response.payload {
+            Some(worker_response::Payload::Error(err)) => {
+                assert_eq!(err.code, 404, "nonexistent path should map to 404");
+                assert!(err.message.contains("不存在"), "error message: {}", err.message);
+            }
+            _ => panic!("Expected Error, got {:?}", response.payload),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_chown_unknown_user() {
+        // chown 不存在的用户名报错(确定性错误,不依赖运行用户身份)
+        let tmpdir = tempfile::tempdir().expect("Failed to create temp dir");
+        let file_path = tmpdir.path().join("chown_target.txt");
+        fs::write(&file_path, "hello").expect("Failed to write file");
+
+        let response = file::handle_chown(chown_req(
+            file_path.to_string_lossy().to_string(),
+            "quirel-no-such-user-xyz",
+            "root",
+            false,
+        )).await;
+
+        match response.payload {
+            Some(worker_response::Payload::Error(err)) => {
+                assert!(err.message.contains("不存在"), "error message: {}", err.message);
+            }
+            _ => panic!("Expected Error, got {:?}", response.payload),
+        }
+    }
+
+    #[test]
+    fn test_resolve_root_names() {
+        // 用户名/组名解析函数单测:resolve "root" → 0
+        assert_eq!(file::resolve_uid_by_name("root"), Some(0));
+        assert_eq!(file::resolve_gid_by_name("root"), Some(0));
+        // 不存在的名称返回 None(而非报错)
+        assert_eq!(file::resolve_uid_by_name("quirel-no-such-user-xyz"), None);
+        assert_eq!(file::resolve_gid_by_name("quirel-no-such-group-xyz"), None);
     }
 }
 

@@ -26,6 +26,8 @@ message ManagerRequest {
         FileExists file_exists = 16;
         ApplyDiff apply_diff = 17;
         FileInfo file_info = 18;  // 新增：文件格式探测
+        Chmod chmod = 19;         // 新增：修改文件/目录权限
+        Chown chown = 20;         // 新增：修改文件/目录属主/属组
         GracefulShutdown graceful_shutdown = 10;  // 新增：优雅关闭请求
     }
 }
@@ -49,6 +51,8 @@ message WorkerResponse {
         FileExistsResult file_exists_result = 15;
         ApplyDiffResult apply_diff_result = 16;
         FileInfoResult file_info_result = 17;  // 新增：文件格式探测结果
+        ChmodResult chmod_result = 18;         // 新增：chmod 结果
+        ChownResult chown_result = 19;         // 新增：chown 结果
         ShutdownAck shutdown_ack = 9;  // 新增：关闭确认
     }
 }
@@ -112,6 +116,8 @@ message FileEntry {
     uint64 size = 3;
     string mtime = 4;
     string permissions = 5;
+    string owner = 6;  // 新增：属主用户名（解析失败回退 uid 数字字符串）
+    string group = 7;  // 新增：属组组名（解析失败回退 gid 数字字符串）
 }
 
 message ReadFile {
@@ -249,6 +255,41 @@ message FileExistsResult {
     bool exists = 1;
     uint64 size = 2;
     uint64 mtime = 3;
+}
+
+// 修改文件/目录权限(chmod)
+message Chmod {
+    string path = 1;
+    uint32 mode = 2;         // 权限位(八进制数值,如 0o755 = 493)
+    bool recursive = 3;      // 递归应用于目录下所有内容
+    // 用户上下文(与其他文件操作一致)
+    uint32 uid = 4;
+    uint32 gid = 5;
+    string username = 6;
+    string home_dir = 7;
+}
+
+message ChmodResult {
+    bool success = 1;
+}
+
+// 修改文件/目录属主/属组(chown)
+// owner/group 为用户名/组名字符串,Worker 端解析为 uid/gid;
+// 以登录用户上下文执行,改属主为其他用户仅登录用户为 root 时成功(Linux 原生语义)
+message Chown {
+    string path = 1;
+    string owner = 2;        // 目标用户名
+    string group = 3;        // 目标组名
+    bool recursive = 4;      // 递归应用于目录下所有内容
+    // 用户上下文(与其他文件操作一致)
+    uint32 uid = 5;
+    uint32 gid = 6;
+    string username = 7;
+    string home_dir = 8;
+}
+
+message ChownResult {
+    bool success = 1;
 }
 
 // ===== 命令执行 =====
