@@ -556,7 +556,7 @@
 
 .fm-properties-dialog {
   position: relative;
-  width: 440px;
+  width: 420px;
   max-width: calc(100vw - 48px);
   max-height: calc(100vh - 48px);
   overflow: auto;
@@ -571,7 +571,7 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 
 .pd-icon {
@@ -582,6 +582,60 @@
   font-size: 14pt;
   font-weight: 600;
   color: var(--quirel-text-primary);
+  word-break: break-all;
+}
+
+/* ── 分页栏（常规 / 权限）：按功能划分，看信息与改设置分离 ── */
+.pd-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--quirel-border-color);
+  margin-bottom: 14px;
+}
+
+.pd-tab {
+  position: relative;
+  padding: 8px 14px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-xs) var(--radius-xs) 0 0;
+  color: var(--quirel-text-secondary);
+  font-size: var(--font-body);
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out);
+}
+
+.pd-tab:hover {
+  color: var(--quirel-text-primary);
+  background: var(--quirel-view-bg);
+}
+
+/* 激活态：主色文字 + 底部指示线（与内容区分隔线重合，Adwaita tab 惯例） */
+.pd-tab-active {
+  color: var(--quirel-accent-bg);
+  font-weight: 500;
+}
+
+.pd-tab-active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;  /* 压住分隔线 */
+  height: 2px;
+  background: var(--quirel-accent-bg);
+  border-radius: 1px;
+}
+
+/* tab 标题旁的「未保存」小圆点徽标 */
+.pd-tab-badge {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--quirel-accent-bg);
+  vertical-align: middle;
 }
 
 .pd-content {
@@ -591,6 +645,8 @@
 .pd-row {
   display: flex;
   justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
   padding: 8px 0;
   border-bottom: 1px solid var(--quirel-border-color);
 }
@@ -598,19 +654,80 @@
 .pd-label {
   color: var(--quirel-text-secondary);
   font-size: var(--font-body);
+  flex-shrink: 0;
 }
 
 .pd-value {
   color: var(--quirel-text-primary);
   font-size: var(--font-body);
+  text-align: right;
+  word-break: break-all;
 }
 
-/* 分区标题（权限 / 所有者） */
-.pd-section-title {
+/* 常规页：完整路径（等宽，可选中复制） */
+.pd-location {
+  font-family: Consolas, "Source Code Pro", monospace;
+  font-size: 12px;
+}
+
+/* 常规页：权限/所有者速览值（等宽对齐 Linux 显示习惯） */
+.pd-mono {
+  font-family: Consolas, "Source Code Pro", monospace;
+  font-size: 12px;
+}
+
+/* 速览行的「未保存」徽标（权限页已改但未应用时提示） */
+.pd-badge-dirty {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--quirel-accent-bg);
+  color: var(--quirel-accent-fg);
+  font-size: 10px;
+  font-weight: 500;
+  vertical-align: middle;
+}
+
+/* ── 权限页：预设按钮行 ── */
+.pd-preset-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.pd-preset-label {
   font-size: var(--font-small);
-  font-weight: 600;
   color: var(--quirel-text-secondary);
-  margin: 14px 0 8px;
+}
+
+.pd-preset-btn {
+  padding: 4px 12px;
+  background: var(--quirel-view-bg);
+  color: var(--quirel-text-primary);
+  border: 1px solid var(--quirel-border-color);
+  border-radius: 999px;
+  font-size: var(--font-small);
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.pd-preset-btn:hover:not(:disabled) {
+  border-color: var(--quirel-accent-bg);
+  color: var(--quirel-accent-bg);
+}
+
+.pd-preset-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 所有者区：owner / group 两个输入框并排（原分区标题已删，自带字段 label；上边距与权限矩阵区分隔） */
+.pd-owner-row {
+  display: flex;
+  gap: 12px;
+  margin-top: 14px;
 }
 
 /* 权限区：3×3 矩阵 + 八进制并排 */
@@ -683,12 +800,7 @@
   color: var(--quirel-text-secondary);
 }
 
-/* 所有者区：owner / group 两个输入框并排 */
-.pd-owner-row {
-  display: flex;
-  gap: 12px;
-}
-
+/* 输入框字段（所有者/组） */
 .pd-owner-field {
   flex: 1;
   display: flex;
