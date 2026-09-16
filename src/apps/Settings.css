@@ -554,8 +554,14 @@
 }
 
 .st-about-logo {
-  font-size: 48px;
   margin-bottom: 12px;
+}
+
+.st-about-logo img {
+  width: 72px;
+  height: 72px;
+  display: block;
+  margin: 0 auto;
 }
 
 .st-about-name {

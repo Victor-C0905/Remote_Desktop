@@ -23,11 +23,10 @@ export interface RemoteFileInfo {
 export type FormatCategory =
   | 'image'
   | 'pdf'
-  | 'text'
+  | 'text'             // .sh 脚本也在此 → 编辑器查看；运行入口在 FileManager 右键菜单
   | 'hex'
   | 'archive'          // 压缩包 → 解压流程（FileManager，服务器原生命令）
-  | 'browser-local'    // HTML → 下载到本地用系统浏览器打开
-  | 'run-script';      // 脚本 → 终端自动执行（类 Windows 双击运行脚本）
+  | 'browser-local';   // HTML → 下载到本地用系统浏览器打开
 
 /** 单个插件的检测结果 */
 export interface FormatMatch {

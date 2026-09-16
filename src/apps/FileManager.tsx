@@ -93,15 +93,6 @@ function formatDate(iso: string): string {
   });
 }
 
-/** 从 file_info 返回的头部字节（前 512B）解码脚本内容预览：前 8 行，超出截断标记 */
-function previewHead(bytes: number[]): string {
-  if (!bytes.length) return "（无法读取内容）";
-  const text = new TextDecoder().decode(new Uint8Array(bytes)).replace(/\r/g, "");
-  const lines = text.split("\n");
-  const shown = lines.slice(0, 8).join("\n").trimEnd();
-  return lines.length > 8 ? `${shown}\n...（更多内容未显示）` : shown;
-}
-
 /* ── Component ─────────────────────────────────────────── */
 
 type ViewMode = "list" | "grid";
@@ -166,15 +157,6 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     stem: string;          // 去掉压缩扩展名后的主体（独立文件夹名）
     status: 'confirm' | 'extracting' | 'error';
     error?: string;        // status=error 时的错误信息
-  } | null>(null);
-  // 脚本运行确认对话框：双击运行前展示内容预览（防误触未审查代码）
-  const [scriptRunDialog, setScriptRunDialog] = useState<{
-    path: string;
-    name: string;
-    size: number;
-    mtime: string;
-    permissions: string;
-    preview: string;       // 头部字节解码的前 8 行
   } | null>(null);
   const [editingEntry, setEditingEntry] = useState<FileEntry | null>(null);  // 正在编辑的文件
   const [editingName, setEditingName] = useState<string>("");  // 编辑中的新名称
@@ -853,28 +835,6 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
             alert(`打开失败: ${err}`);
           }
           break;
-        case 'run-script': {
-          // 脚本：x 位检查 + 内容预览确认（防误触未审查代码直接执行）
-          // permissions 为 9 字符 rwx 串（如 "rwxr-xr-x"），第 4 位是 owner 执行位；
-          // 无 x 位 → 编辑器打开（Linux 桌面惯例：不可执行文件默认查看，想运行先 chmod +x）
-          if (!entry.permissions || entry.permissions[3] !== 'x') {
-            log.info(`脚本无执行权限（${entry.permissions || '未知'}），改用编辑器打开:`, fullPath);
-            manager.create('editor', {
-              serverId: activeServerId,
-              preloadData: { path: fullPath, serverId: activeServerId },
-            });
-            break;
-          }
-          setScriptRunDialog({
-            path: fullPath,
-            name: entry.name,
-            size: info.size,
-            mtime: entry.mtime,
-            permissions: entry.permissions,
-            preview: previewHead(info.magicBytes),
-          });
-          break;
-        }
         case 'hex':
           // 未知格式回退：十六进制查看器
           log.debug(`未知格式，回退十六进制查看器: ${fullPath} (${decision.reason})`);
@@ -899,18 +859,20 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     setPropertiesEntry(entry);
   }, []);
 
-  // ── Script Run Dialog：确认后打开终端并注入命令 ────
-  const confirmRunScript = useCallback(() => {
-    if (!scriptRunDialog || !activeServerId) return;
-    const { path } = scriptRunDialog;
-    setScriptRunDialog(null);
-    const cmd = `bash ${path}`;
-    const dir = path.slice(0, path.lastIndexOf('/')) || '/';
+  // ── Script Run（右键菜单入口）：打开终端并注入命令 ────
+  // 方案 1 设计：双击 .sh 一律编辑器查看；运行是显式意图（右键菜单选择），
+  // 不再弹预览确认——PTY 输出可见、Ctrl+C 可中断、sudo 密码提示是天然确认闸
+  // sudo 运行时密码由 PTY 交互输入（NOPASSWD 环境则直接执行）
+  const runScriptInTerminal = useCallback((entry: FileEntry, sudo: boolean) => {
+    if (!activeServerId) return;
+    const fullPath = currentPath === '/' ? `/${entry.name}` : `${currentPath}/${entry.name}`;
+    const cmd = `${sudo ? 'sudo ' : ''}bash ${fullPath}`;
+    const dir = fullPath.slice(0, fullPath.lastIndexOf('/')) || '/';
     manager.create('terminal', {
       serverId: activeServerId,
       preloadData: { workingDirectory: dir, initialCommand: cmd },
     });
-  }, [scriptRunDialog, manager, activeServerId]);
+  }, [activeServerId, currentPath, manager]);
 
   // ── Extract Dialog：解压执行（状态流转 confirm → extracting → 关闭|error）──
   // mode: 'folder' 解压到独立文件夹（tar -C 需先建目录）；'here' 解压到当前位置
@@ -1923,6 +1885,19 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
               <div className="fm-ctx-item" onClick={() => { handleOpen(contextMenu.entry!); setContextMenu(null); }}>
                 <span className="fm-ctx-icon">📂</span> 打开
               </div>
+
+              {/* 脚本运行（仅 .sh 文件）：双击=编辑器查看（方案 1），运行收右键显式入口 */}
+              {!contextMenu.entry!.is_dir && contextMenu.entry!.name.toLowerCase().endsWith('.sh') && (
+                <>
+                  <div className="fm-ctx-item" onClick={() => { runScriptInTerminal(contextMenu.entry!, false); setContextMenu(null); }}>
+                    <span className="fm-ctx-icon">▶️</span> 在终端中运行
+                  </div>
+                  <div className="fm-ctx-item" onClick={() => { runScriptInTerminal(contextMenu.entry!, true); setContextMenu(null); }}>
+                    <span className="fm-ctx-icon">🛡️</span> 以 sudo 运行
+                  </div>
+                </>
+              )}
+
               <div className="fm-ctx-separator" />
 
               {/* 文件操作 */}
@@ -2175,31 +2150,6 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                 <button className="ed-btn ed-btn-primary" onClick={() => setExtractDialog(null)}>关闭</button>
               </div>
             </>)}
-          </div>
-        </div>,
-        document.body
-      )}
-
-      {/* Script Run Dialog - 运行前内容预览确认（使用 Portal） */}
-      {scriptRunDialog && createPortal(
-        <div className="ed-overlay" onClick={(e) => {
-          if (e.target === e.currentTarget) setScriptRunDialog(null);
-        }}>
-          <div className="ed-dialog">
-            <div className="srd-title">运行脚本</div>
-            <div className="srd-file">{scriptRunDialog.name}</div>
-            <div className="srd-rows">
-              <div className="srd-row"><span>大小</span><span>{formatSize(scriptRunDialog.size)}</span></div>
-              <div className="srd-row"><span>修改时间</span><span>{formatDate(scriptRunDialog.mtime)}</span></div>
-              <div className="srd-row"><span>权限</span><span>{scriptRunDialog.permissions}</span></div>
-            </div>
-            <div className="srd-preview-label">内容预览（前 8 行，请确认无危险操作）</div>
-            <pre className="srd-preview">{scriptRunDialog.preview}</pre>
-            <div className="srd-cmd">将执行: <code>bash {scriptRunDialog.path}</code></div>
-            <div className="ed-footer">
-              <button className="ed-btn" onClick={() => setScriptRunDialog(null)}>取消</button>
-              <button className="ed-btn ed-btn-primary" onClick={confirmRunScript}>在终端中运行</button>
-            </div>
           </div>
         </div>,
         document.body

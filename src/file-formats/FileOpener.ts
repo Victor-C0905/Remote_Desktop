@@ -9,7 +9,6 @@ import { FileFormatRegistry } from './registry';
 import { pdfPlugin } from './plugins/pdf';
 import { archivePlugin } from './plugins/archive';
 import { htmlPlugin } from './plugins/html';
-import { executablePlugin } from './plugins/executable';
 import { imagePlugin } from './plugins/image';
 import { textPlugin } from './plugins/text';
 import type { FormatCategory, RemoteFileInfo } from './types';
@@ -34,7 +33,7 @@ export interface OpenDecision {
    * - 'image' | 'pdf' | 'text' | 'hex'：对应应用
    * - 'archive'：压缩包（FileManager 解压流程）
    * - 'browser-local'：HTML（下载本地，系统浏览器打开）
-   * - 'run-script'：脚本（终端自动执行）
+   * （.sh 脚本走 'text' → 编辑器；运行入口在 FileManager 右键菜单）
    */
   kind: 'directory' | FormatCategory;
   /** 图片类的 MIME 类型（构造 data URI 用） */
@@ -51,9 +50,8 @@ export function createDefaultRegistry(): FileFormatRegistry {
   registry.register(pdfPlugin);        // %PDF- magic，最精确
   registry.register(archivePlugin);    // 压缩包（zip magic + 扩展名）
   registry.register(htmlPlugin);       // HTML（browser-local）
-  registry.register(executablePlugin); // .sh + shebang（run-script）
   registry.register(imagePlugin);      // 图片 magic 表
-  registry.register(textPlugin);       // isText 启发式兜底
+  registry.register(textPlugin);       // isText 启发式兜底（.sh 也在此 → 编辑器，运行收 FileManager 右键菜单）
   return registry;
 }
 
@@ -76,7 +74,7 @@ export function decideOpenTarget(info: RemoteFileInfo, registry: FileFormatRegis
     return { kind: 'hex', needsSizeConfirm: false, reason: `未知格式（扩展名 .${info.extension || '无'}）` };
   }
 
-  // archive/run-script 无大小确认（解压结果大小不可预知，脚本与大小无关）
+  // archive 无大小确认（解压结果大小不可预知）
   const limit = SIZE_LIMITS[match.category as keyof typeof SIZE_LIMITS];
   return {
     kind: match.category,

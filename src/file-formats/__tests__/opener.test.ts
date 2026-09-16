@@ -122,12 +122,12 @@ describe('文件操作扩展决策', () => {
     expect(d.needsSizeConfirm).toBe(true);
   });
 
-  it('.sh 含 shebang 路由到 run-script', () => {
+  it('.sh 含 shebang 也路由到 text（方案 1：双击一律编辑器，运行收右键菜单）', () => {
     const d = decideOpenTarget(
       makeInfo({ extension: 'sh', path: '/tmp/a.sh', isText: true, magicBytes: [0x23, 0x21, 0x2f, 0x62] }),
       createDefaultRegistry(),
     );
-    expect(d.kind).toBe('run-script');
+    expect(d.kind).toBe('text');
   });
 
   it('.sh 无 shebang 路由到 text（编辑器打开）', () => {

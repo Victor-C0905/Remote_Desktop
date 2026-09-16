@@ -1153,7 +1153,9 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
           <div className="st-section">
             <div className="st-section-title text-heading">关于</div>
             <div className="st-card st-about-card">
-              <div className="st-about-logo">🖥️</div>
+              <div className="st-about-logo">
+                <img src="/favicon.svg" alt="Quirel logo" draggable={false} />
+              </div>
               <div className="st-about-name">Quirel</div>
               <div className="st-about-version">版本 {appVersion || "…"}</div>
               <div className="st-about-desc">
