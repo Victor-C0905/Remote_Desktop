@@ -58,6 +58,12 @@ pub struct FileEntry {
     pub size: u64,
     pub mtime: String,
     pub permissions: String,
+    /// 属主用户名（如 "root"；旧版 Agent 响应不含此字段，必须有 default 才能向前兼容）
+    #[serde(default)]
+    pub owner: String,
+    /// 属组组名（如 "www-data"；旧版 Agent 响应不含此字段，必须有 default 才能向前兼容）
+    #[serde(default)]
+    pub group: String,
 }
 
 // 新增：文件差异类型（用于流量优化）

@@ -5,7 +5,7 @@
 pub struct ManagerRequest {
     #[prost(uint64, tag = "1")]
     pub request_id: u64,
-    #[prost(oneof = "manager_request::Payload", tags = "2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18")]
+    #[prost(oneof = "manager_request::Payload", tags = "2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20")]
     pub payload: ::core::option::Option<manager_request::Payload>,
 }
 /// Nested message and enum types in `ManagerRequest`.
@@ -45,6 +45,12 @@ pub mod manager_request {
         /// 新增：文件格式探测
         #[prost(message, tag = "18")]
         FileInfo(super::FileInfo),
+        /// 新增：修改文件/目录权限
+        #[prost(message, tag = "19")]
+        Chmod(super::Chmod),
+        /// 新增：修改文件/目录属主/属组
+        #[prost(message, tag = "20")]
+        Chown(super::Chown),
         /// 新增：优雅关闭请求
         #[prost(message, tag = "10")]
         GracefulShutdown(super::GracefulShutdown),
@@ -56,7 +62,7 @@ pub mod manager_request {
 pub struct WorkerResponse {
     #[prost(uint64, tag = "1")]
     pub request_id: u64,
-    #[prost(oneof = "worker_response::Payload", tags = "2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17")]
+    #[prost(oneof = "worker_response::Payload", tags = "2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19")]
     pub payload: ::core::option::Option<worker_response::Payload>,
 }
 /// Nested message and enum types in `WorkerResponse`.
@@ -95,6 +101,12 @@ pub mod worker_response {
         /// 新增：文件格式探测结果
         #[prost(message, tag = "17")]
         FileInfoResult(super::FileInfoResult),
+        /// 新增：chmod 结果
+        #[prost(message, tag = "18")]
+        ChmodResult(super::ChmodResult),
+        /// 新增：chown 结果
+        #[prost(message, tag = "19")]
+        ChownResult(super::ChownResult),
         /// 新增：关闭确认
         #[prost(message, tag = "9")]
         ShutdownAck(super::ShutdownAck),
@@ -194,6 +206,12 @@ pub struct FileEntry {
     pub mtime: ::prost::alloc::string::String,
     #[prost(string, tag = "5")]
     pub permissions: ::prost::alloc::string::String,
+    /// 属主用户名（解析失败回退 uid 数字字符串）
+    #[prost(string, tag = "6")]
+    pub owner: ::prost::alloc::string::String,
+    /// 属组组名（解析失败回退 gid 数字字符串）
+    #[prost(string, tag = "7")]
+    pub group: ::prost::alloc::string::String,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -422,6 +440,73 @@ pub struct FileExistsResult {
     pub size: u64,
     #[prost(uint64, tag = "3")]
     pub mtime: u64,
+}
+/// 修改文件/目录权限(chmod)
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Chmod {
+    #[prost(string, tag = "1")]
+    pub path: ::prost::alloc::string::String,
+    /// 权限位(八进制数值,如 0o755 = 493)
+    #[prost(uint32, tag = "2")]
+    pub mode: u32,
+    /// 递归应用于目录下所有内容
+    #[prost(bool, tag = "3")]
+    pub recursive: bool,
+    /// 用户上下文(与其他文件操作一致):UID
+    #[prost(uint32, tag = "4")]
+    pub uid: u32,
+    /// 用户上下文(与其他文件操作一致):GID
+    #[prost(uint32, tag = "5")]
+    pub gid: u32,
+    /// 用户上下文(与其他文件操作一致):用户名
+    #[prost(string, tag = "6")]
+    pub username: ::prost::alloc::string::String,
+    /// 用户上下文(与其他文件操作一致):家目录
+    #[prost(string, tag = "7")]
+    pub home_dir: ::prost::alloc::string::String,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ChmodResult {
+    #[prost(bool, tag = "1")]
+    pub success: bool,
+}
+/// 修改文件/目录属主/属组(chown)
+/// owner/group 为用户名/组名字符串,Worker 端解析为 uid/gid;
+/// 以登录用户上下文执行,改属主为其他用户仅登录用户为 root 时成功(Linux 原生语义)
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Chown {
+    #[prost(string, tag = "1")]
+    pub path: ::prost::alloc::string::String,
+    /// 目标用户名
+    #[prost(string, tag = "2")]
+    pub owner: ::prost::alloc::string::String,
+    /// 目标组名
+    #[prost(string, tag = "3")]
+    pub group: ::prost::alloc::string::String,
+    /// 递归应用于目录下所有内容
+    #[prost(bool, tag = "4")]
+    pub recursive: bool,
+    /// 用户上下文(与其他文件操作一致):UID
+    #[prost(uint32, tag = "5")]
+    pub uid: u32,
+    /// 用户上下文(与其他文件操作一致):GID
+    #[prost(uint32, tag = "6")]
+    pub gid: u32,
+    /// 用户上下文(与其他文件操作一致):用户名
+    #[prost(string, tag = "7")]
+    pub username: ::prost::alloc::string::String,
+    /// 用户上下文(与其他文件操作一致):家目录
+    #[prost(string, tag = "8")]
+    pub home_dir: ::prost::alloc::string::String,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ChownResult {
+    #[prost(bool, tag = "1")]
+    pub success: bool,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

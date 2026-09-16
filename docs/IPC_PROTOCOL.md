@@ -1357,6 +1357,8 @@ fn validate_path(path: &str) -> Result<(), Error> {
 | `WriteFile` | `WriteResult` | 写入文件 |
 | `ExecuteCommand` | `CommandOutput` | 执行命令 |
 | `GetSystemInfo` | `SystemInfo` | 获取系统信息 |
+| `Chmod` | `ChmodResult` | 修改文件/目录权限（2026-09-16 新增） |
+| `Chown` | `ChownResult` | 修改文件/目录属主/属组（2026-09-16 新增） |
 
 ### 10.3 相关文档
 

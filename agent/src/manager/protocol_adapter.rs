@@ -20,7 +20,7 @@ use crate::protocol::generated::{
     Delete, Mkdir, Rename, Copy, Move,
     FileExists as FileExistsReq, ApplyDiff as ApplyDiffReq,
     FileDiff as ProtoFileDiff, FileInfo, FileInfoResult,
-    ExecuteCommand,
+    ExecuteCommand, Chmod, Chown,
 };
 use crate::protocol::{Payload, FileEntry};
 
@@ -182,6 +182,33 @@ pub fn serde_to_worker_request(payload: &Payload, user: &UserContext) -> Option<
             }))
         }
 
+        Payload::ChmodRequest { path, mode, recursive } => {
+            tracing::debug!("适配 ChmodRequest: path={}, mode={:o}, recursive={}", path, mode, recursive);
+            Some(manager_request::Payload::Chmod(Chmod {
+                path: path.clone(),
+                mode: *mode,
+                recursive: *recursive,
+                uid: user.uid,
+                gid: user.gid,
+                username: user.username.clone(),
+                home_dir: user.home_dir.clone(),
+            }))
+        }
+
+        Payload::ChownRequest { path, owner, group, recursive } => {
+            tracing::debug!("适配 ChownRequest: path={}, owner={}, group={}, recursive={}", path, owner, group, recursive);
+            Some(manager_request::Payload::Chown(Chown {
+                path: path.clone(),
+                owner: owner.clone(),
+                group: group.clone(),
+                recursive: *recursive,
+                uid: user.uid,
+                gid: user.gid,
+                username: user.username.clone(),
+                home_dir: user.home_dir.clone(),
+            }))
+        }
+
         Payload::FileExistsRequest { path } => {
             tracing::debug!("适配 FileExistsRequest: path={}", path);
             Some(manager_request::Payload::FileExists(FileExistsReq {
@@ -242,6 +269,8 @@ pub fn worker_response_to_serde(response: &crate::protocol::generated::WorkerRes
                 size: e.size,
                 mtime: e.mtime.clone(),
                 permissions: e.permissions.clone(),
+                owner: e.owner.clone(),
+                group: e.group.clone(),
             }).collect();
 
             Some(Payload::ReadDirResponse {
@@ -343,6 +372,16 @@ pub fn worker_response_to_serde(response: &crate::protocol::generated::WorkerRes
                 src: result.src.clone(),
                 dst: result.dst.clone(),
             })
+        }
+
+        Some(worker_response::Payload::ChmodResult(result)) => {
+            tracing::debug!("适配 ChmodResult: success={}", result.success);
+            Some(Payload::ChmodResponse { success: result.success })
+        }
+
+        Some(worker_response::Payload::ChownResult(result)) => {
+            tracing::debug!("适配 ChownResult: success={}", result.success);
+            Some(Payload::ChownResponse { success: result.success })
         }
 
         Some(worker_response::Payload::FileExistsResult(result)) => {
@@ -464,6 +503,8 @@ mod tests {
                     size: 100,
                     mtime: "2026-08-05T10:00:00Z".to_string(),
                     permissions: "rw-r--r--".to_string(),
+                    owner: "testuser".to_string(),
+                    group: "testuser".to_string(),
                 }],
             })),
         };
@@ -476,6 +517,8 @@ mod tests {
                 assert_eq!(entries.len(), 1);
                 assert_eq!(entries[0].name, "file.txt");
                 assert_eq!(entries[0].size, 100);
+                assert_eq!(entries[0].owner, "testuser");
+                assert_eq!(entries[0].group, "testuser");
             }
             _ => panic!("Expected ReadDirResponse"),
         }
@@ -767,6 +810,100 @@ mod tests {
                 assert_eq!(exit_code, 0);
             }
             _ => panic!("Expected CommandOutputResponse"),
+        }
+    }
+
+    #[test]
+    fn test_chmod_request_conversion() {
+        let payload = Payload::ChmodRequest {
+            path: "/home/testuser/dir".to_string(),
+            mode: 0o755, // 493
+            recursive: true,
+        };
+        let user = test_user_context();
+
+        let result = serde_to_worker_request(&payload, &user);
+
+        match result {
+            Some(manager_request::Payload::Chmod(req)) => {
+                assert_eq!(req.path, "/home/testuser/dir");
+                assert_eq!(req.mode, 493); // 0o755
+                assert!(req.recursive);
+                assert_eq!(req.uid, 1000);
+                assert_eq!(req.gid, 1000);
+                assert_eq!(req.username, "testuser");
+                assert_eq!(req.home_dir, "/home/testuser");
+            }
+            _ => panic!("Expected Chmod request"),
+        }
+    }
+
+    #[test]
+    fn test_chmod_result_conversion() {
+        use crate::protocol::generated::{WorkerResponse, ChmodResult};
+
+        let response = WorkerResponse {
+            request_id: 1,
+            payload: Some(worker_response::Payload::ChmodResult(ChmodResult {
+                success: true,
+            })),
+        };
+
+        let result = worker_response_to_serde(&response);
+
+        match result {
+            Some(Payload::ChmodResponse { success }) => {
+                assert!(success);
+            }
+            _ => panic!("Expected ChmodResponse"),
+        }
+    }
+
+    #[test]
+    fn test_chown_request_conversion() {
+        let payload = Payload::ChownRequest {
+            path: "/home/testuser/www".to_string(),
+            owner: "www-data".to_string(),
+            group: "www-data".to_string(),
+            recursive: false,
+        };
+        let user = test_user_context();
+
+        let result = serde_to_worker_request(&payload, &user);
+
+        match result {
+            Some(manager_request::Payload::Chown(req)) => {
+                assert_eq!(req.path, "/home/testuser/www");
+                assert_eq!(req.owner, "www-data");
+                assert_eq!(req.group, "www-data");
+                assert!(!req.recursive);
+                assert_eq!(req.uid, 1000);
+                assert_eq!(req.gid, 1000);
+                assert_eq!(req.username, "testuser");
+                assert_eq!(req.home_dir, "/home/testuser");
+            }
+            _ => panic!("Expected Chown request"),
+        }
+    }
+
+    #[test]
+    fn test_chown_result_conversion() {
+        use crate::protocol::generated::{WorkerResponse, ChownResult};
+
+        let response = WorkerResponse {
+            request_id: 1,
+            payload: Some(worker_response::Payload::ChownResult(ChownResult {
+                success: true,
+            })),
+        };
+
+        let result = worker_response_to_serde(&response);
+
+        match result {
+            Some(Payload::ChownResponse { success }) => {
+                assert!(success);
+            }
+            _ => panic!("Expected ChownResponse"),
         }
     }
 }

@@ -1,7 +1,7 @@
 //! 文件操作处理器 - 处理文件和目录相关请求
 //!
 //! 该模块负责：
-//! - 读取目录列表（ReadDir）
+//! - 读取目录列表（ReadDir，含 owner/group）
 //! - 读取文件内容（ReadFile）
 //! - 探测文件格式（FileInfo）
 //! - 写入文件（WriteFile）
@@ -12,6 +12,8 @@
 //! - 移动（Move）
 //! - 检查文件存在（FileExists）
 //! - 应用差异（ApplyDiff）
+//! - 修改权限（Chmod）
+//! - 修改属主/属组（Chown）
 //
 // 阶段 3 改造:集成 UserExecutor(fork+setuid)实现用户隔离
 // 所有文件操作在目标用户上下文中执行,Linux 文件系统权限自动生效
@@ -20,6 +22,7 @@
 // - ReadFile: mtime 为 Unix 秒(u64)
 // - WriteFile: mtime 为 Unix 秒(u64)
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -40,6 +43,7 @@ use crate::protocol::generated::{
     Move, MoveResult,
     FileExists as FileExistsReq, FileExistsResult,
     ApplyDiff as ApplyDiffReq, ApplyDiffResult,
+    Chmod, ChmodResult, Chown, ChownResult,
     WorkerResponse, worker_response, Error,
 };
 
@@ -80,8 +84,8 @@ pub async fn handle_read_dir(req: ReadDir) -> WorkerResponse {
     };
     let executor = UserExecutor::new(&session);
 
-    // 序列化中间结果类型:(name, is_dir, size, mtime_rfc3339, permissions)
-    type DirEntry = (String, bool, u64, String, String);
+    // 序列化中间结果类型:(name, is_dir, size, mtime_rfc3339, permissions, owner, group)
+    type DirEntry = (String, bool, u64, String, String, String, String);
 
     let path = safe_path.as_str().to_string();
     let result: AnyhowResult<Vec<DirEntry>> = executor.execute_as_user(move || {
@@ -93,6 +97,11 @@ pub async fn handle_read_dir(req: ReadDir) -> WorkerResponse {
         if !p.is_dir() {
             anyhow::bail!("Path is not a directory: {}", path);
         }
+
+        // 构建 uid/gid → 名称映射(手写解析 /etc/passwd 与 /etc/group,
+        // 不引入新依赖;解析失败回退空表,条目属主显示数字字符串)
+        let uid_names = build_uid_name_map();
+        let gid_names = build_gid_name_map();
 
         let entries = fs::read_dir(p)
             .map_err(|e| {
@@ -118,12 +127,28 @@ pub async fn handle_read_dir(req: ReadDir) -> WorkerResponse {
                     })
                     .unwrap_or_default();
 
+                // 属主/属组:MetadataExt 的 uid()/gid() 查映射,解析失败回退数字字符串
+                #[cfg(unix)]
+                let (owner, group) = {
+                    use std::os::unix::fs::MetadataExt;
+                    let uid = metadata.uid();
+                    let gid = metadata.gid();
+                    (
+                        uid_names.get(&uid).cloned().unwrap_or_else(|| uid.to_string()),
+                        gid_names.get(&gid).cloned().unwrap_or_else(|| gid.to_string()),
+                    )
+                };
+                #[cfg(not(unix))]
+                let (owner, group) = (String::new(), String::new());
+
                 Some((
                     name,
                     metadata.is_dir(),
                     if metadata.is_dir() { 0 } else { metadata.len() },
                     mtime,
                     format_permissions(&metadata),
+                    owner,
+                    group,
                 ))
             })
             .collect();
@@ -137,12 +162,14 @@ pub async fn handle_read_dir(req: ReadDir) -> WorkerResponse {
 
             let file_entries = entries
                 .into_iter()
-                .map(|(name, is_dir, size, mtime, permissions)| FileEntry {
+                .map(|(name, is_dir, size, mtime, permissions, owner, group)| FileEntry {
                     name,
                     is_dir,
                     size,
                     mtime,
                     permissions,
+                    owner,
+                    group,
                 })
                 .collect();
 
@@ -849,6 +876,133 @@ pub async fn handle_file_exists(req: FileExistsReq) -> WorkerResponse {
     }
 }
 
+/// 处理 Chmod 请求
+///
+/// 在目标用户上下文中修改文件/目录权限(通过 fork+setuid 实现用户隔离)。
+/// mode 为八进制数值(如 0o755 = 493);recursive=true 时递归应用于目录下所有内容
+/// (递归遍历跳过符号链接,与 chmod -R 行为一致)。
+#[tracing::instrument(fields(path = %req.path, uid = req.uid))]
+pub async fn handle_chmod(req: Chmod) -> WorkerResponse {
+    tracing::info!("处理 Chmod 请求: path={}, mode={:o}, recursive={}, uid={}", req.path, req.mode, req.recursive, req.uid);
+
+    let session = build_user_session(req.uid, req.gid, &req.username, &req.home_dir);
+    // 路径安全校验：防目录穿越、限制用户家目录、防符号链接攻击
+    let safe_path = match crate::auth::validate_path(&req.path, session.home_dir.as_path(), session.uid) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("路径校验失败: path={}, error={}", req.path, e);
+            let (code, message) = error_to_code_message(&e);
+            return WorkerResponse {
+                payload: Some(worker_response::Payload::Error(Error { code, message })),
+                ..Default::default()
+            };
+        }
+    };
+    let executor = UserExecutor::new(&session);
+
+    let path = safe_path.as_str().to_string();
+    let mode = req.mode;
+    let recursive = req.recursive;
+    let result: AnyhowResult<()> = executor.execute_as_user(move || {
+        apply_chmod(&path, mode, recursive)
+    });
+
+    match result {
+        Ok(()) => {
+            tracing::info!("修改权限成功: path={}, mode={:o}", req.path, req.mode);
+            WorkerResponse {
+                payload: Some(worker_response::Payload::ChmodResult(ChmodResult { success: true })),
+                ..Default::default()
+            }
+        }
+        Err(e) => {
+            tracing::error!("修改权限失败: path={}, error={}", req.path, e);
+            let (code, message) = error_to_code_message(&e);
+            WorkerResponse {
+                payload: Some(worker_response::Payload::Error(Error { code, message })),
+                ..Default::default()
+            }
+        }
+    }
+}
+
+/// 处理 Chown 请求
+///
+/// 在目标用户上下文中修改文件/目录属主/属组(通过 fork+setuid 实现用户隔离)。
+/// owner/group 为用户名/组名,先解析为 uid/gid(不存在时返回确定性错误),
+/// 再用 std::os::unix::fs::chown 执行(Rust 1.73+ 标准库)。
+/// 语义:把 owner 改成其他用户仅登录用户为 root 时成功,否则 Linux 返回 EPERM(自然发生);
+/// recursive=true 时递归应用于目录下所有内容(遍历跳过符号链接)。
+#[tracing::instrument(fields(path = %req.path, uid = req.uid))]
+pub async fn handle_chown(req: Chown) -> WorkerResponse {
+    tracing::info!("处理 Chown 请求: path={}, owner={}, group={}, recursive={}, uid={}",
+        req.path, req.owner, req.group, req.recursive, req.uid);
+
+    let session = build_user_session(req.uid, req.gid, &req.username, &req.home_dir);
+    // 路径安全校验：防目录穿越、限制用户家目录、防符号链接攻击
+    let safe_path = match crate::auth::validate_path(&req.path, session.home_dir.as_path(), session.uid) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("路径校验失败: path={}, error={}", req.path, e);
+            let (code, message) = error_to_code_message(&e);
+            return WorkerResponse {
+                payload: Some(worker_response::Payload::Error(Error { code, message })),
+                ..Default::default()
+            };
+        }
+    };
+
+    // 名称 → uid/gid 解析(在降权执行前完成,不存在时直接返回确定性错误)
+    let target_uid = match resolve_uid_by_name(&req.owner) {
+        Some(uid) => uid,
+        None => {
+            let msg = format!("chown 失败: 用户 '{}' 不存在", req.owner);
+            tracing::error!("{}", msg);
+            return WorkerResponse {
+                payload: Some(worker_response::Payload::Error(Error { code: 404, message: msg })),
+                ..Default::default()
+            };
+        }
+    };
+    let target_gid = match resolve_gid_by_name(&req.group) {
+        Some(gid) => gid,
+        None => {
+            let msg = format!("chown 失败: 组 '{}' 不存在", req.group);
+            tracing::error!("{}", msg);
+            return WorkerResponse {
+                payload: Some(worker_response::Payload::Error(Error { code: 404, message: msg })),
+                ..Default::default()
+            };
+        }
+    };
+
+    let executor = UserExecutor::new(&session);
+
+    let path = safe_path.as_str().to_string();
+    let recursive = req.recursive;
+    let result: AnyhowResult<()> = executor.execute_as_user(move || {
+        apply_chown(&path, target_uid, target_gid, recursive)
+    });
+
+    match result {
+        Ok(()) => {
+            tracing::info!("修改属主成功: path={}, owner={}, group={}", req.path, req.owner, req.group);
+            WorkerResponse {
+                payload: Some(worker_response::Payload::ChownResult(ChownResult { success: true })),
+                ..Default::default()
+            }
+        }
+        Err(e) => {
+            tracing::error!("修改属主失败: path={}, error={}", req.path, e);
+            let (code, message) = error_to_code_message(&e);
+            WorkerResponse {
+                payload: Some(worker_response::Payload::Error(Error { code, message })),
+                ..Default::default()
+            }
+        }
+    }
+}
+
 /// 处理 ApplyDiff 请求
 ///
 /// 在目标用户上下文中应用文件差异(mtime 版本校验 + 应用差异 + 写入)。
@@ -999,4 +1153,209 @@ fn format_permissions(metadata: &fs::Metadata) -> String {
 #[cfg(not(unix))]
 fn format_permissions(_metadata: &fs::Metadata) -> String {
     "rw-rw-rw-".into()
+}
+
+// ===== 属主/属组名称解析(手写解析 /etc/passwd 与 /etc/group,不引入新依赖) =====
+
+/// 解析 /etc/passwd,返回 (用户名, uid) 列表
+///
+/// 格式: `name:x:uid:gid:gecos:home:shell`,取第 1、3 冒号分隔字段。
+/// 解析失败(文件缺失/行格式异常)跳过该行,由调用方回退数字字符串。
+fn parse_passwd_entries() -> Vec<(String, u32)> {
+    parse_colon_separated("/etc/passwd")
+}
+
+/// 解析 /etc/group,返回 (组名, gid) 列表
+///
+/// 格式: `name:x:gid:members`,取第 1、3 冒号分隔字段。
+fn parse_group_entries() -> Vec<(String, u32)> {
+    parse_colon_separated("/etc/group")
+}
+
+/// /etc/passwd 与 /etc/group 的通用解析:
+/// 每行按冒号分隔,第 0 段为名称、第 2 段为数字 ID
+fn parse_colon_separated(file: &str) -> Vec<(String, u32)> {
+    let content = match fs::read_to_string(file) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("读取 {} 失败,名称解析回退数字字符串: {}", file, e);
+            return Vec::new();
+        }
+    };
+
+    content
+        .lines()
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter_map(|line| {
+            let mut fields = line.split(':');
+            let name = fields.next()?;
+            let _x = fields.next()?; // 密码占位段(通常为 x)
+            let id = fields.next()?.parse::<u32>().ok()?;
+            Some((name.to_string(), id))
+        })
+        .collect()
+}
+
+/// 构建 uid → 用户名映射(目录列表显示属主用)
+fn build_uid_name_map() -> HashMap<u32, String> {
+    parse_passwd_entries().into_iter().map(|(name, uid)| (uid, name)).collect()
+}
+
+/// 构建 gid → 组名映射(目录列表显示属组用)
+fn build_gid_name_map() -> HashMap<u32, String> {
+    parse_group_entries().into_iter().map(|(name, gid)| (gid, name)).collect()
+}
+
+/// 用户名 → uid 解析(chown 用)
+///
+/// 解析失败(用户不存在)返回 None,由调用方返回确定性错误
+pub fn resolve_uid_by_name(username: &str) -> Option<u32> {
+    parse_passwd_entries()
+        .into_iter()
+        .find(|(name, _)| name == username)
+        .map(|(_, uid)| uid)
+}
+
+/// 组名 → gid 解析(chown 用)
+///
+/// 解析失败(组不存在)返回 None,由调用方返回确定性错误
+pub fn resolve_gid_by_name(group: &str) -> Option<u32> {
+    parse_group_entries()
+        .into_iter()
+        .find(|(name, _)| name == group)
+        .map(|(_, gid)| gid)
+}
+
+// ===== chmod/chown 执行辅助 =====
+
+/// 对单个路径应用 chmod(友好的权限错误信息,交由 error_to_code_message 映射 403)
+#[cfg(unix)]
+fn chmod_one(path: &str, mode: u32) -> AnyhowResult<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(mode)).map_err(|e| {
+        let msg = e.to_string();
+        if msg.contains("Permission denied") || msg.contains("Operation not permitted") {
+            anyhow::anyhow!("权限不足: 无法修改 '{}' 的权限 (需要相应的 Linux 用户权限)", path)
+        } else {
+            anyhow::anyhow!("无法修改 '{}' 的权限: {}", path, e)
+        }
+    })
+}
+
+/// 对单个路径应用 chown(友好的权限错误信息)
+///
+/// 把 owner 改成其他用户仅 root 可成功,非 root 时 Linux 返回 EPERM(原生语义)
+#[cfg(unix)]
+fn chown_one(path: &str, uid: u32, gid: u32) -> AnyhowResult<()> {
+    std::os::unix::fs::chown(path, Some(uid), Some(gid)).map_err(|e| {
+        let msg = e.to_string();
+        if msg.contains("Permission denied") || msg.contains("Operation not permitted") {
+            anyhow::anyhow!("权限不足: 无法修改 '{}' 的属主 (仅 root 可将文件转让给其他用户)", path)
+        } else {
+            anyhow::anyhow!("无法修改 '{}' 的属主: {}", path, e)
+        }
+    })
+}
+
+/// chmod 递归遍历目录内容(后序:先处理子内容再处理目录自身,
+/// 避免先移除读权限导致无法遍历;遍历中跳过符号链接,与 chmod -R 行为一致)
+#[cfg(unix)]
+fn chmod_dir_contents(dir: &str, mode: u32) -> AnyhowResult<()> {
+    for entry in fs::read_dir(dir).map_err(|e| {
+        let msg = e.to_string();
+        if msg.contains("Permission denied") {
+            anyhow::anyhow!("权限不足: 无法访问目录 '{}' (需要相应的 Linux 用户权限)", dir)
+        } else {
+            anyhow::anyhow!("无法读取目录 '{}': {}", dir, e)
+        }
+    })? {
+        let entry = entry.map_err(|e| anyhow::anyhow!("读取目录项失败: {}", e))?;
+        let file_type = entry.file_type().map_err(|e| anyhow::anyhow!("无法获取文件类型: {}", e))?;
+        if file_type.is_symlink() {
+            continue; // 递归遍历跳过符号链接(不修改链接目标)
+        }
+        let child = entry.path().to_string_lossy().to_string();
+        if file_type.is_dir() {
+            chmod_dir_contents(&child, mode)?; // 后序:先处理孙内容
+            chmod_one(&child, mode)?;
+        } else {
+            chmod_one(&child, mode)?;
+        }
+    }
+    Ok(())
+}
+
+/// chown 递归遍历目录内容(后序,跳过符号链接,与 chmod_dir_contents 同构)
+#[cfg(unix)]
+fn chown_dir_contents(dir: &str, uid: u32, gid: u32) -> AnyhowResult<()> {
+    for entry in fs::read_dir(dir).map_err(|e| {
+        let msg = e.to_string();
+        if msg.contains("Permission denied") {
+            anyhow::anyhow!("权限不足: 无法访问目录 '{}' (需要相应的 Linux 用户权限)", dir)
+        } else {
+            anyhow::anyhow!("无法读取目录 '{}': {}", dir, e)
+        }
+    })? {
+        let entry = entry.map_err(|e| anyhow::anyhow!("读取目录项失败: {}", e))?;
+        let file_type = entry.file_type().map_err(|e| anyhow::anyhow!("无法获取文件类型: {}", e))?;
+        if file_type.is_symlink() {
+            continue; // 递归遍历跳过符号链接(不修改链接目标)
+        }
+        let child = entry.path().to_string_lossy().to_string();
+        if file_type.is_dir() {
+            chown_dir_contents(&child, uid, gid)?; // 后序:先处理孙内容
+            chown_one(&child, uid, gid)?;
+        } else {
+            chown_one(&child, uid, gid)?;
+        }
+    }
+    Ok(())
+}
+
+/// chmod 执行体:顶层路径先做存在性预检(友好 404),目录递归时后序应用
+#[cfg(unix)]
+fn apply_chmod(path: &str, mode: u32, recursive: bool) -> AnyhowResult<()> {
+    let metadata = fs::metadata(path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            anyhow::anyhow!("路径 '{}' 不存在", path)
+        } else {
+            anyhow::anyhow!("无法访问 '{}': {}", path, e)
+        }
+    })?;
+
+    if metadata.is_dir() && recursive {
+        chmod_dir_contents(path, mode)?; // 先处理目录内容
+    }
+    chmod_one(path, mode)?; // 最后处理顶层自身(递归时;非递归则仅此一步)
+    Ok(())
+}
+
+/// chown 执行体:顶层路径先做存在性预检(友好 404),目录递归时后序应用
+#[cfg(unix)]
+fn apply_chown(path: &str, uid: u32, gid: u32, recursive: bool) -> AnyhowResult<()> {
+    let metadata = fs::metadata(path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            anyhow::anyhow!("路径 '{}' 不存在", path)
+        } else {
+            anyhow::anyhow!("无法访问 '{}': {}", path, e)
+        }
+    })?;
+
+    if metadata.is_dir() && recursive {
+        chown_dir_contents(path, uid, gid)?; // 先处理目录内容
+    }
+    chown_one(path, uid, gid)?; // 最后处理顶层自身(递归时;非递归则仅此一步)
+    Ok(())
+}
+
+/// 非 Unix 平台:chmod 不支持(agent 仅部署于 Linux,此分支仅为编译兜底)
+#[cfg(not(unix))]
+fn apply_chmod(_path: &str, _mode: u32, _recursive: bool) -> AnyhowResult<()> {
+    anyhow::bail!("chmod 仅支持 Unix 平台")
+}
+
+/// 非 Unix 平台:chown 不支持(agent 仅部署于 Linux,此分支仅为编译兜底)
+#[cfg(not(unix))]
+fn apply_chown(_path: &str, _uid: u32, _gid: u32, _recursive: bool) -> AnyhowResult<()> {
+    anyhow::bail!("chown 仅支持 Unix 平台")
 }

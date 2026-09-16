@@ -405,3 +405,135 @@ fn payload_error_code_carries_auth_error_code() {
         _ => panic!("变体不匹配"),
     }
 }
+
+// ── chmod/chown：文件属主/权限管理（2026-09-16 设计） ──
+
+#[test]
+fn chmod_request_wire_format() {
+    // mode 为八进制数值（0o755 = 493），避免字符串解析歧义
+    let env = Envelope::new(
+        31,
+        Payload::ChmodRequest {
+            path: "/home/user/dir".to_string(),
+            mode: 493,
+            recursive: true,
+        },
+    );
+    let json = serde_json::to_string(&env).unwrap();
+    assert_eq!(
+        json,
+        r#"{"request_id":31,"payload":{"type":"chmod","data":{"path":"/home/user/dir","mode":493,"recursive":true}}}"#
+    );
+    // 线上往返：编码后必须可解码
+    let env2 = roundtrip(&env);
+    match env2.payload {
+        Payload::ChmodRequest { path, mode, recursive } => {
+            assert_eq!(path, "/home/user/dir");
+            assert_eq!(mode, 493);
+            assert!(recursive);
+        }
+        _ => panic!("变体不匹配"),
+    }
+}
+
+#[test]
+fn chmod_resp_wire_format() {
+    let env = Envelope::new(32, Payload::ChmodResponse { success: true });
+    let json = serde_json::to_string(&env).unwrap();
+    assert_eq!(
+        json,
+        r#"{"request_id":32,"payload":{"type":"chmod_resp","data":{"success":true}}}"#
+    );
+    let back = roundtrip(&env);
+    match back.payload {
+        Payload::ChmodResponse { success } => assert!(success),
+        _ => panic!("变体不匹配"),
+    }
+}
+
+#[test]
+fn chown_request_wire_format() {
+    // owner/group 为用户名/组名字符串（如 "www-data"），Agent 端解析为 uid/gid
+    let env = Envelope::new(
+        33,
+        Payload::ChownRequest {
+            path: "/srv/www".to_string(),
+            owner: "www-data".to_string(),
+            group: "www-data".to_string(),
+            recursive: false,
+        },
+    );
+    let json = serde_json::to_string(&env).unwrap();
+    assert_eq!(
+        json,
+        r#"{"request_id":33,"payload":{"type":"chown","data":{"path":"/srv/www","owner":"www-data","group":"www-data","recursive":false}}}"#
+    );
+    let env2 = roundtrip(&env);
+    match env2.payload {
+        Payload::ChownRequest { path, owner, group, recursive } => {
+            assert_eq!(path, "/srv/www");
+            assert_eq!(owner, "www-data");
+            assert_eq!(group, "www-data");
+            assert!(!recursive);
+        }
+        _ => panic!("变体不匹配"),
+    }
+}
+
+#[test]
+fn chown_resp_wire_format() {
+    let env = Envelope::new(34, Payload::ChownResponse { success: true });
+    let json = serde_json::to_string(&env).unwrap();
+    assert_eq!(
+        json,
+        r#"{"request_id":34,"payload":{"type":"chown_resp","data":{"success":true}}}"#
+    );
+    let back = roundtrip(&env);
+    match back.payload {
+        Payload::ChownResponse { success } => assert!(success),
+        _ => panic!("变体不匹配"),
+    }
+}
+
+#[test]
+fn read_dir_resp_without_owner_group_compat() {
+    // FileEntry.owner/group 为后加字段：旧版 Agent 的 read_dir_resp 不含这两字段，
+    // 必须可解码且回退空串（与 CurrentUserResponse.home_dir 的 default 先例一致）
+    let raw = r#"{"request_id":1,"payload":{"type":"read_dir_resp","data":{"path":"/tmp","entries":[{"name":"a.txt","is_dir":false,"size":1,"mtime":"2026-08-05T10:00:00Z","permissions":"rw-r--r--"}]}}}"#;
+    let env: Envelope = serde_json::from_str(raw).expect("旧格式必须可解码");
+    match env.payload {
+        Payload::ReadDirResponse { path, entries } => {
+            assert_eq!(path, "/tmp");
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].name, "a.txt");
+            assert_eq!(entries[0].owner, "");
+            assert_eq!(entries[0].group, "");
+        }
+        _ => panic!("变体不匹配"),
+    }
+}
+
+#[test]
+fn read_dir_resp_with_owner_group_wire_format() {
+    // 新版 Agent 的 read_dir_resp：FileEntry 携带 owner/group 字段
+    let env = Envelope::new(
+        35,
+        Payload::ReadDirResponse {
+            path: "/srv/www".to_string(),
+            entries: vec![quirel_protocol::FileEntry {
+                name: "index.html".to_string(),
+                is_dir: false,
+                size: 1024,
+                mtime: "2026-09-16T00:00:00Z".to_string(),
+                permissions: "rw-r--r--".to_string(),
+                owner: "www-data".to_string(),
+                group: "www-data".to_string(),
+            }],
+        },
+    );
+    let json = serde_json::to_string(&env).unwrap();
+    assert_eq!(
+        json,
+        r#"{"request_id":35,"payload":{"type":"read_dir_resp","data":{"path":"/srv/www","entries":[{"name":"index.html","is_dir":false,"size":1024,"mtime":"2026-09-16T00:00:00Z","permissions":"rw-r--r--","owner":"www-data","group":"www-data"}]}}}"#
+    );
+}

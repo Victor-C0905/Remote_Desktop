@@ -606,6 +606,8 @@ pub fn run() {
             connection::remote_rename,
             connection::remote_copy,
             connection::remote_move,
+            connection::remote_chmod, // 修改文件权限（属性对话框）
+            connection::remote_chown, // 修改文件所有者（属性对话框）
             connection::get_stats,
             connection::subscribe,
             connection::unsubscribe,
