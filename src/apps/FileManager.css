@@ -1064,8 +1064,7 @@
 }
 
 /* 标题 */
-.ed-title,
-.srd-title {
+.ed-title {
   font-size: 14pt;
   font-weight: 600;
   color: var(--quirel-text-primary);
@@ -1077,8 +1076,7 @@
 }
 
 /* 文件名 */
-.ed-file,
-.srd-file {
+.ed-file {
   font-size: var(--font-body);
   color: var(--quirel-text-primary);
   word-break: break-all;
@@ -1167,59 +1165,4 @@
   word-break: break-all;
   color: var(--quirel-text-primary);
   margin: 0;
-}
-
-/* ── Script Run Dialog 专属 ─────────────────── */
-/* 元信息行（大小/时间/权限） */
-.srd-rows {
-  margin-bottom: 12px;
-}
-
-.srd-row {
-  display: flex;
-  justify-content: space-between;
-  padding: 6px 0;
-  border-bottom: 1px solid var(--quirel-border-color);
-  font-size: 13px;
-  color: var(--quirel-text-secondary);
-}
-
-.srd-row span:last-child {
-  color: var(--quirel-text-primary);
-}
-
-/* 内容预览区：等宽深底代码块 */
-.srd-preview-label {
-  font-size: var(--font-small);
-  color: var(--quirel-text-secondary);
-  margin-bottom: 6px;
-}
-
-.srd-preview {
-  max-height: 180px;
-  overflow: auto;
-  background: var(--quirel-view-bg);
-  border: 1px solid var(--quirel-border-color);
-  border-radius: var(--radius-xs);
-  padding: 10px 12px;
-  font-family: Consolas, "Source Code Pro", monospace;
-  font-size: 12px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-all;
-  color: var(--quirel-text-primary);
-  margin: 0;
-}
-
-/* 将执行的命令行 */
-.srd-cmd {
-  margin-top: 10px;
-  font-size: var(--font-small);
-  color: var(--quirel-text-secondary);
-}
-
-.srd-cmd code {
-  font-family: Consolas, "Source Code Pro", monospace;
-  color: var(--quirel-text-primary);
-  word-break: break-all;
 }

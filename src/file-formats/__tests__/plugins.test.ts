@@ -9,7 +9,6 @@ import { imagePlugin } from '../plugins/image';
 import { textPlugin } from '../plugins/text';
 import { archivePlugin, buildExtractCommand } from '../plugins/archive';
 import { htmlPlugin } from '../plugins/html';
-import { executablePlugin } from '../plugins/executable';
 import type { RemoteFileInfo } from '../types';
 
 function makeInfo(overrides: Partial<RemoteFileInfo> = {}): RemoteFileInfo {
@@ -176,32 +175,5 @@ describe('htmlPlugin', () => {
 
   it('其他扩展名不命中', () => {
     expect(htmlPlugin.detect(makeInfo({ extension: 'js', isText: true }))).toBeNull();
-  });
-});
-
-describe('executablePlugin', () => {
-  it('.sh 且含 shebang 命中 run-script', () => {
-    const match = executablePlugin.detect(
-      makeInfo({ extension: 'sh', path: '/tmp/a.sh', magicBytes: [0x23, 0x21, 0x2f, 0x62, 0x69, 0x6e] }), // "#!/bin"
-    );
-    expect(match).toEqual({ pluginId: 'executable', category: 'run-script', confidence: 0.95 });
-  });
-
-  it('.sh 无 shebang 不命中（文本编辑器兜底）', () => {
-    const match = executablePlugin.detect(
-      makeInfo({ extension: 'sh', path: '/tmp/a.sh', magicBytes: [0x65, 0x63, 0x68, 0x6f] }), // "echo"
-    );
-    expect(match).toBeNull();
-  });
-
-  it('非 .sh 不命中（.py 走文本编辑器）', () => {
-    const match = executablePlugin.detect(
-      makeInfo({ extension: 'py', path: '/tmp/a.py', magicBytes: [0x23, 0x21] }),
-    );
-    expect(match).toBeNull();
-  });
-
-  it('无 magicBytes 的 .sh 不命中（保守判定）', () => {
-    expect(executablePlugin.detect(makeInfo({ extension: 'sh', path: '/tmp/a.sh' }))).toBeNull();
   });
 });
