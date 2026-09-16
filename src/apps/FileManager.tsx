@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -163,6 +163,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   const [permRecursive, setPermRecursive] = useState(false);  // 目录：应用到子文件和文件夹
   const [permSaving, setPermSaving] = useState(false);        // 请求进行中（禁用按钮/遮罩）
   const [permError, setPermError] = useState<string | null>(null);  // 内联错误（不关闭对话框）
+  const [permTab, setPermTab] = useState<'general' | 'permissions'>('general');  // 属性分页：常规（只读）/ 权限（可编辑）
   // 解压对话框：三选项确认 → 解压中（loading，不可关闭）→ 成功关闭/失败显示错误
   const [extractDialog, setExtractDialog] = useState<{
     fullPath: string;      // 压缩包完整路径
@@ -870,14 +871,26 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   // ── Properties Dialog ────────────────────────────────
   const showProperties = useCallback((entry: FileEntry) => {
     setPropertiesEntry(entry);
-    // 初始化可编辑状态：权限矩阵/所有者/组；recursive 每次打开重置为不勾选
+    // 初始化可编辑状态：权限矩阵/所有者/组；每次打开重置到「常规」页；recursive 重置为不勾选
     setPermMatrix(parsePermissions(entry.permissions));
     setPermOwner(entry.owner ?? "");
     setPermGroup(entry.group ?? "");
     setPermRecursive(false);
     setPermSaving(false);
     setPermError(null);
+    setPermTab('general');
   }, []);
+
+  // 属性对话框 dirty 判定：权限矩阵或所有者/组相对初始值有变化
+  // （applyProperties 与「应用」按钮禁用态共用，保证判定一致）
+  const permDirty = useMemo(() => {
+    if (!propertiesEntry) return { modeChanged: false, ownerChanged: false };
+    const initialMode = matrixToOctal(parsePermissions(propertiesEntry.permissions));
+    const newMode = matrixToOctal(permMatrix);
+    const ownerChanged = permOwner !== (propertiesEntry.owner ?? "") || permGroup !== (propertiesEntry.group ?? "");
+    return { modeChanged: newMode !== initialMode, ownerChanged };
+  }, [propertiesEntry, permMatrix, permOwner, permGroup]);
+  const permHasChanges = permDirty.modeChanged || permDirty.ownerChanged;
 
   // ── Properties Dialog：应用更改（chmod / chown）───────
   // 与初始值比对：权限变化 → remote_chmod；所有者/组变化 → remote_chown；都变则先后调用
@@ -888,12 +901,10 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       setPermError("请先连接到远程服务器");
       return;
     }
+    const { modeChanged, ownerChanged } = permDirty;
+    if (!modeChanged && !ownerChanged) return;  // 无更改（按钮已禁用，双保险）
     // 完整路径拼法与 runScriptInTerminal 一致（"/" 根目录特判）
     const fullPath = currentPath === '/' ? `/${propertiesEntry.name}` : `${currentPath}/${propertiesEntry.name}`;
-    const initialMode = matrixToOctal(parsePermissions(propertiesEntry.permissions));
-    const newMode = matrixToOctal(permMatrix);
-    const modeChanged = newMode !== initialMode;
-    const ownerChanged = permOwner !== (propertiesEntry.owner ?? "") || permGroup !== (propertiesEntry.group ?? "");
     setPermSaving(true);
     setPermError(null);
     try {
@@ -901,7 +912,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         const ok = await invoke<boolean>('remote_chmod', {
           serverId: activeServerId,
           path: fullPath,
-          mode: newMode,
+          mode: matrixToOctal(permMatrix),
           recursive: permRecursive,
         });
         if (!ok) { setPermError("修改权限失败"); return; }
@@ -924,7 +935,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     } finally {
       setPermSaving(false);
     }
-  }, [propertiesEntry, activeServerId, currentPath, permMatrix, permOwner, permGroup, permRecursive, permSaving, loadDir]);
+  }, [propertiesEntry, activeServerId, currentPath, permMatrix, permOwner, permGroup, permRecursive, permSaving, permDirty, loadDir]);
 
   // ── Script Run（右键菜单入口）：打开终端并注入命令 ────
   // 方案 1 设计：双击 .sh 一律编辑器查看；运行是显式意图（右键菜单选择），
@@ -2151,7 +2162,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         document.body
       )}
 
-      {/* Properties Dialog - 使用 Portal（可编辑：权限矩阵 chmod / 所有者 chown） */}
+      {/* Properties Dialog - 使用 Portal（分页：常规=只读信息 / 权限=可编辑 chmod+chown） */}
       {propertiesEntry && createPortal(
         <div className="pd-overlay" onClick={(e) => {
           // 保存进行中不允许点遮罩关闭（防丢失反馈）；其余状态点击遮罩 = 关闭（与 ed-overlay 一致）
@@ -2164,103 +2175,175 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
               <span className="pd-icon">{getFileIcon(propertiesEntry)}</span>
               <span className="pd-name">{propertiesEntry.name}</span>
             </div>
+
+            {/* 分页栏：按功能划分——「常规」看信息，「权限」改设置 */}
+            <div className="pd-tabs" role="tablist">
+              <button
+                role="tab"
+                aria-selected={permTab === 'general'}
+                className={`pd-tab ${permTab === 'general' ? 'pd-tab-active' : ''}`}
+                onClick={() => setPermTab('general')}
+              >
+                常规
+                {/* 权限页有未保存更改时，常规页标题旁给出徽标提示 */}
+                {permTab === 'general' && permHasChanges && <span className="pd-tab-badge" title="有未保存的更改" />}
+              </button>
+              <button
+                role="tab"
+                aria-selected={permTab === 'permissions'}
+                className={`pd-tab ${permTab === 'permissions' ? 'pd-tab-active' : ''}`}
+                onClick={() => setPermTab('permissions')}
+              >
+                权限
+                {permTab !== 'permissions' && permHasChanges && <span className="pd-tab-badge" title="有未保存的更改" />}
+              </button>
+            </div>
+
             <div className="pd-content">
-              {/* 只读信息区 */}
-              <div className="pd-row">
-                <span className="pd-label">类型:</span>
-                <span className="pd-value">{propertiesEntry.is_dir ? "文件夹" : "文件"}</span>
-              </div>
-              <div className="pd-row">
-                <span className="pd-label">大小:</span>
-                <span className="pd-value">{formatSize(propertiesEntry.size)}</span>
-              </div>
-              <div className="pd-row">
-                <span className="pd-label">修改时间:</span>
-                <span className="pd-value">{formatDate(propertiesEntry.mtime)}</span>
-              </div>
-
-              {/* 权限区：3×3 复选框矩阵（行=所有者/组/其他，列=读取/写入/执行）+ 八进制只读展示 */}
-              <div className="pd-section-title">权限</div>
-              <div className="pd-perm">
-                <div className="pd-perm-grid">
-                  <span className="pd-perm-head" />
-                  {["读取", "写入", "执行"].map(col => (
-                    <span key={col} className="pd-perm-head">{col}</span>
-                  ))}
-                  {(["所有者", "组", "其他"] as const).map((rowLabel, r) => (
-                    <React.Fragment key={rowLabel}>
-                      <span className="pd-perm-rowlabel">{rowLabel}</span>
-                      {[0, 1, 2].map(c => (
-                        <label key={c} className="pd-perm-cell">
-                          <input
-                            type="checkbox"
-                            aria-label={`${rowLabel}${["读取", "写入", "执行"][c]}`}
-                            checked={permMatrix[r][c]}
-                            disabled={permSaving}
-                            onChange={() => setPermMatrix(prev => {
-                              const next = prev.map(t => [...t]);
-                              next[r][c] = !prev[r][c];
-                              return next;
-                            })}
-                          />
-                        </label>
-                      ))}
-                    </React.Fragment>
+              {permTab === 'general' ? (<>
+                {/* ── 常规页：只读信息 ── */}
+                <div className="pd-row">
+                  <span className="pd-label">类型:</span>
+                  <span className="pd-value">{propertiesEntry.is_dir ? "文件夹" : "文件"}</span>
+                </div>
+                <div className="pd-row">
+                  <span className="pd-label">位置:</span>
+                  {/* 完整路径（等宽字体，可选中复制） */}
+                  <span className="pd-value pd-location">
+                    {currentPath === '/' ? `/${propertiesEntry.name}` : `${currentPath}/${propertiesEntry.name}`}
+                  </span>
+                </div>
+                <div className="pd-row">
+                  <span className="pd-label">大小:</span>
+                  <span className="pd-value">{formatSize(propertiesEntry.size)}</span>
+                </div>
+                <div className="pd-row">
+                  <span className="pd-label">修改时间:</span>
+                  <span className="pd-value">{formatDate(propertiesEntry.mtime)}</span>
+                </div>
+                {/* 访问控制速览（当前服务器状态；编辑请切到「权限」页） */}
+                <div className="pd-row">
+                  <span className="pd-label">权限:</span>
+                  <span className="pd-value pd-mono">
+                    {propertiesEntry.permissions || "—"}
+                    {permDirty.modeChanged && <span className="pd-badge-dirty">未保存</span>}
+                  </span>
+                </div>
+                <div className="pd-row">
+                  <span className="pd-label">所有者:</span>
+                  <span className="pd-value pd-mono">
+                    {propertiesEntry.owner || propertiesEntry.group
+                      ? `${propertiesEntry.owner || "—"}:${propertiesEntry.group || "—"}`
+                      : "—"}
+                    {permDirty.ownerChanged && <span className="pd-badge-dirty">未保存</span>}
+                  </span>
+                </div>
+                <div className="pd-hint">如需修改权限或所有者，请切换到「权限」页</div>
+              </>) : (<>
+                {/* ── 权限页：可编辑（chmod + chown） ── */}
+                {/* 快捷预设：一键填充矩阵（目录/文件各一组常用值） */}
+                <div className="pd-preset-row">
+                  <span className="pd-preset-label">预设:</span>
+                  {(propertiesEntry.is_dir
+                    ? [{ mode: 0o755, label: "755 标准" }, { mode: 0o700, label: "700 私有" }]
+                    : [{ mode: 0o644, label: "644 标准" }, { mode: 0o600, label: "600 私有" }, { mode: 0o444, label: "444 只读" }]
+                  ).map(p => (
+                    <button
+                      key={p.label}
+                      className="pd-preset-btn"
+                      disabled={permSaving}
+                      title={`将权限设置为 ${p.label.split(' ')[0]}（${p.label.includes('标准') ? '通用安全默认值' : p.label.includes('私有') ? '仅所有者可访问' : '任何人不可写'}）`}
+                      onClick={() => setPermMatrix(parsePermissions(octalToPermString(p.mode)))}
+                    >
+                      {p.label}
+                    </button>
                   ))}
                 </div>
-                {/* 八进制 + 符号串随矩阵联动（只读）；mode 数值须按八进制显示（0o620=400 → "620"） */}
-                <div className="pd-perm-octal">
-                  <span className="pd-perm-octal-value">{matrixToOctal(permMatrix).toString(8).padStart(3, "0")}</span>
-                  <span className="pd-perm-octal-symbolic">{octalToPermString(matrixToOctal(permMatrix))}</span>
+
+                {/* 3×3 复选框矩阵（行=所有者/组/其他，列=读取/写入/执行）+ 八进制只读展示 */}
+                <div className="pd-perm">
+                  <div className="pd-perm-grid">
+                    <span className="pd-perm-head" />
+                    {["读取", "写入", "执行"].map(col => (
+                      <span key={col} className="pd-perm-head">{col}</span>
+                    ))}
+                    {(["所有者", "组", "其他"] as const).map((rowLabel, r) => (
+                      <React.Fragment key={rowLabel}>
+                        <span className="pd-perm-rowlabel">{rowLabel}</span>
+                        {[0, 1, 2].map(c => (
+                          <label key={c} className="pd-perm-cell">
+                            <input
+                              type="checkbox"
+                              aria-label={`${rowLabel}${["读取", "写入", "执行"][c]}`}
+                              checked={permMatrix[r][c]}
+                              disabled={permSaving}
+                              onChange={() => setPermMatrix(prev => {
+                                const next = prev.map(t => [...t]);
+                                next[r][c] = !prev[r][c];
+                                return next;
+                              })}
+                            />
+                          </label>
+                        ))}
+                      </React.Fragment>
+                    ))}
+                  </div>
+                  {/* 八进制 + 符号串随矩阵联动（只读）；mode 数值须按八进制显示（0o620=400 → "620"） */}
+                  <div className="pd-perm-octal">
+                    <span className="pd-perm-octal-value">{matrixToOctal(permMatrix).toString(8).padStart(3, "0")}</span>
+                    <span className="pd-perm-octal-symbolic">{octalToPermString(matrixToOctal(permMatrix))}</span>
+                  </div>
                 </div>
-              </div>
 
-              {/* 所有者区：owner / group 文本输入（初值 entry.owner/entry.group，缺失回退 "—" 占位） */}
-              <div className="pd-section-title">所有者</div>
-              <div className="pd-owner-row">
-                <label className="pd-owner-field">
-                  <span className="pd-owner-label">所有者</span>
-                  <input
-                    className="pd-input"
-                    value={permOwner}
-                    placeholder={propertiesEntry.owner || "—"}
-                    disabled={permSaving}
-                    onChange={e => setPermOwner(e.target.value)}
-                  />
-                </label>
-                <label className="pd-owner-field">
-                  <span className="pd-owner-label">组</span>
-                  <input
-                    className="pd-input"
-                    value={permGroup}
-                    placeholder={propertiesEntry.group || "—"}
-                    disabled={permSaving}
-                    onChange={e => setPermGroup(e.target.value)}
-                  />
-                </label>
-              </div>
-              <div className="pd-hint">修改所有者为其他用户需要 root 权限</div>
+                {/* 所有者区：owner / group 文本输入（初值 entry.owner/entry.group，缺失回退 "—" 占位） */}
+                <div className="pd-owner-row">
+                  <label className="pd-owner-field">
+                    <span className="pd-owner-label">所有者</span>
+                    <input
+                      className="pd-input"
+                      value={permOwner}
+                      placeholder={propertiesEntry.owner || "—"}
+                      disabled={permSaving}
+                      onChange={e => setPermOwner(e.target.value)}
+                    />
+                  </label>
+                  <label className="pd-owner-field">
+                    <span className="pd-owner-label">组</span>
+                    <input
+                      className="pd-input"
+                      value={permGroup}
+                      placeholder={propertiesEntry.group || "—"}
+                      disabled={permSaving}
+                      onChange={e => setPermGroup(e.target.value)}
+                    />
+                  </label>
+                </div>
+                <div className="pd-hint">修改所有者为其他用户需要 root 权限</div>
 
-              {/* 仅目录：递归应用 */}
-              {propertiesEntry.is_dir && (
-                <label className="pd-recursive">
-                  <input
-                    type="checkbox"
-                    checked={permRecursive}
-                    disabled={permSaving}
-                    onChange={e => setPermRecursive(e.target.checked)}
-                  />
-                  应用到子文件和文件夹
-                </label>
-              )}
+                {/* 仅目录：递归应用 */}
+                {propertiesEntry.is_dir && (
+                  <label className="pd-recursive">
+                    <input
+                      type="checkbox"
+                      checked={permRecursive}
+                      disabled={permSaving}
+                      onChange={e => setPermRecursive(e.target.checked)}
+                    />
+                    应用到子文件和文件夹
+                  </label>
+                )}
+              </>)}
             </div>
             {/* 内联错误（Adwaita error 红），请求失败时不关闭对话框 */}
             {permError && <div className="pd-error">{permError}</div>}
             <div className="pd-footer">
               <button className="pd-btn" disabled={permSaving} onClick={() => setPropertiesEntry(null)}>关闭</button>
-              <button className="pd-btn-primary" disabled={permSaving} onClick={applyProperties}>
-                {permSaving ? "应用中..." : "应用"}
-              </button>
+              {/* 「应用」仅权限页显示；无更改时禁用（避免无意义请求） */}
+              {permTab === 'permissions' && (
+                <button className="pd-btn-primary" disabled={permSaving || !permHasChanges} onClick={applyProperties}>
+                  {permSaving ? "应用中..." : "应用"}
+                </button>
+              )}
             </div>
           </div>
         </div>,
