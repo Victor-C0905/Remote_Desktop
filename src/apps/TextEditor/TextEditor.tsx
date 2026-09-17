@@ -82,8 +82,8 @@ interface TextEditorProps {
  * ```
  */
 export function TextEditor({ windowId, preloadData }: TextEditorProps) {
-  // 获取服务器管理器（用于获取活跃服务器 ID）
-  const { activeServerId } = useServerManager();
+  // 获取服务器管理器（用于获取活跃服务器信息：保存目标 + 工具栏路径前缀显示）
+  const { activeServerId, activeServer } = useServerManager();
 
   // 文件管理 Hook（管理文件状态和操作）
   const {
@@ -275,14 +275,23 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
 
     return (
       <div className="te-toolbar">
-        {/* 左侧：文件名区域 */}
+        {/* 左侧：文件图标 + 文件名/路径两行 meta（对齐 FileManager 信息密度） */}
         <div className="te-toolbar-left">
-          <div className="te-filename">
-            <span className="te-filename-text">{fileName}</span>
-            {/* 未保存标记 */}
-            {hasUnsavedChanges() && (
-              <span className="te-unsaved-marker" title="未保存">●</span>
-            )}
+          <span className="te-file-icon">{fileState ? '📄' : '📝'}</span>
+          <div className="te-file-meta">
+            <div className="te-filename">
+              <span className="te-filename-text">{fileName}</span>
+              {/* 未保存标记 */}
+              {hasUnsavedChanges() && (
+                <span className="te-unsaved-marker" title="未保存">●</span>
+              )}
+            </div>
+            {/* 次级行：服务器:完整路径（等宽小字，悬浮显示全文） */}
+            <div className="te-filepath" title={fileState?.path}>
+              {fileState
+                ? `${activeServer ? `${activeServer.name}:` : ''}${fileState.path}`
+                : '尚未打开文件'}
+            </div>
           </div>
         </div>
 
@@ -296,6 +305,16 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
             title="保存文件 (Ctrl+S)"
           >
             {isSaving ? '保存中...' : '保存'}
+          </button>
+
+          {/* 另存为：复用已有 SaveDialog */}
+          <button
+            className="te-toolbar-btn"
+            onClick={() => setShowSaveDialog(true)}
+            disabled={!fileState || isSaving}
+            title="另存为新文件"
+          >
+            另存为
           </button>
 
           {/* 编辑模式切换 */}
