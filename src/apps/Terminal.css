@@ -49,6 +49,15 @@
   flex-shrink: 0;
 }
 
+/* 搜索栏标签（替代原内联 style 硬编码颜色） */
+.terminal-search-label {
+  color: var(--quirel-text-secondary);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 .terminal-search-input {
   flex: 1;
   padding: 4px 8px;
@@ -221,36 +230,63 @@
   padding-right: 8px;
 }
 
-/* Tab actions 右侧按钮 */
+/* Tab actions 右侧按钮：文字按钮（对齐 pd-btn/te-toolbar-btn 项目按钮语言：
+   透明底 + 1px 边框 + radius-xs，hover 才浮出 view-bg 底色） */
 .terminal-tab-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
+  padding: 4px 12px;
   height: 28px;
   border-radius: var(--radius-xs);
-  border: none;
+  border: 1px solid var(--quirel-border-color);
   background: transparent;
   color: var(--quirel-text-secondary);
-  font-size: 14px;
+  font-family: var(--font-ui);
+  font-size: 12px;
   cursor: pointer;
   flex-shrink: 0;
+  white-space: nowrap;
+  transition: all var(--duration-fast) var(--ease-out);
 }
 
 .terminal-tab-btn:hover {
-  background: var(--quirel-card-bg);
+  background: var(--quirel-view-bg); /* hover 浮出背景（对齐 pd-btn:hover） */
   color: var(--quirel-text-primary);
 }
 
+/* ── 连接状态指示（tab 栏右侧）：CSS 圆点 + 服务器名 ── */
 .terminal-status {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   padding: 4px 8px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--quirel-text-secondary);
   font-family: var(--font-ui);
   white-space: nowrap;
+}
+
+/* 状态圆点：6px 圆形（替代原 ●/○ 文本字符） */
+.terminal-status-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--quirel-text-secondary);
+  flex-shrink: 0;
+}
+
+/* 已连接远程：绿色圆点 */
+.terminal-status.is-remote .terminal-status-dot,
+.terminal-status-dot.on {
+  background: #2ec27e; /* Adwaita success 绿 */
+}
+
+/* 本地/未连接：灰色圆点 */
+.terminal-status.is-local .terminal-status-dot,
+.terminal-status-dot.off {
+  background: var(--quirel-text-secondary);
 }
 
 .terminal-tab {
@@ -353,6 +389,52 @@
 /* ═════════════════════════════════════════════════════════════
    核心修复：Terminal Container & xterm.js 隔离
    ═════════════════════════════════════════════════════════════ */
+
+/* ── Status Bar - 底部状态栏（对齐 FileManager / TextEditor 状态栏样式）──
+   左组=连接信息（服务器 / host:port / 会话数），右组=显示设置（字号） */
+.terminal-status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  height: 30px;
+  flex-shrink: 0; /* 不压缩，终端区域自动让位 */
+  border-top: 1px solid var(--quirel-border-color);
+  background: var(--quirel-headerbar-bg);
+}
+
+/* 状态组：同一语义的信息聚合 */
+.terminal-status-group {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+
+/* 组间竖线分隔符（第二个组开始显示） */
+.terminal-status-group + .terminal-status-group::before {
+  content: "";
+  align-self: stretch;
+  margin: 4px 0;
+  border-left: 1px solid var(--quirel-border-color);
+}
+
+/* 状态项：含内嵌圆点（连接状态）时保持对齐 */
+.terminal-status-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--quirel-text-secondary);
+  white-space: nowrap;
+}
+
+/* 等宽数值（host:port / 字号），与编辑器路径行同款 */
+.terminal-status-mono {
+  font-family: Consolas, "Source Code Pro", monospace;
+}
 
 .terminal-container {
   flex: 1;

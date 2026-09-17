@@ -827,10 +827,13 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
 
         {/* Actions and Status */}
         <div className="terminal-tab-actions">
-          <button className="terminal-tab-btn" onClick={() => setShowSearch((v) => !v)} title="搜索">🔍</button>
-          <button className="terminal-tab-btn" onClick={() => setShowSettings((v) => !v)} title="设置">⚙️</button>
-          <span className="terminal-status">
-            {activeServer ? `● ${activeServer.name}` : '○ 本地'}
+          {/* 文字按钮：与 FileManager 工具栏风格一致（替代 emoji 图标） */}
+          <button className="terminal-tab-btn" onClick={() => setShowSearch((v) => !v)} title="在终端输出中搜索">搜索</button>
+          <button className="terminal-tab-btn" onClick={() => setShowSettings((v) => !v)} title="字号 / 光标闪烁设置">设置</button>
+          {/* 连接状态：CSS 圆点（绿=已连接，灰=本地），服务器名常规字重 */}
+          <span className={`terminal-status ${activeServer ? 'is-remote' : 'is-local'}`} title={activeServer ? `${activeServer.host}:${activeServer.port}` : '未连接远程服务器'}>
+            <span className="terminal-status-dot" />
+            {activeServer ? activeServer.name : '本地'}
           </span>
         </div>
       </div>
@@ -838,7 +841,7 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
       {/* Search Bar */}
       {showSearch && (
         <div className="terminal-search-bar">
-          <span style={{ color: '#888', fontSize: 12 }}>搜索:</span>
+          <span className="terminal-search-label">搜索:</span>
           <input
             className="terminal-search-input"
             value={searchText}
@@ -894,6 +897,33 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
             <div className="empty-hint">点击"+ 新建"启动一个新的终端</div>
           </div>
         )}
+      </div>
+
+      {/* Status Bar - 底部状态栏（对齐 FileManager 状态栏样式）：
+          左组=连接信息（服务器/host:port/会话数），右组=显示设置（字号） */}
+      <div className="terminal-status-bar">
+        <div className="terminal-status-group">
+          {activeServer ? (
+            <>
+              <span className="terminal-status-item">
+                <span className="terminal-status-dot on" />
+                {activeServer.name}
+              </span>
+              <span className="terminal-status-item terminal-status-mono">
+                {activeServer.host}:{activeServer.port}
+              </span>
+              <span className="terminal-status-item">{tabs.length} 个会话</span>
+            </>
+          ) : (
+            <span className="terminal-status-item">
+              <span className="terminal-status-dot off" />
+              本地演示模式（未连接远程服务器）
+            </span>
+          )}
+        </div>
+        <div className="terminal-status-group">
+          <span className="terminal-status-item terminal-status-mono">{fontSize}px</span>
+        </div>
       </div>
 
       {/* Settings Panel */}

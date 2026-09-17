@@ -220,14 +220,13 @@
   border: 1px solid var(--quirel-border-color);
   border-radius: 0; /* 默认无圆角 */
 
-  /* 背景和文字 */
-  background: var(--quirel-view-bg);
-  color: var(--quirel-text-primary);
+  /* 背景和文字（透明底，对齐 te-toolbar-btn/pd-btn） */
+  background: transparent;
+  color: var(--quirel-text-secondary);
 
   /* 字体设置 */
   font-family: var(--font-ui);
-  font-size: 14px; /* Adwaita 标准字号 */
-  font-weight: 500; /* 中等字重 */
+  font-size: var(--font-body); /* Adwaita 标准字号（对齐工具栏按钮） */
 
   /* 交互 */
   cursor: pointer;
@@ -238,12 +237,12 @@
 
 /* ── 第一个按钮：左边圆角 ────────────────────────────── */
 .te-mode-btn:first-child {
-  border-radius: var(--radius-sm) 0 0 var(--radius-sm); /* 左边圆角 */
+  border-radius: var(--radius-xs) 0 0 var(--radius-xs); /* 左边圆角（radius-xs 对齐对话框按钮） */
 }
 
 /* ── 最后一个按钮：右边圆角 ──────────────────────────── */
 .te-mode-btn:last-child {
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0; /* 右边圆角 */
+  border-radius: 0 var(--radius-xs) var(--radius-xs) 0; /* 右边圆角 */
 }
 
 /* ── 相邻按钮边框重叠（防止双边框）────────────────────── */
@@ -253,7 +252,8 @@
 
 /* ── 模式按钮 Hover 状态 ──────────────────────────────── */
 .te-mode-btn:hover {
-  background: var(--quirel-headerbar-bg);
+  background: var(--quirel-view-bg); /* hover 浮出背景（对齐 te-toolbar-btn:hover） */
+  color: var(--quirel-text-primary);
 }
 
 /* ── 模式按钮 Active 状态 ────────────────────────────── */
@@ -285,59 +285,69 @@
    ============================================================ */
 
 /* ── 状态栏容器 ────────────────────────────────────────── */
+/* ── 状态栏 ────────────────────────────────────────────── */
+/* 左右分组布局：左组=编辑信息，右组=文件属性；组间 CSS 竖线分隔（替代原文本 |） */
 .te-status-bar {
-  /* 基础布局 */
   display: flex;
   align-items: center;
-  gap: 12px; /* 状态项之间的间距 */
-  padding: 6px 16px;  /* 左右边距与工具栏和文本编辑区一致 */
-  height: 28px; /* 固定高度，更紧凑 */
+  justify-content: space-between; /* 左右分组两端对齐 */
+  padding: 0 16px;
+  height: 30px;
 
-  /* 边框 */
   border-top: 1px solid var(--quirel-border-color);
 
-  /* 背景 */
   background: var(--quirel-headerbar-bg);
+}
+
+/* 状态组：同一语义的信息聚合（组内间距 16px，大于项间距，形成分组节奏） */
+.te-status-group {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0; /* 允许收缩 */
+}
+
+/* 组间竖线分隔符（第二个组开始显示） */
+.te-status-group + .te-status-group::before {
+  content: "";
+  align-self: stretch;
+  margin: 4px 0;
+  border-left: 1px solid var(--quirel-border-color);
 }
 
 /* ── 状态项 ────────────────────────────────────────────── */
 .te-status-item {
-  /* 字体设置 */
   font-family: var(--font-ui);
   font-size: 12px;
   line-height: 1.4;
 
-  /* 文字颜色 */
   color: var(--quirel-text-secondary);
 
-  /* 禁止换行 */
   white-space: nowrap;
 }
 
-/* ── 分隔符 ────────────────────────────────────────────── */
-.te-status-separator {
-  /* 字体设置 */
+/* ── 状态徽标（只读/未保存）：药丸形高亮，比纯文字更显眼 ── */
+.te-status-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill, 999px);
   font-family: var(--font-ui);
-  font-size: 12px;
-  line-height: 1.4;
-
-  /* 文字颜色 */
-  color: var(--quirel-border-color);
-
-  /* 禁止换行 */
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.6;
   white-space: nowrap;
-
-  /* 间距 */
-  margin: 0 4px;
 }
 
-/* ── 只读标识（二进制文件） ───────────────────────────── */
-.te-status-readonly {
-  font-weight: 600; /* 加粗 */
-  color: var(--quirel-accent-bg); /* 使用强调色（蓝色），表示只读状态 */
-  padding: 2px 6px; /* 内边距 */
-  background: rgba(53, 132, 228, 0.1); /* 浅蓝色背景 */
-  border-radius: 4px; /* 圆角 */
+/* 只读标识（二进制文件）：蓝色 */
+.te-status-badge-readonly {
+  color: var(--quirel-accent-bg);
+  background: rgba(53, 132, 228, 0.12);
+}
+
+/* 未保存徽标：橙色（Adwaita warning），驱动用户注意 */
+.te-status-badge-unsaved {
+  color: #e66100;
+  background: rgba(230, 97, 0, 0.12);
 }
 
 /* ============================================================
@@ -387,6 +397,7 @@
   align-items: center;
   gap: 12px;
   flex: 0 1 auto; /* 不拉伸，占据内容所需空间 */
+  min-width: 0; /* 允许路径行收缩省略 */
 }
 
 /* ── 工具栏右侧区域 ─────────────────────────────────────── */
@@ -395,6 +406,21 @@
   align-items: center;
   gap: 8px; /* 按钮间距 */
   flex: 0 0 auto; /* 固定宽度，不拉伸 */
+}
+
+/* ── 文件图标（工具栏左侧，与 FileManager 图标语言一致） ── */
+.te-file-icon {
+  font-size: 20px;
+  line-height: 1;
+  flex-shrink: 0; /* 图标不压缩 */
+}
+
+/* ── 文件 meta 容器：文件名 + 路径两行 ── */
+.te-file-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0; /* 关键：允许子元素 ellipsis 生效 */
 }
 
 /* ── 文件名显示 ─────────────────────────────────────────── */
@@ -415,6 +441,17 @@
   max-width: 400px; /* 允许更长的文件名 */
 }
 
+/* ── 文件路径行（次级信息）：服务器:路径，等宽小字 ────────── */
+.te-filepath {
+  font-family: Consolas, "Source Code Pro", monospace;
+  font-size: 11px;
+  color: var(--quirel-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.85;
+}
+
 /* ── 未保存标记 ─────────────────────────────────────────── */
 .te-unsaved-marker {
   color: var(--quirel-accent-bg);
@@ -424,23 +461,23 @@
 }
 
 /* ── 工具栏按钮 ─────────────────────────────────────────── */
+/* 对齐项目按钮基准（pd-btn/rd-btn/ed-btn 同语言）：
+   透明底 + 1px 边框 + radius-xs，hover 才浮出 view-bg 底色 */
 .te-toolbar-btn {
-  /* Adwaita 标准按钮样式 */
   padding: 8px 16px;
   min-height: 32px; /* Adwaita 按钮 Minimum height: 32px */
 
-  /* 边框和圆角 */
+  /* 边框和圆角（radius-xs 与对话框按钮一致） */
   border: 1px solid var(--quirel-border-color);
-  border-radius: var(--radius-sm); /* 8px */
+  border-radius: var(--radius-xs);
 
-  /* 背景和文字 */
-  background: var(--quirel-view-bg);
-  color: var(--quirel-text-primary);
+  /* 背景和文字（透明底，hover 才有背景） */
+  background: transparent;
+  color: var(--quirel-text-secondary);
 
   /* 字体设置 */
   font-family: var(--font-ui);
-  font-size: 14px; /* Adwaita 标准字号 */
-  font-weight: 500; /* 中等字重 */
+  font-size: var(--font-body); /* Adwaita 标准字号 */
 
   /* 交互 */
   cursor: pointer;
@@ -451,14 +488,8 @@
 }
 
 .te-toolbar-btn:hover:not(:disabled) {
-  background: var(--quirel-headerbar-bg); /* hover 背景 */
-  border-color: var(--quirel-border-color);
-}
-
-.te-toolbar-btn:active:not(:disabled) {
-  background: var(--quirel-accent-bg); /* active 背景 */
-  color: var(--quirel-accent-fg);
-  border-color: var(--quirel-accent-bg);
+  background: var(--quirel-view-bg); /* hover 浮出背景（对齐 pd-btn:hover） */
+  color: var(--quirel-text-primary);
 }
 
 .te-toolbar-btn:disabled {
@@ -466,9 +497,18 @@
   cursor: not-allowed;
 }
 
-/* ── 保存按钮（特殊样式）──────────────────────────────────── */
+/* ── 保存按钮（主操作）：accent 底 + 无边框（对齐 pd-btn-primary）── */
 .te-save-btn {
   min-width: 90px; /* 固定最小宽度 */
+  background: var(--quirel-accent-bg);
+  color: var(--quirel-accent-fg);
+  border: none;
+  font-weight: 500;
+}
+
+.te-save-btn:hover:not(:disabled) {
+  background: var(--quirel-accent-hover);
+  color: var(--quirel-accent-fg);
 }
 
 /* ── 加载状态 ────────────────────────────────────────────── */
