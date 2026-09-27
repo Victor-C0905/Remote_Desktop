@@ -9,8 +9,7 @@ import { useWindowManager, useWindowState } from "../window-system/WindowManager
 import { AppLayout } from "../components/app-shell";
 import { TransferStatusBar } from "../components/TransferStatusBar";
 import { createLogger } from '../utils/logger';
-import { detectFileFormat, decideOpenTarget, createDefaultRegistry } from '../file-formats/FileOpener';
-import { buildExtractCommand } from '../file-formats/plugins/archive';
+import { openRemoteFile } from './openRemoteFile';
 import { parsePermissions, matrixToOctal, octalToPermString } from './permissions';
 import type { PermMatrix } from './permissions';
 import { SymbolicIcon } from "../components/symbolic";
@@ -164,14 +163,6 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   const [permSaving, setPermSaving] = useState(false);        // 请求进行中（禁用按钮/遮罩）
   const [permError, setPermError] = useState<string | null>(null);  // 内联错误（不关闭对话框）
   const [permTab, setPermTab] = useState<'general' | 'permissions'>('general');  // 属性分页：常规（只读）/ 权限（可编辑）
-  // 解压对话框：三选项确认 → 解压中（loading，不可关闭）→ 成功关闭/失败显示错误
-  const [extractDialog, setExtractDialog] = useState<{
-    fullPath: string;      // 压缩包完整路径
-    name: string;          // 文件名（决定解压命令类型）
-    stem: string;          // 去掉压缩扩展名后的主体（独立文件夹名）
-    status: 'confirm' | 'extracting' | 'error';
-    error?: string;        // status=error 时的错误信息
-  } | null>(null);
   const [editingEntry, setEditingEntry] = useState<FileEntry | null>(null);  // 正在编辑的文件
   const [editingName, setEditingName] = useState<string>("");  // 编辑中的新名称
   // ✅ 移除 mainRef，因为fm-main容器已被AppLayout替代
@@ -801,72 +792,14 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       return;
     }
 
-    try {
-      // 数据层：探测格式 → 网关决策
-      const info = await detectFileFormat(activeServerId, fullPath);
-      const decision = decideOpenTarget(info, createDefaultRegistry());
-
-      // 大文件确认（全量 base64 加载，内存峰值约为文件大小 × 2.3）
-      if (decision.needsSizeConfirm) {
-        const mb = (info.size / 1024 / 1024).toFixed(1);
-        const ok = confirm(`文件较大（${mb} MB），加载可能需要一些时间。仍要打开吗？`);
-        if (!ok) return;
-      }
-
-      switch (decision.kind) {
-        case 'text':
-          // 文本/代码 → TextEditor（保持原有行为）
-          manager.create('editor', {
-            serverId: activeServerId,
-            preloadData: { path: fullPath, serverId: activeServerId },
-          });
-          break;
-        case 'image':
-          manager.create('image-viewer', {
-            serverId: activeServerId,
-            preloadData: { path: fullPath, serverId: activeServerId, mimeType: decision.mimeType },
-          });
-          break;
-        case 'pdf':
-          manager.create('pdf-viewer', {
-            serverId: activeServerId,
-            preloadData: { path: fullPath, serverId: activeServerId },
-          });
-          break;
-        case 'archive': {
-          // 压缩包：弹三选项对话框（独立文件夹/当前位置/取消）→ 服务器原生命令解压 → 刷新目录
-          // 解压执行与状态流转（extracting/error）在对话框组件内（runExtract）
-          const stem = entry.name.replace(/\.(zip|tar|tar\.gz|tgz|tar\.bz2|tar\.xz|7z|rar)$/i, '');
-          setExtractDialog({ fullPath, name: entry.name, stem, status: 'confirm' });
-          break;
-        }
-        case 'browser-local':
-          // HTML：下载到本地临时目录 → 系统默认浏览器打开（Rust 端一体完成）
-          try {
-            await invoke('remote_open_locally', { serverId: activeServerId, remotePath: fullPath });
-          } catch (err) {
-            log.error('本地打开失败:', err);
-            alert(`打开失败: ${err}`);
-          }
-          break;
-        case 'hex':
-          // 未知格式回退：十六进制查看器
-          log.debug(`未知格式，回退十六进制查看器: ${fullPath} (${decision.reason})`);
-          manager.create('hex-viewer', {
-            serverId: activeServerId,
-            preloadData: { path: fullPath, serverId: activeServerId },
-          });
-          break;
-      }
-    } catch (err) {
-      log.error("格式探测失败，回退编辑器打开:", err);
-      // 探测失败（如旧版 Agent 不支持 file_info）：回退旧行为，保证可用性
-      manager.create('editor', {
-        serverId: activeServerId,
-        preloadData: { path: fullPath, serverId: activeServerId },
-      });
+    // 共享打开流程（openRemoteFile）：探测格式 → 决策 → 大文件确认 → 路由到对应应用窗口
+    // 探测失败时函数内部回退编辑器（旧 Agent 兼容）；entry.size 供回退前的大文件确认
+    const outcome = await openRemoteFile(activeServerId, fullPath, manager, entry.size);
+    if (outcome.kind === 'error') {
+      log.error('打开失败:', outcome.message);
+      alert(`打开失败: ${outcome.message}`);
     }
-  }, [currentPath, navigateTo, manager, activeServerId, loadDir]);
+  }, [currentPath, navigateTo, manager, activeServerId]);
 
   // ── Properties Dialog ────────────────────────────────
   const showProperties = useCallback((entry: FileEntry) => {
@@ -951,53 +884,6 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       preloadData: { workingDirectory: dir, initialCommand: cmd },
     });
   }, [activeServerId, currentPath, manager]);
-
-  // ── Extract Dialog：解压执行（状态流转 confirm → extracting → 关闭|error）──
-  // mode: 'folder' 解压到独立文件夹（tar -C 需先建目录）；'here' 解压到当前位置
-  const runExtract = useCallback(async (mode: 'folder' | 'here') => {
-    if (!extractDialog) return;
-    const targetDir = mode === 'folder'
-      ? (currentPath === '/' ? `/${extractDialog.stem}` : `${currentPath}/${extractDialog.stem}`)
-      : currentPath;
-    setExtractDialog(d => d ? { ...d, status: 'extracting' } : null);
-
-    if (mode === 'folder') {
-      try {
-        // tar -C 要求目标目录存在；unzip/7z/unrar 自动创建。已存在时 mkdir 返回成功
-        await invoke('remote_mkdir', { serverId: activeServerId, path: targetDir });
-      } catch (err) {
-        log.warn(`创建目标文件夹失败（可能已存在）: ${targetDir}`, err);
-      }
-    }
-    const cmd = buildExtractCommand(extractDialog.fullPath, targetDir, extractDialog.name);
-    try {
-      const output = await invoke<{ stdout: string; stderr: string; exitCode: number }>(
-        'remote_execute_command', {
-          serverId: activeServerId,
-          command: cmd.command,
-          args: cmd.args,
-          workingDirectory: currentPath,
-          timeoutSecs: 600,
-        });
-      if (output.exitCode === 0) {
-        setExtractDialog(null);
-        loadDir(currentPath);  // 解压成功：关闭对话框 + 刷新目录
-      } else {
-        setExtractDialog(d => d ? {
-          ...d,
-          status: 'error',
-          error: `退出码 ${output.exitCode}：${output.stderr || output.stdout || '无输出'}`,
-        } : null);
-      }
-    } catch (err) {
-      const msg = String(err);
-      // spawn 失败（如服务器未装 7z/unrar）走此分支
-      const hint = msg.includes('No such file') || msg.includes('not found')
-        ? '\n\n服务器未安装对应的解压工具，请安装后重试（如 apt install p7zip-full）'
-        : '';
-      setExtractDialog(d => d ? { ...d, status: 'error', error: msg + hint } : null);
-    }
-  }, [extractDialog, currentPath, activeServerId, loadDir]);
 
   // ── File Operations ───────────────────────────────────
   const handleMkdir = useCallback(async () => {
@@ -2345,45 +2231,6 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                 </button>
               )}
             </div>
-          </div>
-        </div>,
-        document.body
-      )}
-
-      {/* Extract Dialog - 解压目标选择/进度/错误（使用 Portal） */}
-      {extractDialog && createPortal(
-        <div className="ed-overlay" onClick={(e) => {
-          // 解压进行中不允许点遮罩关闭（防丢失反馈）；其余状态点击遮罩 = 取消
-          if (extractDialog.status !== 'extracting' && e.target === e.currentTarget) {
-            setExtractDialog(null);
-          }
-        }}>
-          <div className="ed-dialog">
-            {extractDialog.status === 'confirm' && (<>
-              <div className="ed-title">解压压缩包</div>
-              <div className="ed-file">{extractDialog.name}</div>
-              <div className="ed-note">目标位置的同名文件将被覆盖</div>
-              <div className="ed-footer">
-                <button className="ed-btn" onClick={() => setExtractDialog(null)}>取消</button>
-                <button className="ed-btn" onClick={() => runExtract('here')}>解压到当前位置</button>
-                <button className="ed-btn ed-btn-primary" onClick={() => runExtract('folder')}>
-                  解压到 "{extractDialog.stem}/"
-                </button>
-              </div>
-            </>)}
-            {extractDialog.status === 'extracting' && (
-              <div className="ed-progress">
-                <span className="spinner" />
-                正在解压 {extractDialog.name}，大文件可能需要较长时间...
-              </div>
-            )}
-            {extractDialog.status === 'error' && (<>
-              <div className="ed-title ed-title-error">解压失败</div>
-              <pre className="ed-error">{extractDialog.error}</pre>
-              <div className="ed-footer">
-                <button className="ed-btn ed-btn-primary" onClick={() => setExtractDialog(null)}>关闭</button>
-              </div>
-            </>)}
           </div>
         </div>,
         document.body

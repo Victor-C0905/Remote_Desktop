@@ -1,0 +1,75 @@
+/* ArchiveViewer 单栏树视图（VSCode 风格）：工具栏 + 滚动树 + 内嵌解压对话框 */
+
+.archive-viewer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-1, #1e1e1e);
+  color: var(--text-1, #d4d4d4);
+}
+
+/* ── 工具栏 ── */
+.av-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-1, #333);
+  font-size: 13px;
+  flex-shrink: 0;
+}
+.av-toolbar .av-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.av-toolbar .av-meta { color: var(--text-3, #888); white-space: nowrap; }
+.av-toolbar .av-spacer { flex: 1; }
+.av-btn {
+  padding: 4px 12px;
+  font-size: 13px;
+  border: 1px solid var(--border-1, #444);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.av-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.08); }
+.av-btn:disabled { opacity: 0.4; cursor: default; }
+.av-btn-primary { background: #0e639c; border-color: #0e639c; color: #fff; }
+.av-btn-primary:hover:not(:disabled) { background: #1177bb; }
+
+/* ── 主体：加载/错误/树 ── */
+.av-body { flex: 1; overflow: auto; padding: 6px 4px; position: relative; }
+.av-loading,
+.av-error {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  height: 100%; gap: 10px; color: var(--text-3, #888); font-size: 13px;
+}
+.av-error pre {
+  max-width: 80%; max-height: 40%; overflow: auto;
+  background: rgba(255, 255, 255, 0.04); padding: 8px; border-radius: 4px;
+  font-size: 12px; white-space: pre-wrap;
+}
+
+/* ── 树行 ── */
+.av-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 3px 8px; font-size: 13px;
+  border-radius: 4px; user-select: none;
+}
+.av-row:hover { background: rgba(255, 255, 255, 0.06); }
+.av-row.av-extracting { opacity: 0.5; }
+.av-icon { width: 18px; text-align: center; flex-shrink: 0; }
+.av-row .av-row-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.av-row .av-row-size { color: var(--text-3, #888); font-size: 12px; flex-shrink: 0; }
+.av-row[data-dir="true"] { cursor: pointer; }
+
+/* ── 内嵌解压对话框 ── */
+.av-dialog-backdrop {
+  position: absolute; inset: 0; background: rgba(0, 0, 0, 0.5);
+  display: flex; align-items: center; justify-content: center; z-index: 10;
+}
+.av-dialog {
+  background: var(--bg-2, #252526); border: 1px solid var(--border-1, #444);
+  border-radius: 8px; padding: 16px; min-width: 320px; font-size: 13px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.av-dialog h3 { margin: 0; font-size: 14px; }
+.av-dialog .av-dialog-btns { display: flex; gap: 8px; justify-content: flex-end; }
