@@ -625,6 +625,7 @@ pub fn run() {
             transfer::resume_transfer,
             transfer::retry_transfer,
             transfer::cancel_transfer,
+            transfer::get_active_transfer_count,
             transfer::check_file_exists,
         ])
         .build(tauri::generate_context!())

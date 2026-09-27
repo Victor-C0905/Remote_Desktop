@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { transferStorage } from '../utils/transferStorage';
 import { createLogger } from '../utils/logger';
@@ -50,15 +50,36 @@ export interface TransferTask {
   direction: 'upload' | 'download';
   file_name: string;
   remote_path: string;
+  local_path?: string; // 本地路径（断点记录丢失时重新发起传输用）
   file_size: number;
   transferred: number;
   speed: number;
   eta: number;
-  status: 'pending' | 'active' | 'paused' | 'completed' | 'error' | 'cancelled';
+  status: 'pending' | 'active' | 'paused' | 'completed' | 'error' | 'cancelled' | 'interrupted';
   error?: string;
   progress: number;
   start_time: number; // 任务开始时间戳（毫秒）
   completed_at?: number; // 任务完成时间戳（毫秒）
+}
+
+/**
+ * 终态判定（与 Rust 侧 TransferStatus::is_terminal 对齐）
+ */
+export function isTerminalStatus(status: TransferTask['status']): boolean {
+  return status === 'completed' || status === 'error' || status === 'cancelled' || status === 'interrupted';
+}
+
+/**
+ * 启动恢复降级：Tauri Store 里的非终态任务在 Rust 侧已不存在
+ * （TransferManager 的 tasks map 是内存态，重启即空），
+ * 统一降级为 interrupted，避免显示无法操作的"僵尸"活动任务。
+ */
+export function degradeUnfinishedTasks(tasks: TransferTask[]): TransferTask[] {
+  return tasks.map(t =>
+    isTerminalStatus(t.status)
+      ? t
+      : { ...t, status: 'interrupted' as const, error: '连接已断开，传输已中断' }
+  );
 }
 
 /**
@@ -70,6 +91,7 @@ interface TransferProgressPayload {
   direction: string;
   file_name: string;
   remote_path: string;
+  local_path?: string;     // 本地路径（后端 emit 整个 task；中断兜底重发时需要）
   file_size: number;
   transferred: number;
   progress: number;
@@ -89,6 +111,8 @@ interface TransferProgressPayload {
 export function useTransferProgress(connectionId?: string) {
   // 初始为空数组，通过 useEffect 异步从 Tauri Store 加载
   const [transfers, setTransfers] = useState<TransferTask[]>([]);
+  // Store 加载完成标志：加载完成前不 save，避免空数组覆盖持久化数据
+  const loadedRef = useRef(false);
 
   // 异步从 Tauri Store 加载历史传输任务，只保留最近24小时的
   useEffect(() => {
@@ -102,13 +126,16 @@ export function useTransferProgress(connectionId?: string) {
         const age = now - task.start_time;
         return age < oneDayMs;
       });
-      setTransfers(filtered);
+      // 僵尸降级：非终态任务在后端已不存在，统一降级为 interrupted
+      setTransfers(degradeUnfinishedTasks(filtered));
+      loadedRef.current = true;
     })();
     return () => { cancelled = true; };
   }, []);
 
-  // 监听变化并保存到 Tauri Store
+  // 监听变化并保存到 Tauri Store（加载完成后才启用，防止空数组覆盖）
   useEffect(() => {
+    if (!loadedRef.current) return;
     transferStorage.save(transfers);
   }, [transfers]);
 
@@ -145,7 +172,7 @@ export function useTransferProgress(connectionId?: string) {
           // 更新现有任务
           const newStatus = payload.status as TransferTask['status'];
           const statusChanged = existing.status !== newStatus;
-          const isTerminal = newStatus === 'completed' || newStatus === 'error' || newStatus === 'cancelled';
+          const isTerminal = isTerminalStatus(newStatus);
 
           const updatedTasks = prev.map(t =>
             t.id === payload.id
@@ -201,6 +228,8 @@ export function useTransferProgress(connectionId?: string) {
               eta: payload.eta_secs,
               status: payload.status as TransferTask['status'],
               error: payload.error,
+              // 保留本地路径：中断任务的记录丢失兜底（transfer_file 重发）需要
+              local_path: payload.local_path,
               start_time: Date.now(), // 记录任务开始时间
             },
           ];

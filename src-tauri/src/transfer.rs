@@ -96,17 +96,25 @@ pub enum TransferStatus {
     Completed,
     Error,
     Cancelled,
+    /// 连接断开导致的中断（区别于文件/协议错误）
+    Interrupted,
 }
 
 impl TransferStatus {
     /// 是否为终态（完成后不可变更）
     pub fn is_terminal(self) -> bool {
-        matches!(self, Self::Completed | Self::Error | Self::Cancelled)
+        matches!(
+            self,
+            Self::Completed | Self::Error | Self::Cancelled | Self::Interrupted
+        )
     }
 
     /// 是否可重试
     pub fn is_retryable(self) -> bool {
-        matches!(self, Self::Error | Self::Cancelled)
+        matches!(
+            self,
+            Self::Error | Self::Cancelled | Self::Interrupted
+        )
     }
 }
 
@@ -119,6 +127,7 @@ impl std::fmt::Display for TransferStatus {
             Self::Completed => write!(f, "completed"),
             Self::Error => write!(f, "error"),
             Self::Cancelled => write!(f, "cancelled"),
+            Self::Interrupted => write!(f, "interrupted"),
         }
     }
 }
@@ -382,6 +391,13 @@ impl TransferManager {
             .get_mut(task_id)
             .ok_or_else(|| format!("任务不存在: {}", task_id))?;
 
+        // 终态守卫：连接断开被标记 Interrupted 后，迟到的进度写入直接丢弃，
+        // 避免「已中断」被覆写为进行中/已完成
+        if task.status.is_terminal() {
+            drop(tasks);
+            return Ok(());
+        }
+
         let old_progress = task.progress;  // ← 在更新前保存旧进度
 
         task.transferred = transferred;
@@ -435,6 +451,14 @@ impl TransferManager {
             .get_mut(task_id)
             .ok_or_else(|| format!("任务不存在: {}", task_id))?;
 
+        // 终态守卫：已被中断（连接断开）的任务不再接受迟到失败，
+        // 保留「已中断」状态与其中断文案
+        if task.status.is_terminal() {
+            drop(tasks);
+            tracing::debug!("忽略迟到的失败标记（任务已是终态）: id={}", task_id);
+            return Ok(());
+        }
+
         task.status = TransferStatus::Error;  // ← 改为 Error，与前端一致
         task.error = Some(error);
 
@@ -452,6 +476,13 @@ impl TransferManager {
         let task = tasks
             .get_mut(task_id)
             .ok_or_else(|| format!("任务不存在: {}", task_id))?;
+
+        // 终态守卫：已被中断的任务不接受迟到的完成标记，保留「已中断」状态
+        if task.status.is_terminal() {
+            drop(tasks);
+            tracing::debug!("忽略迟到的完成标记（任务已是终态）: id={}", task_id);
+            return Ok(());
+        }
 
         task.status = TransferStatus::Completed;
         task.progress = 100;
@@ -624,40 +655,50 @@ impl TransferManager {
     }
 
     /// 清理指定连接的所有任务
+    ///
+    /// 连接断开（用户切换/网络中断）时的统一清理入口：
+    /// - 非终态任务 → 标记 Interrupted 并**保留**（供切回服务器后重试）
+    /// - 终态任务不动（由 start_cleanup_task 的 5 分钟周期按保留策略回收）
     pub async fn cleanup_by_connection(&self, connection_id: &str) {
-        // 1. 在锁内收集需要清理的任务
-        let tasks_to_cancel = {
+        // 1. 锁内标记非终态任务为 Interrupted（保留记录）
+        let interrupted_tasks = {
             let mut tasks = self.tasks.lock().await;
-
-            // 先收集任务和ID
-            let mut to_cancel = Vec::new();
-            let mut ids = Vec::new();
-
-            for (id, task) in tasks.iter_mut() {
-                if task.server_id == connection_id {
-                    task.status = TransferStatus::Cancelled;
-                    to_cancel.push(task.clone());
-                    ids.push(id.clone());
+            let mut marked = Vec::new();
+            for (_id, task) in tasks.iter_mut() {
+                if task.server_id == connection_id && !task.status.is_terminal() {
+                    task.status = TransferStatus::Interrupted;
+                    task.error = Some("连接已断开，传输已中断".to_string());
+                    task.speed_bps = 0;
+                    task.eta_secs = 0;
+                    marked.push(task.clone());
                 }
             }
-
-            // 统一删除（迭代器已结束）
-            for id in &ids {
-                tasks.remove(id);
-            }
-
-            to_cancel
+            marked
         };
         // ← 锁已释放
 
-        let count = tasks_to_cancel.len();
+        let count = interrupted_tasks.len();
 
-        // 2. 发送事件
-        for task in tasks_to_cancel {
+        // 2. 发送事件（前端收到 interrupted 状态更新）
+        for task in interrupted_tasks {
             let _ = self.emit_progress(&task);
         }
 
-        tracing::info!(connection_id, count, "已清理连接的传输任务");
+        tracing::info!(connection_id, count, "已中断连接的传输任务（保留记录供重试）");
+    }
+
+    /// 统计未完成传输任务数（pending/active/paused）
+    ///
+    /// 供前端切换服务器前的中断确认使用。
+    /// paused 也计入：连接断开时暂停中的任务同样会被置为 interrupted。
+    /// 用 !is_terminal() 判定，与 cleanup_by_connection 的中断集合共享同一口径，
+    /// 保证「确认弹窗的计数」与「实际被中断的任务数」始终一致。
+    pub async fn count_active(&self) -> usize {
+        let tasks = self.tasks.lock().await;
+        tasks
+            .values()
+            .filter(|t| !t.status.is_terminal())
+            .count()
     }
 
     /// 取消指定任务
@@ -720,15 +761,6 @@ impl TransferManager {
         tasks.values().cloned().collect()
     }
 
-    /// 清理已完成的任务
-    #[allow(dead_code)]
-    pub async fn cleanup_completed(&self) {
-        let mut tasks = self.tasks.lock().await;
-        tasks.retain(|_, task| {
-            !task.status.is_terminal()
-        });
-    }
-
     /// 获取任务状态
     pub async fn get_status(&self, task_id: &str) -> Option<TransferStatus> {
         let tasks = self.tasks.lock().await;
@@ -789,6 +821,11 @@ async fn wait_if_paused(
             Some(TransferStatus::Cancelled) => {
                 tracing::info!("传输已取消: task_id={}", task_id);
                 return Err("传输已取消".to_string());
+            }
+            Some(TransferStatus::Interrupted) => {
+                // 连接断开：任务已被统一清理块标记中断，终止传输 future
+                tracing::info!("传输已中断（连接断开）: task_id={}", task_id);
+                return Err("传输已中断".to_string());
             }
             None => return Err("任务已删除".to_string()),
             _ => continue, // 继续等待（paused 状态）
@@ -2097,6 +2134,13 @@ pub async fn cancel_transfer(task_id: String, app_handle: AppHandle) -> Result<(
     Ok(())
 }
 
+/// 查询未完成传输任务数（切换服务器前的中断确认）
+#[command]
+pub async fn get_active_transfer_count(app_handle: AppHandle) -> Result<u32, String> {
+    let manager = app_handle.state::<Arc<TransferManager>>();
+    Ok(manager.count_active().await as u32)
+}
+
 /// 检查文件是否存在
 #[command]
 pub async fn check_file_exists(
@@ -2130,4 +2174,43 @@ pub struct FileExistsInfo {
     pub exists: bool,
     pub size: Option<u64>,
     pub mtime: Option<u64>,
+}
+
+// ── 单元测试 ──────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn interrupted_is_terminal() {
+        // interrupted 是终态：可被 5 分钟清理任务回收，不再变更
+        assert!(TransferStatus::Interrupted.is_terminal());
+    }
+
+    #[test]
+    fn interrupted_is_retryable() {
+        // interrupted 可重试：切回原服务器后重试
+        assert!(TransferStatus::Interrupted.is_retryable());
+    }
+
+    #[test]
+    fn interrupted_display_lowercase() {
+        assert_eq!(TransferStatus::Interrupted.to_string(), "interrupted");
+    }
+
+    #[test]
+    fn interrupted_serializes_lowercase() {
+        // serde 序列化必须与前端 TS 类型字面量一致
+        let json = serde_json::to_string(&TransferStatus::Interrupted).unwrap();
+        assert_eq!(json, "\"interrupted\"");
+    }
+
+    #[test]
+    fn active_is_not_terminal() {
+        // 回归保护：非终态判断不受影响
+        assert!(!TransferStatus::Active.is_terminal());
+        assert!(!TransferStatus::Pending.is_terminal());
+        assert!(!TransferStatus::Paused.is_terminal());
+    }
 }

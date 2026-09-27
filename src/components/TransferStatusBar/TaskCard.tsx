@@ -5,8 +5,12 @@
  * 对齐浏览器下载列表设计：文件名下方显示文件大小，进度条旁边显示下载速度
  */
 
+import { useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { TransferTask } from '../../hooks/useTransferProgress';
+import { useServerManager } from '../../context/ServerManager';
+import { useServersStore } from '../../stores/serversStore';
+import { useNotificationStore } from '../../stores/notificationStore';
 import { createLogger } from '../../utils/logger';
 import './TaskCard.css';
 
@@ -171,6 +175,9 @@ interface TaskCardProps {
 
 export function TaskCard({ task, onRemove }: TaskCardProps) {
   const startTimeText = formatTime(task.start_time);
+  const { activeServerId, connectServer } = useServerManager();
+  // 重试进行中标志：防止连点导致重复发起传输（跨服务器切换耗时数秒）
+  const retryingRef = useRef(false);
 
   /**
    * 暂停传输
@@ -208,6 +215,68 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
       log.info('已重试传输:', task.id);
     } catch (error) {
       log.error('重试传输失败:', error);
+    }
+  };
+
+  /**
+   * 用任务保存的原始参数重新发起传输（后端记录丢失时的兜底）
+   */
+  const restartTransfer = async () => {
+    try {
+      await invoke('transfer_file', {
+        serverId: task.session_id,
+        direction: task.direction,
+        remotePath: task.remote_path,
+        localPath: task.local_path,
+      });
+      // 新任务已由 transfer-progress 事件进入列表，移除旧的中断记录
+      onRemove(task.id);
+    } catch (error) {
+      log.error('重新发起传输失败:', error);
+      // 兜底路径失败是用户主动操作的直接结果，必须可见（不暴露底层错误细节）
+      useNotificationStore.getState().pushNotification({
+        title: '重新发起传输失败',
+        body: `「${task.file_name}」重新发起失败，请切回对应服务器后手动重试。`,
+        action: '可重新下载该文件',
+        urgency: 'normal',
+        source: '文件传输',
+        serverId: task.session_id,
+      });
+    }
+  };
+
+  /**
+   * 切回原服务器并重试中断的任务（归属即导航）
+   * - 任务属于当前服务器：直接重试
+   * - 任务属于其他服务器：先切换连接（若当前有活跃传输会触发中断确认），
+   *   连接成功后重试；连接失败则终止（错误通知已由 connectServer 发出）
+   * - 后端任务记录已被清理（重启/超出保留数量）：回退为重新发起传输
+   */
+  const handleSwitchAndRetry = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    // 防连点：重试链路（含跨服务器切换）进行中忽略再次点击，避免重复发起传输
+    if (retryingRef.current) return;
+    retryingRef.current = true;
+    try {
+      if (task.session_id !== activeServerId) {
+        await connectServer(task.session_id);
+        // 非响应式读取最新连接状态，连接失败则不重试
+        const server = useServersStore
+          .getState()
+          .servers.find((s) => s.id === task.session_id);
+        if (server?.status !== 'connected') {
+          log.warn('切回服务器失败，取消重试:', task.session_id);
+          return;
+        }
+      }
+      await invoke('retry_transfer', { taskId: task.id });
+      log.info('已重试中断的传输:', task.id);
+    } catch (error) {
+      // retry_transfer 报"任务不存在"：后端记录已丢失，用原始参数重新发起
+      log.warn('重试失败，尝试重新发起传输:', error);
+      await restartTransfer();
+    } finally {
+      retryingRef.current = false;
     }
   };
 
@@ -255,6 +324,7 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
     if (task.status === 'completed') return 'tc-progress-fill completed';
     if (task.status === 'error') return 'tc-progress-fill error';
     if (task.status === 'cancelled') return 'tc-progress-fill cancelled';
+    if (task.status === 'interrupted') return 'tc-progress-fill interrupted';
     return 'tc-progress-fill';
   };
 
@@ -303,6 +373,9 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
         )}
         {task.status === 'error' && task.error && (
           <span className="tc-error-msg" title={task.error}>{task.error}</span>
+        )}
+        {task.status === 'interrupted' && (
+          <span className="tc-error-msg" title={task.error || '连接已断开，传输已中断'}>已中断</span>
         )}
         {startTimeText && task.status !== 'active' && (
           <span className="tc-elapsed">{startTimeText}</span>
@@ -407,6 +480,28 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
               onClick={handleRetry}
               aria-label="重新开始"
               title="重新开始"
+            >
+              <RefreshIcon />
+            </button>
+            <button
+              className="tc-action-btn"
+              onClick={handleClose}
+              aria-label="关闭任务"
+              title="关闭"
+            >
+              <CloseIcon />
+            </button>
+          </>
+        )}
+
+        {/* 已中断任务：切回服务器重试 + 关闭 */}
+        {task.status === 'interrupted' && (
+          <>
+            <button
+              className="tc-action-btn"
+              onClick={handleSwitchAndRetry}
+              aria-label="切回服务器并重试"
+              title="切回服务器并重试"
             >
               <RefreshIcon />
             </button>
