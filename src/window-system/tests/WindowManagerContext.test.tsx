@@ -1,22 +1,29 @@
 // src/window-system/tests/WindowManagerContext.test.tsx
 
 import { render, act } from '@testing-library/react';
-import { WindowManagerProvider, useWindowManager } from '../WindowManagerContext';
+import { WindowManagerProvider, useWindowManager, useWindowGlobalState } from '../WindowManagerContext';
 import { IWindowManager } from '../types';
 
+/**
+ * 测试探针组件
+ *
+ * 对齐当前 API：
+ * - useWindowManager() 返回 { manager }（而非 manager 本身）
+ * - 全局状态经 useWindowGlobalState() 订阅（不在 context 上）
+ */
 function TestComponent({ managerRef }: { managerRef?: React.MutableRefObject<IWindowManager | null> }) {
-  const context = useWindowManager();
-  const { globalState } = context as any;
+  const { manager } = useWindowManager();
+  const globalState = useWindowGlobalState();
 
   // 暴露 manager 给测试代码
   if (managerRef) {
-    (managerRef as any).current = context;
+    managerRef.current = manager;
   }
 
   return (
     <div>
-      <span data-testid="window-count">{globalState?.windowList?.length || 0}</span>
-      <span data-testid="active-id">{globalState?.activeWindowId || 'none'}</span>
+      <span data-testid="window-count">{globalState.windowList.length}</span>
+      <span data-testid="active-id">{globalState.activeWindowId || 'none'}</span>
     </div>
   );
 }
@@ -31,7 +38,7 @@ describe('WindowManagerContext - 事件监听优化', () => {
       </WindowManagerProvider>
     );
 
-    // 等待组件渲染
+    // 等待组件渲染（Provider 的 mount effect 含异步 hydration 等待）
     await act(async () => {
       await new Promise(resolve => setTimeout(resolve, 100));
     });
@@ -46,10 +53,13 @@ describe('WindowManagerContext - 事件监听优化', () => {
     const initialCount = getByTestId('window-count').textContent;
     expect(initialCount).toBe('1');
 
-    // 模拟位置变化事件（不应触发重渲染）
+    // 记录渲染基准：位置事件前 active-id 不变，计数也不应变
+    const initialActiveId = getByTestId('active-id').textContent;
+
+    // 模拟位置变化事件（不应触发全局重渲染）
     act(() => {
       manager.emit?.({
-        type: 'window:position_changed',
+        type: 'window:moved',
         windowId: 'win-files-1',
         timestamp: Date.now()
       });
@@ -58,6 +68,7 @@ describe('WindowManagerContext - 事件监听优化', () => {
     // 验证渲染次数未增加
     const countAfterPosition = getByTestId('window-count').textContent;
     expect(countAfterPosition).toBe(initialCount);
+    expect(getByTestId('active-id').textContent).toBe(initialActiveId);
   });
 
   test('关键事件触发全局重渲染', async () => {

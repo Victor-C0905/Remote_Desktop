@@ -5,6 +5,7 @@ import { WindowManager } from './core/WindowManager';
 import { WindowRegistry } from './core/WindowRegistry';
 import { IWindowManager, WindowEventType, WindowEvent } from './types';
 import { initWindowRegistry } from './init';
+import { useSettingsStore } from '../stores/settingsStore';
 
 // ─── 全局状态类型 ──────────────────────────────────────
 // 仅包含"窗口列表 + 激活窗口 ID"，用于 Dock/Overview 等低频消费
@@ -101,11 +102,27 @@ export function WindowManagerProvider({ children }: { children: ReactNode }) {
     return new WindowManager(registry);
   }, [registry]);
 
-  // 加载持久化窗口
+  // 加载持久化窗口（受用户设置控制：关闭则每次启动干净桌面）
+  // mount-only：只在启动时读一次设置值；运行时切换开关只影响 save（save 内动态读取），
+  // 若把设置值放进依赖会导致切换开关时重复 load() → 窗口重复恢复。
+  // persist 后端是异步 Tauri Store，mount 时可能尚未 rehydrate → 显式等待，
+  // 否则用户关闭的开关可能被默认值 true 覆盖（设置失效）
   useEffect(() => {
-    manager.load();
-    // 初始化事件桥接：将 Manager 事件路由到 per-window 通知
-    initWindowEventBridge(manager as WindowManager);
+    let cancelled = false;
+    const boot = async () => {
+      if (!useSettingsStore.persist.hasHydrated()) {
+        await new Promise<void>((resolve) =>
+          useSettingsStore.persist.onFinishHydration(() => resolve())
+        );
+      }
+      if (cancelled) return;
+      if (!useSettingsStore.getState().restoreWindowsOnStartup) return;
+      manager.load();
+      // 初始化事件桥接：将 Manager 事件路由到 per-window 通知
+      initWindowEventBridge(manager as WindowManager);
+    };
+    boot();
+    return () => { cancelled = true; };
   }, [manager]);
 
   // 选择性事件监听：只在窗口列表变化时触发全局状态更新
@@ -127,9 +144,11 @@ export function WindowManagerProvider({ children }: { children: ReactNode }) {
       })
     );
 
-    // 保存事件也监听（保持原有逻辑）
+    // 保存事件也监听（受用户设置控制：关闭开关则不持久化，避免旧数据残留）
     const saveUnsubscribe = manager.onAny(() => {
-      manager.save();
+      if (useSettingsStore.getState().restoreWindowsOnStartup) {
+        manager.save();
+      }
     });
 
     return () => {

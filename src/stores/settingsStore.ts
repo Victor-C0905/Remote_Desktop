@@ -22,6 +22,9 @@ export interface SettingsState {
 
   // 远程浏览 SOCKS5 固定端口（断线重连后浏览器无需重开的前提）
   browserProxyPort: number;
+
+  // 启动时恢复上次窗口（桌面会话恢复）
+  restoreWindowsOnStartup: boolean;
 }
 
 export interface SettingsActions {
@@ -40,6 +43,9 @@ export interface SettingsActions {
 
   // 远程浏览 SOCKS5 固定端口
   setBrowserProxyPort: (port: number) => void;
+
+  // 启动时恢复上次窗口
+  setRestoreWindowsOnStartup: (enabled: boolean) => void;
 }
 
 /* ── Default Settings ──────────────────────────────────── */
@@ -60,6 +66,9 @@ const DEFAULT_SETTINGS: SettingsState = {
 
   // SOCKS5 固定端口（SOCKS 惯用端口；被占用时可在设置中更换）
   browserProxyPort: 1080,
+
+  // 启动时恢复上次窗口（默认开，保留桌面会话恢复行为）
+  restoreWindowsOnStartup: true,
 };
 
 /* ── Store ────────────────────────────────────────────── */
@@ -109,6 +118,10 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
 
       setBrowserProxyPort: (port) => {
         set({ browserProxyPort: port });
+      },
+
+      setRestoreWindowsOnStartup: (enabled) => {
+        set({ restoreWindowsOnStartup: enabled });
       },
     }),
     {

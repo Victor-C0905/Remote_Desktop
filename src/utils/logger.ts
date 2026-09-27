@@ -75,9 +75,15 @@ function serializeArg(arg: unknown): string {
  */
 function persist(level: 'info' | 'warn' | 'error', module: string, message: string, args: unknown[]): void {
   const data = args.map(serializeArg);
-  invoke("log_write", { level, module, message, data }).catch(() => {
-    /* 落盘失败静默丢弃 */
-  });
+  try {
+    // Promise.resolve 包装：非 Tauri 环境（纯浏览器 dev / 测试 jsdom）下
+    // invoke 返回 undefined，直接 .catch 会抛 Uncaught TypeError
+    Promise.resolve(invoke("log_write", { level, module, message, data })).catch(() => {
+      /* 落盘失败静默丢弃 */
+    });
+  } catch {
+    /* 非 Tauri 环境静默 */
+  }
 }
 
 export interface Logger {
