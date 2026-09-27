@@ -2,13 +2,16 @@
  * 展开的任务列表面板组件
  *
  * 显示在状态栏上方，包含任务列表和批量操作按钮
- * 任务排序：活动 → 排队 → 已暂停 → 完成 → 失败
+ * 任务按服务器分组：当前活跃服务器组默认展开，其他折叠为摘要行
+ * 组内排序：活动 → 排队 → 已暂停 → 完成 → 失败 → 已取消 → 已中断
  * 失去焦点时自动收起
  */
 
-import { useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { TransferTask } from '../../hooks/useTransferProgress';
+import { useServersStore } from '../../stores/serversStore';
+import { groupTransfersByServer } from './transferGrouping';
 import { TaskCard } from './TaskCard';
 import { createLogger } from '../../utils/logger';
 import './TransferPanel.css';
@@ -104,11 +107,35 @@ export function TransferPanel({ transfers, onRemoveTask, onClose, statusbarRef }
    */
   const visibleTransfers = transfers;
 
+  // 服务器分组：当前服务器的组默认展开，其他默认折叠
+  const servers = useServersStore((s) => s.servers);
+  const activeServerId = useServersStore((s) => s.activeServerId);
+  const groups = groupTransfersByServer(visibleTransfers, servers, activeServerId);
+
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+
+  // 活跃服务器变化时重置默认展开（只展开当前服务器）
+  useEffect(() => {
+    setExpandedGroups(activeServerId ? new Set([activeServerId]) : new Set());
+  }, [activeServerId]);
+
+  const toggleGroup = (serverId: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(serverId)) {
+        next.delete(serverId);
+      } else {
+        next.add(serverId);
+      }
+      return next;
+    });
+  };
+
   /**
-   * 排序任务
-   * 优先级：活动 → 排队 → 已暂停 → 已完成 → 失败 → 已取消
+   * 组内排序
+   * 优先级：活动 → 排队 → 已暂停 → 已完成 → 失败 → 已取消 → 已中断
    */
-  const sortedTransfers = [...visibleTransfers].sort((a, b) => {
+  const sortTasks = (tasks: TransferTask[]) => {
     const statusOrder = {
       active: 0,
       pending: 1,
@@ -116,9 +143,10 @@ export function TransferPanel({ transfers, onRemoveTask, onClose, statusbarRef }
       completed: 3,
       error: 4,
       cancelled: 5,
+      interrupted: 6,
     };
-    return statusOrder[a.status] - statusOrder[b.status];
-  });
+    return [...tasks].sort((a, b) => statusOrder[a.status] - statusOrder[b.status]);
+  };
 
   /**
    * 计算任务统计（仅统计可见任务）
@@ -184,9 +212,9 @@ export function TransferPanel({ transfers, onRemoveTask, onClose, statusbarRef }
       aria-label="传输任务列表"
       onClick={(e) => e.stopPropagation()} // 阻止事件冒泡，防止触发父元素的 onClick
     >
-      {/* 任务列表 */}
+      {/* 任务列表（按服务器分组，当前服务器组展开，其他折叠） */}
       <div className="tp-list">
-        {sortedTransfers.length === 0 ? (
+        {groups.length === 0 ? (
           <div className="tp-empty" role="status" aria-live="polite">
             <div className="tp-empty-icon">
               <DownloadIcon />
@@ -194,13 +222,37 @@ export function TransferPanel({ transfers, onRemoveTask, onClose, statusbarRef }
             <p className="tp-empty-text">暂无传输任务</p>
           </div>
         ) : (
-          sortedTransfers.map((task) => (
-            <TaskCard
-              key={task.id}
-              task={task}
-              onRemove={onRemoveTask}
-            />
-          ))
+          groups.map((group) => {
+            const expanded = expandedGroups.has(group.serverId);
+            return (
+              <div key={group.serverId} className="tp-group">
+                <button
+                  className="tp-group-header"
+                  onClick={() => toggleGroup(group.serverId)}
+                  aria-expanded={expanded}
+                  aria-label={`${group.serverName} 的传输任务（${group.summary}）`}
+                >
+                  <span className={`tp-group-dot${group.isCurrent ? ' active' : ''}`} />
+                  <span className="tp-group-name">{group.serverName}</span>
+                  {!expanded && <span className="tp-group-summary">{group.summary}</span>}
+                  <span className="tp-group-toggle">
+                    {expanded ? '▾' : '▸'}
+                  </span>
+                </button>
+                {expanded && (
+                  <div className="tp-group-tasks">
+                    {sortTasks(group.tasks).map((task) => (
+                      <TaskCard
+                        key={task.id}
+                        task={task}
+                        onRemove={onRemoveTask}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })
         )}
       </div>
 

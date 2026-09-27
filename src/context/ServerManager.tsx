@@ -1,6 +1,7 @@
 import { createContext, useContext, useCallback, useEffect, useRef, ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { ask } from "@tauri-apps/plugin-dialog";
 import {
   useServersStore,
   formatLastConnected,
@@ -316,12 +317,40 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
       return;
     }
 
-    // 如果当前有其他连接，先断开（像切换WiFi一样）
+    // 切换目标 ≠ 当前连接 且有未完成传输 → 确认中断（显式契约：
+    // 用户知道切换有代价；任务随后会被统一清理块标记为 interrupted）
     if (activeServerId && activeServerId !== id) {
-      log.info("断开当前连接:", activeServerId);
       try {
-        await invoke("remote_disconnect", { serverId: activeServerId });
-        setServerStatus(activeServerId, "disconnected");
+        const activeCount = await invoke<number>("get_active_transfer_count");
+        if (activeCount > 0) {
+          const confirmed = await ask(
+            `当前有 ${activeCount} 个传输任务正在进行，切换到「${server.name || server.host}」将中断它们。`,
+            {
+              title: "切换服务器",
+              kind: "warning",
+              okLabel: "切换",
+              cancelLabel: "取消",
+            }
+          );
+          if (!confirmed) {
+            log.info("用户取消切换（有传输进行中）");
+            return;
+          }
+        }
+      } catch (e) {
+        // 查询失败不阻塞切换（确认是增强，不是门禁）
+        log.warn("查询活跃传输数失败，跳过确认:", e);
+      }
+    }
+
+    // 如果当前有其他连接，先断开（像切换WiFi一样）
+    // ask 确认期间用户可能已断开或切换到其他服务器，重读最新值避免操作失效连接
+    const currentActiveId = activeServerIdRef.current;
+    if (currentActiveId && currentActiveId !== id) {
+      log.info("断开当前连接:", currentActiveId);
+      try {
+        await invoke("remote_disconnect", { serverId: currentActiveId });
+        setServerStatus(currentActiveId, "disconnected");
       } catch (e) {
         log.warn("断开旧连接时出错:", e);
       }

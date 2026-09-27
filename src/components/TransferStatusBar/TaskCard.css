@@ -131,6 +131,11 @@
   background: var(--quirel-text-disabled);
 }
 
+/* 已中断任务的进度条样式（警示黄，区别于 error 的红色） */
+.tc-progress-fill.interrupted {
+  background: var(--quirel-warning-color, #f5c211);
+}
+
 /* 已完成任务的进度条样式 */
 .tc-progress-fill.completed {
   background: var(--quirel-success-color);

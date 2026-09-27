@@ -260,3 +260,67 @@
     transition: none;
   }
 }
+
+/* ── 服务器分组 ─────────────────────────────────────────────── */
+
+.tp-group {
+  margin-bottom: 4px;
+}
+
+.tp-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.tp-group-header:hover {
+  background: var(--quirel-card-hover);
+}
+
+/* 服务器颜色点：当前服务器高亮 accent，其余灰色 */
+.tp-group-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--quirel-text-disabled);
+}
+
+.tp-group-dot.active {
+  background: var(--quirel-accent-bg);
+}
+
+.tp-group-name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tp-group-summary {
+  color: var(--quirel-text-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tp-group-toggle {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--quirel-text-secondary);
+  font-size: 11px;
+}
+
+.tp-group-tasks {
+  padding-left: 4px;
+}
