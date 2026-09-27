@@ -518,6 +518,8 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
   const browserIdPref = useSettingsStore((s) => s.browserId);
   // SOCKS5 固定端口（断线重连后浏览器无需重开）
   const browserProxyPort = useSettingsStore((s) => s.browserProxyPort);
+  // 启动时恢复上次窗口（响应式读取，勾选即时生效）
+  const restoreWindowsOnStartup = useSettingsStore((s) => s.restoreWindowsOnStartup);
 
   const handleTerminalPathChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
@@ -901,6 +903,21 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                   <span className="st-wallpaper-preview-label">当前自定义壁纸</span>
                 </div>
               )}
+            </div>
+            {/* 启动行为：桌面会话恢复开关（关闭后每次启动为干净桌面） */}
+            <div className="st-card">
+              <div className="st-card-header text-title">启动行为</div>
+              <div className="st-option-row">
+                <span className="st-option-label text-body">启动时恢复上次打开的窗口</span>
+                <input
+                  type="checkbox"
+                  className="st-checkbox"
+                  checked={restoreWindowsOnStartup}
+                  onChange={(e) =>
+                    useSettingsStore.getState().setRestoreWindowsOnStartup(e.target.checked)
+                  }
+                />
+              </div>
             </div>
           </div>
         );
