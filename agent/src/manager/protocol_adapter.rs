@@ -19,8 +19,7 @@ use crate::protocol::generated::{
     ReadDir, ReadFile, WriteFile,
     Delete, Mkdir, Rename, Copy, Move,
     FileExists as FileExistsReq, ApplyDiff as ApplyDiffReq,
-    FileDiff as ProtoFileDiff, FileInfo, FileInfoResult,
-    ExecuteCommand, Chmod, Chown,
+    FileDiff as ProtoFileDiff, FileInfo, ExecuteCommand, Chmod, Chown,
 };
 use crate::protocol::{Payload, FileEntry};
 
@@ -732,7 +731,7 @@ mod tests {
 
     #[test]
     fn test_file_info_result_response_conversion() {
-        use crate::protocol::generated::WorkerResponse;
+        use crate::protocol::generated::{FileInfoResult, WorkerResponse};
 
         let resp = WorkerResponse {
             request_id: 1,

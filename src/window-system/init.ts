@@ -13,6 +13,7 @@ import { BrowserApp } from '../apps/BrowserApp';
 import { ImageViewer } from '../apps/ImageViewer/ImageViewer';
 import { HexViewer } from '../apps/HexViewer/HexViewer';
 import { PDFViewer } from '../apps/PDFViewer/PDFViewer';
+import { ArchiveViewer } from '../apps/ArchiveViewer/ArchiveViewer';
 
 const log = createLogger('WindowInit');
 
@@ -131,6 +132,19 @@ export function initWindowRegistry(registry: WindowRegistry): void {
     minSize: { width: 500, height: 400 },
     allowMultipleInstances: true,
     component: PDFViewer,
+    showOnDesktop: false,
+    showOnDock: false,
+  });
+
+  // Archive Viewer - 压缩包内容浏览（文件格式路由目标，非主动入口）
+  registry.register({
+    id: 'archive-viewer',
+    title: '压缩包查看器',
+    icon: '📦',
+    defaultSize: { width: 760, height: 560 },
+    minSize: { width: 420, height: 320 },
+    allowMultipleInstances: true,
+    component: ArchiveViewer,
     showOnDesktop: false,
     showOnDock: false,
   });

@@ -919,7 +919,13 @@ pub struct RemoteFileInfo {
 #[tracing::instrument(skip(app), fields(server_id = %server_id, path = %path))]
 pub async fn remote_file_info(server_id: String, path: String, app: tauri::AppHandle) -> Result<RemoteFileInfo, String> {
     tracing::debug!("[FileInfo] server_id={}, path={}", server_id, path);
-    let resp = remote_send(server_id, Payload::FileInfoRequest { path }, app).await?;
+    // 传输失败加 [transport] 前缀：前端据此区分「连接故障」（不降级，直接报错）
+    // 与「Agent 端错误」（旧 Agent 无此命令/文件级失败 → 降级回退编辑器）。
+    // 前缀为机器可识别标记，语义一旦发布不可变更。
+    let resp = match remote_send(server_id, Payload::FileInfoRequest { path }, app).await {
+        Ok(resp) => resp,
+        Err(e) => return Err(format!("[transport] {e}")),
+    };
     match resp.payload {
         Payload::FileInfoResponse { path, size, is_dir, is_text, extension, magic_bytes } => {
             Ok(RemoteFileInfo { path, size, is_dir, is_text, extension, magic_bytes })
