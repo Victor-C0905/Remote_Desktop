@@ -621,6 +621,7 @@ pub fn run() {
             terminal::remote_terminal_resize,
             transfer::transfer_file,
             transfer::local_path_is_file,
+            transfer::delete_transfer_temp, // 回收下载残留的临时文件（用户移除任务记录时）
             transfer::pause_transfer,
             transfer::resume_transfer,
             transfer::retry_transfer,

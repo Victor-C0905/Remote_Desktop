@@ -132,6 +132,77 @@ impl std::fmt::Display for TransferStatus {
     }
 }
 
+// ── 传输错误的用户视角文案映射 ──────────────────────────────────
+//
+// 约定（与 src/types/errors.ts 的 AuthErrorCode 映射一致）「三不暴露」：
+// 不暴露协议名词（stream/帧）、不暴露库错误原文、不暴露内部机制。
+// 底层技术细节只进 tracing 日志；Agent 返回的远端语义文案原样保留。
+
+/// 网络 I/O 类技术错误的前缀集合（读写帧/建流/join/ACK 等内部术语）
+const NETWORK_IO_PREFIXES: &[&str] = &[
+    "读取数据帧", "读取数据块", "读取块长度", "读取块数据",
+    "读帧头", "读数据帧", "读控制帧", "读取响应",
+    "打开文件传输 Stream", "打开 stream", "打开 Stream",
+    "发送请求", "发送块", "发送数据", "发送完成", "发送 join",
+    "刷新发送流", "写数据帧", "写控制帧",
+    "读取合并结果", "stream",
+    // （已移除「主 stream」/「非主 stream」：前者被上传完整性组先判遮蔽，
+    //  后者仅进 tracing 日志不进 mark_failed，均不可达）
+    "解析传输消息", "构建传输消息",
+    "发送文件传输请求超时", "接收文件传输响应超时", "发送传输完成消息超时",
+];
+
+/// 本地文件/磁盘类错误前缀
+const LOCAL_FILE_PREFIXES: &[&str] = &[
+    "无法访问本地文件", "无法打开文件", "无法获取文件元数据", "文件 seek 失败",
+    "读取文件失败", "读取任务 panic", "打开保留的临时文件失败",
+    "无法打开临时文件", "无法获取临时文件元数据", "无法创建临时文件",
+    "定位到文件末尾失败", "写入文件失败", "刷新文件失败",
+    "同步文件失败", "同步临时文件到磁盘失败", "临时文件大小不匹配",
+    "同步后重新获取文件元数据失败",
+];
+
+/// 保存（原子重命名）类错误前缀
+const SAVE_PREFIXES: &[&str] = &["重命名文件失败", "临时文件不存在"];
+
+/// 上传完整性类错误前缀
+/// （「非主 stream」文案仅进 tracing 日志不进 mark_failed，已移除）
+const UPLOAD_INCOMPLETE_PREFIXES: &[&str] =
+    &["部分 stream 上传失败", "主 stream 任务 panic"];
+
+/// 把底层技术错误文案转换为用户视角文案
+///
+/// 匹配顺序即优先级；匹配不到任何已知模式时原样返回
+/// （Agent 直传的远端语义文案走此兜底，如「远程文件不存在: /x」）
+fn user_facing_transfer_error(raw: &str) -> String {
+    // 1. Agent 拒绝：剥离内部术语前缀，保留远端语义
+    if let Some(msg) = raw.strip_prefix("Agent 返回错误: ") {
+        return msg.to_string();
+    }
+    // 2. 上传完整性
+    if UPLOAD_INCOMPLETE_PREFIXES.iter().any(|p| raw.starts_with(p)) || raw == "传输不完整" {
+        return "传输中断，文件未能完整送达".to_string();
+    }
+    // 3. 保存失败
+    if SAVE_PREFIXES.iter().any(|p| raw.starts_with(p)) {
+        return "文件保存失败，请检查保存目录的写入权限".to_string();
+    }
+    // 4. 本地文件读写
+    if LOCAL_FILE_PREFIXES.iter().any(|p| raw.starts_with(p)) {
+        return "无法读写本地文件，请检查文件权限和磁盘状态".to_string();
+    }
+    // 5. 网络 I/O：按是否含「超时」细分
+    if NETWORK_IO_PREFIXES.iter().any(|p| raw.starts_with(p)) {
+        return if raw.contains("超时") {
+            "服务器响应超时，传输已停止".to_string()
+        } else {
+            "与服务器之间的数据传输中断".to_string()
+        };
+    }
+    // 6. 兜底：保留原文
+    raw.to_string()
+}
+
 // ── 临时文件工具函数 ──────────────────────────────────────────
 
 /// 生成确定性临时文件路径
@@ -459,8 +530,16 @@ impl TransferManager {
             return Ok(());
         }
 
+        // 用户视角文案：底层技术细节不进 UI，完整原始错误记录在日志（「三不暴露」约定）
+        let user_message = user_facing_transfer_error(&error);
+        if user_message != error {
+            tracing::warn!(task_id, raw_error = %error, user_message = %user_message, "传输失败（文案已转换）");
+        } else {
+            tracing::warn!(task_id, "传输失败: {}", user_message);
+        }
+
         task.status = TransferStatus::Error;  // ← 改为 Error，与前端一致
-        task.error = Some(error);
+        task.error = Some(user_message);
 
         // 发送进度事件
         let task_clone = task.clone();
@@ -1299,6 +1378,38 @@ pub fn local_path_is_file(path: String) -> bool {
     std::fs::metadata(&path).map(|m| m.is_file()).unwrap_or(false)
 }
 
+/// Tauri Command: 回收下载任务的本地临时文件
+///
+/// 用户显式移除任务记录时调用（视为放弃断点续传）。
+/// 临时文件为确定性命名（quirel_{hash}.tmp），按 local_path 重新计算即可定位，
+/// 无需任务 ID（应用重启后 Rust 侧内存 map 已空，前端 Store 记录仍可触发回收）。
+///
+/// 幂等：文件不存在视为成功。文件被占用时（取消中的后台任务尚未释放句柄，
+/// Windows 上删除会 sharing violation）由内部重试循环兜底，命令立即返回。
+#[command]
+pub async fn delete_transfer_temp(local_path: String) {
+    let temp_path = generate_temp_path(Path::new(&local_path));
+    tokio::spawn(async move {
+        // 最多尝试 10 次、间隔 500ms：覆盖取消检测周期（后台任务轮询到 Cancelled
+        // 后退出，FileWriter Drop 释放句柄）
+        for attempt in 1..=10u32 {
+            match std::fs::remove_file(&temp_path) {
+                Ok(()) => {
+                    tracing::debug!(?temp_path, attempt, "已回收临时文件");
+                    return;
+                }
+                // 幂等：不存在即视为已回收
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+                Err(e) => {
+                    tracing::debug!(?temp_path, attempt, error = %e, "临时文件暂不可删，稍后重试");
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
+            }
+        }
+        tracing::warn!(?temp_path, "临时文件回收失败（多次重试后放弃）");
+    });
+}
+
 /// Tauri Command: 开始文件传输
 ///
 /// # 参数
@@ -1527,7 +1638,9 @@ async fn handshake_transfer(
 
     // 发送请求
     let request_envelope = Envelope::new(request_id, request_payload);
-    let request_bytes = request_envelope.encode()?;
+    let request_bytes = request_envelope
+        .encode()
+        .map_err(|e| format!("构建传输消息失败: {}", e))?;
     let request_len = (request_bytes.len() as u32).to_le_bytes();
 
     use tokio::io::AsyncWriteExt;
@@ -1558,7 +1671,8 @@ async fn handshake_transfer(
     .await
     .map_err(|_| "接收文件传输响应超时".to_string())??;
 
-    let response_envelope = Envelope::decode(&response_buf)?;
+    let response_envelope = Envelope::decode(&response_buf)
+        .map_err(|e| format!("解析传输消息失败: {}", e))?;
 
     match response_envelope.payload {
         Payload::FileTransferAccept { session_id, file_size, frame_mode, .. } => {
@@ -1622,7 +1736,9 @@ async fn run_upload_loop(
 
             let chunk_request_id = uuid::Uuid::new_v4().as_u128() as u32;
             let chunk_envelope = Envelope::new(chunk_request_id, chunk_payload);
-            let chunk_bytes = chunk_envelope.encode()?;
+            let chunk_bytes = chunk_envelope
+                .encode()
+                .map_err(|e| format!("构建传输消息失败: {}", e))?;
             let chunk_len = (chunk_bytes.len() as u32).to_le_bytes();
 
             tokio::time::timeout(FILE_CHUNK_TIMEOUT, async {
@@ -1748,7 +1864,9 @@ async fn run_multi_stream_upload(
             offset_end: range.1,
         };
         let join_env = Envelope::new(0, join_payload);
-        let join_bytes = join_env.encode()?;
+        let join_bytes = join_env
+            .encode()
+            .map_err(|e| format!("构建传输消息失败: {}", e))?;
         let join_len = (join_bytes.len() as u32).to_le_bytes();
         send.write_all(&join_len).await.map_err(|e| format!("stream {} 发送 join 长度失败: {}", stream_index, e))?;
         send.write_all(&join_bytes).await.map_err(|e| format!("stream {} 发送 join 数据失败: {}", stream_index, e))?;
@@ -1762,7 +1880,8 @@ async fn run_multi_stream_upload(
         let mut ack_body = vec![0u8; ack_len];
         recv.read_exact(&mut ack_body).await
             .map_err(|e| format!("stream {} 读 ACK 数据失败: {}", stream_index, e))?;
-        let ack_env = Envelope::decode(&ack_body)?;
+        let ack_env = Envelope::decode(&ack_body)
+            .map_err(|e| format!("解析传输消息失败: {}", e))?;
         match &ack_env.payload {
             Payload::FileTransferAccept { .. } => {
                 tracing::info!(stream_index, "多流 stream 加入成功");
@@ -1829,7 +1948,8 @@ async fn run_multi_stream_upload(
     let mut merge_body = vec![0u8; merge_len];
     primary_recv.read_exact(&mut merge_body).await
         .map_err(|e| format!("读取合并结果数据失败: {}", e))?;
-    let merge_env = Envelope::decode(&merge_body)?;
+    let merge_env = Envelope::decode(&merge_body)
+        .map_err(|e| format!("解析传输消息失败: {}", e))?;
 
     match merge_env.payload {
         Payload::MultiStreamMergeComplete { success, error, .. } => {
@@ -1843,7 +1963,7 @@ async fn run_multi_stream_upload(
                 Err(err_msg)
             }
         }
-        _ => Err("期望 MultiStreamMergeComplete".to_string()),
+        _ => Err("读取合并结果失败: 期望 MultiStreamMergeComplete".to_string()),
     }
 }
 
@@ -1914,7 +2034,8 @@ async fn run_download_loop(
                     manager.update_progress(task_id, writer.transferred, speed_bps).await?;
                 }
                 Ok(Ok(RawFrame::Control(body))) => {
-                    let envelope = Envelope::decode(&body)?;
+                    let envelope = Envelope::decode(&body)
+                        .map_err(|e| format!("解析传输消息失败: {}", e))?;
                     match envelope.payload {
                         Payload::FileTransferComplete { success, error, .. } => {
                             if success {
@@ -1937,10 +2058,16 @@ async fn run_download_loop(
                 }
                 Ok(Err(e)) => {
                     manager.mark_failed(task_id, format!("读取数据帧失败: {}", e)).await?;
+                    // 连接断开时任务会被标记为 Interrupted：保留临时文件供切回后断点续传。
+                    // （若连接仍在，任务为 Error 终态；临时文件在用户移除任务记录时由
+                    //  delete_transfer_temp 回收，见 Task 3/4）
+                    writer.preserve();
                     return Err(format!("读取数据帧失败: {}", e));
                 }
                 Err(_) => {
                     manager.mark_failed(task_id, "读取数据帧超时".to_string()).await?;
+                    // 同上：保留供断点续传
+                    writer.preserve();
                     return Err("读取数据帧超时".to_string());
                 }
             }
@@ -1962,15 +2089,22 @@ async fn run_download_loop(
                 Ok(Ok(buf)) => buf,
                 Ok(Err(e)) => {
                     manager.mark_failed(task_id, format!("读取数据块失败: {}", e)).await?;
+                    // 连接断开时任务会被标记为 Interrupted：保留临时文件供切回后断点续传。
+                    // （若连接仍在，任务为 Error 终态；临时文件在用户移除任务记录时由
+                    //  delete_transfer_temp 回收，见 Task 3/4）
+                    writer.preserve();
                     return Err(format!("读取数据块失败: {}", e));
                 }
                 Err(_) => {
                     manager.mark_failed(task_id, "读取数据块超时".to_string()).await?;
+                    // 同上：保留供断点续传
+                    writer.preserve();
                     return Err("读取数据块超时".to_string());
                 }
             };
 
-            let chunk_envelope = Envelope::decode(&chunk_buf)?;
+            let chunk_envelope = Envelope::decode(&chunk_buf)
+                .map_err(|e| format!("解析传输消息失败: {}", e))?;
 
             match chunk_envelope.payload {
                 Payload::FileChunk { data, .. } => {
@@ -2051,7 +2185,9 @@ async fn send_complete_message(
 
     let complete_request_id = uuid::Uuid::new_v4().as_u128() as u32;
     let complete_envelope = Envelope::new(complete_request_id, complete_payload);
-    let complete_bytes = complete_envelope.encode()?;
+    let complete_bytes = complete_envelope
+        .encode()
+        .map_err(|e| format!("构建传输消息失败: {}", e))?;
 
     if raw_mode {
         // 裸帧模式: 控制帧承载 JSON Envelope
@@ -2212,5 +2348,140 @@ mod tests {
         assert!(!TransferStatus::Active.is_terminal());
         assert!(!TransferStatus::Pending.is_terminal());
         assert!(!TransferStatus::Paused.is_terminal());
+    }
+
+    // ── user_facing_transfer_error 文案映射 ──────────────────────
+
+    #[test]
+    fn network_read_error_is_user_facing() {
+        // 不暴露 stream/帧/库错误原文（如 "connection closed"）
+        assert_eq!(
+            user_facing_transfer_error("读取数据帧失败: connection closed"),
+            "与服务器之间的数据传输中断"
+        );
+        assert_eq!(
+            user_facing_transfer_error("读取数据块失败: ConnectionClosed"),
+            "与服务器之间的数据传输中断"
+        );
+        // Envelope decode/多流合并兜底的包装文案（防 serde 英文原文直达 UI）
+        assert_eq!(
+            user_facing_transfer_error("解析传输消息失败: expected value at line 1 column 1"),
+            "与服务器之间的数据传输中断"
+        );
+        assert_eq!(
+            user_facing_transfer_error("读取合并结果失败: 期望 MultiStreamMergeComplete"),
+            "与服务器之间的数据传输中断"
+        );
+    }
+
+    #[test]
+    fn network_timeout_maps_to_timeout_text() {
+        assert_eq!(
+            user_facing_transfer_error("读取数据帧超时"),
+            "服务器响应超时，传输已停止"
+        );
+        assert_eq!(
+            user_facing_transfer_error("发送数据块超时 (60s)"),
+            "服务器响应超时，传输已停止"
+        );
+        // 文件传输握手/完成阶段的真实超时文案（前缀表显式列举）
+        assert_eq!(
+            user_facing_transfer_error("发送文件传输请求超时"),
+            "服务器响应超时，传输已停止"
+        );
+        assert_eq!(
+            user_facing_transfer_error("接收文件传输响应超时"),
+            "服务器响应超时，传输已停止"
+        );
+    }
+
+    #[test]
+    fn stream_failure_vs_timeout_distinguished() {
+        // 同一前缀 "打开 stream"，按是否含「超时」细分（前缀表 + contains 两步规则）
+        assert_eq!(
+            user_facing_transfer_error("打开 stream 2 失败: TimedOut"),
+            "与服务器之间的数据传输中断"
+        );
+        assert_eq!(
+            user_facing_transfer_error("打开 stream 2 超时"),
+            "服务器响应超时，传输已停止"
+        );
+    }
+
+    #[test]
+    fn local_file_error_maps_to_local_text() {
+        assert_eq!(
+            user_facing_transfer_error("无法访问本地文件: (os error 13)"),
+            "无法读写本地文件，请检查文件权限和磁盘状态"
+        );
+        assert_eq!(
+            user_facing_transfer_error("写入文件失败: 磁盘已满"),
+            "无法读写本地文件，请检查文件权限和磁盘状态"
+        );
+    }
+
+    #[test]
+    fn save_error_maps_to_save_text() {
+        assert_eq!(
+            user_facing_transfer_error("重命名文件失败: 拒绝访问"),
+            "文件保存失败，请检查保存目录的写入权限"
+        );
+        assert_eq!(
+            user_facing_transfer_error("临时文件不存在: C:\\x\\quirel_abc.tmp (长度: 30 字符)\n最终路径: C:\\x\\a (长度: 10 字符)"),
+            "文件保存失败，请检查保存目录的写入权限"
+        );
+    }
+
+    #[test]
+    fn upload_incomplete_maps_to_incomplete_text() {
+        assert_eq!(
+            user_facing_transfer_error("部分 stream 上传失败"),
+            "传输中断，文件未能完整送达"
+        );
+        assert_eq!(
+            user_facing_transfer_error("主 stream 任务 panic: JoinError"),
+            "传输中断，文件未能完整送达"
+        );
+        assert_eq!(
+            user_facing_transfer_error("传输不完整"),
+            "传输中断，文件未能完整送达"
+        );
+    }
+
+    #[test]
+    fn agent_prefix_stripped_but_message_kept() {
+        // "Agent 返回错误: " 是内部术语前缀，剥离；远端语义保留
+        assert_eq!(
+            user_facing_transfer_error("Agent 返回错误: 远程文件不存在: /a/b"),
+            "远程文件不存在: /a/b"
+        );
+    }
+
+    #[test]
+    fn agent_direct_message_kept_verbatim() {
+        // Agent 直传文案（FileTransferComplete error / Payload::Error）原样保留
+        assert_eq!(
+            user_facing_transfer_error("远程文件不存在: /a/b"),
+            "远程文件不存在: /a/b"
+        );
+        assert_eq!(user_facing_transfer_error("未知错误"), "未知错误");
+    }
+
+    // ── 临时文件确定性命名 ──────────────────────────────────────
+
+    #[test]
+    fn temp_path_is_deterministic_and_hash_named() {
+        // 同一目标路径 → 同一临时文件名（断点续传直接定位）
+        let p1 = generate_temp_path(Path::new("/data/报告.pdf"));
+        let p2 = generate_temp_path(Path::new("/data/报告.pdf"));
+        assert_eq!(p1, p2);
+        // 命名格式：quirel_{hash}.tmp
+        let name = p1.file_name().unwrap().to_string_lossy().to_string();
+        assert!(name.starts_with("quirel_"), "实际: {}", name);
+        assert!(name.ends_with(".tmp"), "实际: {}", name);
+        // 不同目标路径不碰撞
+        assert_ne!(p1, generate_temp_path(Path::new("/data/其他.zip")));
+        // 临时文件与目标文件同目录（删除命令按 local_path 重算即可定位）
+        assert_eq!(p1.parent(), Some(Path::new("/data")));
     }
 }

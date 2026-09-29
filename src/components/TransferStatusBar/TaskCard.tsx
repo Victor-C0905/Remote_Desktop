@@ -301,6 +301,17 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
   const handleClose = async (e: React.MouseEvent) => {
     e.stopPropagation();  // 阻止事件冒泡
 
+    // 显式移除任务 = 放弃断点续传：回收下载残留的本地临时文件。
+    // 命令内部对占用文件后台重试，这里 fire-and-forget，失败只记日志。
+    // 注意：restartTransfer 兜底重发成功后的 onRemove 不走此路径（新任务正在续传临时文件）。
+    // 仅下载任务调用：上传无本地临时文件，且其 local_path 是源文件，
+    // 不能按哈希碰撞误删同目录其他下载任务的临时文件。
+    if (task.direction === 'download' && task.local_path) {
+      invoke('delete_transfer_temp', { localPath: task.local_path }).catch((err) => {
+        log.warn('回收临时文件失败:', err);
+      });
+    }
+
     try {
       // 如果任务正在进行，先取消传输
       if (task.status === 'active' || task.status === 'paused') {
