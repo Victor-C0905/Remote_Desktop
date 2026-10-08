@@ -253,6 +253,9 @@ async fn run_worker_mode(_args: &Args) -> Result<()> {
 async fn run_manager_mode(args: &Args) -> Result<()> {
     let cfg = config::load(&args.config)?;
 
+    // 上传大小限制：初始化全局热值与配置写回路径（设置页修改时写回此文件）
+    quireld::transfer_limit::init(cfg.limits.max_file_transfer_mb, &args.config);
+
     init_logging(&args, &cfg);
 
     let (cert, key) = cert::ensure_certificate(&cfg)?;

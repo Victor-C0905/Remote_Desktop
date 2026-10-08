@@ -1137,7 +1137,29 @@ async fn handle_stream(
     }
 
     let data = data.unwrap();
-    let envelope = Envelope::decode(&data).map_err(|e| anyhow::anyhow!(e))?;
+    let envelope = match Envelope::decode(&data) {
+        Ok(env) => env,
+        Err(e) => {
+            // 解码失败（如未来客户端发送本版 Agent 尚不认识的 payload）：
+            // 回 Error 帧后正常结束 stream，而非 ?断流——客户端 remote_send
+            // 能优雅收到错误文案；若直接断流，客户端主循环会把整条连接误判为断开并拆除
+            tracing::warn!("消息解码失败: {}", e);
+            let resp = Envelope::new(
+                0,
+                Payload::Error {
+                    code: 400,
+                    message: "无法识别的消息类型，请升级 Agent".to_string(),
+                },
+            );
+            if let Ok(bytes) = resp.encode() {
+                // 回写失败只 warn 不改流程：仍正常结束 stream（不让单帧失败升级为断流）
+                if let Err(e) = write_message(&mut send, &bytes).await {
+                    tracing::warn!("发送解码失败错误响应失败: {}", e);
+                }
+            }
+            return Ok(());
+        }
+    };
 
     // 处理订阅请求
     match &envelope.payload {
@@ -1664,6 +1686,13 @@ async fn send_auth_response(
             error: error.map(|s| s.to_string()),
             session_id: session_id.map(|s| s.to_string()),
             code,
+            // 能力上报：客户端凭此门控新协议命令（单点构造，18 个认证路径统一携带）
+            capabilities: Some(
+                crate::transfer_limit::AGENT_CAPABILITIES
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+            ),
         },
     );
 

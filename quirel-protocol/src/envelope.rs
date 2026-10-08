@@ -179,6 +179,11 @@ pub enum Payload {
         /// 结构化错误码（失败时；旧版 Agent 不携带此字段，回退 None）
         #[serde(default)]
         code: Option<AuthErrorCode>,
+        /// Agent 能力声明（认证成功时携带；旧版 Agent 不含此字段 → None）。
+        /// 客户端凭此门控新协议命令（如 transfer_limit）：旧 Agent 无法解码新 payload，
+        /// 盲发会导致 Agent 断流、客户端误判整条连接断开
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        capabilities: Option<Vec<String>>,
     },
 
     /// 统计查询请求
@@ -558,6 +563,25 @@ pub enum Payload {
     #[serde(rename = "disconnect_resp")]
     DisconnectResponse { success: bool },
 
+    /// 查询 Agent 上传大小限制（任何已认证用户可查）
+    #[serde(rename = "get_transfer_limit")]
+    GetTransferLimit {},
+
+    /// 上传大小限制响应（查询与修改共用）
+    /// persisted=false 表示写回配置文件失败——热值不回滚，重启后恢复旧值
+    #[serde(rename = "transfer_limit_resp")]
+    TransferLimitResponse {
+        max_file_transfer_mb: u64,
+        /// 当前会话是否可修改（root）
+        editable: bool,
+        /// 修改是否已持久化到配置文件（查询响应恒 true）
+        persisted: bool,
+    },
+
+    /// 修改 Agent 上传大小限制（仅 root；值域 1–102400 MB）
+    #[serde(rename = "set_transfer_limit")]
+    SetTransferLimit { max_file_transfer_mb: u64 },
+
     #[serde(rename = "error")]
     Error { code: i32, message: String },
 }
@@ -634,6 +658,9 @@ impl Payload {
             Payload::ApplyDiffResponse { .. } => "ApplyDiffResponse",
             Payload::DisconnectRequest {} => "DisconnectRequest",
             Payload::DisconnectResponse { .. } => "DisconnectResponse",
+            Payload::GetTransferLimit {} => "GetTransferLimit",
+            Payload::TransferLimitResponse { .. } => "TransferLimitResponse",
+            Payload::SetTransferLimit { .. } => "SetTransferLimit",
             Payload::Error { .. } => "Error",
         }
     }

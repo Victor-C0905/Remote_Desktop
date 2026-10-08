@@ -86,6 +86,8 @@ pub struct ActiveConnection {
     // 用户主动断开标志：remote_disconnect 置位（先于 close，避免竞态误判），
     // 统一清理块据此区分 connection-lost 事件来源，前端仅对网络断开自动重连
     pub user_initiated: Arc<AtomicBool>,
+    // Agent 能力声明（认证响应携带；旧 Agent 为空列表）
+    pub capabilities: Vec<String>,
 }
 
 /// 连接丢失的触发源（用于日志区分）
@@ -301,6 +303,9 @@ pub async fn remote_connect(
         // 认证
         let creds = credentials.ok_or_else(|| ConnectError::new(AuthErrorCode::MissingCredentials))?;
 
+        // Agent 能力声明（两条认证路径填充；旧 Agent 为空列表，用于门控新协议命令）
+        let agent_capabilities: Vec<String>;
+
         // 根据 method 执行不同的认证流程
         match creds.method {
             AuthMethod::Password => {
@@ -331,7 +336,7 @@ pub async fn remote_connect(
 
                 // 验证返回类型（增加类型检查）
                 match envelope.payload {
-                    Payload::AuthResponse { success, error, session_id: _, code } => {
+                    Payload::AuthResponse { success, error, session_id: _, code, capabilities } => {
                         if !success {
                             // 优先结构化 code；旧版 Agent 按文案 fallback 分类
                             let err_code = code
@@ -340,6 +345,8 @@ pub async fn remote_connect(
                             conn.close(0u32.into(), b"authentication failed");
                             return Err(ConnectError::with_detail(err_code, error.unwrap_or_else(|| "认证失败".to_string())));
                         }
+                        // 认证成功：捕获能力声明（旧 Agent 无此字段 → 空列表）
+                        agent_capabilities = capabilities.unwrap_or_default();
                     }
                     other => {
                         conn.close(0u32.into(), b"unexpected response");
@@ -355,7 +362,7 @@ pub async fn remote_connect(
                 tracing::info!("[Connection] 开始公钥认证: username={}", creds.username);
 
                 // 执行公钥认证
-                let session_id = perform_pubkey_auth(
+                let (session_id, pk_capabilities) = perform_pubkey_auth(
                     &conn,
                     creds.username.clone(),
                     private_key,
@@ -372,6 +379,7 @@ pub async fn remote_connect(
                     conn.close(0u32.into(), reason);
                     e
                 })?;
+                agent_capabilities = pk_capabilities;
 
                 tracing::info!("[Connection] 公钥认证成功: username={}, session_id={:?}", creds.username, session_id);
             }
@@ -389,6 +397,7 @@ pub async fn remote_connect(
                 quic_conn: Some(Arc::new(conn.clone())),
                 subscription_task: None,
                 user_initiated: user_initiated.clone(),
+                capabilities: agent_capabilities,
             });
         }
 
@@ -1308,6 +1317,60 @@ pub async fn get_stats(server_id: String, stats_type: String, app: tauri::AppHan
     }
 }
 
+// ── 上传大小限制（设置页「文件→传输设置」）─────────────────────────
+//
+// 值的单一事实来源在 Agent 端，客户端不持久化（每次进入设置页查询）。
+// 前端必须先经 get_agent_capabilities 确认支持，再调用本组命令：
+// 旧 Agent 无法解码新 payload，直接发送会断流，主循环会把整条连接误判为断开。
+
+/// Tauri Command: 查询当前连接 Agent 的能力列表
+///
+/// 空列表 = 旧 Agent（不支持新协议命令）；未连接返回 Err
+#[tauri::command]
+pub fn get_agent_capabilities(server_id: String, app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    let manager = app.state::<ConnectionManager>();
+    let conns = manager.connections.lock().unwrap();
+    conns
+        .get(&server_id)
+        .map(|c| c.capabilities.clone())
+        .ok_or_else(|| "未连接服务器".to_string())
+}
+
+/// 上传大小限制信息（透传 Agent 响应；字段命名与 StatsResponse 一致为 snake_case）
+#[derive(Debug, serde::Serialize)]
+pub struct TransferLimitInfo {
+    pub max_file_transfer_mb: u64,
+    pub editable: bool,
+    pub persisted: bool,
+}
+
+/// Tauri Command: 查询 Agent 上传大小限制（任何已认证用户）
+#[tauri::command]
+pub async fn get_transfer_limit(server_id: String, app: tauri::AppHandle) -> Result<TransferLimitInfo, String> {
+    let resp = remote_send(server_id, Payload::GetTransferLimit {}, app).await?;
+    match resp.payload {
+        Payload::TransferLimitResponse { max_file_transfer_mb, editable, persisted } =>
+            Ok(TransferLimitInfo { max_file_transfer_mb, editable, persisted }),
+        // Agent 的 403/400 响应已是用户视角文案（映射在 Agent 端有单测锁定），原样透传
+        Payload::Error { message, .. } => Err(message),
+        _ => Err("意外响应".into()),
+    }
+}
+
+/// Tauri Command: 修改 Agent 上传大小限制（仅 root；立即对该服务器所有会话生效）
+#[tauri::command]
+pub async fn set_transfer_limit(server_id: String, max_file_transfer_mb: u64, app: tauri::AppHandle) -> Result<TransferLimitInfo, String> {
+    tracing::debug!("[Connection] set_transfer_limit: server_id={}, max_file_transfer_mb={}", server_id, max_file_transfer_mb);
+
+    let resp = remote_send(server_id, Payload::SetTransferLimit { max_file_transfer_mb }, app).await?;
+    match resp.payload {
+        Payload::TransferLimitResponse { max_file_transfer_mb, editable, persisted } =>
+            Ok(TransferLimitInfo { max_file_transfer_mb, editable, persisted }),
+        Payload::Error { message, .. } => Err(message),
+        _ => Err("意外响应".into()),
+    }
+}
+
 // ── 订阅相关 Tauri Commands ─────────────────────────────────
 
 #[tauri::command]
@@ -1767,13 +1830,13 @@ const STREAM_TIMEOUT_SECS: u64 = 30;
 /// - `passphrase`: 私钥密码（可选）
 ///
 /// # 返回
-/// 成功返回 AuthResponse 的 session_id，失败返回错误信息
+/// 成功返回 (session_id, Agent 能力声明)，失败返回错误信息
 async fn perform_pubkey_auth(
     conn: &quinn::Connection,
     username: String,
     private_key: String,
     passphrase: Option<String>,
-) -> Result<Option<String>, ConnectError> {
+) -> Result<(Option<String>, Vec<String>), ConnectError> {
     use tokio::io::AsyncWriteExt;
 
     tracing::info!("[PubKeyAuth] 开始公钥认证流程: username={}", username);
@@ -2100,10 +2163,11 @@ async fn perform_pubkey_auth(
             ConnectError::new(AuthErrorCode::ProtocolError)
         })?;
     match final_envelope.payload {
-        Payload::AuthResponse { success, error, session_id, code } => {
+        Payload::AuthResponse { success, error, session_id, code, capabilities } => {
             if success {
                 tracing::info!("[PubKeyAuth] 公钥认证成功: username={}, session_id={:?}", username, session_id);
-                Ok(session_id)
+                // 认证成功：携带能力声明返回（旧 Agent 无此字段 → 空列表）
+                Ok((session_id, capabilities.unwrap_or_default()))
             } else {
                 // 优先使用结构化 code；旧版 Agent 无 code 时按文案 fallback 分类
                 let err_code = code

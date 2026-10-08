@@ -15,6 +15,7 @@ pub mod protocol;
 pub mod server;
 pub mod subscription;
 pub mod diff;
+pub mod transfer_limit;
 pub mod transfer_session;
 
 // 仅在 Unix 系统上编译 worker 模块
