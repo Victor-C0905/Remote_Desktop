@@ -9,6 +9,7 @@ const ALL_NAMES = [
   "mail-unread", "mailbox",
   "emblem-ok", "user-trash", "window-close",
   "bell", "bell-outline",
+  "pan-up", "pan-down",
 ] as const;
 
 describe("SymbolicIcon", () => {

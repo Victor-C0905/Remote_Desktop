@@ -116,6 +116,43 @@
   color: var(--quirel-text-on-accent);
 }
 
+/* ── 过滤分段控件（全部/文件夹/文件，会话内不持久化）────── */
+.fm-toolbar-filter {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;  /* 工具栏空间不足时挤压路径栏，不挤压分段控件 */
+}
+
+.fm-seg-btn {
+  height: 28px;
+  padding: 0 10px;
+  display: flex;
+  align-items: center;
+  background: none;
+  border: 1px solid var(--quirel-border-color);
+  color: var(--quirel-text-secondary);
+  font-family: var(--font-ui);
+  font-size: calc(var(--font-body) - 1px);  /* 与面包屑一致的紧凑字号 */
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+/* 连体分段：中间无竖线，圆角只留在两端 */
+.fm-seg-btn + .fm-seg-btn { border-left: none; }
+.fm-seg-btn:first-of-type { border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
+.fm-seg-btn:last-of-type { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+
+.fm-seg-btn:hover {
+  background: var(--quirel-border-color);
+  color: var(--quirel-text-primary);
+}
+
+.fm-seg-btn.active {
+  background: var(--quirel-accent-bg);
+  border-color: var(--quirel-accent-bg);
+  color: var(--quirel-text-on-accent);
+}
+
 /* ── Breadcrumb ──────────────────────────────────────── */
 .fm-breadcrumb {
   display: flex;
@@ -274,10 +311,12 @@
   min-height: 0;  /* ✅ 建立 flex 约束链 */
 }
 
-/* ✅ 表头固定（flex-shrink: 0），不参与滚动 */
+/* ✅ 表头固定（flex-shrink: 0），不参与滚动
+   列宽经 --fm-cols 变量下发（fm-list 容器挂载，表头与行共用）；
+   未设置时回退到历史默认比例 */
 .fm-list .fm-list-header {
   display: grid;
-  grid-template-columns: minmax(180px, 2fr) 90px 140px 90px;  /* ✅ 优化列宽比例 */
+  grid-template-columns: var(--fm-cols, minmax(180px, 2fr) 90px 140px 90px);
   gap: 8px;
   font-size: var(--font-small);
   font-weight: 600;
@@ -286,6 +325,58 @@
   background: var(--quirel-headerbar-bg);  /* ✅ 使用标题栏背景色 */
   border-bottom: 1px solid var(--quirel-border-color);  /* ✅ 添加分隔线 */
   flex-shrink: 0;  /* ✅ 固定高度，不压缩 */
+}
+
+/* 表头列：可点击排序 + 拖拽调宽 */
+.fm-list .fm-list-header .fm-col-header {
+  position: relative;      /* 拖拽手柄绝对定位的锚点 */
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  user-select: none;
+  overflow: visible;       /* 手柄跨列间隙，不被裁剪 */
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+/* 悬停/当前排序列：文字转主色，示意可交互 */
+.fm-list .fm-list-header .fm-col-header:hover,
+.fm-list .fm-list-header .fm-col-header.sorted {
+  color: var(--quirel-text-primary);
+}
+
+/* 排序方向指示（升序 ▼ / 降序 ▲，桌面文件管理器惯例） */
+.fm-list .fm-list-header .fm-col-header .fm-sort-indicator {
+  flex-shrink: 0;
+  opacity: 0.9;
+}
+
+/* 列宽拖拽手柄：覆盖列间隙，命中区上下外扩，hover 显示分隔线 */
+.fm-list .fm-list-header .fm-col-header .fm-col-resizer {
+  position: absolute;
+  top: -8px;      /* 外扩表头 padding，提高命中 */
+  bottom: -8px;
+  right: -8px;    /* 覆盖 8px 列间隙的一半 */
+  width: 8px;
+  cursor: col-resize;
+  z-index: 1;
+}
+
+.fm-list .fm-list-header .fm-col-header .fm-col-resizer::after {
+  content: "";
+  position: absolute;
+  top: 25%;
+  bottom: 25%;
+  left: 3px;
+  width: 2px;
+  border-radius: 1px;
+  background: transparent;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.fm-list .fm-list-header .fm-col-header .fm-col-resizer:hover::after,
+.fm-list .fm-list-header .fm-col-header .fm-col-resizer:active::after {
+  background: var(--quirel-accent-bg);
 }
 
 /* ✅ 文件列表滚动容器（模仿 SystemMonitor） */
@@ -298,7 +389,7 @@
 
 .fm-list .fm-list-row {
   display: grid;
-  grid-template-columns: minmax(180px, 2fr) 90px 140px 90px;  /* ✅ 匹配表头列宽 */
+  grid-template-columns: var(--fm-cols, minmax(180px, 2fr) 90px 140px 90px);  /* ✅ 匹配表头列宽（--fm-cols 同源） */
   gap: 8px;
   padding: 6px 12px;
   border-radius: var(--radius-xs);
@@ -320,7 +411,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  min-width: 200px; /* ✅ 修改：从 0 改为 200px */
+  min-width: 0;  /* 列宽交由 --fm-cols 轨道管理（可拖拽调窄），文本自身用省略号截断 */
   overflow: hidden;
 }
 

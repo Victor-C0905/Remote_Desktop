@@ -12,7 +12,10 @@ import { createLogger } from '../utils/logger';
 import { openRemoteFile } from './openRemoteFile';
 import { parsePermissions, matrixToOctal, octalToPermString } from './permissions';
 import type { PermMatrix } from './permissions';
+import { sortFileEntries, DEFAULT_SORT, DEFAULT_COLUMN_WIDTHS, COLUMN_MIN_WIDTHS, clampColumnWidth, buildGridTemplate, filterFileEntries, DEFAULT_FILTER } from './fileTable';
+import type { SortKey, SortState, ColumnWidths, FilterMode } from './fileTable';
 import { SymbolicIcon } from "../components/symbolic";
+import { useSettingsStore } from '../stores/settingsStore';
 import "./FileManager.css";
 
 const log = createLogger('FileManager');
@@ -102,6 +105,14 @@ function formatDate(iso: string): string {
 
 type ViewMode = "list" | "grid";
 
+/** 列表视图表头列定义（key 同时用作排序键与列宽键；perm 为最后一列不提供拖拽手柄） */
+const FILE_COLUMNS: { key: SortKey; label: string }[] = [
+  { key: "name", label: "名称" },
+  { key: "size", label: "大小" },
+  { key: "mtime", label: "修改时间" },
+  { key: "perm", label: "权限" },
+];
+
 /** FileManager 应用组件
  *  集成窗口系统：
  *  - 使用 useWindowState(windowId) 获取窗口状态
@@ -146,6 +157,40 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   // 用户真实家目录（root 为 /root，普通用户从 /etc/passwd 读取，不再硬编码 /home/${username}）
   const [homeDir, setHomeDir] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("list");
+
+  // ── 目录/文件过滤（工具栏分段控件）────────────────────────
+  // 会话内状态，刻意不持久化：每次打开默认"全部"（用户约定）
+  const [filterMode, setFilterMode] = useState<FilterMode>(DEFAULT_FILTER);
+  // 显示列表 = 已排序的 entries 按当前过滤模式筛选；渲染与键盘导航均以此为准
+  // （entries 保持全量，切换过滤/排序不会丢失数据或需要重新加载目录）
+  const visibleEntries = useMemo(
+    () => filterFileEntries(entries, filterMode),
+    [entries, filterMode]
+  );
+
+  // ── 表头排序（点击翻转）────────────────────────────────
+  // 会话内状态：目录加载与点击表头共用；目录优先规则见 fileTable.sortFileEntries
+  const [sortState, setSortState] = useState<SortState>(DEFAULT_SORT);
+  // loadDir 需要读最新排序但不能把 sortState 加进其 useCallback 依赖——
+  // 否则初始加载 useEffect（依赖 loadDir）会在每次排序翻转时重新加载家目录
+  const sortStateRef = useRef(sortState);
+  useEffect(() => { sortStateRef.current = sortState; }, [sortState]);
+
+  // ── 列宽（拖拽调节 + 持久化）────────────────────────────
+  // 持久值来自设置存储（zustand persist → Tauri Store，Rust 侧写盘）；
+  // 拖拽会话中用本地临时值即时预览，mouseup 才提交持久层（避免拖动过程频繁写盘）
+  const persistedColumns = useSettingsStore(s => s.fileManagerColumns) ?? DEFAULT_COLUMN_WIDTHS;
+  const setFileManagerColumns = useSettingsStore(s => s.setFileManagerColumns);
+  const [resizing, setResizing] = useState<{ key: SortKey; startX: number; startWidth: number } | null>(null);
+  const [dragWidth, setDragWidth] = useState<number | null>(null);
+  // mouseup 提交时读最新拖拽宽度（handleUp 闭包内同步可达）
+  const dragWidthRef = useRef<number | null>(null);
+  // 列表容器（fm-list）：用于计算列宽上限的可用空间
+  const listAreaRef = useRef<HTMLDivElement>(null);
+  // 实际生效列宽：拖拽中的列取临时值，其余取持久值
+  const columnWidths: ColumnWidths = resizing && dragWidth !== null
+    ? { ...persistedColumns, [resizing.key]: dragWidth }
+    : persistedColumns;
   const [history, setHistory] = useState<string[]>([currentPath]);
   const [historyIdx, setHistoryIdx] = useState(0);
   const [contextMenu, setContextMenu] = useState<{
@@ -280,13 +325,10 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       }
 
       if (resp && resp.entries) {
-        const sorted = [...resp.entries].sort((a, b) => {
-          if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
-          return a.name.localeCompare(b.name);
-        });
-        setEntries(sorted);
+        // 按当前表头排序（默认：目录优先 + 名称升序，与历史行为一致）
+        setEntries(sortFileEntries(resp.entries, sortStateRef.current));
       } else {
-        setEntries(getDemoEntries(path));
+        setEntries(sortFileEntries(getDemoEntries(path), sortStateRef.current));
       }
 
       // 成功后才更新当前路径（确保路径确实存在）
@@ -310,6 +352,84 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       setLoading(false);
     }
   }, [activeServerId]);
+
+  /* ── 表头排序：点击翻转 ────────────────────────────────── */
+
+  /** 点击表头：同列翻转升/降序，异列切换到该列升序；立即对现有列表重排
+   *  （entries 即显示顺序，键盘导航 selectedIdx 语义不受影响） */
+  const toggleSort = useCallback((key: SortKey) => {
+    const prev = sortStateRef.current;
+    const next: SortState = prev.key === key
+      ? { key, dir: prev.dir === "asc" ? "desc" : "asc" }
+      : { key, dir: "asc" };
+    setSortState(next);
+    sortStateRef.current = next;  // 同步 ref，防连点时读到旧值
+    setEntries(prevEntries => sortFileEntries(prevEntries, next));
+  }, []);
+
+  /* ── 列宽拖拽：mousedown 预览、mouseup 提交持久层 ────────── */
+
+  /** 开始拖拽列宽：记录起点与该列当前渲染宽度（名称列自此从弹性转固定） */
+  const beginColumnResize = useCallback((e: React.MouseEvent, key: SortKey) => {
+    e.preventDefault();    // 阻止拖拽选中文本
+    e.stopPropagation();  // 不触发表头排序
+    const colEl = (e.currentTarget as HTMLElement).parentElement;
+    if (!colEl) return;
+    const startWidth = colEl.getBoundingClientRect().width;
+    dragWidthRef.current = startWidth;
+    setDragWidth(startWidth);
+    setResizing({ key, startX: e.clientX, startWidth });
+  }, []);
+
+  // 拖拽会话：window 级 mousemove/mouseup（鼠标移出表头仍持续跟踪）
+  useEffect(() => {
+    if (!resizing) return;
+    const { key, startX, startWidth } = resizing;
+
+    // 可用空间上限：容器宽 - 行内边距/列间隙 - 名称列下限 - 其余列当前宽度
+    // （防止固定列总和超出容器后右缘被 overflow 裁剪）
+    const containerWidth = listAreaRef.current?.getBoundingClientRect().width;
+    let maxWidth: number | undefined;
+    if (containerWidth) {
+      const current = useSettingsStore.getState().fileManagerColumns ?? DEFAULT_COLUMN_WIDTHS;
+      const othersWidth = (Object.keys(current) as SortKey[])
+        .filter(k => k !== key && k !== "name" && current[k] !== null)
+        .reduce((sum, k) => sum + (current[k] as number), 0);
+      maxWidth = containerWidth - 48 - COLUMN_MIN_WIDTHS.name - othersWidth;
+    }
+
+    const handleMove = (e: MouseEvent) => {
+      const w = clampColumnWidth(key, startWidth + (e.clientX - startX), maxWidth);
+      dragWidthRef.current = w;
+      setDragWidth(w);
+    };
+    const handleUp = () => {
+      const w = dragWidthRef.current;
+      if (w !== null) {
+        // 拖拽结束提交一次持久层（getState 读最新值，避免闭包旧值覆盖并发修改）
+        const current = useSettingsStore.getState().fileManagerColumns ?? DEFAULT_COLUMN_WIDTHS;
+        setFileManagerColumns({ ...current, [key]: w });
+      }
+      dragWidthRef.current = null;
+      setDragWidth(null);
+      setResizing(null);
+    };
+
+    window.addEventListener("mousemove", handleMove);
+    window.addEventListener("mouseup", handleUp);
+    // 全局列宽光标 + 禁止文本选中（拖拽期间）
+    const prevCursor = document.body.style.cursor;
+    const prevUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    return () => {
+      window.removeEventListener("mousemove", handleMove);
+      window.removeEventListener("mouseup", handleUp);
+      document.body.style.cursor = prevCursor;
+      document.body.style.userSelect = prevUserSelect;
+    };
+    // resizing 即拖拽会话对象，会话期间 key/startX/startWidth 不变
+  }, [resizing, setFileManagerColumns]);
 
   // ── Path Suggestions ───────────────────────────────────
   const fetchSuggestions = useCallback(async (path: string) => {
@@ -1446,17 +1566,18 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
 
     if (e.key === "Backspace") { e.preventDefault(); goUp(); }
     if (e.key === "Enter" && selectedIdx !== null) {
-      handleOpen(entries[selectedIdx]);
+      handleOpen(visibleEntries[selectedIdx]);
     }
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setSelectedIdx(prev => Math.min((prev ?? -1) + 1, entries.length - 1));
+      // 上下键在过滤后的可见列表内移动（visibleEntries 即渲染顺序）
+      setSelectedIdx(prev => Math.min((prev ?? -1) + 1, visibleEntries.length - 1));
     }
     if (e.key === "ArrowUp") {
       e.preventDefault();
       setSelectedIdx(prev => Math.max((prev ?? 0) - 1, 0));
     }
-  }, [entries, selectedIdx, goUp, handleOpen, editingEntry, isEditingPath]);
+  }, [visibleEntries, selectedIdx, goUp, handleOpen, editingEntry, isEditingPath]);
 
   // ── 监听上传完成事件 ─────────────────────────────────
   useEffect(() => {
@@ -1616,6 +1737,26 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
               <button className="fm-toolbar-btn" title="搜索">🔍</button>
             </div>
 
+            {/* Dir/File Filter：目录/文件分段过滤（会话内不持久化，默认"全部"） */}
+            <div className="fm-toolbar-filter" role="group" aria-label="显示内容过滤">
+              {([
+                { key: "all", label: "全部" },
+                { key: "dirs", label: "文件夹" },
+                { key: "files", label: "文件" },
+              ] as { key: FilterMode; label: string }[]).map(seg => (
+                <button
+                  key={seg.key}
+                  className={`fm-seg-btn${filterMode === seg.key ? " active" : ""}`}
+                  onClick={() => {
+                    // 切换过滤清空选中：过滤后的可见索引与旧选中位不再对应
+                    setFilterMode(seg.key);
+                    setSelectedIdx(null);
+                  }}
+                  title={`仅显示${seg.label}`}
+                >{seg.label}</button>
+              ))}
+            </div>
+
             {/* View Toggle */}
             <div className="fm-toolbar-view">
               <button
@@ -1691,14 +1832,48 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
               <div className="fm-empty-icon">{permissionDenied ? "🔒" : "📂"}</div>
               <div className="fm-empty-text">{permissionDenied ? "无权限读取此目录内容" : "空目录"}</div>
             </div>
+          ) : visibleEntries.length === 0 ? (
+            /* ── 过滤无匹配：目录非空，但当前过滤模式下无可见项 ── */
+            <div
+              className="fm-empty"
+              onContextMenu={handleEmptyContextMenu}
+              onClick={handleEmptyClick}
+            >
+              <div className="fm-empty-icon">{filterMode === "dirs" ? "📁" : "📄"}</div>
+              <div className="fm-empty-text">{filterMode === "dirs" ? "此目录下没有文件夹" : "此目录下没有文件"}</div>
+            </div>
           ) : viewMode === "list" ? (
-            <div className="fm-list">
-              {/* ✅ 表头固定（flex-shrink: 0），不参与滚动 */}
+            <div
+              className="fm-list"
+              ref={listAreaRef}
+              style={{ "--fm-cols": buildGridTemplate(columnWidths) } as React.CSSProperties}
+            >
+              {/* ✅ 表头固定（flex-shrink: 0），不参与滚动
+                  点击列头翻转排序；列间手柄拖拽调宽（宽度经 --fm-cols 下发给表头与行） */}
               <div className="fm-list-header">
-                <span>名称</span>
-                <span>大小</span>
-                <span>修改时间</span>
-                <span>权限</span>
+                {FILE_COLUMNS.map(col => (
+                  <span
+                    key={col.key}
+                    className={`fm-col-header${sortState.key === col.key ? " sorted" : ""}`}
+                    onClick={() => toggleSort(col.key)}
+                  >
+                    <span className="fm-col-label">{col.label}</span>
+                    {sortState.key === col.key && (
+                      <SymbolicIcon
+                        name={sortState.dir === "asc" ? "pan-down" : "pan-up"}
+                        size={12}
+                        className="fm-sort-indicator"
+                      />
+                    )}
+                    {col.key !== "perm" && (
+                      <span
+                        className="fm-col-resizer"
+                        onMouseDown={(e) => beginColumnResize(e, col.key)}
+                        onClick={(e) => e.stopPropagation()}  // 手柄点击不触发排序
+                      />
+                    )}
+                  </span>
+                ))}
               </div>
               {/* ✅ 文件列表滚动容器（flex: 1 + overflow-y: auto） */}
               <div
@@ -1706,7 +1881,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                 onContextMenu={handleEmptyContextMenu}
                 onClick={handleEmptyClick}
               >
-                {entries.map((entry, idx) => (
+                {visibleEntries.map((entry, idx) => (
                   <div
                     key={entry.name}
                     className={`fm-list-row${selectedIdx === idx ? " selected" : ""}`}
@@ -1769,7 +1944,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
               onContextMenu={handleEmptyContextMenu}
               onClick={handleEmptyClick}
             >
-              {entries.map((entry, idx) => (
+              {visibleEntries.map((entry, idx) => (
                 <div
                   key={entry.name}
                   className={`fm-grid-item${selectedIdx === idx ? " selected" : ""}`}
