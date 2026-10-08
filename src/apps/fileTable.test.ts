@@ -169,7 +169,7 @@ describe("clampColumnWidth", () => {
 describe("buildGridTemplate", () => {
   it("默认值：名称列弹性（minmax），其余固定 px", () => {
     expect(buildGridTemplate(DEFAULT_COLUMN_WIDTHS)).toBe(
-      "minmax(180px, 2fr) 90px 140px 90px"
+      "minmax(130px, 2fr) 90px 140px 90px"
     );
   });
 

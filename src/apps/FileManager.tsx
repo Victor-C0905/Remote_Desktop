@@ -182,6 +182,8 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   const persistedColumns = useSettingsStore(s => s.fileManagerColumns) ?? DEFAULT_COLUMN_WIDTHS;
   const setFileManagerColumns = useSettingsStore(s => s.setFileManagerColumns);
   const [resizing, setResizing] = useState<{ key: SortKey; startX: number; startWidth: number } | null>(null);
+  // 悬停的表头列：整列（表头+数据行）淡聚焦染色，让列宽可视化（col-hover-* 容器类 + CSS 选择器）
+  const [hoveredCol, setHoveredCol] = useState<SortKey | null>(null);
   const [dragWidth, setDragWidth] = useState<number | null>(null);
   // mouseup 提交时读最新拖拽宽度（handleUp 闭包内同步可达）
   const dragWidthRef = useRef<number | null>(null);
@@ -413,6 +415,8 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       dragWidthRef.current = null;
       setDragWidth(null);
       setResizing(null);
+      // 拖拽期间 leave 被抑制（保持整列高亮），结束时统一清理
+      setHoveredCol(null);
     };
 
     window.addEventListener("mousemove", handleMove);
@@ -1844,7 +1848,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
             </div>
           ) : viewMode === "list" ? (
             <div
-              className="fm-list"
+              className={`fm-list${hoveredCol ? ` col-hover-${hoveredCol}` : ""}`}
               ref={listAreaRef}
               style={{ "--fm-cols": buildGridTemplate(columnWidths) } as React.CSSProperties}
             >
@@ -1854,8 +1858,12 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                 {FILE_COLUMNS.map(col => (
                   <span
                     key={col.key}
-                    className={`fm-col-header${sortState.key === col.key ? " sorted" : ""}`}
+                    data-col={col.key}
+                    className={`fm-col-header${sortState.key === col.key ? " sorted" : ""}${resizing?.key === col.key ? " resizing" : ""}`}
                     onClick={() => toggleSort(col.key)}
+                    onMouseEnter={() => setHoveredCol(col.key)}
+                    /* 拖拽调宽期间保持整列高亮（鼠标常会移出列头），结束时统一清理 */
+                    onMouseLeave={() => { if (resizing?.key !== col.key) setHoveredCol(null); }}
                   >
                     <span className="fm-col-label">{col.label}</span>
                     {sortState.key === col.key && (

@@ -316,7 +316,7 @@
    未设置时回退到历史默认比例 */
 .fm-list .fm-list-header {
   display: grid;
-  grid-template-columns: var(--fm-cols, minmax(180px, 2fr) 90px 140px 90px);
+  grid-template-columns: var(--fm-cols, minmax(130px, 2fr) 90px 140px 90px);
   gap: 8px;
   font-size: var(--font-small);
   font-weight: 600;
@@ -343,6 +343,39 @@
 .fm-list .fm-list-header .fm-col-header:hover,
 .fm-list .fm-list-header .fm-col-header.sorted {
   color: var(--quirel-text-primary);
+}
+
+/* 当前排序列淡聚焦：背景条横跨整列头，列宽（含拖拽调节后）一目了然
+   列头为 grid 直接子项且默认 stretch，背景即精确覆盖整列轨道宽度 */
+.fm-list .fm-list-header .fm-col-header.sorted {
+  background: var(--quirel-hover-bg);
+  border-radius: var(--radius-sm);
+}
+
+/* 拖拽调宽中的列：淡 accent 聚焦背景（比排序列的中性高亮更进一级） */
+.fm-list .fm-list-header .fm-col-header.resizing {
+  background: color-mix(in srgb, var(--quirel-accent-bg) 14%, transparent);
+  border-radius: var(--radius-sm);
+}
+
+/* ── 悬停列头：列头淡聚焦 ──────────────────────────────
+   容器挂 col-hover-<key> 类，CSS 按列选中表头；背景条横跨整列
+   轨道宽度，肉眼即可看出这一列有多宽、边界在哪 */
+.fm-list.col-hover-name .fm-list-header [data-col="name"],
+.fm-list.col-hover-size .fm-list-header [data-col="size"],
+.fm-list.col-hover-mtime .fm-list-header [data-col="mtime"],
+.fm-list.col-hover-perm .fm-list-header [data-col="perm"] {
+  background: color-mix(in srgb, var(--quirel-accent-bg) 10%, transparent);
+  border-radius: var(--radius-sm);
+}
+
+/* 表头列标签：列拖窄时与指示符共存，文本收缩截断 */
+.fm-list .fm-list-header .fm-col-header .fm-col-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 排序方向指示（升序 ▼ / 降序 ▲，桌面文件管理器惯例） */
@@ -421,6 +454,9 @@
 }
 
 .fm-list .fm-list-row .fm-file-name .fm-fn-text {
+  /* flex 子项默认 min-width:auto 不收缩，必须显式允许收缩，省略号才能生效 */
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -449,6 +485,10 @@
 .fm-list .fm-list-row .fm-file-perm {
   font-size: var(--font-small);
   color: var(--quirel-text-secondary);
+  /* 固定 px 列超宽文本（长日期/权限串）用省略号截断，不撑开轨道 */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .fm-list .fm-list-row.selected .fm-file-size,

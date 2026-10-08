@@ -97,9 +97,11 @@ export interface ColumnWidths {
 /** 默认列宽：与 CSS 历史值一致（fm-list-header 的 grid-template-columns） */
 export const DEFAULT_COLUMN_WIDTHS: ColumnWidths = { name: null, size: 90, mtime: 140, perm: 90 };
 
-/** 各列最小宽度（名称列与 minmax 下限一致，防止拖拽把列压没了） */
+/** 各列最小宽度（名称列与 minmax 下限一致，防止拖拽把列压没了）
+ *  name=130：图标 18 + 间距 8 + 文本区约 100px（≈10 个中文字符），
+ *  配合省略号截断可读性足够，且给其余固定列留出更多空间 */
 export const COLUMN_MIN_WIDTHS: Record<SortKey, number> = {
-  name: 180,
+  name: 130,
   size: 56,
   mtime: 90,
   perm: 70,
@@ -119,6 +121,6 @@ export function clampColumnWidth(key: SortKey, width: number, maxWidth?: number)
 
 /** 生成 grid-template-columns：表头与行共用，经 CSS 变量 --fm-cols 下发一次 */
 export function buildGridTemplate(widths: ColumnWidths): string {
-  const nameCol = widths.name === null ? "minmax(180px, 2fr)" : `${widths.name}px`;
+  const nameCol = widths.name === null ? "minmax(130px, 2fr)" : `${widths.name}px`;
   return `${nameCol} ${widths.size}px ${widths.mtime}px ${widths.perm}px`;
 }
