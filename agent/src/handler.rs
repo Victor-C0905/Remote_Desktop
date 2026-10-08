@@ -240,6 +240,51 @@ pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &U
             Envelope::new(envelope.request_id, stats)
         }
 
+        // ===== 上传大小限制（设置页「文件→传输设置」；仅 upload 方向检查）=====
+
+        // 查询：任何已认证用户可查；editable=当前会话是否 root（前端据此禁用输入）
+        Payload::GetTransferLimit {} => {
+            Envelope::new(
+                envelope.request_id,
+                Payload::TransferLimitResponse {
+                    max_file_transfer_mb: crate::transfer_limit::current_mb(),
+                    editable: session.uid == 0,
+                    // 查询响应无「未持久化」语义，恒 true
+                    persisted: true,
+                },
+            )
+        }
+
+        // 修改：仅 root；成功返回新值与写回结果（403/400 沿用 HTTP 语义，文案为用户视角）
+        Payload::SetTransferLimit { max_file_transfer_mb } => {
+            match crate::transfer_limit::set_limit(session.uid, *max_file_transfer_mb) {
+                Ok(outcome) => {
+                    // 管理面写操作留痕：谁改的（username/uid）、改成多少、是否持久化
+                    tracing::info!(
+                        "修改上传大小限制: username={}, uid={}, new_mb={}, persisted={}",
+                        session.username,
+                        session.uid,
+                        outcome.max_file_transfer_mb,
+                        outcome.persisted
+                    );
+                    Envelope::new(
+                        envelope.request_id,
+                        Payload::TransferLimitResponse {
+                            max_file_transfer_mb: outcome.max_file_transfer_mb,
+                            editable: true,
+                            persisted: outcome.persisted,
+                        },
+                    )
+                }
+                // 403/400→用户文案映射抽在 transfer_limit::limit_error_payload
+                // （纯函数，单测锁死错误码语义与文案）
+                Err(e) => Envelope::new(
+                    envelope.request_id,
+                    crate::transfer_limit::limit_error_payload(&e),
+                ),
+            }
+        }
+
         // 路径建议请求（客户端在用但 Agent 端不支持：路径建议由客户端本地计算，
         // 该请求到达 Agent 时明确返回 501，避免落入"未知的消息类型"兜底）
         Payload::GetPathSuggestionsRequest { .. } => {
@@ -369,7 +414,7 @@ pub async fn handle_file_transfer_request(
     file_size: Option<u64>,
     chunk_size: Option<u32>,
     resume_from: Option<u64>,
-    cfg: &AgentConfig,
+    _cfg: &AgentConfig,
     session: &UserSession,
     audit_log: Arc<AuditLogger>,
     frame_mode: &str,
@@ -390,13 +435,14 @@ pub async fn handle_file_transfer_request(
             // 需要 file_size 参数
             let file_size = file_size.ok_or("上传文件必须提供 file_size 参数".to_string())?;
 
-            // 检查文件大小限制
-            let max_size = cfg.limits.max_file_transfer_mb * 1024 * 1024;
+            // 检查文件大小限制（读全局热值：root 在设置页修改后立即生效，无需重启 Agent）
+            let max_mb = crate::transfer_limit::current_mb();
+            let max_size = max_mb * 1024 * 1024;
             if file_size > max_size {
                 return Err(format!(
                     "文件大小超过限制: {}MB > {}MB",
                     file_size / (1024 * 1024),
-                    cfg.limits.max_file_transfer_mb
+                    max_mb
                 ));
             }
 

@@ -9,6 +9,7 @@ import { ThemeId } from "../config/themes";
 import { createLogger } from '../utils/logger';
 import { AuthMethod } from '../types/server';
 import { StatsPanel } from '../components/StatsPanel';
+import { TransferLimitCard } from "../components/TransferLimitCard";
 import { SymbolicIcon } from '../components/symbolic';
 import { getServerErrorInfo } from '../stores/serversStore';
 import { getSettingsStorage } from '../utils/storage';
@@ -984,14 +985,8 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                 </select>
               </div>
             </div>
-            <div className="st-card">
-              <div className="st-card-header text-title">传输设置</div>
-              <div className="st-option-row">
-                <span className="st-option-label text-body">最大传输大小</span>
-                <input type="number" className="st-input" defaultValue="1000" />
-                <span className="st-input-unit">MB</span>
-              </div>
-            </div>
+            {/* 上传大小限制：值的单一事实来源在 Agent 端，组件内完成能力门控+查询+应用 */}
+            <TransferLimitCard serverId={activeServer?.id || null} />
           </div>
         );
 

@@ -1052,3 +1052,8 @@
   border-radius: 4px;
   font-family: 'Source Code Pro', monospace;
 }
+
+/* 警告态 hint：应用成功但配置未持久化等需用户注意的提示（与 st-hint 叠用） */
+.st-hint-warn {
+  color: var(--quirel-warning-fg);
+}

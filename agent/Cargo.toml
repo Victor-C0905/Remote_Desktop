@@ -37,6 +37,8 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring",
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
+# 配置写回（保留注释精准改值；与 toml 0.8 内部使用的同一 toml_edit 版本线）
+toml_edit = "0.22"
 
 # 日志
 tracing = "0.1"

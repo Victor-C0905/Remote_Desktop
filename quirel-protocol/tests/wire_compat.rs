@@ -332,6 +332,7 @@ fn auth_response_with_code_wire_format() {
             error: Some("用户名或密码错误".to_string()),
             session_id: None,
             code: Some(AuthErrorCode::InvalidCredentials),
+            capabilities: None,
         },
     );
     let json = serde_json::to_string(&env).unwrap();
@@ -347,7 +348,7 @@ fn auth_response_without_code_compat() {
     let raw = r#"{"request_id":7,"payload":{"type":"auth_response","data":{"success":false,"error":"账户暂时锁定，请15分钟后再试","session_id":null}}}"#;
     let env: Envelope = serde_json::from_str(raw).expect("旧格式必须可解码");
     match env.payload {
-        Payload::AuthResponse { success, error, session_id: _, code } => {
+        Payload::AuthResponse { success, error, session_id: _, code, capabilities: _ } => {
             assert!(!success);
             assert_eq!(error.as_deref(), Some("账户暂时锁定，请15分钟后再试"));
             assert_eq!(code, None);
@@ -536,4 +537,101 @@ fn read_dir_resp_with_owner_group_wire_format() {
         json,
         r#"{"request_id":35,"payload":{"type":"read_dir_resp","data":{"path":"/srv/www","entries":[{"name":"index.html","is_dir":false,"size":1024,"mtime":"2026-09-16T00:00:00Z","permissions":"rw-r--r--","owner":"www-data","group":"www-data"}]}}}"#
     );
+}
+
+// ===== 上传大小限制（设置页「文件→传输设置」）+ Agent 能力协商 =====
+
+#[test]
+fn get_transfer_limit_request_wire_format() {
+    // 空 struct 变体在 tag/content 下序列化为 "data":{}
+    // （若断言红灯且差异仅为 data 形状，以 serde 实际输出为准修正断言并锁死）
+    let env = Envelope::new(11, Payload::GetTransferLimit {});
+    let json = serde_json::to_string(&env).unwrap();
+    assert_eq!(
+        json,
+        r#"{"request_id":11,"payload":{"type":"get_transfer_limit","data":{}}}"#
+    );
+    let back = roundtrip(&env);
+    match back.payload {
+        Payload::GetTransferLimit {} => {}
+        _ => panic!("变体不匹配"),
+    }
+}
+
+#[test]
+fn transfer_limit_response_wire_format() {
+    let env = Envelope::new(12, Payload::TransferLimitResponse {
+        max_file_transfer_mb: 2048,
+        editable: true,
+        persisted: false,
+    });
+    let json = serde_json::to_string(&env).unwrap();
+    assert_eq!(
+        json,
+        r#"{"request_id":12,"payload":{"type":"transfer_limit_resp","data":{"max_file_transfer_mb":2048,"editable":true,"persisted":false}}}"#
+    );
+    let back = roundtrip(&env);
+    match back.payload {
+        Payload::TransferLimitResponse { max_file_transfer_mb, editable, persisted } => {
+            assert_eq!((max_file_transfer_mb, editable, persisted), (2048, true, false));
+        }
+        _ => panic!("变体不匹配"),
+    }
+}
+
+#[test]
+fn set_transfer_limit_request_wire_format() {
+    let env = Envelope::new(13, Payload::SetTransferLimit { max_file_transfer_mb: 1024 });
+    let json = serde_json::to_string(&env).unwrap();
+    assert_eq!(
+        json,
+        r#"{"request_id":13,"payload":{"type":"set_transfer_limit","data":{"max_file_transfer_mb":1024}}}"#
+    );
+    let back = roundtrip(&env);
+    match back.payload {
+        Payload::SetTransferLimit { max_file_transfer_mb } => {
+            assert_eq!(max_file_transfer_mb, 1024);
+        }
+        _ => panic!("变体不匹配"),
+    }
+}
+
+#[test]
+fn auth_response_with_capabilities_wire_format() {
+    // 新 Agent 认证响应携带能力列表；旧客户端 serde 忽略未知字段，向前兼容
+    let env = Envelope::new(14, Payload::AuthResponse {
+        success: true,
+        error: None,
+        session_id: Some("sess-1".to_string()),
+        code: None,
+        capabilities: Some(vec!["transfer_limit".to_string()]),
+    });
+    let json = serde_json::to_string(&env).unwrap();
+    assert_eq!(
+        json,
+        r#"{"request_id":14,"payload":{"type":"auth_response","data":{"success":true,"error":null,"session_id":"sess-1","code":null,"capabilities":["transfer_limit"]}}}"#
+    );
+    let back = roundtrip(&env);
+    match back.payload {
+        Payload::AuthResponse { success, capabilities, .. } => {
+            assert!(success);
+            assert_eq!(capabilities, Some(vec!["transfer_limit".to_string()]));
+        }
+        _ => panic!("变体不匹配"),
+    }
+}
+
+#[test]
+fn auth_response_without_capabilities_compat() {
+    // 旧 Agent 响应不含 capabilities → 解码回退 None。
+    // 客户端凭 None 识别旧 Agent 并门控新协议命令（旧 Agent 解码不了新 payload，盲发会断流拆连）
+    let raw = r#"{"request_id":7,"payload":{"type":"auth_response","data":{"success":true,"error":null,"session_id":"s1","code":null}}}"#;
+    let env: Envelope = serde_json::from_str(raw).expect("旧格式必须可解码");
+    match env.payload {
+        Payload::AuthResponse { success, capabilities, .. } => {
+            assert!(success);
+            assert_eq!(capabilities, None);
+        }
+        _ => panic!("变体不匹配"),
+    }
 }
