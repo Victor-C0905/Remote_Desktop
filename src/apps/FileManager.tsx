@@ -417,6 +417,14 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       setResizing(null);
       // 拖拽期间 leave 被抑制（保持整列高亮），结束时统一清理
       setHoveredCol(null);
+      // 吞掉拖拽结束时浏览器合成的 click：mousedown 发生在手柄、mouseup 落在
+      // 表头上时，click 会派发到二者的公共祖先（列头 span），误触发排序翻转；
+      // 捕获阶段一次性拦截——合成 click 在 mouseup 后立即派发，不会误伤用户的下一次真实点击
+      const swallow = (ev: MouseEvent) => {
+        ev.stopPropagation();
+        ev.preventDefault();
+      };
+      document.addEventListener("click", swallow, { capture: true, once: true });
     };
 
     window.addEventListener("mousemove", handleMove);
