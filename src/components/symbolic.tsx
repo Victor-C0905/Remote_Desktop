@@ -9,7 +9,8 @@ export type SymbolicIconName =
   | "view-refresh" | "network-offline"
   | "mail-unread" | "mailbox"
   | "emblem-ok" | "user-trash" | "window-close"
-  | "bell" | "bell-outline";
+  | "bell" | "bell-outline"
+  | "pan-up" | "pan-down";
 
 /** 图标内容（16×16 网格，几何近似 Adwaita symbolic 造型） */
 const ICONS: Record<SymbolicIconName, ReactNode> = {
@@ -80,6 +81,14 @@ const ICONS: Record<SymbolicIconName, ReactNode> = {
     <path d="M8 2.1 c-2.1 0 -3.3 1.7 -3.3 3.9 v2.9 l-1.3 2 a0.6 0.6 0 0 0 0.5 0.9 h8.2 a0.6 0.6 0 0 0 0.5 -0.9 l-1.3 -2 v-2.9 c0 -2.2 -1.2 -3.9 -3.3 -3.9 Z"
       fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
     <path d="M6.7 13.2 a1.3 1.3 0 0 0 2.6 0" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+  </>),
+  // 实心小三角朝上（排序指示：降序）
+  "pan-up": (<>
+    <path d="M8 4.4 L12.4 9.6 H3.6 Z" fill="currentColor" />
+  </>),
+  // 实心小三角朝下（排序指示：升序，桌面文件管理器惯例）
+  "pan-down": (<>
+    <path d="M8 11.6 L3.6 6.4 H12.4 Z" fill="currentColor" />
   </>),
 };
 

@@ -3,6 +3,7 @@ import { persist, createJSONStorage } from "zustand/middleware";
 import { settingsStorage } from "../utils/storage";
 import { ThemeId, AccentColorId } from "../config/themes";
 import { applyThemeColors } from "../utils/themeUtils";
+import { DEFAULT_COLUMN_WIDTHS, ColumnWidths } from "../apps/fileTable";
 
 /* ── Types ─────────────────────────────────────────────── */
 
@@ -25,6 +26,9 @@ export interface SettingsState {
 
   // 启动时恢复上次窗口（桌面会话恢复）
   restoreWindowsOnStartup: boolean;
+
+  // 文件管理器列表列宽（用户拖拽调节后持久化；name 为 null 表示名称列弹性默认态）
+  fileManagerColumns: ColumnWidths;
 }
 
 export interface SettingsActions {
@@ -46,6 +50,9 @@ export interface SettingsActions {
 
   // 启动时恢复上次窗口
   setRestoreWindowsOnStartup: (enabled: boolean) => void;
+
+  // 文件管理器列宽（拖拽结束时提交一次，避免拖动过程频繁写盘）
+  setFileManagerColumns: (widths: ColumnWidths) => void;
 }
 
 /* ── Default Settings ──────────────────────────────────── */
@@ -69,6 +76,9 @@ const DEFAULT_SETTINGS: SettingsState = {
 
   // 启动时恢复上次窗口（默认开，保留桌面会话恢复行为）
   restoreWindowsOnStartup: true,
+
+  // 文件管理器列宽默认值（与 CSS 历史列宽一致，名称列弹性）
+  fileManagerColumns: DEFAULT_COLUMN_WIDTHS,
 };
 
 /* ── Store ────────────────────────────────────────────── */
@@ -122,6 +132,10 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
 
       setRestoreWindowsOnStartup: (enabled) => {
         set({ restoreWindowsOnStartup: enabled });
+      },
+
+      setFileManagerColumns: (widths) => {
+        set({ fileManagerColumns: widths });
       },
     }),
     {
