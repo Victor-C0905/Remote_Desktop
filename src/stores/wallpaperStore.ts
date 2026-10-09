@@ -1,6 +1,9 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import { settingsStorage } from "../utils/storage";
+import { createLogger } from "../utils/logger";
+
+const log = createLogger('WallpaperStore');
 
 /* ── Types ─────────────────────────────────────────────── */
 
@@ -28,14 +31,14 @@ export const PRESET_WALLPAPERS: Record<string, string> = {
   "adwaita-green": "linear-gradient(135deg, #33d17a 0%, #26a269 100%)",
   "adwaita-orange": "linear-gradient(135deg, #e66100 0%, #c64600 100%)",
   "adwaita-purple": "linear-gradient(135deg, #9141ac 0%, #613583 100%)",
-  "gnome-default": "linear-gradient(180deg, #3584e4 0%, #1a5fb4 50%, #0d1b3d 100%)",
+  "quirel-default": "linear-gradient(180deg, #3584e4 0%, #1a5fb4 50%, #0d1b3d 100%)",
 };
 
 /* ── Default Wallpaper ───────────────────────────────── */
 
 const DEFAULT_WALLPAPER: WallpaperConfig = {
   type: "preset",
-  presetId: "gnome-default",
+  presetId: "quirel-default",
 };
 
 /* ── Store ────────────────────────────────────────────── */
@@ -58,12 +61,12 @@ export const useWallpaperStore = create<WallpaperState & WallpaperActions>()(
       },
     }),
     {
-      name: "gnome-remote-wallpaper",
+      name: "quirel-wallpaper",
       storage: createJSONStorage(() => settingsStorage),
       // Hydration 完成后的回调
       onRehydrateStorage: () => (state) => {
         if (state) {
-          console.log("[WallpaperStore] Rehydrated:", state.wallpaper);
+          log.debug("Rehydrated:", state.wallpaper);
         }
       },
     }
@@ -75,7 +78,7 @@ export const useWallpaperStore = create<WallpaperState & WallpaperActions>()(
 export function getWallpaperStyle(wallpaper: WallpaperConfig): React.CSSProperties {
   if (wallpaper.type === "preset" && wallpaper.presetId) {
     return {
-      backgroundImage: PRESET_WALLPAPERS[wallpaper.presetId] || PRESET_WALLPAPERS["gnome-default"],
+      backgroundImage: PRESET_WALLPAPERS[wallpaper.presetId] || PRESET_WALLPAPERS["quirel-default"],
       backgroundSize: "cover",
       backgroundPosition: "center",
       backgroundRepeat: "no-repeat",
@@ -92,7 +95,7 @@ export function getWallpaperStyle(wallpaper: WallpaperConfig): React.CSSProperti
   }
 
   return {
-    backgroundImage: PRESET_WALLPAPERS["gnome-default"],
+    backgroundImage: PRESET_WALLPAPERS["quirel-default"],
     backgroundSize: "cover",
     backgroundPosition: "center",
     backgroundRepeat: "no-repeat",
@@ -106,7 +109,7 @@ export function getPresetWallpaperName(presetId: string): string {
     "adwaita-green": "Adwaita 绿",
     "adwaita-orange": "Adwaita 橙",
     "adwaita-purple": "Adwaita 紫",
-    "gnome-default": "GNOME 默认",
+    "quirel-default": "Quirel 默认",
   };
   return names[presetId] || presetId;
 }

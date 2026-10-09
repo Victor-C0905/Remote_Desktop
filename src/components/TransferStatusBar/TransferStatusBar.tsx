@@ -1,0 +1,198 @@
+/**
+ * 传输状态栏组件
+ *
+ * 显示在文件管理器窗口底部状态栏右侧，用于展示文件传输进度
+ * 收起状态：显示图标 + 数量 + 迷你进度条 + 百分比 + 展开按钮
+ * 展开状态：浮层面板显示任务列表（后续任务实现）
+ */
+
+import { useState, useRef } from 'react';
+import { useTransferProgress } from '../../hooks/useTransferProgress';
+import { TransferPanel } from './TransferPanel';
+import './TransferStatusBar.css';
+
+// ── 内联 SVG 图标组件（Adwaita 风格）────────────────────────────
+
+/**
+ * 下载图标（向下箭头）
+ * 来源：Adwaita go-down-symbolic.svg
+ */
+function DownloadIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+      <path d="M8 12l-4-4h2.5V4h3v4H12z" />
+    </svg>
+  );
+}
+
+/**
+ * 展开图标（向下箭头）
+ * 来源：Adwaita pan-down-symbolic.svg
+ */
+function ExpandIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+      <path d="M2 4l4 4 4-4z" />
+    </svg>
+  );
+}
+
+/**
+ * 收起图标（向上箭头）
+ * 来源：Adwaita pan-up-symbolic.svg
+ */
+function CollapseIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+      <path d="M10 8l-4-4-4 4z" />
+    </svg>
+  );
+}
+
+export function TransferStatusBar() {
+  const { transfers, removeTask } = useTransferProgress();
+  const [isExpanded, setIsExpanded] = useState(false);
+  const statusbarRef = useRef<HTMLDivElement>(null);
+  const isClickOnButton = useRef(false); // 标记是否点击了按钮
+
+  // 展开/收起切换函数
+  const toggleExpand = () => {
+    setIsExpanded(!isExpanded);
+  };
+
+  // 处理状态栏的点击：设置标志位
+  const handleStatusbarClick = () => {
+    isClickOnButton.current = true;
+    toggleExpand();
+    // 在下一个事件循环重置标志位
+    setTimeout(() => {
+      isClickOnButton.current = false;
+    }, 0);
+  };
+
+  // 如果没有传输任务，显示占位状态（与有任务时保持一致的布局）
+  if (transfers.length === 0) {
+    return (
+      <div
+        ref={statusbarRef}
+        className="transfer-status-bar"
+        onClick={handleStatusbarClick}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            toggleExpand();
+          }
+        }}
+        aria-label="传输任务"
+        aria-expanded={isExpanded}
+      >
+        {/* 图标 + 文本（保持与有任务时相同的布局） */}
+        <div className="tsb-icon-count">
+          <DownloadIcon className="tsb-icon" />
+          <span className="tsb-count" aria-live="polite">无传输</span>
+        </div>
+
+        {/* 空进度条（保持视觉一致性） */}
+        <div className="tsb-progress-mini">
+          <div className="tsb-progress-fill tsb-progress-empty" style={{ width: '0%' }} />
+        </div>
+
+        {/* 占位百分比 */}
+        <span className="tsb-percent tsb-percent-empty">—</span>
+
+        {/* 展开/收起指示器 */}
+        <div className="tsb-toggle-indicator">
+          {isExpanded ? <CollapseIcon className="tsb-toggle-icon" /> : <ExpandIcon className="tsb-toggle-icon" />}
+        </div>
+
+        {/* 展开的空状态面板 */}
+        {isExpanded && (
+          <TransferPanel
+            transfers={transfers}
+            onRemoveTask={removeTask}
+            onClose={() => setIsExpanded(false)}
+            statusbarRef={statusbarRef}
+          />
+        )}
+      </div>
+    );
+  }
+
+  // 计算总进度：只统计未完成的任务（排除100%的已完成任务）
+  const calculateWeightedProgress = () => {
+    // 只统计未完成的任务（活动、排队、暂停、失败、已取消）
+    const unfinishedTasks = transfers.filter(t => t.status !== 'completed');
+
+    if (unfinishedTasks.length === 0) {
+      // 所有任务都已完成，显示100%
+      const completedTasks = transfers.filter(t => t.status === 'completed');
+      return completedTasks.length > 0 ? 100 : 0;
+    }
+
+    // 计算未完成任务的平均进度
+    const totalProgress = unfinishedTasks.reduce((sum, t) => sum + t.progress, 0);
+    return totalProgress / unfinishedTasks.length;
+  };
+
+  const totalProgress = calculateWeightedProgress();
+
+  return (
+    <div
+      ref={statusbarRef}
+      className="transfer-status-bar"
+      onClick={handleStatusbarClick}
+      role="button"
+      aria-label={isExpanded ? '收起传输列表' : '展开传输列表'}
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          toggleExpand();
+        }
+      }}
+    >
+      {/* 图标 + 数量 */}
+      <div className="tsb-icon-count">
+        <DownloadIcon className="tsb-icon" />
+        <span className="tsb-count" aria-label={`${transfers.length}个传输任务`} aria-live="polite">
+          {transfers.length}
+        </span>
+      </div>
+
+      {/* 迷你进度条 */}
+      <div
+        className="tsb-progress-mini"
+        role="progressbar"
+        aria-valuenow={Math.round(totalProgress)}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label="传输总进度"
+      >
+        <div
+          className="tsb-progress-fill"
+          style={{ width: `${totalProgress}%` }}
+        />
+      </div>
+
+      {/* 百分比 */}
+      <span className="tsb-percent" aria-live="polite">{Math.round(totalProgress)}%</span>
+
+      {/* 展开/收起指示器 */}
+      <div className="tsb-toggle-indicator">
+        {isExpanded ? <CollapseIcon className="tsb-toggle-icon" /> : <ExpandIcon className="tsb-toggle-icon" />}
+      </div>
+
+      {/* 展开的任务列表面板 */}
+      {isExpanded && (
+        <TransferPanel
+          transfers={transfers}
+          onRemoveTask={removeTask}
+          onClose={() => setIsExpanded(false)}
+          statusbarRef={statusbarRef}
+        />
+      )}
+    </div>
+  );
+}

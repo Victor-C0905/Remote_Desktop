@@ -1,0 +1,104 @@
+/*
+   PDFViewer — 远程 PDF 阅读器（Adwaita 风格）
+   工具栏 + 滚动画布布局，与其他查看器保持一致
+*/
+
+.pv-root {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  background: var(--quirel-window-bg, #242424);
+  overflow: hidden;
+}
+
+.pv-status {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--quirel-dim-fg, #9a9996);
+  font-size: 14px;
+}
+
+.pv-error {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--quirel-error-fg, #e01b24);
+  font-size: 14px;
+  padding: 24px;
+  text-align: center;
+}
+
+.pv-error-path {
+  color: var(--quirel-dim-fg, #9a9996);
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.pv-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--quirel-headerbar-bg, #303030);
+  border-bottom: 1px solid var(--quirel-border, #3f3f3f);
+  flex-shrink: 0;
+}
+
+.pv-filename {
+  flex: 1;
+  font-size: 13px;
+  color: var(--quirel-fg, #ffffff);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pv-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--quirel-fg, #ffffff);
+  background: var(--quirel-button-bg, #3f3f3f);
+  border: 1px solid var(--quirel-border, #4f4f4f);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.pv-btn:hover:not(:disabled) {
+  background: var(--quirel-button-hover-bg, #4f4f4f);
+}
+
+.pv-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.pv-page-input {
+  width: 56px;
+  padding: 4px 6px;
+  font-size: 12px;
+  text-align: center;
+  color: var(--quirel-fg, #ffffff);
+  background: var(--quirel-view-bg, #1e1e1e);
+  border: 1px solid var(--quirel-border, #4f4f4f);
+  border-radius: 6px;
+}
+
+.pv-page-total {
+  font-size: 12px;
+  color: var(--quirel-dim-fg, #9a9996);
+}
+
+.pv-canvas {
+  flex: 1;
+  overflow: auto;
+  background: var(--quirel-view-bg, #1e1e1e);
+  display: flex;
+  justify-content: center;
+  padding: 8px;
+}

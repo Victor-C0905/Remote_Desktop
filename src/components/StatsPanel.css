@@ -1,0 +1,129 @@
+/* ============================================================
+   StatsPanel — System Monitoring Component Styles
+   ============================================================ */
+
+.stats-panel {
+  padding: 16px; /* 匹配 SystemMonitor 的内容区域 */
+}
+
+.stats-panel h2 {
+  font-size: var(--font-title);
+  font-weight: 600;
+  color: var(--quirel-text-primary);
+  margin-bottom: 20px;
+}
+
+.stats-section {
+  margin-bottom: 30px;
+}
+
+.stats-section h3 {
+  font-size: var(--font-body);
+  font-weight: 600;
+  color: var(--quirel-text-primary);
+  margin-bottom: 15px;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 15px;
+}
+
+.stat-item {
+  display: flex;
+  flex-direction: column;
+  padding: 15px;
+  background: var(--quirel-card-bg);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--quirel-border-color);
+  transition: background var(--duration-fast) var(--ease-out),
+              box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.stat-item:hover {
+  background: var(--quirel-card-hover);
+  box-shadow: var(--shadow-card);
+}
+
+.stat-item .label {
+  font-size: var(--font-small);
+  color: var(--quirel-text-secondary);
+  margin-bottom: 5px;
+}
+
+.stat-item .value {
+  font-size: 18px;
+  font-weight: bold;
+  color: var(--quirel-text-primary);
+}
+
+/* 状态颜色 */
+.value.success {
+  color: var(--quirel-success-color);
+}
+
+.value.warning {
+  color: var(--quirel-warning-color);
+}
+
+.value.error {
+  color: var(--quirel-error-color);
+}
+
+/* 刷新按钮 */
+.refresh-button {
+  padding: 10px 20px;
+  background: var(--quirel-accent-bg);
+  color: var(--quirel-text-on-accent);
+  border: none;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  font-size: var(--font-body);
+  font-weight: 500;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.refresh-button:hover {
+  background: var(--quirel-accent-hover);
+}
+
+.refresh-button:active {
+  background: var(--quirel-accent-active);
+}
+
+/* 错误提示 */
+.error {
+  color: var(--quirel-error-color);
+  padding: 10px;
+  background: rgba(224, 27, 36, 0.1);
+  border: 1px solid var(--quirel-error-color);
+  border-radius: var(--radius-xs);
+  margin-bottom: 10px;
+}
+
+/* 响应式布局 */
+@media (max-width: 768px) {
+  .stats-panel {
+    padding: 12px;
+  }
+
+  .stats-grid {
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 10px;
+  }
+
+  .stat-item {
+    padding: 12px;
+  }
+
+  .stat-item .value {
+    font-size: 16px;
+  }
+}
+
+@media (max-width: 480px) {
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}

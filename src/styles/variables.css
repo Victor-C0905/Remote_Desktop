@@ -1,0 +1,153 @@
+/* ============================================================
+   CSS Variables — Quirel Client
+   从 adwaita.css 提取，只包含变量定义
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Cantarell:wght@400;700&family=Source+Code+Pro:wght@400;600&display=swap');
+
+/* ── Light Mode (Adwaita Default) ──────────────────────── */
+:root {
+  /* Accent Colors */
+  --quirel-accent-bg:      #15aa70;      /* RGB(21,170,112) - 纸张主题默认强调色 */
+  --quirel-accent-fg:      #ffffff;
+  --quirel-accent-hover:   #129864;
+  --quirel-accent-active:  #0f8658;
+
+  /* Window & Surfaces (Warm Gray) */
+  --quirel-window-bg:      #fafafa;      /* RGB(250,250,250) - 柔和白 */
+  --quirel-view-bg:        #faf5f3;      /* RGB(250,245,243) - 内容区（最浅） */
+  --quirel-card-bg:        #faf5f3;      /* RGB(250,245,243) - 卡片背景（最浅） */
+  --quirel-card-hover:     #ebe5d9;      /* RGB(235,229,217) - 卡片悬停（较深） */
+  --quirel-headerbar-bg:   #f5f0e6;      /* RGB(245,240,230) - HeaderBar（中等） */
+  --quirel-sidebar-bg:     #f5f0e6;      /* RGB(245,240,230) - 侧边栏（中等） */
+  --quirel-sidebar-fg:     #3f3f3f;
+  --quirel-sidebar-border: #d5d0c4;      /* RGB(213,208,196) - 边框（最深） */
+
+  /* Foreground */
+  --quirel-text-primary:     rgba(0, 0, 0, 0.87);
+  --quirel-text-secondary:   rgba(0, 0, 0, 0.60);
+  --quirel-text-disabled:    rgba(0, 0, 0, 0.38);
+  --quirel-text-on-accent:   #ffffff;
+
+  /* Status Colors */
+  --quirel-success-color:    #26a269;      /* Adwaita Green - 成功状态 */
+  --quirel-error-color:      #e01b24;      /* Adwaita Red - 错误状态 */
+  --quirel-warning-color:    #f5c211;      /* Adwaita Yellow - 警告状态 */
+
+  /* ── 语义严重度令牌（通知/错误 UI 统一）────────────── */
+  /* urgency 映射：critical→danger / normal→warning / low→success */
+  /* 单套定义（与 Status Colors 同模式）；-bg 半透明，亮暗主题通用 */
+  --quirel-danger-fg:        #c01c28;      /* 深红，亮背景可读 */
+  --quirel-danger-bg:       rgba(224, 27, 36, 0.08);
+  --quirel-danger-border:   rgba(224, 27, 36, 0.35);
+  --quirel-warning-fg:      #9c5b00;      /* 深橙，亮背景可读 */
+  --quirel-warning-bg:      rgba(245, 194, 17, 0.14);
+  --quirel-warning-border:  rgba(245, 194, 17, 0.45);
+  --quirel-success-fg:      #1b7f4d;      /* 深绿，亮背景可读 */
+  --quirel-success-bg:      rgba(38, 162, 105, 0.10);
+  --quirel-success-border:  rgba(38, 162, 105, 0.35);
+
+  /* ── 通知严重度圆点色板（emoji 观感球体）────────────── */
+  /* 三段径向渐变：hi 左上高光 / mid 主色 / lo 边缘暗色 */
+  /* 默认值 = 中性主题（Adwaita 三色）；运行时由 applyThemeColors 按主题覆盖 */
+  --quirel-dot-critical-hi:  #ff9c9c;
+  --quirel-dot-critical-mid: #e01b24;
+  --quirel-dot-critical-lo:  #a5121a;
+  --quirel-dot-normal-hi:    #ffe26b;
+  --quirel-dot-normal-mid:   #f5c211;
+  --quirel-dot-normal-lo:    #b3870a;
+  --quirel-dot-low-hi:       #8ff0b4;
+  --quirel-dot-low-mid:      #33d17a;
+  --quirel-dot-low-lo:       #1c7a4a;
+
+  /* Borders */
+  --quirel-border-color:   rgba(0, 0, 0, 0.15);
+  --quirel-border-focus:   #3584e4;
+
+  /* Slider (滑块滑条颜色) */
+  --quirel-slider-track-bg:   #d5d0c4;      /* 深暖灰 - 滑条轨道 */
+  --quirel-slider-thumb-bg:   #3584e4;      /* Adwaita Blue - 滑块 */
+  --quirel-slider-active-bg:  #1f75d1;      /* 滑块活动状态 */
+
+  /* Radius */
+  --radius-xs:      4px;
+  --radius-sm:      8px;
+  --radius-md:      12px;
+  --radius-lg:      18px;
+  --radius-pill:    9999px;
+
+  /* Typography */
+  --font-ui:        'Cantarell', 'Inter', system-ui, sans-serif;
+  --font-mono:      'Source Code Pro', 'SF Mono', 'Cascadia Code', monospace;
+  --font-title:     11pt;
+  --font-body:      10pt;
+  --font-small:     9pt;
+
+  /* Shadows */
+  --shadow-card:    0 1px 3px rgba(0,0,0,0.08);
+  --shadow-popup:   0 4px 16px rgba(0,0,0,0.15);
+  --shadow-modal:   0 8px 32px rgba(0,0,0,0.2);
+
+  /* Timing */
+  --duration-fast:    150ms;
+  --duration-normal:  200ms;
+  --duration-slow:    300ms;
+  --ease-out:         cubic-bezier(0.25, 0, 0, 1);
+
+  /* ── 毛玻璃效果 (Frosted Glass) ─────────────────────── */
+  /* headerbar-bg 的 RGB 分离，用于构造 rgba 透明色 */
+  --quirel-headerbar-bg-rgb: 245, 240, 230;
+  /* 毛玻璃参数：原色 + 0.78 透明度 */
+  --quirel-frosted-bg:       rgba(245, 240, 230, 0.78);
+  --quirel-frosted-blur:     blur(24px) saturate(160%);
+  /* 毛玻璃边框（比普通边框更弱，避免突兀） */
+  --quirel-frosted-border:   rgba(0, 0, 0, 0.06);
+
+  /* Layout Constants */
+  --topbar-height:    32px;
+  --headerbar-height: 48px;
+  --sidebar-width:    240px;
+  --dock-height:      64px;
+
+  /* ── Z-Index 层级系统（统一管理）─────────────────────── */
+  /* Layer 0: 壁纸层（背景层，z-index 无需设置）              */
+  /* Layer 10: 桌面图标层                                     */
+  --z-desktop-icons:    10;
+
+  /* Layer 15: Dock 层（底部任务栏，低于窗口，窗口可遮挡）   */
+  --z-dock:             15;
+
+  /* Layer 20: 非激活窗口层                                   */
+  --z-window-inactive:  20;
+
+  /* Layer 30: 激活窗口层（在 Dock 之上，窗口可遮挡 Dock）   */
+  --z-window-active:    30;
+
+  /* Layer 50: TopBar 层（顶部任务栏，始终可见）             */
+  --z-topbar:           50;
+
+  /* Layer 60: 应用内部浮动层（下拉菜单、Tooltip）            */
+  --z-app-dropdown:     60;
+  --z-app-tooltip:      65;
+
+  /* Layer 70: 应用内部模态层（确认对话框、设置面板）         */
+  --z-app-modal:        70;
+
+  /* Layer 80: 全局弹窗层（通知中心、全局菜单）               */
+  --z-notification:     80;
+  --z-global-menu:      85;
+
+  /* Layer 90: 最高层级（紧急系统提示、全局遮罩）             */
+  --z-system-alert:     90;
+  --z-system-overlay:   95;
+
+  /* Layer 100: Aero Snap 预览层(最高层,高于所有窗口与系统级遮罩) */
+  --z-snap-preview:    100;
+
+  /* 说明：                                                  */
+  /* 1. 所有组件必须使用 CSS 变量，不得直接写数字             */
+  /* 2. 同层级元素按 DOM 顺序渲染，z-index 相同              */
+  /* 3. 应用内部浮动元素不得超过 Layer 60-70                 */
+  /* 4. 全局弹窗不得超过 Layer 80-90                         */
+  /* 5. Dock 低于窗口，窗口可以遮挡 Dock（Adwaita 行为）       */
+}

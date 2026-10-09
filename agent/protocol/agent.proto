@@ -1,0 +1,406 @@
+syntax = "proto3";
+
+package agent;
+
+// Agent IPC 协议定义
+
+// ===== 基础消息类型 =====
+
+// 管理器请求
+message ManagerRequest {
+    uint64 request_id = 1;
+    oneof payload {
+        CreateSession create_session = 2;
+        // ResizeWindow 已移除：由 Manager 直接处理（Worker 不持有 master_fd）
+        KillSession kill_session = 4;
+        ReadDir read_dir = 5;
+        ReadFile read_file = 6;
+        WriteFile write_file = 7;
+        ExecuteCommand execute_command = 8;
+        GetSystemInfo get_system_info = 9;
+        Delete delete = 11;
+        Mkdir mkdir = 12;
+        Rename rename = 13;
+        Copy copy = 14;
+        Move move = 15;
+        FileExists file_exists = 16;
+        ApplyDiff apply_diff = 17;
+        FileInfo file_info = 18;  // 新增：文件格式探测
+        Chmod chmod = 19;         // 新增：修改文件/目录权限
+        Chown chown = 20;         // 新增：修改文件/目录属主/属组
+        GracefulShutdown graceful_shutdown = 10;  // 新增：优雅关闭请求
+    }
+}
+
+// Worker 响应
+message WorkerResponse {
+    uint64 request_id = 1;
+    oneof payload {
+        SessionCreated session_created = 2;
+        DirListing dir_listing = 3;
+        FileContent file_content = 4;
+        WriteResult write_result = 5;
+        CommandOutput command_output = 6;
+        SystemInfo system_info = 7;
+        Error error = 8;
+        DeleteResult delete_result = 10;
+        MkdirResult mkdir_result = 11;
+        RenameResult rename_result = 12;
+        CopyResult copy_result = 13;
+        MoveResult move_result = 14;
+        FileExistsResult file_exists_result = 15;
+        ApplyDiffResult apply_diff_result = 16;
+        FileInfoResult file_info_result = 17;  // 新增：文件格式探测结果
+        ChmodResult chmod_result = 18;         // 新增：chmod 结果
+        ChownResult chown_result = 19;         // 新增：chown 结果
+        ShutdownAck shutdown_ack = 9;  // 新增：关闭确认
+    }
+}
+
+// 错误响应
+message Error {
+    uint32 code = 1;
+    string message = 2;
+}
+
+// ===== 会话管理 =====
+
+message CreateSession {
+    uint32 cols = 1;
+    uint32 rows = 2;
+    string shell = 3;
+    string working_directory = 4;
+    // 阶段 2 新增:用户隔离信息
+    uint32 uid = 5;
+    uint32 gid = 6;
+    string username = 7;
+    string home_dir = 8;
+}
+
+message SessionCreated {
+    string session_id = 1;
+    string socket_name = 2;  // 新增: abstract socket 名称（Manager 用于连接 Session 进程）
+}
+
+message ResizeWindow {
+    string session_id = 1;
+    uint32 cols = 2;
+    uint32 rows = 3;
+}
+
+message KillSession {
+    string session_id = 1;
+}
+
+// ===== 文件操作 =====
+// 阶段 3 新增:所有文件操作消息包含用户上下文(uid/gid/username/home_dir),
+// Worker 据此使用 UserExecutor(fork+setuid)执行用户隔离
+
+message ReadDir {
+    string path = 1;
+    // 用户上下文(阶段 3 新增)
+    uint32 uid = 2;
+    uint32 gid = 3;
+    string username = 4;
+    string home_dir = 5;
+}
+
+message DirListing {
+    string path = 1;
+    repeated FileEntry entries = 2;
+}
+
+message FileEntry {
+    string name = 1;
+    bool is_dir = 2;
+    uint64 size = 3;
+    string mtime = 4;
+    string permissions = 5;
+    string owner = 6;  // 新增：属主用户名（解析失败回退 uid 数字字符串）
+    string group = 7;  // 新增：属组组名（解析失败回退 gid 数字字符串）
+}
+
+message ReadFile {
+    string path = 1;
+    // 用户上下文(阶段 3 新增)
+    uint32 uid = 2;
+    uint32 gid = 3;
+    string username = 4;
+    string home_dir = 5;
+}
+
+message FileContent {
+    string path = 1;
+    bytes content = 2;
+    uint64 mtime = 3;
+    uint64 size = 4;
+}
+
+// 文件格式探测（读取元数据 + 头部字节，用于客户端格式路由）
+message FileInfo {
+    string path = 1;
+    // 用户上下文（与其他文件操作一致）
+    uint32 uid = 2;
+    uint32 gid = 3;
+    string username = 4;
+    string home_dir = 5;
+}
+
+message FileInfoResult {
+    string path = 1;
+    uint64 size = 2;
+    bool is_dir = 3;
+    bool is_text = 4;
+    string extension = 5;
+    bytes magic_bytes = 6;
+}
+
+message WriteFile {
+    string path = 1;
+    bytes content = 2;
+    // 用户上下文(阶段 3 新增)
+    uint32 uid = 3;
+    uint32 gid = 4;
+    string username = 5;
+    string home_dir = 6;
+}
+
+message WriteResult {
+    string path = 1;
+    uint64 mtime = 2;
+    uint64 size = 3;
+}
+
+// 删除文件/目录
+message Delete {
+    string path = 1;
+    uint32 uid = 2;
+    uint32 gid = 3;
+    string username = 4;
+    string home_dir = 5;
+}
+
+message DeleteResult {
+    bool success = 1;
+}
+
+// 创建目录
+message Mkdir {
+    string path = 1;
+    uint32 uid = 2;
+    uint32 gid = 3;
+    string username = 4;
+    string home_dir = 5;
+}
+
+message MkdirResult {
+    string path = 1;
+}
+
+// 重命名/移动
+message Rename {
+    string old_path = 1;
+    string new_path = 2;
+    uint32 uid = 3;
+    uint32 gid = 4;
+    string username = 5;
+    string home_dir = 6;
+}
+
+message RenameResult {
+    string old_path = 1;
+    string new_path = 2;
+}
+
+// 复制(仅文件)
+message Copy {
+    string src = 1;
+    string dst = 2;
+    uint32 uid = 3;
+    uint32 gid = 4;
+    string username = 5;
+    string home_dir = 6;
+}
+
+message CopyResult {
+    string src = 1;
+    string dst = 2;
+}
+
+// 移动(等同于 Rename)
+message Move {
+    string src = 1;
+    string dst = 2;
+    uint32 uid = 3;
+    uint32 gid = 4;
+    string username = 5;
+    string home_dir = 6;
+}
+
+message MoveResult {
+    string src = 1;
+    string dst = 2;
+}
+
+// 检查文件是否存在
+message FileExists {
+    string path = 1;
+    uint32 uid = 2;
+    uint32 gid = 3;
+    string username = 4;
+    string home_dir = 5;
+}
+
+message FileExistsResult {
+    bool exists = 1;
+    uint64 size = 2;
+    uint64 mtime = 3;
+}
+
+// 修改文件/目录权限(chmod)
+message Chmod {
+    string path = 1;
+    uint32 mode = 2;         // 权限位(八进制数值,如 0o755 = 493)
+    bool recursive = 3;      // 递归应用于目录下所有内容
+    // 用户上下文(与其他文件操作一致)
+    uint32 uid = 4;
+    uint32 gid = 5;
+    string username = 6;
+    string home_dir = 7;
+}
+
+message ChmodResult {
+    bool success = 1;
+}
+
+// 修改文件/目录属主/属组(chown)
+// owner/group 为用户名/组名字符串,Worker 端解析为 uid/gid;
+// 以登录用户上下文执行,改属主为其他用户仅登录用户为 root 时成功(Linux 原生语义)
+message Chown {
+    string path = 1;
+    string owner = 2;        // 目标用户名
+    string group = 3;        // 目标组名
+    bool recursive = 4;      // 递归应用于目录下所有内容
+    // 用户上下文(与其他文件操作一致)
+    uint32 uid = 5;
+    uint32 gid = 6;
+    string username = 7;
+    string home_dir = 8;
+}
+
+message ChownResult {
+    bool success = 1;
+}
+
+// ===== 命令执行 =====
+
+message ExecuteCommand {
+    string command = 1;
+    repeated string args = 2;
+    string working_directory = 3;
+    // 用户上下文(阶段 3 新增)
+    uint32 uid = 4;
+    uint32 gid = 5;
+    string username = 6;
+    string home_dir = 7;
+    // 额外环境变量(可选,当前未使用)
+    map<string, string> env = 8;
+    // 超时秒数(0 = Worker 端默认 300s;超时 kill 子进程)
+    uint32 timeout_secs = 9;
+}
+
+message CommandOutput {
+    bytes stdout = 1;
+    bytes stderr = 2;
+    int32 exit_code = 3;
+}
+
+// ===== 差异应用 =====
+
+// 文件差异项
+message FileDiff {
+    // 差异类型: 0=insert, 1=delete, 2=replace
+    int32 diff_type = 1;
+    // 行号(从 1 开始)
+    uint32 line_number = 2;
+    // 原内容(replace/delete 时存在)
+    string old_content = 3;
+    // 新内容(replace/insert 时存在)
+    string new_content = 4;
+}
+
+// 应用差异
+message ApplyDiff {
+    string path = 1;
+    uint64 base_mtime = 2;
+    repeated FileDiff diffs = 3;
+    uint32 uid = 4;
+    uint32 gid = 5;
+    string username = 6;
+    string home_dir = 7;
+}
+
+message ApplyDiffResult {
+    string path = 1;
+    bool success = 2;
+    uint64 new_mtime = 3;
+    string error = 4;
+}
+
+// ===== 系统信息 =====
+
+message GetSystemInfo {}
+
+message SystemInfo {
+    string hostname = 1;
+    string os_name = 2;
+    string os_version = 3;
+    string kernel_version = 4;
+    uint64 uptime_secs = 5;
+    CpuInfo cpu = 6;
+    MemoryInfo memory = 7;
+    repeated DiskInfo disks = 8;
+}
+
+message CpuInfo {
+    string model = 1;
+    uint32 cores = 2;
+    double usage_percent = 3;
+}
+
+message MemoryInfo {
+    uint64 total_bytes = 1;
+    uint64 used_bytes = 2;
+    uint64 available_bytes = 3;
+    double usage_percent = 4;
+}
+
+message DiskInfo {
+    string mount_point = 1;
+    string device = 2;
+    string filesystem = 3;
+    uint64 total_bytes = 4;
+    uint64 used_bytes = 5;
+    uint64 available_bytes = 6;
+    double usage_percent = 7;
+}
+
+// ===== 热更新 =====
+
+// Manager -> Worker 的优雅关闭请求
+message GracefulShutdown {
+    uint32 grace_period_secs = 1;   // 宽限期（秒），超时后强制杀死
+    bool migrate_state = 2;          // 是否进行状态迁移（Phase 4 暂不实现，始终为 false）
+    string reason = 3;               // 触发原因
+}
+
+// Worker -> Manager 的关闭确认
+message ShutdownAck {
+    bool all_tasks_completed = 1;    // 是否成功完成所有未决任务
+    uint32 sessions_count = 2;       // 退出的会话数量（应为 0，不杀死 Sessions）
+}
+
+// Worker -> Manager 的状态迁移数据（Phase 4 暂不使用，预留扩展点）
+message WorkerStateSnapshot {
+    repeated uint64 pending_requests = 1;  // 待处理的请求 ID 列表
+}

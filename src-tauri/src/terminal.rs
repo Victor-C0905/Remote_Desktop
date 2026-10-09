@@ -1,5 +1,5 @@
 // src-tauri/src/terminal.rs
-// 远程终端 Tauri commands（符合 GNOME Terminal 标准）
+// 远程终端 Tauri commands（符合 Adwaita Terminal 标准）
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -9,7 +9,9 @@ use tokio::sync::{mpsc, Mutex};
 
 use crate::connection::{ConnectionManager, Envelope, Payload};
 
-/// 远程终端会话信息
+/// 终端 Stream 初始连接超时（30秒）
+/// 仅用于 Stream 创建和初始请求/响应，不影响后续数据传输
+const TERMINAL_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteTerminalSession {
     pub session_id: String,
@@ -33,6 +35,7 @@ impl TerminalStreamManager {
     }
 
     /// 获取内部的 Arc（用于克隆）
+    #[allow(dead_code)]
     pub fn inner(&self) -> Arc<Mutex<HashMap<String, mpsc::Sender<Vec<u8>>>>> {
         self.sessions.clone()
     }
@@ -64,13 +67,15 @@ impl Default for TerminalStreamManager {
 
 // ── Tauri Commands ─────────────────────────────────
 
-/// 创建远程终端会话（符合 GNOME Terminal 标准）
+/// 创建远程终端会话（符合 Adwaita Terminal 标准）
 #[tauri::command]
+#[tracing::instrument(skip(app), fields(server_id = %server_id))]
 pub async fn remote_spawn_terminal(
     server_id: String,
     shell: String,
     cols: u16,
     rows: u16,
+    working_directory: Option<String>,
     app: tauri::AppHandle,
 ) -> Result<RemoteTerminalSession, String> {
     let manager = app.state::<ConnectionManager>();
@@ -86,34 +91,46 @@ pub async fn remote_spawn_terminal(
 
     let conn = quic_conn.ok_or("QUIC Connection 不可用")?;
 
-    // 创建持久 Stream（双向隧道）
-    let stream = conn.open_bi().await
+    // 创建持久 Stream（双向隧道，添加超时）
+    let stream = tokio::time::timeout(TERMINAL_CONNECT_TIMEOUT, conn.open_bi())
+        .await
+        .map_err(|_| "创建终端 Stream 超时".to_string())?
         .map_err(|e| format!("创建 Stream 失败: {}", e))?;
 
     let (mut send, mut recv) = stream;
 
-    // 发送 TerminalSpawnRequest
+    // 发送 TerminalSpawnRequest（添加超时）
     let request_id = manager.next_request_id();
     let envelope = Envelope::new(request_id, Payload::TerminalSpawnRequest {
         shell: shell.clone(),
         cols,
         rows,
+        working_directory,
     });
 
     let data = envelope.encode()?;
     let len = (data.len() as u32).to_le_bytes();
     use tokio::io::AsyncWriteExt;
-    send.write_all(&len).await.map_err(|e| format!("发送长度失败: {}", e))?;
-    send.write_all(&data).await.map_err(|e| format!("发送数据失败: {}", e))?;
-    send.flush().await.map_err(|e| format!("flush 失败: {}", e))?;
+    tokio::time::timeout(TERMINAL_CONNECT_TIMEOUT, async {
+        send.write_all(&len).await.map_err(|e| format!("发送长度失败: {}", e))?;
+        send.write_all(&data).await.map_err(|e| format!("发送数据失败: {}", e))?;
+        send.flush().await.map_err(|e| format!("flush 失败: {}", e))?;
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|_| "发送终端创建请求超时".to_string())??;
 
-    // 读取响应
-    use tokio::io::AsyncReadExt;
-    let mut len_buf = [0u8; 4];
-    recv.read_exact(&mut len_buf).await.map_err(|e| format!("读取响应长度失败: {}", e))?;
-    let resp_len = u32::from_le_bytes(len_buf) as usize;
-    let mut resp_data = vec![0u8; resp_len];
-    recv.read_exact(&mut resp_data).await.map_err(|e| format!("读取响应数据失败: {}", e))?;
+    // 读取响应（添加超时）
+    let resp_data = tokio::time::timeout(TERMINAL_CONNECT_TIMEOUT, async {
+        let mut len_buf = [0u8; 4];
+        recv.read_exact(&mut len_buf).await.map_err(|e| format!("读取响应长度失败: {}", e))?;
+        let resp_len = u32::from_le_bytes(len_buf) as usize;
+        let mut resp_data = vec![0u8; resp_len];
+        recv.read_exact(&mut resp_data).await.map_err(|e| format!("读取响应数据失败: {}", e))?;
+        Ok::<Vec<u8>, String>(resp_data)
+    })
+    .await
+    .map_err(|_| "等待终端创建响应超时".to_string())??;
 
     let resp_envelope = Envelope::decode(&resp_data)?;
     let session_id = match resp_envelope.payload {
@@ -221,12 +238,14 @@ pub async fn remote_spawn_terminal(
 
 /// 写入数据到远程终端（使用持久 Stream）
 #[tauri::command]
+#[tracing::instrument(skip(data, app), fields(server_id = %_server_id, session_id = %session_id))]
 pub async fn remote_terminal_write(
     session_id: String,
     data: Vec<u8>,
     _server_id: String,  // 不再需要 server_id，使用持久 Stream
     app: tauri::AppHandle,
 ) -> Result<(), String> {
+    tracing::debug!("[Terminal] 写入远程终端: bytes={}", data.len());
     let terminal_manager = app.state::<Arc<TerminalStreamManager>>();
 
     // 获取输入通道
@@ -242,6 +261,7 @@ pub async fn remote_terminal_write(
 
 /// 关闭远程终端会话
 #[tauri::command]
+#[tracing::instrument(skip(app), fields(session_id = %session_id))]
 pub async fn remote_terminal_close(
     session_id: String,
     app: tauri::AppHandle,
@@ -257,6 +277,7 @@ pub async fn remote_terminal_close(
 
 /// 调整远程终端大小（同步到远程 PTY）
 #[tauri::command]
+#[tracing::instrument(skip(app), fields(server_id = %_server_id, session_id = %session_id))]
 pub async fn remote_terminal_resize(
     session_id: String,
     cols: u16,
@@ -276,13 +297,15 @@ pub async fn remote_terminal_resize(
 
     let conn = quic_conn.ok_or("QUIC Connection 不可用")?;
 
-    // 创建新的 Stream 发送 resize 请求
-    let stream = conn.open_bi().await
+    // 创建新的 Stream 发送 resize 请求（添加超时）
+    let stream = tokio::time::timeout(TERMINAL_CONNECT_TIMEOUT, conn.open_bi())
+        .await
+        .map_err(|_| "创建 resize Stream 超时".to_string())?
         .map_err(|e| format!("创建 Stream 失败: {}", e))?;
 
     let (mut send, mut recv) = stream;
 
-    // 发送 TerminalResizeRequest
+    // 发送 TerminalResizeRequest（添加超时）
     let request_id = manager.next_request_id();
     let envelope = Envelope::new(request_id, Payload::TerminalResizeRequest {
         session_id: session_id.clone(),
@@ -293,21 +316,27 @@ pub async fn remote_terminal_resize(
     let data = envelope.encode()?;
     let len = (data.len() as u32).to_le_bytes();
     use tokio::io::AsyncWriteExt;
-    send.write_all(&len).await.map_err(|e| format!("发送长度失败: {}", e))?;
-    send.write_all(&data).await.map_err(|e| format!("发送数据失败: {}", e))?;
-    send.flush().await.map_err(|e| format!("flush 失败: {}", e))?;
+    tokio::time::timeout(TERMINAL_CONNECT_TIMEOUT, async {
+        send.write_all(&len).await.map_err(|e| format!("发送长度失败: {}", e))?;
+        send.write_all(&data).await.map_err(|e| format!("发送数据失败: {}", e))?;
+        send.flush().await.map_err(|e| format!("flush 失败: {}", e))?;
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|_| "发送 resize 请求超时".to_string())??;
 
-    // 读取响应（忽略响应内容）
-    use tokio::io::AsyncReadExt;
-    let mut len_buf = [0u8; 4];
-    if let Ok(_) = recv.read_exact(&mut len_buf).await {
-        let resp_len = u32::from_le_bytes(len_buf) as usize;
-        if resp_len > 0 && resp_len < 1024 * 1024 {
-            let mut resp_data = vec![0u8; resp_len];
-            let _ = recv.read_exact(&mut resp_data).await;
-            // 忽略响应
+    // 读取响应（添加超时，忽略响应内容）
+    let _ = tokio::time::timeout(TERMINAL_CONNECT_TIMEOUT, async {
+        let mut len_buf = [0u8; 4];
+        if recv.read_exact(&mut len_buf).await.is_ok() {
+            let resp_len = u32::from_le_bytes(len_buf) as usize;
+            if resp_len > 0 && resp_len < 1024 * 1024 {
+                let mut resp_data = vec![0u8; resp_len];
+                let _ = recv.read_exact(&mut resp_data).await;
+            }
         }
-    }
+    })
+    .await;
 
     tracing::debug!("远程终端 resize: session_id={}, {}x{}", session_id, cols, rows);
     Ok(())

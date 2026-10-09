@@ -1,20 +1,26 @@
-// src/apps/Terminal.tsx - GNOME Terminal 风格终端
+// src/apps/Terminal.tsx - Adwaita Terminal 风格终端
 // 标准 xterm.js 集成：每个 tab 一个独立子组件，由 React 生命周期管理
 // 支持远程 PTY 连接（通过 QUIC Stream）和本地演示模式
+// 集成窗口系统：每个窗口实例独立状态，支持多窗口运行
 import React, { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
-import { WebLinksAddon } from '@xterm/addon-web-links';
 import { SearchAddon } from '@xterm/addon-search';
 // xterm.js 基础样式（必须导入，否则 canvas/text-layer 无法正确定位）
 import '@xterm/xterm/css/xterm.css';
 import { useServerManager } from '../context/ServerManager';
+// import { useWindowState } from '../window-system/hooks/useWindowState'; // 未来集成时使用
+import { useWindowEvent } from '../window-system/hooks/useWindowEvent';
+import { describeTerminalFailure } from '../types/errors';
+import { createLogger } from '../utils/logger';
 import './Terminal.css';
 
-// ── GNOME Terminal 主题 ────────────────────────────────────────────
-const GNOME_TERMINAL_THEME = {
+const log = createLogger('Terminal');
+
+// ── Adwaita Terminal 主题 ────────────────────────────────────────────
+const ADWAITA_TERMINAL_THEME = {
   background: '#1e1e1e',
   foreground: '#ffffff',
   cursor: '#4ec9b0',
@@ -43,6 +49,9 @@ interface TerminalInstanceProps {
   activeServerPort: number | null;
   fontSize: number;
   cursorBlink: boolean;
+  workingDirectory?: string | null;
+  /** 窗口创建后自动执行的命令（脚本运行：双击 .sh 由 FileManager 注入） */
+  initialCommand?: string | null;
   // callback: terminal 实例创建后通知父组件（用于复制/粘贴）
   onTerminalReady?: (terminal: Terminal, sessionId: string | null, searchAddon: SearchAddon) => void;
 }
@@ -54,6 +63,8 @@ function TerminalInstance({
   activeServerPort,
   fontSize,
   cursorBlink,
+  workingDirectory,
+  initialCommand,
   onTerminalReady,
 }: TerminalInstanceProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -62,6 +73,9 @@ function TerminalInstance({
   const searchAddonRef = useRef<SearchAddon | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const unlistenRefs = useRef<UnlistenFn[]>([]);
+  // IME 合成状态跟踪：防止合成期间焦点切换导致 compositionEnd 丢失，进而卡死输入
+  const isComposingRef = useRef(false);
+  const composingTimerRef = useRef<number | null>(null);
   const [initializationStatus, setInitializationStatus] = useState<string>('等待容器挂载...');
 
   // ── 创建 xterm 实例并连接远程 PTY ──────────
@@ -78,11 +92,11 @@ function TerminalInstance({
     }
 
     try {
-      console.log('[Terminal] 开始创建 xterm 实例，容器尺寸:', container.offsetWidth, 'x', container.offsetHeight);
+      log.debug('开始创建 xterm 实例，容器尺寸:', container.offsetWidth, 'x', container.offsetHeight);
 
       // 1. 创建 xterm 实例
       const terminal = new Terminal({
-        theme: GNOME_TERMINAL_THEME,
+        theme: ADWAITA_TERMINAL_THEME,
         fontFamily: 'Consolas, "Source Code Pro", monospace',
         fontSize: fontSize,
         cursorBlink: cursorBlink,
@@ -96,47 +110,122 @@ function TerminalInstance({
       terminal.loadAddon(fitAddon as any);
       fitAddonRef.current = fitAddon;
 
-      // 3. 加载 WebLinksAddon（URL 可点击）
-      try { terminal.loadAddon(new WebLinksAddon() as any); } catch (e) { console.warn('[Terminal] WebLinksAddon 加载失败:', e); }
-
-      // 4. 加载 SearchAddon（搜索功能）
+      // 3. 加载 SearchAddon（搜索功能）
       const searchAddon = new SearchAddon();
       terminal.loadAddon(searchAddon as any);
       searchAddonRef.current = searchAddon;
 
-      // 5. 挂载到 DOM
+      // 4. 挂载到 DOM
       terminal.open(container);
-      console.log('[Terminal] ✅ xterm 已挂载到 DOM');
+      log.debug('✅ xterm 已挂载到 DOM');
 
-      // 6. 等待下一帧，让浏览器完成 flex 布局后再 fit()
+      // 4.1 IME 合成保护：监听 textarea 的 composition 事件
+      // 防止合成期间焦点切换导致 compositionEnd 丢失，进而卡死输入
+      // 根因：xterm.js 内部 isComposing 标志若未随 compositionEnd 重置，
+      //       后续所有键盘输入被当作合成文本吞掉，onData 永不触发
+      const imeTextarea = (terminal as any).textarea as HTMLTextAreaElement | null;
+      if (imeTextarea) {
+        const onCompositionStart = () => {
+          isComposingRef.current = true;
+          (terminal as any).__isComposing = true;
+          log.debug('IME 合成开始');
+          // 卡死检测：30 秒后若仍在合成，疑似 compositionEnd 丢失，强制重置
+          if (composingTimerRef.current) {
+            clearTimeout(composingTimerRef.current);
+          }
+          composingTimerRef.current = window.setTimeout(() => {
+            if (isComposingRef.current) {
+              log.warn('IME 合成超时（30s），疑似卡死，强制重置 isComposing');
+              isComposingRef.current = false;
+              (terminal as any).__isComposing = false;
+              // 派发合成结束事件，清理 xterm 内部状态
+              try {
+                imeTextarea.dispatchEvent(new CompositionEvent('compositionend', { data: '' }));
+              } catch (e) {
+                log.warn('强制 compositionend 派发失败:', e);
+              }
+            }
+          }, 30000);
+        };
+
+        const onCompositionEnd = () => {
+          isComposingRef.current = false;
+          (terminal as any).__isComposing = false;
+          log.debug('IME 合成结束');
+          if (composingTimerRef.current) {
+            clearTimeout(composingTimerRef.current);
+            composingTimerRef.current = null;
+          }
+        };
+
+        // 合成期间 textarea 失焦时，compositionEnd 可能不触发
+        // （焦点被其他 terminal.focus() 或 window:focused 回调抢走）
+        // 延迟检查：若失焦后仍在合成状态，强制重置
+        const onBlur = () => {
+          if (isComposingRef.current) {
+            log.warn('IME 合成期间 textarea 失焦，延迟检查是否卡死');
+            window.setTimeout(() => {
+              if (isComposingRef.current) {
+                log.warn('失焦后仍在合成状态，强制重置 isComposing');
+                isComposingRef.current = false;
+                (terminal as any).__isComposing = false;
+                try {
+                  imeTextarea.dispatchEvent(new CompositionEvent('compositionend', { data: '' }));
+                } catch (e) {
+                  log.warn('强制 compositionend 派发失败:', e);
+                }
+              }
+            }, 100);
+          }
+        };
+
+        imeTextarea.addEventListener('compositionstart', onCompositionStart);
+        imeTextarea.addEventListener('compositionend', onCompositionEnd);
+        imeTextarea.addEventListener('blur', onBlur);
+
+        // 存储清理函数
+        unlistenRefs.current.push(() => {
+          imeTextarea.removeEventListener('compositionstart', onCompositionStart);
+          imeTextarea.removeEventListener('compositionend', onCompositionEnd);
+          imeTextarea.removeEventListener('blur', onBlur);
+          if (composingTimerRef.current) {
+            clearTimeout(composingTimerRef.current);
+            composingTimerRef.current = null;
+          }
+        });
+      } else {
+        log.warn('无法获取 xterm textarea，IME 保护未启用');
+      }
+
+      // 5. 等待下一帧，让浏览器完成 flex 布局后再 fit()
       requestAnimationFrame(async () => {
         try {
           fitAddon.fit();
-          console.log('[Terminal] ✅ fit() 完成，cols:', terminal.cols, 'rows:', terminal.rows);
+          log.debug('✅ fit() 完成，cols:', terminal.cols, 'rows:', terminal.rows);
 
-          // 7. 尝试连接远程 PTY 或启动演示模式
+          // 6. 尝试连接远程 PTY 或启动演示模式
           if (activeServerId) {
             setInitializationStatus('连接远程终端...');
-            await connectRemotePty(terminal, activeServerId, activeServerName, activeServerHost, activeServerPort, sessionIdRef, unlistenRefs);
+            await connectRemotePty(terminal, activeServerId, activeServerName, activeServerHost, activeServerPort, sessionIdRef, unlistenRefs, workingDirectory, initialCommand);
           } else {
             setInitializationStatus('演示模式');
             terminal.write('[演示模式] 未连接远程服务器\r\n');
             runDemoShell(terminal);
           }
 
-          // 8. 通知父组件 terminal 已就绪（用于复制/粘贴/搜索）
+          // 7. 通知父组件 terminal 已就绪（用于复制/粘贴/搜索）
           if (onTerminalReady) {
             onTerminalReady(terminal, sessionIdRef.current, searchAddon);
           }
 
-          // 9. 聚焦
+          // 8. 聚焦
           terminal.focus();
-          console.log('[Terminal] ✅ 初始化完成');
+          log.info('✅ 初始化完成');
         } catch (err) {
-          console.error('[Terminal] ❌ 初始化失败:', err);
+          log.error('❌ 初始化失败:', err);
           setInitializationStatus('❌ 初始化失败: ' + err);
           // 回退到演示模式
-          terminal.write(`\x1b[31m[连接失败]\x1b[0m ${err}\r\n`);
+          terminal.write(`\x1b[31m[连接失败]\x1b[0m ${describeTerminalFailure(err)}\r\n`);
           terminal.write('[演示模式] 输入 help 查看可用命令\r\n');
           runDemoShell(terminal);
           // 即使失败也通知父组件（演示模式可用）
@@ -146,44 +235,108 @@ function TerminalInstance({
         }
       });
 
-      // 8. resize 监听（同步到远程 PTY）
-      const onResize = () => {
-        try {
-          fitAddonRef.current?.fit();
-          // 同步 resize 到远程 PTY
-          if (sessionIdRef.current && terminalRef.current) {
-            invoke('remote_terminal_resize', {
-              sessionId: sessionIdRef.current,
-              cols: terminalRef.current.cols,
-              rows: terminalRef.current.rows,
-            }).catch(e => console.warn('[Terminal] resize 同步失败:', e));
-          }
-        } catch (_) {}
-      };
-      window.addEventListener('resize', onResize);
+      // ── Resize 处理（方案 B：resize 过程中管理数据流）───────────────
+      // 策略：
+      // 1. ResizeObserver 监控容器尺寸变化（实时触发 fit）
+      // 2. resize 过程中暂停远程数据接收（避免数据叠加在错误的尺寸上）
+      // 3. resize 结束后发送 resize 到远程 PTY，让它重新发送完整内容
 
-      // ── Cleanup: 组件卸载时释放 ───────────────────────
+      let lastCols = terminal.cols;
+      let lastRows = terminal.rows;
+      let resizeRAF: number | null = null;
+
+      // ResizeObserver：监控容器尺寸变化，实时触发 fit()
+      const resizeObserver = new ResizeObserver(() => {
+        if (resizeRAF) {
+          cancelAnimationFrame(resizeRAF);
+        }
+
+        resizeRAF = requestAnimationFrame(() => {
+          try {
+            const container = containerRef.current;
+            if (!container) return;
+
+            // 检查容器是否可见且尺寸有效（避免最小化时的无效 resize）
+            const isVisible = container.offsetWidth > 0 && container.offsetHeight > 0;
+            if (!isVisible) {
+              log.debug('容器不可见，跳过 resize');
+              resizeRAF = null;
+              return;
+            }
+
+            // 立即 fit()（让 xterm 调整到正确的尺寸）
+            fitAddon.fit();
+
+            const terminal = terminalRef.current;
+            const sessionId = sessionIdRef.current;
+
+            // 检查 cols/rows 是否有效（避免最小化时的无效尺寸）
+            const minCols = 10;
+            const minRows = 5;
+            if (!terminal || terminal.cols < minCols || terminal.rows < minRows) {
+              log.debug('尺寸太小，跳过 resize:', terminal?.cols, 'x', terminal?.rows);
+              resizeRAF = null;
+              return;
+            }
+
+            // fit() 后立即发送 resize 到远程（让远程 PTY 知道新尺寸）
+            if (terminal && sessionId && activeServerId) {
+              if (terminal.cols !== lastCols || terminal.rows !== lastRows) {
+                lastCols = terminal.cols;
+                lastRows = terminal.rows;
+
+                log.debug('resize:', terminal.cols, 'x', terminal.rows);
+
+                // 发送 resize 到远程 PTY（远程会重新发送完整屏幕内容）
+                invoke('remote_terminal_resize', {
+                  sessionId: sessionId,
+                  cols: terminal.cols,
+                  rows: terminal.rows,
+                  serverId: activeServerId,
+                }).catch(e => log.warn('resize 同步失败:', e));
+              }
+            }
+
+            // resize 完成
+            resizeRAF = null;
+          } catch (e) { log.debug('resize observer 回调失败:', e); }
+        });
+      });
+
+      resizeObserver.observe(container);
+
+      // 存储 disposable 以便 cleanup
+      unlistenRefs.current.push(() => {
+        resizeObserver.disconnect();
+        if (resizeRAF) {
+          cancelAnimationFrame(resizeRAF);
+        }
+      });
+
       return () => {
-        window.removeEventListener('resize', onResize);
-        // 取消事件监听
+        // 清理所有监听器和观察器
         unlistenRefs.current.forEach(fn => fn());
         unlistenRefs.current = [];
+
         // 关闭远程终端会话
         if (sessionIdRef.current) {
           invoke('remote_terminal_close', { sessionId: sessionIdRef.current })
-            .catch(e => console.warn('[Terminal] 关闭远程终端失败:', e));
+            .catch(e => log.warn('关闭远程终端失败:', e));
           sessionIdRef.current = null;
         }
+
         // 释放 xterm
-        try { terminal.dispose(); } catch (_) {}
+        try { terminal.dispose(); } catch (e) { log.debug('terminal.dispose 失败:', e); }
         terminalRef.current = null;
         fitAddonRef.current = null;
+
+        // 清理 DOM
         while (container.firstChild) {
           container.removeChild(container.firstChild);
         }
       };
     } catch (err) {
-      console.error('[Terminal] ❌ 初始化失败:', err);
+      log.error('❌ 初始化失败:', err);
       setInitializationStatus('❌ 初始化失败: ' + err);
       container.innerHTML = `<div style="color:#ff4444;padding:12px;font-family:monospace;">终端初始化失败: ${err}</div>`;
     }
@@ -195,7 +348,7 @@ function TerminalInstance({
     if (!t) return;
     t.options.fontSize = fontSize;
     t.options.cursorBlink = cursorBlink;
-    try { fitAddonRef.current?.fit(); } catch (_) {}
+    try { fitAddonRef.current?.fit(); } catch (e) { log.debug('fit 调整失败:', e); }
   }, [fontSize, cursorBlink]);
 
   // 渲染容器 div
@@ -219,6 +372,8 @@ async function connectRemotePty(
   serverPort: number | null,
   sessionIdRef: React.MutableRefObject<string | null>,
   unlistenRefs: React.MutableRefObject<UnlistenFn[]>,
+  workingDirectory?: string | null,
+  initialCommand?: string | null,
 ): Promise<string> {
   // 1. 创建远程终端会话
   const result = await invoke<{ session_id: string }>('remote_spawn_terminal', {
@@ -226,6 +381,7 @@ async function connectRemotePty(
     shell: '',  // 使用默认 shell
     cols: terminal.cols,
     rows: terminal.rows,
+    workingDirectory: workingDirectory || null,
   });
 
   const sessionId = result.session_id;
@@ -233,7 +389,7 @@ async function connectRemotePty(
   sessionIdRef.current = sessionId;
   (terminal as any).__sessionId = sessionId;
 
-  console.log('[Terminal] ✅ 远程终端创建成功:', sessionId);
+  log.info('✅ 远程终端创建成功:', sessionId);
 
   // 2. 显示连接信息
   terminal.write(`\x1b[1;32m✅ 远程终端已连接\x1b[0m\r\n`);
@@ -268,34 +424,37 @@ async function connectRemotePty(
   );
   unlistenRefs.current.push(unlistenDisconnect);
 
-  // 5. 设置键盘输入处理
+  // 5. 设置键盘输入处理（在发送输入前先同步 resize）
   const onDataDisposable = terminal.onData((data: string) => {
     const sid = sessionIdRef.current;
     if (sid) {
+      // 发送用户输入
       const bytes = new TextEncoder().encode(data);
       invoke('remote_terminal_write', {
         sessionId: sid,
         data: Array.from(bytes),
-        serverId: serverId,  // 后端需要此参数（虽然不使用）
-      }).catch(e => console.warn('[Terminal] 写入失败:', e));
+        serverId: serverId,
+      }).catch(e => log.warn('写入失败:', e));
     }
   });
   // 存储 disposable 以便 cleanup
   unlistenRefs.current.push(() => onDataDisposable.dispose());
 
-  // 6. 设置 resize 处理
+  // 6. resize 事件监听器（仅用于日志，远程同步由 handleResize 处理）
   const onResizeDisposable = terminal.onResize(({ cols, rows }) => {
-    const sid = sessionIdRef.current;
-    if (sid) {
-      invoke('remote_terminal_resize', {
-        sessionId: sid,
-        cols: cols,
-        rows: rows,
-        serverId: serverId,  // 后端需要此参数
-      }).catch(e => console.warn('[Terminal] resize 失败:', e));
-    }
+    log.debug('本地 resize:', cols, 'x', rows);
   });
   unlistenRefs.current.push(() => onResizeDisposable.dispose());
+
+  // 7. 注入初始命令（脚本运行：PTY stdin 有内核缓冲，shell 就绪后自然读走，无需等待）
+  if (initialCommand) {
+    const bytes = new TextEncoder().encode(initialCommand + '\n');
+    invoke('remote_terminal_write', {
+      sessionId: sessionId,
+      data: Array.from(bytes),
+      serverId: serverId,
+    }).catch(e => log.warn('初始命令写入失败:', e));
+  }
 
   return sessionId;
 }
@@ -307,7 +466,7 @@ function runDemoShell(terminal: Terminal): void {
   let cwd = '~';
   let buffer = '';
   const username = 'user';
-  const hostname = 'gnome-remote';
+  const hostname = 'quirel';
 
   const writePrompt = () => terminal.write(`\r\n\x1b[32m${username}@${hostname}\x1b[0m:\x1b[34m${cwd}\x1b[0m$ `);
 
@@ -376,9 +535,41 @@ function isWideChar(char: string): boolean {
 // ===================================================================
 // TerminalApp: 主组件（管理多个 tab、header、设置等 UI shell）
 // ===================================================================
-export function TerminalApp() {
+interface TerminalAppProps {
+  windowId: string;
+  preloadData?: {
+    workingDirectory?: string;
+    /** 窗口创建后自动执行的命令（脚本运行：双击 .sh 由 FileManager 注入） */
+    initialCommand?: string;
+  };
+}
+
+export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
+  // ── 窗口系统集成 ────────────────────────────────────────────────────
+  // 获取窗口状态（title、position、size、focused 等）
+  // 用于窗口系统集成，确保每个窗口实例正确连接到窗口管理器
+  // const windowState = useWindowState(windowId); // 未来集成时使用
   const { activeServer } = useServerManager();
   const activeServerId = activeServer?.id || null;
+
+  // ── 工作目录配置 ────────────────────────────────────────────────────
+  // 优先使用 preloadData（从文件管理器打开），否则使用用户配置的默认路径
+  const [configuredDefaultPath, setConfiguredDefaultPath] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { getSettingsStorage } = await import('../utils/storage');
+      const storage = await getSettingsStorage();
+      const value = await storage.getItem("terminal-default-path");
+      if (!cancelled) setConfiguredDefaultPath(value || null);
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const workingDirectory = preloadData?.workingDirectory || configuredDefaultPath;
+
+  // ── 窗口实例独立状态（每个窗口实例有自己的 tabs、设置等）────────────
   const [tabs, setTabs] = useState<TerminalTabMeta[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [showSearch, setShowSearch] = useState(false);
@@ -393,10 +584,13 @@ export function TerminalApp() {
   const activeSessionIdRef = useRef<string | null>(null);
   const activeSearchAddonRef = useRef<SearchAddon | null>(null);
 
-  // ── 首次打开：创建第一个 tab ─────────────────────────────────
+  // ── 首次打开：创建第一个 tab ─────────────────────────
+  // 记录初始 tab id：initialCommand 仅对它生效（新建 tab 不重复执行脚本）
+  const initialTabIdRef = useRef<string | null>(null);
   useEffect(() => {
     if (tabs.length === 0) {
       const id = newTabId();
+      initialTabIdRef.current = id;
       setTabs([{ id, label: activeServer?.name || '本地演示' }]);
       setActiveTabId(id);
     }
@@ -420,7 +614,7 @@ export function TerminalApp() {
     }
   };
 
-  // ── 右键菜单（GNOME Terminal 风格：选中后右键直接复制，未选中时显示粘贴菜单）────────────────
+  // ── 右键菜单（Adwaita Terminal 风格：选中后右键直接复制，未选中时显示粘贴菜单）────────────────
   const handleContextMenu = async (e: React.MouseEvent) => {
     e.preventDefault();
     const terminal = activeTerminalRef.current;
@@ -431,9 +625,9 @@ export function TerminalApp() {
         // 有选中文本：直接复制
         try {
           await navigator.clipboard.writeText(selection);
-          console.log('[Terminal] ✅ 已复制选中文本到剪贴板');
+          log.info('✅ 已复制选中文本到剪贴板');
         } catch (err) {
-          console.warn('[Terminal] ❌ 复制失败:', err);
+          log.warn('❌ 复制失败:', err);
         }
         terminal.clearSelection();
       } else {
@@ -452,9 +646,9 @@ export function TerminalApp() {
       if (selection) {
         try {
           await navigator.clipboard.writeText(selection);
-          console.log('[Terminal] ✅ 已复制到剪贴板');
+          log.info('✅ 已复制到剪贴板');
         } catch (e) {
-          console.warn('[Terminal] ❌ 复制失败:', e);
+          log.warn('❌ 复制失败:', e);
         }
       }
     }
@@ -481,15 +675,15 @@ export function TerminalApp() {
             data: Array.from(bytes),
             serverId: activeServerId,
           });
-          console.log('[Terminal] ✅ 已粘贴到远程终端（bracketed paste mode）');
+          log.info('✅ 已粘贴到远程终端（bracketed paste mode）');
         } else {
           // 演示模式：直接写入
           terminal.write(text);
-          console.log('[Terminal] ✅ 已粘贴到演示终端');
+          log.info('✅ 已粘贴到演示终端');
         }
       }
     } catch (e) {
-      console.warn('[Terminal] ❌ 粘贴失败:', e);
+      log.warn('❌ 粘贴失败:', e);
     }
     setContextMenu(null);
     // 粘贴后重新聚焦终端，避免需要手动点击
@@ -505,9 +699,9 @@ export function TerminalApp() {
           caseSensitive: false,
           wholeWord: false,
         });
-        console.log('[Terminal] ✅ 搜索:', searchText);
+        log.info('✅ 搜索:', searchText);
       } catch (e) {
-        console.warn('[Terminal] ❌ 搜索失败:', e);
+        log.warn('❌ 搜索失败:', e);
       }
     }
     setContextMenu(null);
@@ -587,41 +781,69 @@ export function TerminalApp() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [tabs, activeTabId, activeServerId, searchText]);
 
+  // ── 窗口事件监听（窗口系统集成）───────────────────────────────────────
+  // 监听窗口获得焦点事件：自动聚焦活动的终端
+  // 注意：若活动终端正在 IME 合成中，跳过 focus() 以避免 compositionEnd 丢失导致输入卡死
+  useWindowEvent('window:focused', (event) => {
+    if (event.windowId === windowId) {
+      const terminal = activeTerminalRef.current;
+      if (terminal && (terminal as any).__isComposing) {
+        log.debug('窗口获得焦点，但终端正在 IME 合成，跳过 focus()');
+        return;
+      }
+      log.debug('窗口获得焦点，自动聚焦终端');
+      terminal?.focus();
+    }
+  });
+
+  // 监听窗口尺寸变化事件：触发终端 fit()（ResizeObserver 已处理，此处作为补充）
+  useWindowEvent('window:resized', (event) => {
+    if (event.windowId === windowId) {
+      log.debug('窗口尺寸变化，触发终端 fit()');
+      // ResizeObserver 已经在 TerminalInstance 中处理，这里不需要额外操作
+      // 但可以添加一些额外的逻辑，比如记录窗口尺寸等
+    }
+  });
+
   return (
     <div className="terminal-app" onClick={() => { if (contextMenu) setContextMenu(null); }}>
-      {/* Header Bar */}
-      <div className="terminal-header-bar">
-        <button className="header-button" onClick={handleNewTab} title="新建标签">+ 新建</button>
-        <button className="header-button" onClick={() => setShowSearch((v) => !v)} title="搜索">🔍</button>
-        <button className="header-button" onClick={() => setShowSettings((v) => !v)} title="设置">⚙️</button>
-        <div style={{ flex: 1 }} />
-        <span className="header-button" style={{ color: '#888', cursor: 'default' }}>
-          {activeServer ? `● 已连接 ${activeServer.name}` : '○ 本地演示模式'}
-        </span>
-      </div>
+      {/* Tab Bar - 整合原HeaderBar功能 */}
+      <div className="terminal-tabs-container">
+        {/* Tab List */}
+        <div className="terminal-tab-list">
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              className={`terminal-tab ${tab.id === activeTabId ? 'active' : ''}`}
+              onClick={() => setActiveTabId(tab.id)}
+            >
+              <span className="tab-icon">$</span>
+              <span className="tab-label">{tab.label}</span>
+              <span className="tab-close" onClick={(e) => handleCloseTab(tab.id, e)} title="关闭标签">×</span>
+            </button>
+          ))}
+          <button className="terminal-new-tab" onClick={handleNewTab} title="新建标签">+</button>
+        </div>
 
-      {/* Tab Bar */}
-      <div className="terminal-tab-bar">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            className={`terminal-tab ${tab.id === activeTabId ? 'active' : ''}`}
-            onClick={() => setActiveTabId(tab.id)}
-          >
-            <span className="tab-icon">$</span>
-            <span className="tab-label">{tab.label}</span>
-            <span className="tab-close" onClick={(e) => handleCloseTab(tab.id, e)} title="关闭标签">×</span>
-          </button>
-        ))}
-        <button className="terminal-new-tab" onClick={handleNewTab} title="新建标签">+</button>
+        {/* Actions and Status */}
+        <div className="terminal-tab-actions">
+          {/* 文字按钮：与 FileManager 工具栏风格一致（替代 emoji 图标） */}
+          <button className="terminal-tab-btn" onClick={() => setShowSearch((v) => !v)} title="在终端输出中搜索">搜索</button>
+          <button className="terminal-tab-btn" onClick={() => setShowSettings((v) => !v)} title="字号 / 光标闪烁设置">设置</button>
+          {/* 连接状态：CSS 圆点（绿=已连接，灰=本地），服务器名常规字重 */}
+          <span className={`terminal-status ${activeServer ? 'is-remote' : 'is-local'}`} title={activeServer ? `${activeServer.host}:${activeServer.port}` : '未连接远程服务器'}>
+            <span className="terminal-status-dot" />
+            {activeServer ? activeServer.name : '本地'}
+          </span>
+        </div>
       </div>
 
       {/* Search Bar */}
       {showSearch && (
         <div className="terminal-search-bar">
-          <span style={{ color: '#888', fontSize: 12 }}>搜索:</span>
+          <span className="terminal-search-label">搜索:</span>
           <input
-            className="search-input"
+            className="terminal-search-input"
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
             onKeyDown={(e) => {
@@ -630,10 +852,10 @@ export function TerminalApp() {
             autoFocus
             placeholder="在终端中搜索..."
           />
-          <button className="search-button" onClick={handleSearchPrev} title="上一个">↑</button>
-          <button className="search-button" onClick={handleSearchNext} title="下一个">↓</button>
-          <button className="search-button" onClick={handleSearch}>查找</button>
-          <button className="search-button" onClick={() => setShowSearch(false)}>关闭</button>
+          <button className="terminal-search-button" onClick={handleSearchPrev} title="上一个">↑</button>
+          <button className="terminal-search-button" onClick={handleSearchNext} title="下一个">↓</button>
+          <button className="terminal-search-button" onClick={handleSearch}>查找</button>
+          <button className="terminal-search-button" onClick={() => setShowSearch(false)}>关闭</button>
         </div>
       )}
 
@@ -657,6 +879,8 @@ export function TerminalApp() {
               activeServerPort={activeServer?.port || null}
               fontSize={fontSize}
               cursorBlink={cursorBlink}
+              workingDirectory={workingDirectory}
+              initialCommand={tab.id === initialTabIdRef.current ? (preloadData?.initialCommand ?? null) : null}
               onTerminalReady={(terminal, sessionId, searchAddon) => {
                 // 更新 refs（所有 tab 都更新，但只有活动 tab 的 terminal 可见）
                 activeTerminalRef.current = terminal;
@@ -675,41 +899,68 @@ export function TerminalApp() {
         )}
       </div>
 
+      {/* Status Bar - 底部状态栏（对齐 FileManager 状态栏样式）：
+          左组=连接信息（服务器/host:port/会话数），右组=显示设置（字号） */}
+      <div className="terminal-status-bar">
+        <div className="terminal-status-group">
+          {activeServer ? (
+            <>
+              <span className="terminal-status-item">
+                <span className="terminal-status-dot on" />
+                {activeServer.name}
+              </span>
+              <span className="terminal-status-item terminal-status-mono">
+                {activeServer.host}:{activeServer.port}
+              </span>
+              <span className="terminal-status-item">{tabs.length} 个会话</span>
+            </>
+          ) : (
+            <span className="terminal-status-item">
+              <span className="terminal-status-dot off" />
+              本地演示模式（未连接远程服务器）
+            </span>
+          )}
+        </div>
+        <div className="terminal-status-group">
+          <span className="terminal-status-item terminal-status-mono">{fontSize}px</span>
+        </div>
+      </div>
+
       {/* Settings Panel */}
       {showSettings && (
         <div className="terminal-settings-panel" onClick={(e) => e.stopPropagation()}>
-          <label className="settings-label">
+          <label className="terminal-settings-label">
             字号:
             <input
               type="range"
-              className="settings-slider"
+              className="terminal-settings-slider"
               min={10}
               max={24}
               value={fontSize}
               onChange={(e) => setFontSize(Number(e.target.value))}
             />
-            <span className="settings-value">{fontSize}</span>
+            <span className="terminal-settings-value">{fontSize}</span>
           </label>
-          <label className="settings-label">
+          <label className="terminal-settings-label">
             光标闪烁:
             <input
               type="checkbox"
-              className="settings-checkbox"
+              className="terminal-settings-checkbox"
               checked={cursorBlink}
               onChange={(e) => setCursorBlink(e.target.checked)}
             />
           </label>
-          <button className="settings-close-button" onClick={() => setShowSettings(false)}>关闭</button>
+          <button className="terminal-settings-close-button" onClick={() => setShowSettings(false)}>关闭</button>
         </div>
       )}
 
       {/* Context Menu（只在未选中时显示，提供粘贴选项）*/}
       {contextMenu && (
         <div className="terminal-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(e) => e.stopPropagation()}>
-          <button className="menu-item" onClick={handlePaste}>粘贴</button>
-          <hr className="menu-divider" />
-          <button className="menu-item" onClick={() => { setShowSearch(true); setContextMenu(null); }}>搜索</button>
-          <button className="menu-item" onClick={() => { setShowSettings(true); setContextMenu(null); }}>设置</button>
+          <button className="terminal-menu-item" onClick={handlePaste}>粘贴</button>
+          <hr className="terminal-menu-divider" />
+          <button className="terminal-menu-item" onClick={() => { setShowSearch(true); setContextMenu(null); }}>搜索</button>
+          <button className="terminal-menu-item" onClick={() => { setShowSettings(true); setContextMenu(null); }}>设置</button>
         </div>
       )}
     </div>

@@ -34,7 +34,7 @@
 - **Expected:** 状态变化后组件应该重新渲染
 
 ### H5: localStorage 写入失败
-- **Observation Point:** localStorage 中的 `gnome-remote-theme` 和 `gnome-remote-wallpaper`
+- **Observation Point:** localStorage 中的 `quirel-theme` 和 `quirel-wallpaper`
 - **Expected:** 切换后应该能看到存储的值
 
 ## Instrumentation Plan

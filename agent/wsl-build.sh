@@ -17,7 +17,7 @@ rustc --version
 echo ""
 
 # 进入项目目录
-cd /mnt/e/MyWork/gnome-remote/agent
+cd /mnt/e/MyWork/quirel/agent
 
 # 删除旧的 Cargo.lock（如果存在）
 if [ -f "Cargo.lock" ]; then

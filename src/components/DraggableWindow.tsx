@@ -3,15 +3,18 @@ import { useState, useRef, useEffect, useCallback } from "react";
 interface DraggableWindowProps {
   title: string;
   isActive: boolean;
+  isMinimized?: boolean; // 新增:最小化状态
   onClose: () => void;
   onMinimize: () => void;
   onFocus: () => void;
+  onPositionChange?: (position: { x: number; y: number }) => void; // 新增:位置变化回调
+  onSizeChange?: (size: { width: number; height: number }) => void; // 新增:大小变化回调
   children: React.ReactNode;
   initialPosition?: { x: number; y: number };
   initialSize?: { width: number; height: number };
   minWidth?: number;
   minHeight?: number;
-  zIndex?: number; // 窗口层级，由父组件根据激活顺序动态分配
+  zIndex?: number; // 窗口层级,由父组件根据激活顺序动态分配
 }
 
 /**
@@ -21,15 +24,18 @@ interface DraggableWindowProps {
 export function DraggableWindow({
   title,
   isActive,
+  isMinimized = false,
   onClose,
   onMinimize,
   onFocus,
+  onPositionChange,
+  onSizeChange,
   children,
   initialPosition = { x: 50, y: 50 },
   initialSize = { width: 800, height: 600 },
   minWidth = 400,
   minHeight = 300,
-  zIndex = 10, // 默认 z-index，低于 top-bar(100) 和 dock(50)
+  zIndex = 10, // 默认 z-index,低于 top-bar(100) 和 dock(50)
 }: DraggableWindowProps) {
   const [position, setPosition] = useState(initialPosition);
   const [size, setSize] = useState(initialSize);
@@ -41,9 +47,11 @@ export function DraggableWindow({
   const windowRef = useRef<HTMLDivElement>(null);
   const dragStartPos = useRef({ x: 0, y: 0 });
   const resizeStartPos = useRef({ x: 0, y: 0, width: 0, height: 0, posX: 0, posY: 0 }); // 添加 posX 和 posY
-  
+
   // 使用 ref 存储拖拽时的临时位置，避免频繁触发 React 重渲染
   const dragPositionRef = useRef({ x: 0, y: 0 });
+  // 使用 ref 存储调整大小时的临时位置和大小
+  const resizeDataRef = useRef({ x: 0, y: 0, width: 0, height: 0 });
   // requestAnimationFrame ID，用于取消动画帧
   const rafIdRef = useRef<number | null>(null);
 
@@ -55,21 +63,34 @@ export function DraggableWindow({
     return () => clearTimeout(timer);
   }, []);
 
+  // 当窗口从最小化恢复时,同步 Window 对象保存的位置和大小
+  // 保存之前的最小化状态,用于检测恢复
+  const prevMinimizedRef = useRef(isMinimized);
+  useEffect(() => {
+    // 检测从最小化恢复(从 true 变为 false)
+    if (prevMinimizedRef.current && !isMinimized) {
+      // 恢复时同步 Window 对象的位置和大小
+      setPosition(initialPosition);
+      setSize(initialSize);
+    }
+    prevMinimizedRef.current = isMinimized;
+  }, [isMinimized, initialPosition, initialSize]);
+
   // 拖拽开始
   const handleDragStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation(); // 阻止事件传播，防止触发外部窗口移动
     setIsDragging(true);
-    
-    // 点击 titlebar 时，触发窗口置顶（GNOME 标准：点击窗口 → raise + focus）
+
+    // 点击 titlebar 时，触发窗口置顶（Adwaita 标准：点击窗口 → raise + focus）
     onFocus();
-    
+
     // 记录拖拽起始位置
     dragStartPos.current = {
       x: e.clientX - position.x,
       y: e.clientY - position.y,
     };
-    
+
     // 初始化临时位置
     dragPositionRef.current = position;
   }, [position, onFocus]);
@@ -82,14 +103,18 @@ export function DraggableWindow({
       const newX = e.clientX - dragStartPos.current.x;
       const newY = e.clientY - dragStartPos.current.y;
 
-      // 放宽边界限制，允许窗口在更大范围内移动
-      // 窗口可以移动到屏幕边缘，但保留一些可见区域
-      const maxX = window.innerWidth - 100; // 保留至少 100px 可见
-      const maxY = window.innerHeight - 100; // 保留至少 100px 可见
+      // 获取父容器尺寸，限制窗口在父容器内
+      const parentEl = windowRef.current?.parentElement;
+      const parentWidth = parentEl?.clientWidth || window.innerWidth;
+      const parentHeight = parentEl?.clientHeight || window.innerHeight;
+
+      // 窗口必须完全在父容器内可见
+      const maxX = parentWidth - size.width;
+      const maxY = parentHeight - size.height;
       
-      // 最小边界：窗口不能完全移出屏幕顶部和左侧
-      const minX = -size.width + 100; // 保留至少 100px 可见
-      const minY = -size.height + 100; // 保留至少 100px 可见
+      // 最小边界：窗口不能移出父容器
+      const minX = 0;
+      const minY = 0;
 
       const boundedX = Math.max(minX, Math.min(newX, maxX));
       const boundedY = Math.max(minY, Math.min(newY, maxY));
@@ -118,9 +143,14 @@ export function DraggableWindow({
         rafIdRef.current = null;
       }
 
-      // 拖拽结束时，更新 state（触发一次重渲染）
+      // 拖拽结束时,更新 state(触发一次重渲染)
       setPosition(dragPositionRef.current);
       setIsDragging(false);
+
+      // 同步位置到 Window 对象
+      if (onPositionChange) {
+        onPositionChange(dragPositionRef.current);
+      }
     };
 
     // 使用 passive 事件监听器，提升性能
@@ -165,34 +195,54 @@ export function DraggableWindow({
 
       let newWidth = resizeStartPos.current.width;
       let newHeight = resizeStartPos.current.height;
-      let newX = resizeStartPos.current.posX; // 使用 resize 开始时的位置
+      let newX = resizeStartPos.current.posX;
       let newY = resizeStartPos.current.posY;
 
+      // 获取父容器尺寸，限制窗口在父容器内（暂未使用）
+      // const parentEl = windowRef.current?.parentElement;
+      // const parentWidth = parentEl?.clientWidth || window.innerWidth;
+      // const parentHeight = parentEl?.clientHeight || window.innerHeight;
+
       // 根据调整方向计算新尺寸和位置
+      // 右侧拖拽：无最大宽度限制，仅保留最小宽度
       if (resizeDirection.includes("e")) {
         newWidth = Math.max(minWidth, resizeStartPos.current.width + deltaX);
       }
       if (resizeDirection.includes("w")) {
         const widthDelta = Math.min(deltaX, resizeStartPos.current.width - minWidth);
         newWidth = resizeStartPos.current.width - widthDelta;
-        newX = resizeStartPos.current.posX + widthDelta; // 使用 resize 开始时的位置
+        const newXCandidate = resizeStartPos.current.posX + widthDelta;
+        newX = Math.max(0, newXCandidate);
       }
+      // 下方拖拽：无最大高度限制，仅保留最小高度
       if (resizeDirection.includes("s")) {
         newHeight = Math.max(minHeight, resizeStartPos.current.height + deltaY);
       }
       if (resizeDirection.includes("n")) {
         const heightDelta = Math.min(deltaY, resizeStartPos.current.height - minHeight);
         newHeight = resizeStartPos.current.height - heightDelta;
-        newY = resizeStartPos.current.posY + heightDelta; // 使用 resize 开始时的位置
+        const newYCandidate = resizeStartPos.current.posY + heightDelta;
+        newY = Math.max(0, newYCandidate);
       }
 
       setSize({ width: newWidth, height: newHeight });
       setPosition({ x: newX, y: newY });
+
+      // 存储到 ref,供 handleMouseUp 使用
+      resizeDataRef.current = { x: newX, y: newY, width: newWidth, height: newHeight };
     };
 
     const handleMouseUp = () => {
       setIsResizing(false);
       setResizeDirection(null);
+
+      // 同步位置和大小到 Window 对象(使用 ref 中的最终值)
+      if (onPositionChange) {
+        onPositionChange({ x: resizeDataRef.current.x, y: resizeDataRef.current.y });
+      }
+      if (onSizeChange) {
+        onSizeChange({ width: resizeDataRef.current.width, height: resizeDataRef.current.height });
+      }
     };
 
     document.addEventListener("mousemove", handleMouseMove);
@@ -215,6 +265,7 @@ export function DraggableWindow({
         width: size.width,
         height: size.height,
         zIndex: zIndex, // 使用动态 z-index，确保活动窗口在最上层
+        display: isMinimized ? "none" : "block", // 最小化时隐藏,但保持 DOM 结构
         cursor: isDragging ? "move" : "default",
         // 使用 transform 代替 left/top，性能更好（GPU 加速）
         // 同时包含 translate 和 scale，避免 CSS 动画冲突
@@ -244,7 +295,7 @@ export function DraggableWindow({
         <div className="awt-spacer" />
         <span className="awt-title">{title}</span>
         <div className="awt-btns">
-          {/* GNOME 标准：黄绿红顺序（最小化、全屏、关闭） */}
+          {/* Adwaita 标准：黄绿红顺序（最小化、全屏、关闭） */}
           <button
             className="awt-btn minimize"
             onMouseDown={(e) => e.stopPropagation()}
@@ -279,7 +330,7 @@ export function DraggableWindow({
       <div
         className="app-window-content"
         onMouseDown={() => {
-          // GNOME 标准：点击内容区域 → 激活窗口
+          // Adwaita 标准：点击内容区域 → 激活窗口
           // 使用 requestAnimationFrame 延迟状态更新，确保事件处理完成
           requestAnimationFrame(() => {
             onFocus();
@@ -369,10 +420,11 @@ export function DraggableWindow({
         style={{
           position: "absolute",
           right: 0,
-          top: 48,
+          top: 0, // 在 HeaderBar 上方，避免被 HeaderBar 的 onMouseDown 覆盖
           width: 16,
           height: 16,
           cursor: "ne-resize",
+          zIndex: 1, // 确保 resize handle 在 HeaderBar 上方
         }}
         onMouseDown={(e) => handleResizeStart(e, "ne")}
       />

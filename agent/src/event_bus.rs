@@ -1,8 +1,6 @@
 // agent/src/event_bus.rs
 
-use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::broadcast;
 use serde_json::Value;
 
 /// 事件数据
@@ -50,16 +48,6 @@ impl EventBus {
     /// 订阅事件（返回接收器）
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.broadcaster.subscribe()
-    }
-
-    /// 检查是否有订阅者（通过广播通道的 receiver_count）
-    pub fn has_subscribers(&self) -> bool {
-        self.broadcaster.receiver_count() > 0
-    }
-
-    /// 获取订阅者数量
-    pub fn subscriber_count(&self) -> usize {
-        self.broadcaster.receiver_count()
     }
 }
 

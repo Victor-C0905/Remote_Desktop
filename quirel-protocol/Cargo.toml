@@ -1,0 +1,12 @@
+[package]
+name = "quirel-protocol"
+version = "0.1.0"
+edition = "2021"
+description = "Quirel 客户端↔Agent 线上协议的单一真相源（JSON over QUIC stream）"
+
+# 本 crate 是协议规范本体：
+# - 只依赖 serde/serde_json，禁止引入 tokio/quinn 等运行时依赖
+# - 任何字段变更都是线上破坏性变更，必须走版本协商（未来）
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

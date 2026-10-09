@@ -21,8 +21,8 @@ pub fn ensure_certificate(cfg: &AgentConfig) -> Result<(Vec<CertificateDer<'stat
 
     let mut params = CertificateParams::default();
     params.distinguished_name = DistinguishedName::new();
-    params.distinguished_name.push(rcgen::DnType::CommonName, "GNOME Remote Agent");
-    params.distinguished_name.push(rcgen::DnType::OrganizationName, "GNOME Remote");
+    params.distinguished_name.push(rcgen::DnType::CommonName, "Quireld");
+    params.distinguished_name.push(rcgen::DnType::OrganizationName, "Quirel");
     params.alg = &PKCS_ECDSA_P256_SHA256;
 
     let key_pair = KeyPair::generate(&PKCS_ECDSA_P256_SHA256)?;

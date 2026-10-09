@@ -2,7 +2,7 @@
 
 use crate::event_bus::EventBus;
 use crate::protocol::MetricsSnapshot;
-use sysinfo::{System, Disks, Networks, CpuRefreshKind};
+use sysinfo::{System, Disks, CpuRefreshKind};
 use tokio::time::{sleep, Duration};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -95,7 +95,8 @@ impl MetricsCollector {
 
         // 直接读取 /proc/net/dev 获取网络数据（兼容 WSL 镜像网络模式）
         let (network_rx, network_tx) = Self::get_network_stats();
-        tracing::info!("网络总计: 接收 {} bytes, 发送 {} bytes", network_rx, network_tx);
+        // 网络总计使用 TRACE 级别，避免在 DEBUG 模式下频繁输出
+        tracing::trace!("网络总计: 接收 {} bytes, 发送 {} bytes", network_rx, network_tx);
 
         // 计算真正被进程使用的内存（不包括 buffer/cache）
         // 与 free 命令的 "used" 一致：total - free - buffers - cache
@@ -146,7 +147,8 @@ impl MetricsCollector {
                         if interface != "lo" {
                             total_rx += rx_bytes;
                             total_tx += tx_bytes;
-                            tracing::debug!(
+                            // 网络接口详情使用 TRACE 级别，避免在 DEBUG 模式下输出过多日志
+                            tracing::trace!(
                                 "网络接口 {}: 接收 {} bytes, 发送 {} bytes",
                                 interface,
                                 rx_bytes,

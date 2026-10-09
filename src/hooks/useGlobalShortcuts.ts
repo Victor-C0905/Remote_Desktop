@@ -51,7 +51,7 @@ export function useGlobalShortcuts(
   }, [handleKeyDown]);
 }
 
-/* ── Preset Shortcuts for GNOME Remote ────────────────── */
+/* ── Preset Shortcuts for Quirel ────────────────── */
 
 export function createAppShortcuts(
   openApp: (appId: string) => void,

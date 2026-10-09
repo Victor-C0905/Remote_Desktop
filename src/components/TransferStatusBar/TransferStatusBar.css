@@ -1,0 +1,131 @@
+/* 传输状态栏组件样式（Adwaita 风格） */
+
+.transfer-status-bar {
+  position: relative; /* 为 TransferPanel 提供定位上下文 */
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 12px;
+
+  /* 融入状态栏：不使用特殊背景和边框 */
+  background: transparent;
+  border-left: none;
+  border-radius: 0;
+
+  /* 字体 */
+  font-family: var(--font-ui);
+  font-size: var(--font-body);
+  color: var(--quirel-text-primary);
+
+  /* 可点击样式 */
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.2s cubic-bezier(0.25, 0, 0, 1);
+}
+
+.transfer-status-bar:hover {
+  background: transparent;
+}
+
+/* 焦点状态：更明显的视觉反馈 */
+.transfer-status-bar:focus {
+  outline: none;
+  background: transparent;
+}
+
+/* ── 图标 + 数量区域 ──────────────────────── */
+.tsb-icon-count {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tsb-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--quirel-accent-bg);
+}
+
+.tsb-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--quirel-text-primary);
+  min-width: 16px;
+  text-align: center;
+}
+
+/* ── 迷你进度条 ──────────────────────── */
+.tsb-progress-mini {
+  width: 80px;
+  height: 4px;
+  background: var(--quirel-border-color);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.tsb-progress-fill {
+  height: 100%;
+  background: var(--quirel-accent-bg);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+/* 空进度条（更柔和） */
+.tsb-progress-fill.tsb-progress-empty {
+  background: transparent;
+  width: 0% !important;
+}
+
+/* ── 百分比文本 ──────────────────────── */
+.tsb-percent {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--quirel-text-secondary);
+  min-width: 32px;
+  text-align: right;
+}
+
+/* 空状态百分比（更柔和） */
+.tsb-percent-empty {
+  color: var(--quirel-text-disabled);
+  font-weight: 400;
+}
+
+/* ── 展开/收起指示器 ──────────────────────── */
+.tsb-toggle-indicator {
+  padding: 4px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--quirel-text-secondary);
+  transition: color 0.15s ease;
+}
+
+.transfer-status-bar:hover .tsb-toggle-indicator {
+  color: var(--quirel-accent-bg);
+}
+
+.tsb-toggle-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: currentColor;
+}
+
+/* ── 响应式设计 ──────────────────────── */
+@media (max-width: 600px) {
+  .transfer-status-bar {
+    gap: 6px;
+    padding: 0 8px;
+  }
+
+  .tsb-progress-mini {
+    width: 60px;
+  }
+
+  .tsb-percent {
+    display: none; /* 窄窗口隐藏百分比 */
+  }
+}

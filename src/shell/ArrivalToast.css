@@ -1,0 +1,106 @@
+/* src/shell/ArrivalToast.css */
+/* 到达预览条：TopBar 下方居中悬浮，全局弹窗层级 */
+
+.at-toast {
+  position: fixed;
+  top: calc(var(--topbar-height) + 12px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--z-notification);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 280px;
+  max-width: min(480px, 90%);
+  height: 44px;
+  padding: 0 12px;
+  background: var(--quirel-window-bg);
+  border: 1px solid var(--quirel-border-color);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popup);
+  cursor: pointer;
+  animation: at-slide-in 200ms var(--ease-out);
+}
+
+.at-toast-leaving {
+  animation: at-slide-out 200ms var(--ease-out) forwards;
+}
+
+/* 严重度图标着色（urgency → 语义令牌） */
+.at-sev { flex: none; }
+.at-sev-critical { color: var(--quirel-danger-fg); }
+.at-sev-normal { color: var(--quirel-warning-fg); }
+.at-sev-low { color: var(--quirel-success-fg); }
+
+.at-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--quirel-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.at-source {
+  font-size: 12px;
+  color: var(--quirel-text-secondary);
+  background: var(--quirel-card-bg);
+  border: 1px solid var(--quirel-border-color);
+  border-radius: var(--radius-pill);
+  padding: 1px 8px;
+  flex: none;
+}
+
+.at-missed {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--quirel-accent-fg);
+  background: var(--quirel-accent-bg);
+  border-radius: var(--radius-pill);
+  padding: 1px 8px;
+  flex: none;
+}
+
+/* 关闭按钮仅 hover 显示 */
+.at-close {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--quirel-text-secondary);
+  cursor: pointer;
+  flex: none;
+}
+
+.at-toast:hover .at-close {
+  display: inline-flex;
+}
+
+.at-close:hover {
+  background: var(--quirel-card-hover);
+  color: var(--quirel-text-primary);
+}
+
+/* 动效（reduced-motion 降级为直接显隐） */
+@keyframes at-slide-in {
+  from { opacity: 0; transform: translate(-50%, -8px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+@keyframes at-slide-out {
+  from { opacity: 1; transform: translate(-50%, 0); }
+  to { opacity: 0; transform: translate(-50%, -8px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .at-toast,
+  .at-toast-leaving {
+    animation: none;
+  }
+}
