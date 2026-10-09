@@ -1,0 +1,48 @@
+# Quireld - 开发环境配置
+# 用于开发调试和集成测试
+
+[server]
+bind = "0.0.0.0"  # 允许远程访问（开发环境）
+quic_port = 8443
+ws_port = 8444
+cert_path = "./cert.pem"
+key_path = "./key.pem"
+
+[auth.ssh]
+enable_pubkey = true
+enable_password = true
+pam_service = "sshd"
+
+[security]
+# 开发环境：移除路径限制（已重构权限系统）
+# allowed_paths = [
+#     "/home",
+#     "/var/log",
+#     "/etc",
+#     "/opt",
+#     "/usr/local"
+# ]
+blocked_commands = [
+    "rm -rf /",
+    "dd if=",
+    "mkfs."
+]
+
+[limits]
+max_terminal_sessions = 10
+max_file_transfer_mb = 200
+metrics_interval_secs = 3
+connection_idle_timeout_secs = 180  # 开发环境：中等超时
+
+[collectors]
+metrics_interval_secs = 3
+file_changes_delay_ms = 150
+process_scan_interval_secs = 3
+service_status_interval_secs = 8
+
+[audit]
+log_path = "./logs/audit-dev.log"
+
+[log]
+level = "debug"  # 开发环境：详细日志
+dir = "logs"

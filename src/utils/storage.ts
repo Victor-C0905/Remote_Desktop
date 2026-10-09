@@ -1,4 +1,7 @@
 import { load } from "@tauri-apps/plugin-store";
+import { createLogger } from "./logger";
+
+const log = createLogger('Storage');
 
 /* ── Types ─────────────────────────────────────────────── */
 
@@ -27,12 +30,12 @@ export async function createTauriStorage(storePath: string): Promise<TauriStorag
     getItem: async (name: string): Promise<string | null> => {
       try {
         const value = await store.get(name);
-        console.log(`[TauriStorage] GET "${name}" from ${storePath}:`, value);
+        log.debug(`GET "${name}" from ${storePath}:`, value);
         return value !== null && value !== undefined 
           ? JSON.stringify(value) 
           : null;
       } catch (e) {
-        console.warn(`[TauriStorage] Failed to get "${name}" from ${storePath}:`, e);
+        log.warn(`Failed to get "${name}" from ${storePath}:`, e);
         return null;
       }
     },
@@ -40,11 +43,11 @@ export async function createTauriStorage(storePath: string): Promise<TauriStorag
     setItem: async (name: string, value: string): Promise<void> => {
       try {
         const parsedValue = JSON.parse(value);
-        console.log(`[TauriStorage] SET "${name}" in ${storePath}:`, parsedValue);
+        log.debug(`SET "${name}" in ${storePath}:`, parsedValue);
         await store.set(name, parsedValue);
         await store.save();
       } catch (e) {
-        console.warn(`[TauriStorage] Failed to set "${name}" in ${storePath}:`, e);
+        log.warn(`Failed to set "${name}" in ${storePath}:`, e);
       }
     },
 
@@ -53,7 +56,7 @@ export async function createTauriStorage(storePath: string): Promise<TauriStorag
         await store.delete(name);
         await store.save();
       } catch (e) {
-        console.warn(`[TauriStorage] Failed to delete "${name}" from ${storePath}:`, e);
+        log.warn(`Failed to delete "${name}" from ${storePath}:`, e);
       }
     },
   };
@@ -65,6 +68,8 @@ export async function createTauriStorage(storePath: string): Promise<TauriStorag
 let _settingsStorage: TauriStorage | null = null;
 let _serversStorage: TauriStorage | null = null;
 let _secureStorage: TauriStorage | null = null;
+let _transfersStorage: TauriStorage | null = null;
+let _windowsStorage: TauriStorage | null = null;
 
 /**
  * 获取普通设置存储（主题、字体、壁纸等）
@@ -94,6 +99,26 @@ export async function getSecureStorage(): Promise<TauriStorage> {
     _secureStorage = await createTauriStorage("secure.bin");
   }
   return _secureStorage;
+}
+
+/**
+ * 获取传输任务存储（传输进度、历史）
+ */
+export async function getTransfersStorage(): Promise<TauriStorage> {
+  if (!_transfersStorage) {
+    _transfersStorage = await createTauriStorage("transfers.bin");
+  }
+  return _transfersStorage;
+}
+
+/**
+ * 获取窗口布局存储（窗口位置、尺寸、层级）
+ */
+export async function getWindowsStorage(): Promise<TauriStorage> {
+  if (!_windowsStorage) {
+    _windowsStorage = await createTauriStorage("windows.bin");
+  }
+  return _windowsStorage;
 }
 
 // 异步存储对象（用于 Zustand persist）
@@ -138,6 +163,36 @@ export const secureStorage: TauriStorage = {
   },
   removeItem: async (name: string) => {
     const storage = await getSecureStorage();
+    return storage.removeItem(name);
+  },
+};
+
+export const transfersStorage: TauriStorage = {
+  getItem: async (name: string) => {
+    const storage = await getTransfersStorage();
+    return storage.getItem(name);
+  },
+  setItem: async (name: string, value: string) => {
+    const storage = await getTransfersStorage();
+    return storage.setItem(name, value);
+  },
+  removeItem: async (name: string) => {
+    const storage = await getTransfersStorage();
+    return storage.removeItem(name);
+  },
+};
+
+export const windowsStorage: TauriStorage = {
+  getItem: async (name: string) => {
+    const storage = await getWindowsStorage();
+    return storage.getItem(name);
+  },
+  setItem: async (name: string, value: string) => {
+    const storage = await getWindowsStorage();
+    return storage.setItem(name, value);
+  },
+  removeItem: async (name: string) => {
+    const storage = await getWindowsStorage();
     return storage.removeItem(name);
   },
 };

@@ -1,117 +1,25 @@
+/* ── Shell 布局架构 ────────────────────────────────────── */
+/* 壁纸层在背景，TopBar + Workspace 在前景 */
+
 .shell {
   width: 100%;
   height: 100%;
   display: flex;
   flex-direction: column;
-  overflow: visible; /* 允许窗口在整个屏幕内移动 */
+  background-size: cover;
+  background-position: center;
 }
 
-/* ── Top Bar ──────────────────────────────────────────── */
-.top-bar {
-  height: var(--topbar-height);
-  background: var(--headerbar-bg);
-  border-bottom: 1px solid var(--border-color);
-  display: flex;
-  align-items: center;
-  padding: 0 12px;
-  gap: 16px;
-  flex-shrink: 0;
-  z-index: 100;
-  -webkit-app-region: drag;
-  app-region: drag;
-}
-
-.top-bar button,
-.top-bar .connection-indicator,
-.top-bar .metrics,
-.top-bar .clock,
-.top-bar .notification-btn {
-  -webkit-app-region: no-drag;
-  app-region: no-drag;
-}
-
-.top-bar .activities-btn {
-  background: none;
-  border: none;
-  color: var(--text-primary);
-  font-family: var(--font-ui);
-  font-size: var(--font-small);
-  font-weight: 700;
-  cursor: pointer;
-  padding: 2px 8px;
-  border-radius: var(--radius-xs);
-  transition: background var(--duration-fast) var(--ease-out);
-}
-
-.top-bar .activities-btn:hover {
-  background: var(--border-color);
-}
-
-.top-bar .separator {
-  width: 1px;
-  height: 16px;
-  background: var(--border-color);
-}
-
-.top-bar .connection-indicator {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: var(--font-small);
-  color: var(--text-secondary);
-}
-
-.top-bar .connection-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #33d17a;
-}
-
-.top-bar .connection-dot.disconnected {
-  background: #e01b24;
-}
-
-.top-bar .spacer {
-  flex: 1;
-}
-
-.top-bar .metrics {
-  display: flex;
-  gap: 12px;
-  font-size: var(--font-small);
-  color: var(--text-secondary);
-  font-variant-numeric: tabular-nums;
-}
-
-.top-bar .clock {
-  font-size: var(--font-small);
-  color: var(--text-primary);
-  font-variant-numeric: tabular-nums;
-}
-
-.top-bar .notification-btn {
-  background: none;
-  border: none;
-  color: var(--text-secondary);
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: var(--radius-xs);
-  font-size: 14px;
-  transition: background var(--duration-fast) var(--ease-out);
-}
-
-.top-bar .notification-btn:hover {
-  background: var(--border-color);
-}
-
-/* ── Desktop Area ────────────────────────────────────── */
-.desktop-area {
+/* ── Workspace 工作区 ──────────────────────────────────── */
+/* TopBar 下方的区域，包含桌面图标、窗口、Dock */
+.workspace {
   flex: 1;
   position: relative;
-  overflow: visible; /* 允许窗口在整个屏幕内移动 */
+  overflow: hidden;
+  min-height: 0; /* 建立 flex 高度约束链 */
 }
 
+/* ── Desktop Icons ─────────────────────────────────────── */
 .desktop-icons {
   position: absolute;
   top: 24px;
@@ -119,6 +27,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  z-index: var(--z-desktop-icons);
 }
 
 .desktop-icon {
@@ -165,17 +74,36 @@
   bottom: 16px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 50;
+  z-index: var(--z-dock);
 }
 
 .dock {
   display: flex;
   gap: 4px;
   padding: 8px 12px;
-  background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(24px);
+  /* 多层背景: 底层半透明 + 上层渐变 */
+  background:
+    linear-gradient(
+      to bottom,
+      rgba(255, 255, 255, 0.08) 0%,
+      rgba(255, 255, 255, 0.04) 50%,
+      rgba(0, 0, 0, 0.02) 100%
+    ),
+    rgba(var(--quirel-headerbar-bg-rgb), 0.15);
+  backdrop-filter: var(--quirel-frosted-blur);
+  -webkit-backdrop-filter: var(--quirel-frosted-blur);
   border-radius: var(--radius-lg);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  /* 双层边框: 外层深色 + 内层浅色 */
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow:
+    /* 主阴影 - 柔和的下落阴影 */
+    0 8px 32px rgba(0, 0, 0, 0.15),
+    /* 顶部高光 - 模拟光源 */
+    0 1px 0 rgba(255, 255, 255, 0.15) inset,
+    /* 底部阴影 - 增强立体感 */
+    0 -1px 0 rgba(0, 0, 0, 0.05) inset,
+    /* 外发光 - 微妙的边缘光 */
+    0 0 0 1px rgba(255, 255, 255, 0.05);
 }
 
 .dock-item {
@@ -186,15 +114,48 @@
   padding: 4px 8px;
   border-radius: var(--radius-sm);
   cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out);
+  position: relative;
+}
+
+.dock-item::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
   transition: background var(--duration-fast) var(--ease-out);
 }
 
+.dock-item:hover::before {
+  /* 悬停: 微妙的背景高亮 + 顶部高光 */
+  background: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.15) 0%,
+    rgba(255, 255, 255, 0.08) 100%
+  );
+}
+
 .dock-item:hover {
-  background: rgba(255, 255, 255, 0.15);
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.1),
+    0 1px 0 rgba(255, 255, 255, 0.1) inset;
+}
+
+.dock-item:active::before {
+  /* 激活: 更深的背景 + 轻微下压效果 */
+  background: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.2) 0%,
+    rgba(255, 255, 255, 0.12) 100%
+  );
 }
 
 .dock-item:active {
-  background: rgba(255, 255, 255, 0.25);
+  transform: translateY(1px);
+  box-shadow:
+    0 1px 4px rgba(0, 0, 0, 0.15),
+    0 1px 0 rgba(0, 0, 0, 0.05) inset;
 }
 
 .dock-item .icon {
@@ -204,17 +165,60 @@
   align-items: center;
   justify-content: center;
   font-size: 24px;
+  color: var(--dock-text-color, #ffffff);
+  /* 简化阴影: 只用一层柔和的描边效果 */
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  position: relative;
+  z-index: 1;
 }
 
 .dock-item .label {
   font-size: 8pt;
-  color: rgba(255, 255, 255, 0.8);
+  color: var(--dock-text-color, #ffffff);
+  /* 简化阴影: 轻微的描边,不影响可读性 */
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.4);
+  position: relative;
+  z-index: 1;
 }
 
 .dock-separator {
   width: 1px;
   background: rgba(255, 255, 255, 0.2);
   margin: 4px 4px;
+}
+
+/* ── Dock Running Indicator ────────────────────────────── */
+.dock-item.running {
+  position: relative;
+}
+
+.dock-indicator {
+  position: absolute;
+  bottom: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--dock-text-color, #ffffff);
+  /* 简化光晕: 只用一层柔和的发光 */
+  box-shadow: 0 0 3px var(--dock-text-color, #ffffff);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: translateX(-50%) scale(1);
+  }
+  50% {
+    opacity: 0.7;
+    transform: translateX(-50%) scale(0.9);
+  }
+}
+
+.dock-item.running .icon::after {
+  content: none;
 }
 
 /* ── Overview Overlay ─────────────────────────────────── */
@@ -246,10 +250,10 @@
 .overview-search {
   width: 400px;
   padding: 10px 16px;
-  border: 2px solid var(--border-color);
+  border: 2px solid var(--quirel-border-color);
   border-radius: var(--radius-lg);
   background: rgba(255, 255, 255, 0.95);
-  color: var(--text-primary);
+  color: var(--quirel-text-primary);
   font-family: var(--font-ui);
   font-size: var(--font-body);
   outline: none;
@@ -257,11 +261,11 @@
 }
 
 .overview-search:focus {
-  border-color: var(--accent-bg);
+  border-color: var(--quirel-accent-bg);
 }
 
 .overview-search::placeholder {
-  color: var(--text-disabled);
+  color: var(--quirel-text-disabled);
 }
 
 .overview-apps {
@@ -304,78 +308,57 @@
   text-align: center;
 }
 
-/* ── Application Windows ──────────────────────────────── */
+/* ── Application Windows（旧版 DraggableWindow）─────── */
+/* 注意：width/height 由 DraggableWindow 通过内联 style 设置 */
 .app-window {
   position: absolute;
-  /* 移除 CSS 中的 top/left，由 transform 控制 */
   top: 0;
   left: 0;
-  width: calc(100% - 160px);
-  height: calc(100% - 112px);
-  background: var(--window-bg);
+  background: var(--quirel-window-bg);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-popup);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  /* 移除 CSS 中的 z-index，由 inline style 控制 */
-  /* 移除默认边框，只在选中时显示 */
   border: none;
-  /* 移除 CSS 动画，使用 React 动画避免 transform 冲突 */
-  /* animation: windowOpen 200ms var(--ease-out); */
-  /* GPU 加速优化 */
   will-change: transform;
-  /* 移除 box-shadow 和 border 的 transition，避免切换时的割裂感 */
   transition: opacity 0.2s ease-out;
 }
 
 .app-window.active {
-  /* 移除 CSS 中的 z-index，由 inline style 控制 */
+  z-index: 90;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
-  /* 取消边框，只使用阴影区分活动窗口 */
   border: none;
 }
 
-/* 拖拽时的视觉反馈 */
 .app-window.dragging {
   opacity: 0.95;
   box-shadow: 0 12px 48px rgba(0, 0, 0, 0.25);
   cursor: move;
-  /* 提升性能：禁用过渡动画 */
   transition: none;
 }
 
-/* 拖拽结束时的平滑过渡 */
 .app-window:not(.dragging) {
   opacity: 1;
-  /* 移除 box-shadow 和 border 的 transition，避免切换时的割裂感 */
   transition: opacity 0.3s ease-out;
 }
 
-/* 非激活窗口的样式 */
 .app-window:not(.active) {
-  /* 移除 CSS 中的 z-index，由 inline style 控制 */
+  z-index: 10;
   box-shadow: var(--shadow-popup);
   border: none;
 }
 
-/* 移除 @keyframes windowOpen，使用 React 动画避免 transform 冲突 */
-/* @keyframes windowOpen {
-  from { opacity: 0; transform: scale(0.96); }
-  to   { opacity: 1; transform: scale(1); }
-} */
-
 .app-window-titlebar {
   height: var(--headerbar-height);
-  background: var(--headerbar-bg);
-  border-bottom: 1px solid var(--border-color);
+  background: var(--quirel-headerbar-bg);
+  border-bottom: 1px solid var(--quirel-border-color);
   display: flex;
   align-items: center;
   padding: 0 12px;
   gap: 8px;
   flex-shrink: 0;
   cursor: move;
-  /* 移除 app-region: drag，使用 JavaScript 拖拽 */
 }
 
 .app-window-titlebar .awt-btns,
@@ -400,7 +383,7 @@
 }
 
 .awt-btn.minimize {
-  background: #f7d76a; /* GNOME Adwaita 浅黄色，更柔和 */
+  background: #f7d76a;
 }
 
 .awt-btn.minimize:hover {
@@ -408,7 +391,7 @@
 }
 
 .awt-btn.maximize {
-  background: #57e389; /* GNOME Adwaita 浅绿色，更柔和 */
+  background: #57e389;
 }
 
 .awt-btn.maximize:hover {
@@ -416,7 +399,7 @@
 }
 
 .awt-btn.close {
-  background: #f66151; /* GNOME Adwaita 浅红色，更柔和 */
+  background: #f66151;
 }
 
 .awt-btn.close:hover {
@@ -426,18 +409,18 @@
 .awt-title {
   font-size: var(--font-small);
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--quirel-text-primary);
   flex: 1;
   text-align: center;
 }
 
 .awt-spacer {
-  width: 56px; /* balance the close/minimize buttons */
+  width: 56px;
 }
 
 .app-window-content {
   flex: 1;
-  overflow: hidden;
+  min-height: 0;
 }
 
 /* ── App Placeholder ──────────────────────────────────── */
@@ -447,7 +430,7 @@
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: var(--text-disabled);
+  color: var(--quirel-text-disabled);
   gap: 12px;
 }
 
@@ -458,24 +441,4 @@
 
 .app-placeholder .placeholder-text {
   font-size: var(--font-body);
-}
-
-/* ── Dock Running Indicator ────────────────────────────── */
-.dock-item.running {
-  position: relative;
-}
-
-.dock-indicator {
-  position: absolute;
-  bottom: 2px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: #ffffff;
-}
-
-.dock-item.running .icon::after {
-  content: none;
 }

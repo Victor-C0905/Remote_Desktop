@@ -1,5 +1,5 @@
 @echo off
-echo 🚀 启动 GNOME Remote 开发环境...
+echo 🚀 启动 Quirel 开发环境...
 echo.
 
 REM 检查 Rust 是否已安装
@@ -26,14 +26,14 @@ echo Installing frontend dependencies...
 npm install
 
 echo.
-echo 📋 步骤 2: 启动 Agent (在新窗口中)...
-start "GNOME Remote Agent" cmd /k "cd /d %~dp0\..\agent && cargo run"
+echo 📋 步骤 2: 启动 Quireld (在新窗口中)...
+start "Quireld" cmd /k "cd /d %~dp0\..\agent && cargo run"
 
 echo.
 echo 📋 步骤 3: 启动 Tauri 开发服务器 (在新窗口中)...
-start "GNOME Remote Tauri" cmd /k "cd /d %~dp0\.. && npm run tauri dev"
+start "Quirel Tauri" cmd /k "cd /d %~dp0\.. && npm run tauri dev"
 
 echo.
 echo ✅ 开发环境已启动！
-echo 💡 两个窗口将分别运行 Agent 和 Tauri 应用
+echo 💡 两个窗口将分别运行 Quireld 和 Tauri 应用
 pause

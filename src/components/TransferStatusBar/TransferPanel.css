@@ -1,0 +1,326 @@
+/**
+ * TransferPanel 样式
+ *
+ * 展开的任务列表面板，显示在状态栏上方
+ * 位置：position absolute，右对齐
+ * 宽度：300px
+ */
+
+/* ── 面板容器 ─────────────────────────────────────────────── */
+
+.transfer-panel {
+  position: absolute;
+  bottom: calc(100% + 8px); /* 状态栏上方 8px 间距 */
+  right: 0;
+  width: min(400px, calc(100vw - 32px)); /* 面板宽度：400px，确保所有元素有足够空间 */
+  max-width: 100%; /* 确保不超过父容器 */
+  max-height: calc(40vh - 32px);
+  min-width: 360px; /* 最小宽度，确保可用性 */
+  background: var(--quirel-window-bg);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+
+  /* 向上滑入动画 */
+  animation: slideUp 0.2s cubic-bezier(0.25, 0, 0, 1);
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ── 任务列表区域 ───────────────────────────────────────────── */
+
+.tp-list {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  max-height: calc(40vh - 64px); /* 减去底部操作栏高度 */
+}
+
+/* 空状态提示 */
+.tp-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 120px;
+  color: var(--quirel-text-secondary);
+  font-size: 10pt;
+}
+
+/* 滚动条样式 */
+.tp-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.tp-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.tp-list::-webkit-scrollbar-thumb {
+  background: var(--quirel-border-color);
+  border-radius: 4px;
+}
+
+.tp-list::-webkit-scrollbar-thumb:hover {
+  background: var(--quirel-text-secondary);
+}
+
+/* ── 空状态提示 ───────────────────────────────────────────── */
+
+.tp-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  color: var(--quirel-text-secondary);
+}
+
+.tp-empty-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  margin-bottom: 16px;
+  background: var(--quirel-card-bg);
+  border-radius: 50%;
+  color: var(--quirel-text-disabled);
+}
+
+.tp-empty-text {
+  font-size: 14px;
+  margin: 0 0 8px 0;
+  color: var(--quirel-text-primary);
+}
+
+.tp-empty-hint {
+  font-size: 12px;
+  margin: 0;
+  color: var(--quirel-text-secondary);
+  text-align: center;
+  max-width: 250px;
+}
+
+/* ── 底部操作栏 ──────────────────────────────────────────────── */
+
+.tp-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  height: 32px;
+  border-top: 1px solid var(--quirel-border-color);
+  background: var(--quirel-sidebar-bg);
+}
+
+/* ── 统计信息 ───────────────────────────────────────────────── */
+
+.tp-stats {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+}
+
+.tp-stat-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 9pt;
+}
+
+.tp-stat-label {
+  color: var(--quirel-text-secondary);
+}
+
+.tp-stat-value {
+  color: var(--quirel-text-primary);
+  font-weight: 500;
+}
+
+.tp-stat-value.success {
+  color: var(--quirel-success-color);
+}
+
+.tp-stat-value.error {
+  color: var(--quirel-error-color);
+}
+
+.tp-stat-value.cancelled {
+  color: var(--quirel-text-disabled);
+}
+
+/* ── 操作按钮 ───────────────────────────────────────────────── */
+
+.tp-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tp-action-btn {
+  padding: 4px 12px;
+  font-size: 9pt;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-weight: 500;
+}
+
+.tp-action-btn.cancel {
+  background: transparent;
+  color: var(--quirel-error-color);
+}
+
+.tp-action-btn.cancel:hover {
+  background: var(--quirel-card-bg);
+}
+
+.tp-action-btn.pause {
+  background: transparent;
+  color: var(--quirel-text-secondary);
+}
+
+.tp-action-btn.pause:hover {
+  background: var(--quirel-card-bg);
+  color: var(--quirel-text-primary);
+}
+
+.tp-action-btn.resume {
+  background: transparent;
+  color: var(--quirel-accent-bg);
+}
+
+.tp-action-btn.resume:hover {
+  background: var(--quirel-card-bg);
+}
+
+.tp-action-btn.close {
+  background: var(--quirel-accent-bg);
+  color: var(--quirel-accent-fg);
+}
+
+.tp-action-btn.close:hover {
+  background: var(--quirel-accent-hover);
+}
+
+.tp-action-btn:active {
+  transform: scale(0.96);
+}
+
+.tp-action-btn:focus {
+  outline: 2px solid var(--quirel-accent-bg);
+  outline-offset: 1px;
+}
+
+/* ── 响应式适配 ─────────────────────────────────────────────── */
+
+@media (max-width: 480px) {
+  .transfer-panel {
+    width: calc(100vw - 16px); /* 窄屏幕时减小边距 */
+    max-height: calc(50vh - 32px); /* 增加高度 */
+    min-width: 280px; /* 减小最小宽度 */
+  }
+
+  .tp-footer {
+    padding: 6px 8px;
+    height: 28px;
+  }
+
+  .tp-stats {
+    gap: 8px;
+    font-size: 8pt;
+  }
+
+  .tp-action-btn {
+    padding: 3px 8px;
+    font-size: 8pt;
+  }
+}
+
+/* ── 无障碍：减少动画 ───────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .transfer-panel,
+  .tp-action-btn {
+    animation: none;
+    transition: none;
+  }
+}
+
+/* ── 服务器分组 ─────────────────────────────────────────────── */
+
+.tp-group {
+  margin-bottom: 4px;
+}
+
+.tp-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.tp-group-header:hover {
+  background: var(--quirel-card-hover);
+}
+
+/* 服务器颜色点：当前服务器高亮 accent，其余灰色 */
+.tp-group-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--quirel-text-disabled);
+}
+
+.tp-group-dot.active {
+  background: var(--quirel-accent-bg);
+}
+
+.tp-group-name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tp-group-summary {
+  color: var(--quirel-text-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tp-group-toggle {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--quirel-text-secondary);
+  font-size: 11px;
+}
+
+.tp-group-tasks {
+  padding-left: 4px;
+}

@@ -1,0 +1,121 @@
+/* src/components/ConnectionState.css */
+/* 连接状态覆盖层（全应用统一） */
+
+/* ── 错误态卡片 ─────────────────────────────────────── */
+.cs-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 6px;
+  max-width: 420px;
+  padding: 24px 28px;
+  background: var(--quirel-window-bg);
+  border: 1px solid var(--quirel-border-color);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  animation: cs-fade-in 180ms var(--ease-out);
+}
+
+.cs-error-icon {
+  color: var(--quirel-danger-fg);
+}
+
+.cs-error-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--quirel-text-primary);
+}
+
+.cs-error-message {
+  font-size: 14px;
+  color: var(--quirel-text-secondary);
+}
+
+.cs-error-action {
+  font-size: 12px;
+  color: var(--quirel-text-secondary);
+  background: var(--quirel-card-bg);
+  border: 1px solid var(--quirel-border-color);
+  border-radius: var(--radius-pill);
+  padding: 2px 10px;
+}
+
+.cs-error-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--quirel-text-secondary);
+  white-space: pre-line;
+  text-align: left;
+}
+
+.cs-error-buttons {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.cs-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 16px;
+  background: var(--quirel-accent-bg);
+  color: var(--quirel-accent-fg);
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.cs-btn-primary:hover {
+  background: var(--quirel-accent-hover);
+}
+
+.cs-btn-ghost {
+  height: 36px;
+  padding: 0 16px;
+  background: transparent;
+  color: var(--quirel-text-primary);
+  border: 1px solid var(--quirel-border-color);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+/* ── 轻量重连态 ─────────────────────────────────────── */
+.cs-reconnecting {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px;
+  background: var(--quirel-window-bg);
+  border: 1px solid var(--quirel-border-color);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  font-size: 14px;
+  color: var(--quirel-text-primary);
+}
+
+.cs-reconnecting-icon {
+  color: var(--quirel-accent-bg);
+}
+
+/* ── 动效 ───────────────────────────────────────────── */
+@media (prefers-reduced-motion: no-preference) {
+  .cs-reconnecting-icon {
+    animation: cs-rotate 1s linear infinite;
+  }
+}
+
+@keyframes cs-rotate {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes cs-fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}

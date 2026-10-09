@@ -1,0 +1,107 @@
+//! IpcServer 集成测试
+//!
+//! 测试 IpcServer 与 PtyRegistry 和 WorkerManager 的集成。
+//! 仅在 Unix 系统上运行。
+
+#![cfg(unix)]
+
+use std::sync::Arc;
+use quireld::manager::{IpcServer, PtyRegistry, WorkerManager};
+
+#[tokio::test]
+async fn test_ipc_server_with_pty_registry() {
+    // 创建 PtyRegistry
+    let registry = Arc::new(PtyRegistry::new());
+
+    // 创建 WorkerManager
+    let worker_manager = Arc::new(WorkerManager::new(
+        "/usr/bin/quireld".to_string(),
+        "/tmp/test.sock".to_string(),
+        3
+    ));
+
+    // 创建 IpcServer（集成 WorkerManager）
+    let socket_path = format!("/tmp/test_ipc_{}.sock", uuid::Uuid::new_v4());
+    let server = IpcServer::new(socket_path.clone(), registry.clone(), worker_manager.clone(), 128);
+
+    // 启动服务器
+    server.start().await.expect("Failed to start IPC server");
+
+    // 新架构：active_connection_count 已移除，验证 start/stop 正常即可
+
+    // 停止服务器
+    server.stop().await.expect("Failed to stop IPC server");
+
+    // 清理
+    let _ = std::fs::remove_file(&socket_path);
+}
+
+// test_cleanup_connection 已移除：cleanup_connection 方法已删除
+// （新架构中 dispatcher 断开自动清理，不再需要显式 cleanup）
+
+// test_cleanup_by_worker_pid 已移除：cleanup_by_worker_pid 方法已删除
+// （新架构中 dispatcher 断开自动清理，不再需要显式 cleanup）
+
+#[tokio::test]
+async fn test_multiple_start_stop_cycles() {
+    let registry = Arc::new(PtyRegistry::new());
+    let worker_manager = Arc::new(WorkerManager::new(
+        "/usr/bin/quireld".to_string(),
+        "/tmp/test.sock".to_string(),
+        3
+    ));
+    let socket_path = format!("/tmp/test_ipc_cycle_{}.sock", uuid::Uuid::new_v4());
+
+    // 第一次启动-停止循环
+    {
+        let server = IpcServer::new(socket_path.clone(), registry.clone(), worker_manager.clone(), 128);
+        server.start().await.expect("Failed to start IPC server (1st cycle)");
+        server.stop().await.expect("Failed to stop IPC server (1st cycle)");
+    }
+
+    // 第二次启动-停止循环（验证 Socket 文件正确清理）
+    {
+        let server = IpcServer::new(socket_path.clone(), registry.clone(), worker_manager.clone(), 128);
+        server.start().await.expect("Failed to start IPC server (2nd cycle)");
+        server.stop().await.expect("Failed to stop IPC server (2nd cycle)");
+    }
+
+    let _ = std::fs::remove_file(&socket_path);
+}
+
+#[tokio::test]
+async fn test_worker_status_event_integration() {
+    // 测试 WorkerManager 和 IpcServer 的事件集成
+    let registry = Arc::new(PtyRegistry::new());
+    let worker_manager = Arc::new(WorkerManager::new(
+        "/usr/bin/quireld".to_string(),
+        "/tmp/test_worker.sock".to_string(),
+        3
+    ));
+    let socket_path = format!("/tmp/test_worker_integration_{}.sock", uuid::Uuid::new_v4());
+    let server = IpcServer::new(socket_path.clone(), registry.clone(), worker_manager.clone(), 128);
+
+    server.start().await.expect("Failed to start IPC server");
+
+    // 订阅 WorkerManager 事件
+    let _event_rx = worker_manager.subscribe();
+
+    // 启动 Worker（会失败，因为没有真实的二进制文件）
+    let _ = worker_manager.start().await;
+
+    // 如果启动成功，应该收到 Starting 事件
+    // 但由于路径不存在，启动会失败，所以我们只验证 subscribe() 能正常工作
+
+    server.stop().await.expect("Failed to stop IPC server");
+    let _ = std::fs::remove_file(&socket_path);
+}
+
+#[tokio::test]
+async fn test_manager_creation() {
+    // 测试 Manager 创建（需要配置）
+    use quireld::config::AgentConfig;
+
+    let config = AgentConfig::default();
+    let result = quireld::manager::Manager::new(&config).await;
+    assert!(result.is_ok());
+}

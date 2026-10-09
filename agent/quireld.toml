@@ -1,0 +1,49 @@
+# Quireld 配置文件
+
+[server]
+bind = "0.0.0.0"
+quic_port = 8443
+ws_port = 8444
+cert_path = "./cert.pem"
+key_path = "./key.pem"
+
+[auth.ssh]
+enable_pubkey = true
+enable_password = true
+pam_service = "sshd"
+
+[security]
+# 移除：allowed_paths = ["home", "/etc", "/var/log", "/opt"]
+blocked_commands = ["rm -rf /", "dd if=", "mkfs."]
+
+[limits]
+max_terminal_sessions = 10
+max_file_transfer_mb = 500
+metrics_interval_secs = 2
+connection_idle_timeout_secs = 300
+
+[collectors]
+metrics_interval_secs = 2
+file_changes_delay_ms = 100
+process_scan_interval_secs = 2
+service_status_interval_secs = 5
+
+[audit]
+log_path = "/var/log/quireld/audit.log"
+
+[log]
+# 日志级别: trace, debug, info, warn, error
+level = "info"
+# 日志输出目录
+dir = "logs"
+
+[worker]
+# Agent 二进制路径(相对于 quireld 进程工作目录)
+agent_binary = "./target/release/quireld"
+# IPC Socket 路径
+ipc_socket_path = "/tmp/quireld-worker.sock"
+# 最大重启次数
+max_restarts = 3
+# IPC 请求 channel 容量（Manager 侧 dispatcher 的 mpsc channel 大小）
+# 满时 send().await 会等待，提供背压；默认 128 足够
+ipc_channel_capacity = 128

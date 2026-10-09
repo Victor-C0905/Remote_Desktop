@@ -1,93 +1,46 @@
-import { useState, useEffect, useCallback } from "react";
+// src/shell/NotificationCenter.tsx
+// 通知中心：右侧滑出面板（呈现层，Adwaita Symbolic 风格）
+// 数据源 notificationStore；交互（过滤/已读/清除）与数据层不变
+
+import { useState, useEffect } from "react";
 import "./NotificationCenter.css";
-
-/* ── Types ─────────────────────────────────────────────── */
-
-type Urgency = "low" | "normal" | "critical";
-
-interface Notification {
-  id: string;
-  title: string;
-  body: string;
-  timestamp: number;
-  urgency: Urgency;
-  source: string;
-  read: boolean;
-}
-
-/* ── Demo Notifications ───────────────────────────────── */
-
-function generateDemoNotifications(): Notification[] {
-  return [
-    {
-      id: "notif-1",
-      title: "CPU 使用率过高",
-      body: "CPU 使用率达到 85%，超过阈值 80%",
-      timestamp: Date.now() - 1000 * 60 * 2,
-      urgency: "critical",
-      source: "系统监控",
-      read: false,
-    },
-    {
-      id: "notif-2",
-      title: "文件下载完成",
-      body: "config.tar.gz (256MB) 已下载到本地",
-      timestamp: Date.now() - 1000 * 60 * 5,
-      urgency: "normal",
-      source: "文件管理",
-      read: false,
-    },
-    {
-      id: "notif-3",
-      title: "连接已恢复",
-      body: "prod-server 连接已恢复，延迟 6ms",
-      timestamp: Date.now() - 1000 * 60 * 10,
-      urgency: "normal",
-      source: "连接",
-      read: true,
-    },
-    {
-      id: "notif-4",
-      title: "磁盘空间不足",
-      body: "/var 分区使用率达到 92%",
-      timestamp: Date.now() - 1000 * 60 * 30,
-      urgency: "critical",
-      source: "系统监控",
-      read: true,
-    },
-    {
-      id: "notif-5",
-      title: "终端会话创建",
-      body: "新终端会话已启动 (pty-abc123)",
-      timestamp: Date.now() - 1000 * 60 * 60,
-      urgency: "low",
-      source: "终端",
-      read: true,
-    },
-  ];
-}
+import { useNotificationStore } from "../stores/notificationStore";
+import type { NotificationUrgency } from "../stores/notificationStore";
+import { SymbolicIcon } from "../components/symbolic";
 
 /* ── Utility Functions ───────────────────────────────── */
 
 function formatTime(timestamp: number): string {
-  const now = Date.now();
-  const diff = now - timestamp;
+  const now = new Date();
+  const date = new Date(timestamp);
+  const diff = now.getTime() - timestamp;
 
   if (diff < 1000 * 60) return "刚刚";
   if (diff < 1000 * 60 * 60) return `${Math.floor(diff / 60000)} 分钟前`;
-  if (diff < 1000 * 60 * 60 * 24) return `${Math.floor(diff / 3600000)} 小时前`;
-  return `${Math.floor(diff / 86400000)} 天前`;
+
+  // 非今天：显示具体日期（跨年带年份）
+  if (date.toDateString() !== now.toDateString()) {
+    const sameYear = date.getFullYear() === now.getFullYear();
+    return sameYear
+      ? `${date.getMonth() + 1}月${date.getDate()}日`
+      : `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
+  }
+
+  // 今天且超过 1 小时
+  return `${Math.floor(diff / 3600000)} 小时前`;
 }
 
-function getUrgencyIcon(urgency: Urgency): string {
+/** urgency → Symbolic 图标名 */
+function getUrgencyIcon(urgency: NotificationUrgency) {
   switch (urgency) {
-    case "critical": return "🔴";
-    case "normal": return "🟡";
-    case "low": return "🟢";
+    case "critical": return "dialog-error" as const;
+    case "normal": return "dialog-warning" as const;
+    case "low": return "dialog-information" as const;
   }
 }
 
-function getUrgencyClass(urgency: Urgency): string {
+/** urgency → 语义类名（左边框 + 图标着色由 CSS 令牌控制） */
+function getUrgencyClass(urgency: NotificationUrgency): string {
   return `nc-notif-urgency-${urgency}`;
 }
 
@@ -99,32 +52,17 @@ interface NotificationCenterProps {
 }
 
 export function NotificationCenter({ isOpen, onClose }: NotificationCenterProps) {
-  const [notifications, setNotifications] = useState<Notification[]>(generateDemoNotifications());
-  const [filter, setFilter] = useState<Urgency | "all">("all");
+  // 真实数据源：zustand 内存 store（连接失败/断连/恢复通知）
+  const { notifications, markAsRead, dismiss, clearAll, markAllRead } = useNotificationStore();
+  const [filter, setFilter] = useState<NotificationUrgency | "all">("all");
 
-  const unreadCount = notifications.filter(n => !n.read).length;
-  const criticalCount = notifications.filter(n => n.urgency === "critical" && !n.read).length;
+  const unreadCount = notifications.filter((n) => !n.read).length;
+  const criticalCount = notifications.filter((n) => n.urgency === "critical" && !n.read).length;
 
-  const filteredNotifications = notifications.filter(n => {
+  const filteredNotifications = notifications.filter((n) => {
     if (filter === "all") return true;
     return n.urgency === filter;
   }).sort((a, b) => b.timestamp - a.timestamp);
-
-  const markAsRead = useCallback((id: string) => {
-    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
-  }, []);
-
-  const dismissNotification = useCallback((id: string) => {
-    setNotifications(prev => prev.filter(n => n.id !== id));
-  }, []);
-
-  const clearAll = useCallback(() => {
-    setNotifications([]);
-  }, []);
-
-  const markAllRead = useCallback(() => {
-    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
-  }, []);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -135,6 +73,11 @@ export function NotificationCenter({ isOpen, onClose }: NotificationCenterProps)
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isOpen, onClose]);
+
+  // 打开面板即清除未读标签（badge 归零、卡片未读样式消失；期间新到通知保持未读）
+  useEffect(() => {
+    if (isOpen) markAllRead();
+  }, [isOpen, markAllRead]);
 
   if (!isOpen) return null;
 
@@ -151,16 +94,20 @@ export function NotificationCenter({ isOpen, onClose }: NotificationCenterProps)
           </div>
           <div className="nc-header-actions">
             <button className="nc-action-btn" onClick={markAllRead} title="全部标记已读">
-              ✓ 全部已读
+              <SymbolicIcon name="emblem-ok" size={14} />
+              全部已读
             </button>
             <button className="nc-action-btn nc-action-danger" onClick={clearAll} title="清除全部">
-              🗑️ 清除
+              <SymbolicIcon name="user-trash" size={14} />
+              清除
             </button>
-            <button className="nc-close-btn" onClick={onClose}>×</button>
+            <button className="nc-close-btn" onClick={onClose} aria-label="关闭通知中心">
+              <SymbolicIcon name="window-close" size={14} />
+            </button>
           </div>
         </div>
 
-        {/* Filters */}
+        {/* Filters（文本 + 语义色点） */}
         <div className="nc-filters">
           <button
             className={`nc-filter-btn ${filter === "all" ? "active" : ""}`}
@@ -172,19 +119,22 @@ export function NotificationCenter({ isOpen, onClose }: NotificationCenterProps)
             className={`nc-filter-btn ${filter === "critical" ? "active" : ""}`}
             onClick={() => setFilter("critical")}
           >
-            🔴 紧急 ({notifications.filter(n => n.urgency === "critical").length})
+            <span className="nc-dot nc-dot-critical" />
+            紧急 ({notifications.filter((n) => n.urgency === "critical").length})
           </button>
           <button
             className={`nc-filter-btn ${filter === "normal" ? "active" : ""}`}
             onClick={() => setFilter("normal")}
           >
-            🟡 普通 ({notifications.filter(n => n.urgency === "normal").length})
+            <span className="nc-dot nc-dot-normal" />
+            普通 ({notifications.filter((n) => n.urgency === "normal").length})
           </button>
           <button
             className={`nc-filter-btn ${filter === "low" ? "active" : ""}`}
             onClick={() => setFilter("low")}
           >
-            🟢 低 ({notifications.filter(n => n.urgency === "low").length})
+            <span className="nc-dot nc-dot-low" />
+            低 ({notifications.filter((n) => n.urgency === "low").length})
           </button>
         </div>
 
@@ -192,32 +142,47 @@ export function NotificationCenter({ isOpen, onClose }: NotificationCenterProps)
         <div className="nc-list">
           {filteredNotifications.length === 0 ? (
             <div className="nc-empty">
-              <div className="nc-empty-icon">📭</div>
+              <SymbolicIcon name="mailbox" size={32} className="nc-empty-icon" />
               <div className="nc-empty-text">没有通知</div>
             </div>
           ) : (
-            filteredNotifications.map(notif => (
+            filteredNotifications.map((notif) => (
               <div
                 key={notif.id}
                 className={`nc-notif ${getUrgencyClass(notif.urgency)} ${!notif.read ? "nc-unread" : ""}`}
                 onClick={() => markAsRead(notif.id)}
               >
-                <div className="nc-notif-icon">{getUrgencyIcon(notif.urgency)}</div>
-                <div className="nc-notif-content">
-                  <div className="nc-notif-header">
-                    <span className="nc-notif-title">{notif.title}</span>
-                    <span className="nc-notif-source">{notif.source}</span>
-                  </div>
-                  <div className="nc-notif-body">{notif.body}</div>
-                  <div className="nc-notif-time">{formatTime(notif.timestamp)}</div>
+                {/* 卡片头部行：时间（左上）+ 关闭按钮（右上） */}
+                <div className="nc-notif-top">
+                  <span className="nc-notif-time">{formatTime(notif.timestamp)}</span>
+                  <button
+                    className="nc-notif-dismiss"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      dismiss(notif.id);
+                    }}
+                    aria-label="删除通知"
+                    title="删除"
+                  >
+                    <SymbolicIcon name="window-close" size={12} />
+                  </button>
                 </div>
-                <button
-                  className="nc-notif-dismiss"
-                  onClick={(e) => { e.stopPropagation(); dismissNotification(notif.id); }}
-                  title="删除"
-                >
-                  ×
-                </button>
+                {/* 主体行：严重度图标 + 标题/来源/正文/建议 */}
+                <div className="nc-notif-main">
+                  <SymbolicIcon
+                    name={getUrgencyIcon(notif.urgency)}
+                    size={16}
+                    className="nc-notif-sev-icon"
+                  />
+                  <div className="nc-notif-content">
+                    <div className="nc-notif-header">
+                      <span className="nc-notif-title">{notif.title}</span>
+                      <span className="nc-notif-source">{notif.source}</span>
+                    </div>
+                    <div className="nc-notif-body">{notif.body}</div>
+                    {notif.action && <div className="nc-notif-action">{notif.action}</div>}
+                  </div>
+                </div>
               </div>
             ))
           )}

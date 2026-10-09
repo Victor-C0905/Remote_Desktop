@@ -1,0 +1,152 @@
+/* ============================================================
+   BrowserApp — 远程浏览会话控制面板（Adwaita 风格）
+   ============================================================ */
+
+.ba {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0; /* 建立 flex 约束链 */
+  background: var(--quirel-window-bg);
+}
+
+/* ── Header Bar ──────────────────────────────────────── */
+.ba-headerbar {
+  height: var(--headerbar-height);
+  background: var(--quirel-headerbar-bg);
+  border-bottom: 1px solid var(--quirel-border-color);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  flex-shrink: 0;
+}
+
+.ba-title {
+  font-size: var(--font-body);
+  font-weight: 700;
+  color: var(--quirel-text-primary);
+}
+
+.ba-badge {
+  font-size: var(--font-small);
+  padding: 2px 8px;
+  border-radius: var(--radius-full, 999px);
+  background: var(--quirel-border-color);
+  color: var(--quirel-text-secondary);
+}
+
+/* ── Body ────────────────────────────────────────────── */
+.ba-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: stretch;
+}
+
+.ba-status {
+  border: 1px solid var(--quirel-border-color);
+  border-radius: var(--radius-md, 8px);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ba-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ba-status-label {
+  font-size: var(--font-body);
+  color: var(--quirel-text-secondary);
+}
+
+.ba-status-value {
+  font-size: var(--font-body);
+  font-weight: 600;
+  color: var(--quirel-text-primary);
+}
+
+.ba-hint {
+  font-size: var(--font-small);
+  color: var(--quirel-text-secondary);
+  line-height: 1.5;
+}
+
+.ba-btn {
+  align-self: flex-start;
+  padding: 8px 16px;
+  font-size: var(--font-body);
+  font-weight: 600;
+  color: #fff;
+  background: var(--quirel-accent, #3584e4);
+  border: none;
+  border-radius: var(--radius-md, 8px);
+  cursor: pointer;
+  transition: filter 0.15s ease;
+}
+
+.ba-btn:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.ba-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* ── 未连接占位 ─────────────────────────────────────── */
+.ba-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--quirel-text-secondary);
+}
+
+.ba-empty-icon {
+  font-size: 48px;
+  opacity: 0.6;
+}
+
+.ba-empty-title {
+  font-size: var(--font-body);
+  font-weight: 700;
+  color: var(--quirel-text-primary);
+}
+
+.ba-empty-desc {
+  font-size: var(--font-small);
+}
+
+/* ── 错误面板 ────────────────────────────────────────── */
+.ba-error {
+  border: 1px solid var(--quirel-border-color);
+  border-radius: var(--radius-md, 8px);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ba-error-title {
+  font-size: var(--font-body);
+  font-weight: 700;
+  color: var(--quirel-text-primary);
+}
+
+.ba-error-desc {
+  font-size: var(--font-small);
+  color: var(--quirel-text-secondary);
+  word-break: break-all;
+}

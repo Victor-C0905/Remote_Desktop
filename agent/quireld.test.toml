@@ -1,0 +1,44 @@
+# Quireld - 测试环境配置
+# 用于本地开发和单元测试
+
+[server]
+bind = "127.0.0.1"  # 仅本地访问
+quic_port = 8443
+ws_port = 8444
+cert_path = "./cert.pem"
+key_path = "./key.pem"
+
+[auth.ssh]
+enable_pubkey = true
+enable_password = true
+pam_service = "sshd"
+
+[security]
+# 测试环境：移除路径限制（已重构权限系统）
+# allowed_paths = [
+#     "/home",
+#     "/tmp",
+#     "/var/log",
+#     "/etc",
+#     "/opt"
+# ]
+blocked_commands = []  # 测试环境不阻止危险命令（仅用于测试！）
+
+[limits]
+max_terminal_sessions = 5
+max_file_transfer_mb = 100
+metrics_interval_secs = 5
+connection_idle_timeout_secs = 60  # 测试环境：短超时，快速清理
+
+[collectors]
+metrics_interval_secs = 5
+file_changes_delay_ms = 200
+process_scan_interval_secs = 5
+service_status_interval_secs = 10
+
+[audit]
+log_path = "./logs/audit-test.log"
+
+[log]
+level = "debug"  # 测试环境：详细日志
+dir = "logs"

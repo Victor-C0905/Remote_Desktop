@@ -1,0 +1,23 @@
+/* ============================================================
+   Scrollbar 全局样式 — Quirel Client
+   从 adwaita.css 提取，确保桌面系统统一滚动条样式
+   ============================================================ */
+
+/* ── Scrollbar (Adwaita Style) ───────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--quirel-border-color);
+  border-radius: var(--radius-pill);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0,0,0,0.3);
+}

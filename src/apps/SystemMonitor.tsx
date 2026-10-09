@@ -10,7 +10,16 @@ import {
   formatSpeedSafe,
 } from "../utils/offlineDefaults";
 import { MonitorSkeleton } from "../components/skeleton/MonitorSkeleton";
+import { createLogger } from '../utils/logger';
+import { StatsPanel } from "../components/StatsPanel";
+import { SymbolicIcon } from "../components/symbolic";
+import { ConnectionErrorState, ReconnectingState } from "../components/ConnectionState";
+import { getServerErrorInfo } from "../stores/serversStore";
+import { useOpenApp } from "../window-system/hooks/useOpenApp";
+// import { useWindowState } from "../window-system/hooks/useWindowState"; // 未来集成时使用
 import "./SystemMonitor.css";
+
+const log = createLogger('SystemMonitor');
 
 interface MetricsSnapshot {
   cpu_percent: number;
@@ -44,7 +53,7 @@ interface HistoryPoint {
   value: number;
 }
 
-type TabId = "processes" | "resources" | "filesystems";
+type TabId = "processes" | "resources" | "filesystems" | "stats";
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
@@ -130,8 +139,17 @@ function MiniChart({ data, color, height, max }: MiniChartProps) {
 
 /* ── Main Component ───────────────────────────────────── */
 
-export function SystemMonitor() {
-  const { activeServerId } = useServerManager();
+export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
+  // 窗口系统集成（未来可能需要使用 windowState）
+  // const windowState = useWindowState(windowId);
+  const { activeServerId, activeServer, servers, connectServer } = useServerManager();
+  const openApp = useOpenApp();
+
+  // 断连故障服务器（activeServerId 已清空，按状态识别；reconnecting 优先于 error）
+  const troubledServer =
+    servers.find((s) => s.status === "reconnecting") ||
+    servers.find((s) => s.status === "error") ||
+    null;
 
   const [activeTab, setActiveTab] = useState<TabId>("resources");
   // 永远不为 null：离线时 = OFFLINE_METRICS，在线时 = 真实数据
@@ -227,7 +245,7 @@ export function SystemMonitor() {
               const rxSpeed = rxDiff > 0 ? rxDiff / timeDiff : 0;
               const txSpeed = txDiff > 0 ? txDiff / timeDiff : 0;
 
-              console.log('网络速率计算:', {
+              log.debug('网络速率计算:', {
                 rxDiff,
                 txDiff,
                 timeDiff,
@@ -252,7 +270,7 @@ export function SystemMonitor() {
     let unlistenFn: (() => void) | undefined;
     setupListener().then((fn) => {
       unlistenFn = fn;
-    });
+    }).catch((e) => log.error('事件监听设置失败:', e));
 
     return () => {
       if (unlistenFn) {
@@ -293,49 +311,75 @@ export function SystemMonitor() {
 
   return (
     <div className="sm">
-      {/* Header Bar — 始终渲染（不受门控影响） */}
-      <div className="sm-headerbar">
-        <div className="sm-tabs">
-          <button
-            className={`sm-tab${activeTab === "processes" ? " active" : ""}`}
-            onClick={() => setActiveTab("processes")}
-          >
-            进程
-          </button>
-          <button
-            className={`sm-tab${activeTab === "resources" ? " active" : ""}`}
-            onClick={() => setActiveTab("resources")}
-          >
-            资源
-          </button>
-          <button
-            className={`sm-tab${activeTab === "filesystems" ? " active" : ""}`}
-            onClick={() => setActiveTab("filesystems")}
-          >
-            文件系统
-          </button>
-        </div>
-        <div className="sm-headerbar-spacer" />
-        <button className="sm-menu-btn" title="菜单">⋮</button>
-      </div>
-
       {/* Content — 三层状态门控 */}
       <div className="sm-content">
         {showOffline ? (
-          /* 层 3: 离线占位符（无连接/断连后） */
+          troubledServer ? (
+            /* 连接中断：自动重连轻量态 / 最终失败错误态 */
+            <div className="sm-offline-state">
+              <MonitorSkeleton />
+              <div className="sm-offline-overlay">
+                {troubledServer.status === "reconnecting" ? (
+                  <ReconnectingState serverName={troubledServer.name || troubledServer.host} />
+                ) : (
+                  <ConnectionErrorState
+                    {...getServerErrorInfo(troubledServer)}
+                    onRetry={() => connectServer(troubledServer.id)}
+                    onOpenSettings={() => openApp("settings")}
+                  />
+                )}
+              </div>
+            </div>
+          ) : (
+          /* 层 3: 离线占位符（从未连接/用户主动断开） */
           <div className="sm-offline-state">
             <MonitorSkeleton />
             <div className="sm-offline-overlay">
-              <div className="offline-badge">📡 未连接</div>
+              <div className="offline-badge">
+                <SymbolicIcon name="network-offline" size={16} className="offline-badge-icon" />
+                未连接
+              </div>
               <div className="offline-hint">连接到远程服务器以查看系统监控数据</div>
             </div>
           </div>
+          )
         ) : showSkeleton ? (
           /* 层 1: 骨架屏（有连接但等待首条数据） */
           <MonitorSkeleton />
         ) : (
           /* 层 2: 真实数据内容（已收到在线数据） */
           <>
+            {/* Tab Toolbar - 原HeaderBar的Tab功能 */}
+            <div className="sm-toolbar">
+              <div className="sm-tabs">
+                <button
+                  className={`sm-tab${activeTab === "processes" ? " active" : ""}`}
+                  onClick={() => setActiveTab("processes")}
+                >
+                  进程
+                </button>
+                <button
+                  className={`sm-tab${activeTab === "resources" ? " active" : ""}`}
+                  onClick={() => setActiveTab("resources")}
+                >
+                  资源
+                </button>
+                <button
+                  className={`sm-tab${activeTab === "filesystems" ? " active" : ""}`}
+                  onClick={() => setActiveTab("filesystems")}
+                >
+                  文件系统
+                </button>
+                <button
+                  className={`sm-tab${activeTab === "stats" ? " active" : ""}`}
+                  onClick={() => setActiveTab("stats")}
+                >
+                  统计
+                </button>
+              </div>
+              <button className="sm-menu-btn" title="菜单">⋮</button>
+            </div>
+
             {activeTab === "processes" && (
           <div className="sm-processes">
             <div className="sm-process-header">
@@ -467,11 +511,11 @@ export function SystemMonitor() {
             <div className="sm-res-section sm-res-disks">
               <div className="sm-res-title-section">磁盘用量</div>
               {isOffline ? (
-                <div style={{ padding: '16px 0', color: 'var(--text-disabled)', textAlign: 'center' }}>
+                <div style={{ padding: '16px 0', color: 'var(--quirel-text-disabled)', textAlign: 'center' }}>
                   无数据（未连接）
                 </div>
               ) : metrics.disks.length === 0 ? (
-                <div style={{ padding: '16px 0', color: 'var(--text-secondary)', textAlign: 'center' }}>
+                <div style={{ padding: '16px 0', color: 'var(--quirel-text-secondary)', textAlign: 'center' }}>
                   暂无磁盘信息
                 </div>
               ) : (
@@ -515,7 +559,7 @@ export function SystemMonitor() {
             </div>
             <div className="sm-fs-list">
               {isOffline ? (
-                <div className="sm-fs-row" style={{ justifyContent: 'center', color: 'var(--text-disabled)', padding: '20px 0' }}>
+                <div className="sm-fs-row" style={{ justifyContent: 'center', color: 'var(--quirel-text-disabled)', padding: '20px 0' }}>
                   无数据（未连接）
                 </div>
               ) : (
@@ -541,6 +585,15 @@ export function SystemMonitor() {
               </>
               )}
             </div>
+          </div>
+        )}
+
+        {activeTab === "stats" && (
+          <div className="sm-stats">
+            <StatsPanel
+              serverId={activeServerId || ''}
+              isRoot={activeServer?.auth?.username === 'root'}
+            />
           </div>
         )}
           </>

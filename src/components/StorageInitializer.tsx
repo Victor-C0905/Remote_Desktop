@@ -1,5 +1,8 @@
 import { useState, useEffect } from "react";
 import { getSettingsStorage, getServersStorage } from "../utils/storage";
+import { createLogger } from "../utils/logger";
+
+const log = createLogger('StorageInitializer');
 
 interface StorageInitializerProps {
   children: React.ReactNode;
@@ -18,7 +21,7 @@ export function StorageInitializer({ children }: StorageInitializerProps) {
   useEffect(() => {
     const initializeStorage = async () => {
       try {
-        console.log("[StorageInitializer] 开始预加载存储...");
+        log.info('开始预加载存储...');
         
         // 预加载所有存储
         await Promise.all([
@@ -26,10 +29,10 @@ export function StorageInitializer({ children }: StorageInitializerProps) {
           getServersStorage(),
         ]);
         
-        console.log("[StorageInitializer] 存储预加载完成");
+        log.info('存储预加载完成');
         setInitialized(true);
       } catch (e) {
-        console.error("[StorageInitializer] 存储预加载失败:", e);
+        log.error('存储预加载失败:', e);
         setError(e instanceof Error ? e.message : String(e));
         // 即使失败也继续渲染，使用默认值
         setInitialized(true);
@@ -40,7 +43,7 @@ export function StorageInitializer({ children }: StorageInitializerProps) {
   }, []);
 
   if (error) {
-    console.warn("[StorageInitializer] 存储加载出错，使用默认值:", error);
+    log.warn('存储加载出错，使用默认值:', error);
   }
 
   // 等待存储初始化完成后再渲染

@@ -1,13 +1,33 @@
 import { useState, useEffect } from "react";
-import { useServerManager, formatLastConnected, getStatusIcon, getStatusColor } from "../context/ServerManager";
+import { invoke } from "@tauri-apps/api/core";
+import { useServerManager, formatLastConnected, getStatusColor } from "../context/ServerManager";
 import { useWallpaper, getPresetWallpaperName, getWallpaperStyle } from "../context/WallpaperContext";
 import { PRESET_WALLPAPERS } from "../stores/wallpaperStore";
 import { useSettingsStore } from "../stores/settingsStore";
+import { themes, accentColors } from "../config/themes";
+import { ThemeId } from "../config/themes";
+import { createLogger } from '../utils/logger';
+import { AuthMethod } from '../types/server';
+import { StatsPanel } from '../components/StatsPanel';
+import { TransferLimitCard } from "../components/TransferLimitCard";
+import { SymbolicIcon } from '../components/symbolic';
+import { getServerErrorInfo } from '../stores/serversStore';
+import { getSettingsStorage } from '../utils/storage';
+// import { useWindowState } from "../window-system/hooks/useWindowState"; // 未来集成时使用
 import "./Settings.css";
+
+const log = createLogger('Settings');
 
 /* ── Types ─────────────────────────────────────────────── */
 
-type SettingsSection = "connection" | "appearance" | "keyboard" | "files" | "terminal" | "notifications" | "about";
+type SettingsSection = "connection" | "appearance" | "keyboard" | "files" | "terminal" | "browser" | "notifications" | "stats" | "about";
+
+/** 本机可用浏览器（Rust 端 proxy_list_browsers 返回） */
+interface BrowserInfo {
+  id: string;
+  name: string;
+  path: string;
+}
 
 /* ── Sidebar Items ──────────────────────────────────── */
 
@@ -23,7 +43,9 @@ const SIDEBAR_ITEMS: SidebarItem[] = [
   { id: "keyboard", icon: "⌨️", label: "快捷键" },
   { id: "files", icon: "📁", label: "文件" },
   { id: "terminal", icon: "🖥️", label: "终端" },
+  { id: "browser", icon: "🌐", label: "浏览器" },
   { id: "notifications", icon: "🔔", label: "通知" },
+  { id: "stats", icon: "📊", label: "系统监控" },
   { id: "about", icon: "ℹ️", label: "关于" },
 ];
 
@@ -32,26 +54,82 @@ const SIDEBAR_ITEMS: SidebarItem[] = [
 interface AddServerModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onAdd: (name: string, host: string, port: number, token: string) => void;
+  onAdd: (name: string, host: string, port: number, auth: any) => void;
 }
 
 function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
   const [name, setName] = useState("");
   const [host, setHost] = useState("");
   const [port, setPort] = useState(8443);
-  const [token, setToken] = useState("");
+
+  // 认证配置状态
+  const [authMethod, setAuthMethod] = useState<AuthMethod>(AuthMethod.PASSWORD);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [privateKeyFile, setPrivateKeyFile] = useState("");
+  const [passphrase, setPassphrase] = useState("");
 
   if (!isOpen) return null;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (name && host && token) {
-      onAdd(name, host, port, token);
+    if (name && host) {
+      // 构建认证配置对象
+      const auth = {
+        method: authMethod,
+        username,
+        ...(authMethod === AuthMethod.PASSWORD && { password }),
+        ...(authMethod === AuthMethod.PUBKEY && {
+          privateKey: privateKeyFile,
+          ...(passphrase && { passphrase }), // 只在密码非空时才添加
+        }),
+      };
+
+      onAdd(name, host, port, auth);
       setName("");
       setHost("");
       setPort(8443);
-      setToken("");
+      // 重置认证配置
+      setAuthMethod(AuthMethod.PASSWORD);
+      setUsername("");
+      setPassword("");
+      setPrivateKeyFile("");
+      setPassphrase("");
       onClose();
+    }
+  };
+
+  // 处理私钥文件选择（AddServerModal）
+  const handlePrivateKeySelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      try {
+        // 读取文件内容
+        const content = await file.text();
+
+        // 基本格式验证
+        if (!content.includes('-----BEGIN')) {
+          alert('选择的文件不是有效的私钥文件。\n\n私钥文件应以 -----BEGIN 开头。\n\n支持的格式：\n• OpenSSH 格式（如 ~/.ssh/id_ed25519）\n• PEM 格式（云服务商提供的密钥）\n\n不支持：PuTTY 格式（.ppk）');
+          return;
+        }
+
+        // 检查是否是 PuTTY 格式
+        if (content.includes('PuTTY')) {
+          alert('检测到 PuTTY 格式私钥（.ppk）。\n\n请使用 PuTTYgen 转换为 OpenSSH 格式：\n1. 打开 PuTTYgen\n2. 加载您的 .ppk 文件\n3. 点击 "Conversions" -> "Export OpenSSH key"\n4. 保存新的文件');
+          return;
+        }
+
+        // 检查是否加密
+        if (content.includes('ENCRYPTED') && !passphrase) {
+          console.log('检测到加密私钥，用户需要在密码字段输入密码');
+        }
+
+        setPrivateKeyFile(content);
+        log.info('已加载私钥文件:', file.name);
+      } catch (error) {
+        console.error("读取私钥文件失败:", error);
+        alert("读取私钥文件失败，请检查文件格式和权限");
+      }
     }
   };
 
@@ -64,7 +142,7 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
         </div>
         <form className="st-modal-body" onSubmit={handleSubmit}>
           <div className="st-form-row">
-            <label className="st-form-label">服务器名称</label>
+            <label className="st-form-label text-label">服务器名称</label>
             <input
               type="text"
               className="st-form-input"
@@ -75,7 +153,7 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
             />
           </div>
           <div className="st-form-row">
-            <label className="st-form-label">主机地址</label>
+            <label className="st-form-label text-label">主机地址</label>
             <input
               type="text"
               className="st-form-input"
@@ -94,17 +172,79 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
               placeholder="8443"
             />
           </div>
+
+          {/* 认证配置 */}
           <div className="st-form-row">
-            <label className="st-form-label">认证 Token</label>
+            <label className="st-form-label">认证方式</label>
+            <select
+              className="st-form-input"
+              value={authMethod}
+              onChange={(e) => setAuthMethod(e.target.value as AuthMethod)}
+            >
+              <option value={AuthMethod.PASSWORD}>密码认证</option>
+              <option value={AuthMethod.PUBKEY}>公钥认证</option>
+            </select>
+          </div>
+
+          <div className="st-form-row">
+            <label className="st-form-label">用户名</label>
             <input
               type="text"
               className="st-form-input"
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              placeholder="例如: gmr_xxxxxx-xxxx-xxxx-xxxx"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="SSH 登录用户名"
             />
-            <span className="st-form-hint">从 Agent 日志中获取</span>
           </div>
+
+          {/* 密码认证字段 */}
+          {authMethod === AuthMethod.PASSWORD && (
+            <div className="st-form-row">
+              <label className="st-form-label">密码</label>
+              <input
+                type="password"
+                className="st-form-input"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="SSH 登录密码"
+              />
+            </div>
+          )}
+
+          {/* 公钥认证字段 */}
+          {authMethod === AuthMethod.PUBKEY && (
+            <>
+              <div className="st-form-row">
+                <label className="st-form-label">私钥文件</label>
+                <input
+                  type="file"
+                  className="st-form-input"
+                  onChange={handlePrivateKeySelect}
+                  accept=".pem,.key,id_rsa,id_ed25519,id_ecdsa,id_dsa"
+                />
+                <span className="st-form-hint">
+                  选择 SSH 私钥文件（OpenSSH 或 PEM 格式）<br/>
+                  支持：id_ed25519、id_rsa、云服务商提供的密钥<br/>
+                  不支持：PuTTY 格式（.ppk）- 请先转换
+                </span>
+              </div>
+              {privateKeyFile && (
+                <div className="st-form-row">
+                  <span className="st-form-hint">已选择: {privateKeyFile.split('\n')[0].substring(0, 50)}...</span>
+                </div>
+              )}
+              <div className="st-form-row">
+                <label className="st-form-label">私钥密码 (可选)</label>
+                <input
+                  type="password"
+                  className="st-form-input"
+                  value={passphrase}
+                  onChange={(e) => setPassphrase(e.target.value)}
+                  placeholder="如果私钥有密码保护,请输入"
+                />
+              </div>
+            </>
+          )}
         </form>
         <div className="st-modal-footer">
           <button className="st-btn" onClick={onClose}>取消</button>
@@ -120,15 +260,21 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
 interface EditServerModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (id: string, name: string, host: string, port: number, token: string) => void;
-  server: { id: string; name: string; host: string; port: number; token?: string } | null;
+  onSave: (id: string, name: string, host: string, port: number, auth: any) => void;
+  server: { id: string; name: string; host: string; port: number; auth?: any } | null;
 }
 
 function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalProps) {
   const [name, setName] = useState("");
   const [host, setHost] = useState("");
   const [port, setPort] = useState(8443);
-  const [token, setToken] = useState("");
+
+  // 认证配置状态
+  const [authMethod, setAuthMethod] = useState<AuthMethod>(AuthMethod.PASSWORD);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [privateKeyFile, setPrivateKeyFile] = useState("");
+  const [passphrase, setPassphrase] = useState("");
 
   // 当 server 变化时，更新表单数据
   useEffect(() => {
@@ -136,7 +282,14 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
       setName(server.name);
       setHost(server.host);
       setPort(server.port);
-      setToken(server.token || "");
+      // 加载认证配置
+      if (server.auth) {
+        setAuthMethod(server.auth.method || AuthMethod.PASSWORD);
+        setUsername(server.auth.username || "");
+        setPassword(server.auth.password || "");
+        setPrivateKeyFile(server.auth.privateKey || "");
+        setPassphrase(server.auth.passphrase || "");
+      }
     }
   }, [server]);
 
@@ -144,9 +297,54 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (name && host && token) {
-      onSave(server.id, name, host, port, token);
+    if (name && host) {
+      // 构建认证配置对象
+      const auth = {
+        method: authMethod,
+        username,
+        ...(authMethod === AuthMethod.PASSWORD && { password }),
+        ...(authMethod === AuthMethod.PUBKEY && {
+          privateKey: privateKeyFile,
+          ...(passphrase && { passphrase }), // 只在密码非空时才添加
+        }),
+      };
+
+      onSave(server.id, name, host, port, auth);
       onClose();
+    }
+  };
+
+  // 处理私钥文件选择（EditServerModal）
+  const handlePrivateKeySelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      try {
+        // 读取文件内容
+        const content = await file.text();
+
+        // 基本格式验证
+        if (!content.includes('-----BEGIN')) {
+          alert('选择的文件不是有效的私钥文件。\n\n私钥文件应以 -----BEGIN 开头。\n\n支持的格式：\n• OpenSSH 格式（如 ~/.ssh/id_ed25519）\n• PEM 格式（云服务商提供的密钥）\n\n不支持：PuTTY 格式（.ppk）');
+          return;
+        }
+
+        // 检查是否是 PuTTY 格式
+        if (content.includes('PuTTY')) {
+          alert('检测到 PuTTY 格式私钥（.ppk）。\n\n请使用 PuTTYgen 转换为 OpenSSH 格式：\n1. 打开 PuTTYgen\n2. 加载您的 .ppk 文件\n3. 点击 "Conversions" -> "Export OpenSSH key"\n4. 保存新的文件');
+          return;
+        }
+
+        // 检查是否加密
+        if (content.includes('ENCRYPTED') && !passphrase) {
+          console.log('检测到加密私钥，用户需要在密码字段输入密码');
+        }
+
+        setPrivateKeyFile(content);
+        log.info('已加载私钥文件:', file.name);
+      } catch (error) {
+        console.error("读取私钥文件失败:", error);
+        alert("读取私钥文件失败，请检查文件格式和权限");
+      }
     }
   };
 
@@ -159,7 +357,7 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
         </div>
         <form className="st-modal-body" onSubmit={handleSubmit}>
           <div className="st-form-row">
-            <label className="st-form-label">服务器名称</label>
+            <label className="st-form-label text-label">服务器名称</label>
             <input
               type="text"
               className="st-form-input"
@@ -170,7 +368,7 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
             />
           </div>
           <div className="st-form-row">
-            <label className="st-form-label">主机地址</label>
+            <label className="st-form-label text-label">主机地址</label>
             <input
               type="text"
               className="st-form-input"
@@ -189,17 +387,79 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
               placeholder="8443"
             />
           </div>
+
+          {/* 认证配置 */}
           <div className="st-form-row">
-            <label className="st-form-label">认证 Token</label>
+            <label className="st-form-label">认证方式</label>
+            <select
+              className="st-form-input"
+              value={authMethod}
+              onChange={(e) => setAuthMethod(e.target.value as AuthMethod)}
+            >
+              <option value={AuthMethod.PASSWORD}>密码认证</option>
+              <option value={AuthMethod.PUBKEY}>公钥认证</option>
+            </select>
+          </div>
+
+          <div className="st-form-row">
+            <label className="st-form-label">用户名</label>
             <input
               type="text"
               className="st-form-input"
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              placeholder="例如: gmr_xxxxxx-xxxx-xxxx-xxxx"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="SSH 登录用户名"
             />
-            <span className="st-form-hint">从 Agent 日志中获取</span>
           </div>
+
+          {/* 密码认证字段 */}
+          {authMethod === AuthMethod.PASSWORD && (
+            <div className="st-form-row">
+              <label className="st-form-label">密码</label>
+              <input
+                type="password"
+                className="st-form-input"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="SSH 登录密码"
+              />
+            </div>
+          )}
+
+          {/* 公钥认证字段 */}
+          {authMethod === AuthMethod.PUBKEY && (
+            <>
+              <div className="st-form-row">
+                <label className="st-form-label">私钥文件</label>
+                <input
+                  type="file"
+                  className="st-form-input"
+                  onChange={handlePrivateKeySelect}
+                  accept=".pem,.key,id_rsa,id_ed25519,id_ecdsa,id_dsa"
+                />
+                <span className="st-form-hint">
+                  选择 SSH 私钥文件（OpenSSH 或 PEM 格式）<br/>
+                  支持：id_ed25519、id_rsa、云服务商提供的密钥<br/>
+                  不支持：PuTTY 格式（.ppk）- 请先转换
+                </span>
+              </div>
+              {privateKeyFile && (
+                <div className="st-form-row">
+                  <span className="st-form-hint">已选择: {privateKeyFile.split('\n')[0].substring(0, 50)}...</span>
+                </div>
+              )}
+              <div className="st-form-row">
+                <label className="st-form-label">私钥密码 (可选)</label>
+                <input
+                  type="password"
+                  className="st-form-input"
+                  value={passphrase}
+                  onChange={(e) => setPassphrase(e.target.value)}
+                  placeholder="如果私钥有密码保护,请输入"
+                />
+              </div>
+            </>
+          )}
         </form>
         <div className="st-modal-footer">
           <button className="st-btn" onClick={onClose}>取消</button>
@@ -212,12 +472,62 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
 
 /* ── Main Component ─────────────────────────────────── */
 
-export function Settings() {
+export function Settings({ windowId: _windowId }: { windowId: string }) {
+  // 窗口系统集成（未来可能需要使用 windowState）
+  // const windowState = useWindowState(windowId);
   const [activeSection, setActiveSection] = useState<SettingsSection>("connection");
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
-  const [editingServer, setEditingServer] = useState<{ id: string; name: string; host: string; port: number; token?: string } | null>(null);
+  const [editingServer, setEditingServer] = useState<{ id: string; name: string; host: string; port: number; auth?: any } | null>(null);
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
+
+  // 终端默认路径配置（通过 Tauri Store 异步加载）
+  const [terminalDefaultPath, setTerminalDefaultPath] = useState("");
+
+  // 版本号：从 Rust 端读取（编译期单一来源 Cargo.toml），不再前端硬编码
+  const [appVersion, setAppVersion] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const storage = await getSettingsStorage();
+      const value = await storage.getItem("terminal-default-path");
+      if (!cancelled) setTerminalDefaultPath(value || "");
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    invoke<string>("get_app_version")
+      .then((v) => { if (!cancelled) setAppVersion(v); })
+      .catch((e) => log.error("获取版本号失败:", e));
+    return () => { cancelled = true; };
+  }, []);
+
+  // 本机已安装浏览器列表（浏览器设置分区展示）
+  const [browserList, setBrowserList] = useState<BrowserInfo[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    invoke<BrowserInfo[]>("proxy_list_browsers")
+      .then((list) => { if (!cancelled) setBrowserList(list); })
+      .catch((e) => log.error("获取浏览器列表失败:", e));
+    return () => { cancelled = true; };
+  }, []);
+
+  // 默认浏览器（全局设置，远程浏览应用启动时使用）
+  const browserIdPref = useSettingsStore((s) => s.browserId);
+  // SOCKS5 固定端口（断线重连后浏览器无需重开）
+  const browserProxyPort = useSettingsStore((s) => s.browserProxyPort);
+  // 启动时恢复上次窗口（响应式读取，勾选即时生效）
+  const restoreWindowsOnStartup = useSettingsStore((s) => s.restoreWindowsOnStartup);
+
+  const handleTerminalPathChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setTerminalDefaultPath(value);
+    const storage = await getSettingsStorage();
+    await storage.setItem("terminal-default-path", value);
+  };
 
   const {
     servers,
@@ -238,32 +548,53 @@ export function Settings() {
   } = useWallpaper();
 
   // 使用 Zustand settingsStore
-  const { theme, setTheme, accentColor, setAccentColor, fontSize, setFontSize, terminalFontSize, setTerminalFontSize } = useSettingsStore();
+  const {
+    fontSize,
+    setFontSize,
+    terminalFontSize,
+    setTerminalFontSize,
+    themeId,
+    setThemeId,
+    accentColorId,
+    setAccentColorId,
+  } = useSettingsStore();
 
-  const handleAddServer = (name: string, host: string, port: number, token: string) => {
-    addServer({ name, host, port, token });
+  // 主题已由 Desktop.tsx 全局应用，此处不再重复调用
+  // useTheme(themeId, accentColorId);
+
+  const handleAddServer = (name: string, host: string, port: number, auth: any) => {
+    addServer({
+      name,
+      host,
+      port,
+      auth,
+    });
   };
 
-  const handleEditServer = (id: string, name: string, host: string, port: number, token: string) => {
-    updateServer(id, { name, host, port, token });
+  const handleEditServer = (id: string, name: string, host: string, port: number, auth: any) => {
+    updateServer(id, { name, host, port, auth });
   };
 
-  const handleOpenEditModal = (server: { id: string; name: string; host: string; port: number; token?: string }) => {
+  const handleOpenEditModal = (server: { id: string; name: string; host: string; port: number; auth?: any }) => {
     setEditingServer(server);
     setEditModalOpen(true);
   };
 
   const handleConnect = async (id: string) => {
-    console.log("[Settings] handleConnect 被调用, id:", id);
+    log.debug("handleConnect 被调用, id:", id);
     setSelectedServerId(id);
-    console.log("[Settings] 调用 connectServer");
+    log.debug("调用 connectServer");
     await connectServer(id);
-    console.log("[Settings] connectServer 完成");
+    log.debug("connectServer 完成");
   };
 
   const handleDisconnect = (id: string) => {
     disconnectServer(id);
   };
+
+  // 断开后 activeServerId 已清空（activeServer 为 null），
+  // 回退到最近选择的服务器，保证"当前连接"卡片仍显示上下文与重连入口
+  const cardServer = activeServer || servers.find((s) => s.id === selectedServerId) || null;
 
   const handleRemove = (id: string) => {
     if (confirm("确定要删除此服务器配置吗？")) {
@@ -276,55 +607,78 @@ export function Settings() {
       case "connection":
         return (
           <div className="st-section">
-            <div className="st-section-title">连接服务器配置</div>
+            <div className="st-section-title text-heading">连接服务器配置</div>
 
             {/* Current Connection */}
             <div className="st-card">
-              <div className="st-card-header">当前连接</div>
+              <div className="st-card-header text-title">当前连接</div>
               <div className="st-current-connection">
                 <div className="st-conn-row">
-                  <span className="st-conn-label">主机</span>
-                  <span className="st-conn-value">{activeServer?.host || "未连接"}</span>
-                </div>
-                <div className="st-conn-row">
-                  <span className="st-conn-label">端口</span>
-                  <span className="st-conn-value">{activeServer?.port || "—"} (QUIC)</span>
-                </div>
-                <div className="st-conn-row">
-                  <span className="st-conn-label">状态</span>
-                  <span className="st-conn-value">
-                    <span 
-                      className="st-status-dot" 
-                      style={{ background: activeServer ? getStatusColor(activeServer.status) : "#9a9996" }}
-                    />
-                    {activeServer?.status === "connected" ? "已连接" : 
-                     activeServer?.status === "connecting" ? "连接中..." :
-                     activeServer?.status === "error" ? "错误" : "未连接"}
+                  <span className="st-conn-label text-label">主机</span>
+                  <span className="st-conn-value st-conn-value-host">
+                    {cardServer?.host || <span className="st-conn-placeholder">未连接</span>}
                   </span>
                 </div>
-                {activeServer?.status === "connected" && (
+                <div className="st-conn-row">
+                  <span className="st-conn-label text-label">端口</span>
+                  <span className="st-conn-value st-conn-value-port">
+                    {cardServer?.port || <span className="st-conn-placeholder">—</span>}
+                    <span className="st-conn-protocol">(QUIC)</span>
+                  </span>
+                </div>
+                <div className="st-conn-row">
+                  <span className="st-conn-label text-label">状态</span>
+                  <span className="st-conn-value st-conn-value-status">
+                    <span 
+                      className="st-status-dot" 
+                      style={{ background: cardServer ? getStatusColor(cardServer.status) : "#9a9996" }}
+                    />
+                    {cardServer?.status === "connected" ? "已连接" : 
+                     cardServer?.status === "connecting" ? "连接中..." :
+                     cardServer?.status === "reconnecting" ? "自动重连中..." :
+                     cardServer?.status === "error" ? "错误" : 
+                     <span className="st-conn-placeholder">未连接</span>}
+                  </span>
+                </div>
+                {cardServer?.status === "connected" && (
                   <div className="st-conn-row">
-                    <span className="st-conn-label">延迟</span>
-                    <span className="st-conn-value">6 ms</span>
+                    <span className="st-conn-label text-label">延迟</span>
+                    <span className="st-conn-value st-conn-value-latency">
+                      {/* 心跳 RTT 回传（每 5s 刷新）；连接瞬间显示握手 RTT，首个 5s 内由心跳接管 */}
+                      {cardServer.rttMs != null ? `${Math.round(cardServer.rttMs)} ms` : "—"}
+                    </span>
                   </div>
                 )}
-                {activeServer?.error && (
-                  <div className="st-conn-error">{activeServer.error}</div>
-                )}
+                {(() => {
+                  if (!cardServer?.error) return null;
+                  const ei = getServerErrorInfo(cardServer);
+                  return (
+                    <div className="st-conn-error">
+                      <SymbolicIcon name="dialog-error" size={14} className="st-conn-error-icon" />
+                      <div className="st-conn-error-body">
+                        <div className="st-conn-error-title">{ei.title}</div>
+                        <div className="st-conn-error-message">
+                          {ei.message}{ei.detail ? `（${ei.detail}）` : ""}
+                        </div>
+                        {ei.hint && <div className="st-conn-error-hint">{ei.hint}</div>}
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
               <div className="st-card-actions">
-                {activeServer?.status === "connected" && (
+                {cardServer?.status === "connected" && (
                   <button 
                     className="st-btn st-btn-danger"
-                    onClick={() => handleDisconnect(activeServer.id)}
+                    onClick={() => handleDisconnect(cardServer.id)}
                   >
                     断开连接
                   </button>
                 )}
-                {activeServer?.status === "error" && selectedServerId && (
+                {cardServer && (cardServer.status === "error" || cardServer.status === "disconnected") && (
                   <button 
                     className="st-btn st-btn-primary"
-                    onClick={() => handleConnect(selectedServerId)}
+                    onClick={() => handleConnect(cardServer.id)}
                   >
                     重试连接
                   </button>
@@ -334,12 +688,12 @@ export function Settings() {
 
             {/* Saved Servers */}
             <div className="st-card">
-              <div className="st-card-header">已保存的服务器</div>
+              <div className="st-card-header text-title">已保存的服务器</div>
               <div className="st-server-list">
                 {servers.length === 0 ? (
                   <div className="st-server-empty">
-                    <span>暂无保存的服务器</span>
-                    <span className="st-server-empty-hint">点击下方按钮添加</span>
+                    <span className="text-body">暂无保存的服务器</span>
+                    <span className="st-server-empty-hint text-caption">点击下方按钮添加</span>
                   </div>
                 ) : (
                   servers.map(server => (
@@ -348,12 +702,10 @@ export function Settings() {
                       className={`st-server-item ${activeServerId === server.id ? "selected" : ""}`}
                       onClick={() => handleOpenEditModal(server)}
                     >
-                      <span 
-                        className="st-server-status" 
+                      <span
+                        className="st-server-status"
                         style={{ background: getStatusColor(server.status) }}
-                      >
-                        {getStatusIcon(server.status)}
-                      </span>
+                      />
                       <span className="st-server-name">{server.name}</span>
                       <span className="st-server-host">{server.host}</span>
                       <span className="st-server-time">{formatLastConnected(server.lastConnected)}</span>
@@ -371,6 +723,14 @@ export function Settings() {
                             className="st-server-action-btn st-server-action-connecting"
                             disabled
                             title="连接中..."
+                          >
+                            ◷
+                          </button>
+                        ) : server.status === "reconnecting" ? (
+                          <button 
+                            className="st-server-action-btn st-server-action-connecting"
+                            disabled
+                            title="自动重连中（最多 3 次、5 秒间隔）..."
                           >
                             ◷
                           </button>
@@ -421,78 +781,97 @@ export function Settings() {
         );
 
       case "appearance":
+        const currentTheme = themes[themeId];
         return (
           <div className="st-section">
-            <div className="st-section-title">外观设置</div>
+            <div className="st-section-title text-heading">外观设置</div>
 
-            {/* Theme */}
+            {/* 主题选择 */}
             <div className="st-card">
-              <div className="st-card-header">主题</div>
-              <div className="st-theme-toggle">
-                <button
-                  className={`st-theme-btn ${theme === "light" ? "active" : ""}`}
-                  onClick={() => setTheme("light")}
-                >
-                  <span className="st-theme-icon">☀️</span>
-                  <span className="st-theme-label">亮色</span>
-                </button>
-                <button
-                  className={`st-theme-btn ${theme === "dark" ? "active" : ""}`}
-                  onClick={() => setTheme("dark")}
-                >
-                  <span className="st-theme-icon">🌙</span>
-                  <span className="st-theme-label">暗色</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Accent Color */}
-            <div className="st-card">
-              <div className="st-card-header">强调色</div>
-              <div className="st-accent-colors">
-                {["#3584e4", "#2ec27e", "#e66100", "#c061cb", "#f6d32d", "#26a269"].map(color => (
-                  <button
-                    key={color}
-                    className={`st-accent-btn ${accentColor === color ? "selected" : ""}`}
-                    style={{ background: color }}
-                    onClick={() => setAccentColor(color)}
-                  />
+              <div className="st-card-header text-title">主题</div>
+              <div className="st-theme-options">
+                {Object.entries(themes).map(([id, theme]) => (
+                  <div
+                    key={id}
+                    className={`st-theme-option ${themeId === id ? "selected" : ""}`}
+                    onClick={() => {
+                      setThemeId(id as ThemeId);
+                      // 切换到纸张主题时，默认选中绿色强调色
+                      if (id === 'paper') {
+                        setAccentColorId('paperAccent');
+                      } else {
+                        // 切换到其他主题时，清除强调色选择
+                        setAccentColorId(null);
+                      }
+                    }}
+                    title={theme.name}
+                  >
+                    <div className="st-theme-preview" style={{ background: theme.lightColors.viewBg }}>
+                      <div className="st-theme-preview-header" style={{ background: theme.lightColors.headerbarBg }} />
+                      <div className="st-theme-preview-sidebar" style={{ background: theme.lightColors.sidebarBg }} />
+                      <div className="st-theme-preview-card" style={{ background: theme.lightColors.cardBg }} />
+                    </div>
+                  </div>
                 ))}
               </div>
             </div>
 
-            {/* Font Size */}
+            {/* 强调色选择（仅当主题支持可选强调色时显示） */}
+            {currentTheme.accentColorOptions && (
+              <div className="st-card">
+                <div className="st-card-header text-title">强调色</div>
+                <div className="st-accent-options">
+                  {currentTheme.accentColorOptions.map((option) => (
+                    <div
+                      key={option}
+                      className={`st-accent-option ${accentColorId === option ? "selected" : ""}`}
+                      onClick={() => setAccentColorId(option)}
+                    >
+                      <div
+                        className="st-accent-preview"
+                        style={{ background: accentColors[option].light }}
+                      />
+                      <div className="st-accent-name">
+                        {option === "warmBlue" ? "暖蓝色" : "绿色"}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* 字体大小 */}
             <div className="st-card">
-              <div className="st-card-header">字体大小</div>
+              <div className="st-card-header text-title">字体大小</div>
               <div className="st-slider-row">
-                <span className="st-slider-label">界面字体</span>
-                <input 
-                  type="range" 
-                  min="8" 
-                  max="14" 
-                  value={fontSize} 
-                  onChange={(e) => setFontSize(parseInt(e.target.value))} 
-                  className="st-slider" 
+                <span className="st-slider-label text-body">界面字体</span>
+                <input
+                  type="range"
+                  min="8"
+                  max="14"
+                  value={fontSize}
+                  onChange={(e) => setFontSize(parseInt(e.target.value))}
+                  className="st-slider"
                 />
                 <span className="st-slider-value">{fontSize}pt</span>
               </div>
               <div className="st-slider-row">
-                <span className="st-slider-label">终端字体</span>
-                <input 
-                  type="range" 
-                  min="10" 
-                  max="16" 
-                  value={terminalFontSize} 
-                  onChange={(e) => setTerminalFontSize(parseInt(e.target.value))} 
-                  className="st-slider" 
+                <span className="st-slider-label text-body">终端字体</span>
+                <input
+                  type="range"
+                  min="10"
+                  max="16"
+                  value={terminalFontSize}
+                  onChange={(e) => setTerminalFontSize(parseInt(e.target.value))}
+                  className="st-slider"
                 />
                 <span className="st-slider-value">{terminalFontSize}pt</span>
               </div>
             </div>
 
-            {/* Wallpaper */}
+            {/* 壁纸 */}
             <div className="st-card">
-              <div className="st-card-header">壁纸</div>
+              <div className="st-card-header text-title">壁纸</div>
               <div className="st-wallpaper-grid">
                 {Object.keys(PRESET_WALLPAPERS).map(presetId => (
                   <button
@@ -518,13 +897,28 @@ export function Settings() {
               </div>
               {wallpaper.type === "custom" && wallpaper.customPath && (
                 <div className="st-wallpaper-preview">
-                  <div 
+                  <div
                     className="st-wallpaper-preview-img"
                     style={getWallpaperStyle(wallpaper)}
                   />
                   <span className="st-wallpaper-preview-label">当前自定义壁纸</span>
                 </div>
               )}
+            </div>
+            {/* 启动行为：桌面会话恢复开关（关闭后每次启动为干净桌面） */}
+            <div className="st-card">
+              <div className="st-card-header text-title">启动行为</div>
+              <div className="st-option-row">
+                <span className="st-option-label text-body">启动时恢复上次打开的窗口</span>
+                <input
+                  type="checkbox"
+                  className="st-checkbox"
+                  checked={restoreWindowsOnStartup}
+                  onChange={(e) =>
+                    useSettingsStore.getState().setRestoreWindowsOnStartup(e.target.checked)
+                  }
+                />
+              </div>
             </div>
           </div>
         );
@@ -534,15 +928,15 @@ export function Settings() {
           <div className="st-section">
             <div className="st-section-title">快捷键</div>
             <div className="st-card">
-              <div className="st-card-header">全局快捷键</div>
+              <div className="st-card-header text-title">全局快捷键</div>
               <div className="st-shortcut-list">
                 <div className="st-shortcut-row">
-                  <span className="st-shortcut-action">打开活动概览</span>
+                  <span className="st-shortcut-action text-body">打开活动概览</span>
                   <span className="st-shortcut-key">Super</span>
                 </div>
                 <div className="st-shortcut-row">
                   <span className="st-shortcut-action">打开文件管理器</span>
-                  <span className="st-shortcut-key">Super + 1</span>
+                  <span className="st-shortcut-key text-mono">Super + 1</span>
                 </div>
                 <div className="st-shortcut-row">
                   <span className="st-shortcut-action">打开终端</span>
@@ -553,11 +947,11 @@ export function Settings() {
                   <span className="st-shortcut-key">Super + 3</span>
                 </div>
                 <div className="st-shortcut-row">
-                  <span className="st-shortcut-action">打开设置</span>
+                  <span className="st-shortcut-action text-body">打开设置</span>
                   <span className="st-shortcut-key">Super + 4</span>
                 </div>
                 <div className="st-shortcut-row">
-                  <span className="st-shortcut-action">切换终端标签</span>
+                  <span className="st-shortcut-action text-body">切换终端标签</span>
                   <span className="st-shortcut-key">Ctrl + Tab</span>
                 </div>
               </div>
@@ -568,22 +962,22 @@ export function Settings() {
       case "files":
         return (
           <div className="st-section">
-            <div className="st-section-title">文件管理设置</div>
+            <div className="st-section-title text-heading">文件管理设置</div>
             <div className="st-card">
-              <div className="st-card-header">默认视图</div>
+              <div className="st-card-header text-title">默认视图</div>
               <div className="st-option-row">
-                <span className="st-option-label">默认视图模式</span>
+                <span className="st-option-label text-body">默认视图模式</span>
                 <select className="st-select">
                   <option>列表视图</option>
                   <option>网格视图</option>
                 </select>
               </div>
               <div className="st-option-row">
-                <span className="st-option-label">显示隐藏文件</span>
+                <span className="st-option-label text-body">显示隐藏文件</span>
                 <input type="checkbox" className="st-checkbox" />
               </div>
               <div className="st-option-row">
-                <span className="st-option-label">排序方式</span>
+                <span className="st-option-label text-body">排序方式</span>
                 <select className="st-select">
                   <option>名称</option>
                   <option>大小</option>
@@ -591,14 +985,8 @@ export function Settings() {
                 </select>
               </div>
             </div>
-            <div className="st-card">
-              <div className="st-card-header">传输设置</div>
-              <div className="st-option-row">
-                <span className="st-option-label">最大传输大小</span>
-                <input type="number" className="st-input" defaultValue="1000" />
-                <span className="st-input-unit">MB</span>
-              </div>
-            </div>
+            {/* 上传大小限制：值的单一事实来源在 Agent 端，组件内完成能力门控+查询+应用 */}
+            <TransferLimitCard serverId={activeServer?.id || null} />
           </div>
         );
 
@@ -606,8 +994,28 @@ export function Settings() {
         return (
           <div className="st-section">
             <div className="st-section-title">终端设置</div>
+
+            {/* 默认工作目录 */}
             <div className="st-card">
-              <div className="st-card-header">配色方案</div>
+              <div className="st-card-header text-title">默认工作目录</div>
+              <div className="st-option-row">
+                <input
+                  type="text"
+                  className="st-input"
+                  value={terminalDefaultPath}
+                  onChange={handleTerminalPathChange}
+                  placeholder="留空使用用户主目录 (~)"
+                  spellCheck={false}
+                  style={{ width: '100%' }}
+                />
+              </div>
+              <div className="st-hint">
+                💡 在文件管理器地址栏输入 <code>shell</code> 可在当前目录打开终端
+              </div>
+            </div>
+
+            <div className="st-card">
+              <div className="st-card-header text-title">配色方案</div>
               <div className="st-theme-toggle">
                 <button className="st-theme-btn active">
                   <span className="st-theme-icon">⬛</span>
@@ -624,9 +1032,9 @@ export function Settings() {
               </div>
             </div>
             <div className="st-card">
-              <div className="st-card-header">终端选项</div>
+              <div className="st-card-header text-title">终端选项</div>
               <div className="st-option-row">
-                <span className="st-option-label">光标样式</span>
+                <span className="st-option-label text-body">光标样式</span>
                 <select className="st-select">
                   <option>方块</option>
                   <option>竖线</option>
@@ -634,46 +1042,96 @@ export function Settings() {
                 </select>
               </div>
               <div className="st-option-row">
-                <span className="st-option-label">光标闪烁</span>
+                <span className="st-option-label text-body">光标闪烁</span>
                 <input type="checkbox" className="st-checkbox" defaultChecked />
               </div>
               <div className="st-option-row">
-                <span className="st-option-label">滚动缓冲区</span>
+                <span className="st-option-label text-body">滚动缓冲区</span>
                 <input type="number" className="st-input" defaultValue="5000" />
-                <span className="st-input-unit">行</span>
+                <span className="st-input-unit text-caption">行</span>
               </div>
             </div>
           </div>
         );
 
+      case "browser": {
+        const setBrowserId = useSettingsStore.getState().setBrowserId;
+        return (
+          <div className="st-section">
+            <div className="st-section-title text-heading">浏览器设置</div>
+
+            <div className="st-card">
+              <div className="st-card-header text-title">默认浏览器</div>
+              <div className="st-option-row">
+                <span className="st-option-label text-body">远程浏览使用</span>
+                <select
+                  className="st-select"
+                  value={browserList.some((b) => b.id === browserIdPref) || browserIdPref === "auto" ? browserIdPref : "auto"}
+                  onChange={(e) => setBrowserId(e.target.value)}
+                >
+                  <option value="auto">自动（推荐）</option>
+                  {browserList.map((b) => (
+                    <option key={b.id} value={b.id}>{b.name}</option>
+                  ))}
+                </select>
+              </div>
+              {browserList.length === 0 && (
+                <div className="st-hint">未检测到已安装的浏览器</div>
+              )}
+              <div className="st-option-row">
+                <span className="st-option-label text-body">SOCKS5 端口</span>
+                <input
+                  type="number"
+                  className="st-input"
+                  min={1024}
+                  max={65535}
+                  value={browserProxyPort}
+                  onChange={(e) => {
+                    const v = parseInt(e.target.value, 10);
+                    if (!Number.isNaN(v) && v >= 1024 && v <= 65535) {
+                      useSettingsStore.getState().setBrowserProxyPort(v);
+                    }
+                  }}
+                  style={{ width: 100 }}
+                />
+              </div>
+              <div className="st-hint">
+                💡 远程浏览应用将以该浏览器打开，各浏览器登录状态独立保留。
+                固定端口使断线重连后浏览器自动恢复网络，无需重开（对已开始的会话在下一次启动时生效）
+              </div>
+            </div>
+          </div>
+        );
+      }
+
       case "notifications":
         return (
           <div className="st-section">
-            <div className="st-section-title">通知设置</div>
+            <div className="st-section-title text-heading">通知设置</div>
             <div className="st-card">
-              <div className="st-card-header">通知类型</div>
+              <div className="st-card-header text-title">通知类型</div>
               <div className="st-option-row">
-                <span className="st-option-label">系统监控警报</span>
+                <span className="st-option-label text-body">系统监控警报</span>
                 <input type="checkbox" className="st-checkbox" defaultChecked />
               </div>
               <div className="st-option-row">
-                <span className="st-option-label">文件操作完成</span>
+                <span className="st-option-label text-body">文件操作完成</span>
                 <input type="checkbox" className="st-checkbox" defaultChecked />
               </div>
               <div className="st-option-row">
-                <span className="st-option-label">连接状态变化</span>
+                <span className="st-option-label text-body">连接状态变化</span>
                 <input type="checkbox" className="st-checkbox" defaultChecked />
               </div>
             </div>
             <div className="st-card">
-              <div className="st-card-header">警报阈值</div>
+              <div className="st-card-header text-title">警报阈值</div>
               <div className="st-slider-row">
-                <span className="st-slider-label">CPU 使用率警报</span>
+                <span className="st-slider-label text-body">CPU 使用率警报</span>
                 <input type="range" min="50" max="100" defaultValue="80" className="st-slider" />
                 <span className="st-slider-value">80%</span>
               </div>
               <div className="st-slider-row">
-                <span className="st-slider-label">磁盘使用率警报</span>
+                <span className="st-slider-label text-body">磁盘使用率警报</span>
                 <input type="range" min="50" max="100" defaultValue="90" className="st-slider" />
                 <span className="st-slider-value">90%</span>
               </div>
@@ -681,16 +1139,39 @@ export function Settings() {
           </div>
         );
 
+      case "stats": {
+        // 前端根据用户名判断是否为 root（后端会做真正的权限校验）
+        const isRoot = activeServer?.auth.username === 'root';
+        const serverId = activeServer?.id || '';
+        return (
+          <div className="st-section">
+            <div className="st-section-title text-heading">系统监控</div>
+            {serverId ? (
+              <StatsPanel serverId={serverId} isRoot={isRoot} />
+            ) : (
+              <div className="st-card">
+                <div className="st-card-header text-title">未连接服务器</div>
+                <div className="text-body" style={{ padding: '12px 0' }}>
+                  请先在"连接"页面连接到服务器，然后才能查看统计数据。
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      }
+
       case "about":
         return (
           <div className="st-section">
-            <div className="st-section-title">关于</div>
+            <div className="st-section-title text-heading">关于</div>
             <div className="st-card st-about-card">
-              <div className="st-about-logo">🖥️</div>
-              <div className="st-about-name">GNOME Remote</div>
-              <div className="st-about-version">版本 0.1.0</div>
+              <div className="st-about-logo">
+                <img src="/favicon.svg" alt="Quirel logo" draggable={false} />
+              </div>
+              <div className="st-about-name">Quirel</div>
+              <div className="st-about-version">版本 {appVersion || "…"}</div>
               <div className="st-about-desc">
-                基于 GNOME 设计系统的远程 Linux 服务器控制客户端
+                基于 Adwaita 设计系统的远程 Linux 服务器控制客户端
               </div>
               <div className="st-about-tech">
                 <span>Tauri 2.x + React 18</span>
@@ -699,7 +1180,7 @@ export function Settings() {
               </div>
             </div>
             <div className="st-card">
-              <div className="st-card-header">技术栈</div>
+              <div className="st-card-header text-title">技术栈</div>
               <div className="st-tech-list">
                 <div className="st-tech-item">
                   <span className="st-tech-name">前端框架</span>
@@ -710,12 +1191,12 @@ export function Settings() {
                   <span className="st-tech-value">Tauri 2.x (Rust)</span>
                 </div>
                 <div className="st-tech-item">
-                  <span className="st-tech-name">终端模拟</span>
-                  <span className="st-tech-value">xterm.js 5.5</span>
+                  <span className="st-tech-name text-label">终端模拟</span>
+                  <span className="st-tech-value text-caption">xterm.js 5.5</span>
                 </div>
                 <div className="st-tech-item">
-                  <span className="st-tech-name">设计系统</span>
-                  <span className="st-tech-value">GNOME Adwaita</span>
+                  <span className="st-tech-name text-label">设计系统</span>
+                  <span className="st-tech-value">Adwaita</span>
                 </div>
               </div>
             </div>
@@ -729,16 +1210,6 @@ export function Settings() {
 
   return (
     <div className="st">
-      {/* Header Bar */}
-      <div className="st-headerbar">
-        <button className="st-back-btn" title="返回">←</button>
-        <span className="st-title">
-          {SIDEBAR_ITEMS.find(i => i.id === activeSection)?.label || "设置"}
-        </span>
-        <div className="st-headerbar-spacer" />
-        <button className="st-search-btn" title="搜索设置">🔍</button>
-      </div>
-
       {/* Content */}
       <div className="st-content">
         {/* Sidebar */}
@@ -750,7 +1221,7 @@ export function Settings() {
               onClick={() => setActiveSection(item.id)}
             >
               <span className="st-sb-icon">{item.icon}</span>
-              <span className="st-sb-label">{item.label}</span>
+              <span className="st-sb-label text-label">{item.label}</span>
             </div>
           ))}
         </div>

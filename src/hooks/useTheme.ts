@@ -1,12 +1,15 @@
-import { useSettingsStore } from "../stores/settingsStore";
+// src/hooks/useTheme.ts
 
-/* ── Hook: 直接使用 settingsStore ─────────────────────── */
+import { useLayoutEffect } from 'react';
+import { ThemeId, AccentColorId } from '../config/themes';
+import { applyThemeColors } from '../utils/themeUtils';
 
-/**
- * 主题 Hook - 简化版，直接使用 Zustand store
- */
-export function useTheme() {
-  const { theme, setTheme } = useSettingsStore();
-  
-  return { theme, setTheme };
+export function useTheme(
+  themeId: ThemeId,
+  accentColorId?: AccentColorId | null
+) {
+  useLayoutEffect(() => {
+    // 应用主题颜色到 CSS 变量
+    applyThemeColors(themeId, accentColorId);
+  }, [themeId, accentColorId]);
 }

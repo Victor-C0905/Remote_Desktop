@@ -29,7 +29,7 @@ export function TerminalSkeleton() {
           <div className="terminal-skeleton-line" style={{ width: '30%' }} />
           {/* 模拟命令提示符 + 闪烁光标 */}
           <div style={{ marginTop: 8 }}>
-            <span style={{ color: '#4ec9a066' }}>user@gnome-remote</span>
+            <span style={{ color: '#4ec9a066' }}>user@quirel</span>
             <span style={{ color: '#ffffff66' }}>:</span>
             <span style={{ color: '#6699ff66' }}>~</span>
             <span style={{ color: '#ffffff66' }}>{' $ '}</span>

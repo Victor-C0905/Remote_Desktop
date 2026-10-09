@@ -1,0 +1,99 @@
+/*
+   HexViewer — 十六进制查看器（未知格式回退，Adwaita 风格）
+   等宽字体 hexdump 布局，对齐 hexdump -C 输出格式
+*/
+
+.hv-root {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  background: var(--quirel-window-bg, #242424);
+  overflow: hidden;
+}
+
+.hv-status {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--quirel-dim-fg, #9a9996);
+  font-size: 14px;
+}
+
+.hv-error {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--quirel-error-fg, #e01b24);
+  font-size: 14px;
+  padding: 24px;
+  text-align: center;
+}
+
+.hv-error-path {
+  color: var(--quirel-dim-fg, #9a9996);
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.hv-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--quirel-headerbar-bg, #303030);
+  border-bottom: 1px solid var(--quirel-border, #3f3f3f);
+  flex-shrink: 0;
+}
+
+.hv-filename {
+  flex: 1;
+  font-size: 13px;
+  color: var(--quirel-fg, #ffffff);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hv-size {
+  font-size: 12px;
+  color: var(--quirel-dim-fg, #9a9996);
+}
+
+.hv-content {
+  flex: 1;
+  overflow: auto;
+  padding: 8px 12px;
+  background: var(--quirel-view-bg, #1e1e1e);
+  font-family: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.hv-line {
+  display: flex;
+  gap: 12px;
+  white-space: pre;
+}
+
+.hv-offset {
+  color: var(--quirel-dim-fg, #9a9996);
+}
+
+.hv-hex {
+  color: var(--quirel-fg, #ffffff);
+}
+
+.hv-ascii {
+  color: var(--quirel-accent-fg, #99c1f1);
+}
+
+.hv-truncated {
+  margin-top: 8px;
+  color: var(--quirel-dim-fg, #9a9996);
+  font-size: 12px;
+}

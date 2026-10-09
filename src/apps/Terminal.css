@@ -1,5 +1,5 @@
 /* ============================================================
-   Terminal App — GNOME Terminal 风格
+   Terminal App — Adwaita Terminal 风格
    重点：彻底隔离 xterm.js 不受全局 CSS (box-sizing / user-select / margin / padding) 影响
    ============================================================ */
 
@@ -7,6 +7,7 @@
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0; /* ✅ 建立 flex 约束链（关键修复） */
   background: #1e1e1e;
 }
 
@@ -15,26 +16,26 @@
   display: flex;
   align-items: center;
   padding: 8px 12px;
-  background: var(--headerbar-bg);
-  border-bottom: 1px solid var(--border-color);
+  background: var(--quirel-headerbar-bg);
+  border-bottom: 1px solid var(--quirel-border-color);
   gap: 8px;
-  z-index: 10;
+  z-index: 1; /* ✅ 内容层，相对于父容器，无需高 z-index */
   position: relative;
   flex-shrink: 0;
 }
 
-.header-button {
+.terminal-header-button {
   padding: 4px 12px;
   border: none;
   background: transparent;
-  color: var(--text-primary);
+  color: var(--quirel-text-primary);
   cursor: pointer;
   border-radius: var(--radius-xs);
   font-size: 13px;
 }
 
-.header-button:hover {
-  background: var(--card-bg);
+.terminal-header-button:hover {
+  background: var(--quirel-card-bg);
 }
 
 /* ── Search Bar ─────────────────────────────────────────────── */
@@ -42,18 +43,27 @@
   display: flex;
   align-items: center;
   padding: 8px 12px;
-  background: var(--card-bg);
-  border-bottom: 1px solid var(--border-color);
+  background: var(--quirel-card-bg);
+  border-bottom: 1px solid var(--quirel-border-color);
   gap: 8px;
   flex-shrink: 0;
 }
 
-.search-input {
+/* 搜索栏标签（替代原内联 style 硬编码颜色） */
+.terminal-search-label {
+  color: var(--quirel-text-secondary);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.terminal-search-input {
   flex: 1;
   padding: 4px 8px;
-  border: 1px solid var(--border-color);
-  background: var(--view-bg);
-  color: var(--text-primary);
+  border: 1px solid var(--quirel-border-color);
+  background: var(--quirel-view-bg);
+  color: var(--quirel-text-primary);
   border-radius: var(--radius-xs);
   font-family: var(--font-ui);
   font-size: 13px;
@@ -62,23 +72,23 @@
   -webkit-user-select: text;
 }
 
-.search-input:focus {
-  outline: 2px solid var(--accent-bg);
+.terminal-search-input:focus {
+  outline: 2px solid var(--quirel-accent-bg);
   outline-offset: -2px;
 }
 
-.search-button {
+.terminal-search-button {
   padding: 4px 12px;
   border: none;
-  background: var(--accent-bg);
+  background: var(--quirel-accent-bg);
   color: #fff;
   cursor: pointer;
   border-radius: var(--radius-xs);
   font-size: 13px;
 }
 
-.search-button:hover {
-  background: var(--accent-hover);
+.terminal-search-button:hover {
+  background: var(--quirel-accent-hover);
 }
 
 /* ── Settings Panel ─────────────────────────────────────────────── */
@@ -88,42 +98,42 @@
   right: 12px;
   width: 300px;
   padding: 16px;
-  background: var(--card-bg);
-  border: 1px solid var(--border-color);
+  background: var(--quirel-card-bg);
+  border: 1px solid var(--quirel-border-color);
   border-radius: var(--radius-sm);
-  z-index: 100;
+  z-index: var(--z-app-dropdown); /* ✅ Layer 60: 应用内部浮动层 */
   box-shadow: var(--shadow-popup);
 }
 
-.settings-label {
+.terminal-settings-label {
   display: flex;
   align-items: center;
   margin-bottom: 12px;
-  color: var(--text-primary);
+  color: var(--quirel-text-primary);
   font-size: 13px;
   font-family: var(--font-ui);
 }
 
-.settings-slider {
+.terminal-settings-slider {
   flex: 1;
   margin: 0 8px;
 }
 
-.settings-value {
+.terminal-settings-value {
   min-width: 30px;
   text-align: right;
   font-family: var(--font-mono);
 }
 
-.settings-checkbox {
+.terminal-settings-checkbox {
   margin-left: 8px;
 }
 
-.settings-close-button {
+.terminal-settings-close-button {
   width: 100%;
   padding: 8px;
   border: none;
-  background: var(--accent-bg);
+  background: var(--quirel-accent-bg);
   color: #fff;
   border-radius: var(--radius-xs);
   cursor: pointer;
@@ -131,93 +141,191 @@
   font-size: 13px;
 }
 
-.settings-close-button:hover {
-  background: var(--accent-hover);
+.terminal-settings-close-button:hover {
+  background: var(--quirel-accent-hover);
 }
 
 /* ── Context Menu ─────────────────────────────────────────────── */
 .terminal-context-menu {
   position: fixed;
   padding: 6px 0;
-  background: var(--card-bg);
-  border: 1px solid var(--border-color);
+  background: var(--quirel-card-bg);
+  border: 1px solid var(--quirel-border-color);
   border-radius: var(--radius-sm);
-  z-index: 200;
+  z-index: var(--z-app-dropdown); /* ✅ Layer 60: 应用内部下拉菜单 */
   min-width: 160px;
   box-shadow: var(--shadow-popup);
 }
 
-.menu-item {
+.terminal-menu-item {
   display: block;
   width: 100%;
   padding: 8px 16px;
   border: none;
   background: transparent;
-  color: var(--text-primary);
+  color: var(--quirel-text-primary);
   cursor: pointer;
   text-align: left;
   font-size: 13px;
   font-family: var(--font-ui);
 }
 
-.menu-item:hover {
-  background: var(--card-hover);
+.terminal-menu-item:hover {
+  background: var(--quirel-card-hover);
 }
 
-.menu-divider {
+.terminal-menu-divider {
   margin: 4px 0;
   border: none;
-  border-top: 1px solid var(--border-color);
+  border-top: 1px solid var(--quirel-border-color);
 }
 
 /* ── Tab Bar ─────────────────────────────────────────────── */
-.terminal-tab-bar {
+.terminal-tabs-container {
   display: flex;
   align-items: center;
-  height: 36px;
-  background: var(--headerbar-bg);
-  border-bottom: 1px solid var(--border-color);
+  height: 48px;
+  background: var(--quirel-headerbar-bg);
+  border-bottom: 1px solid var(--quirel-border-color);
   padding: 0 4px;
-  gap: 2px;
   flex-shrink: 0;
-  z-index: 10;
+  z-index: 1; /* ✅ 内容层，相对于父容器，无需高 z-index */
   position: relative;
+}
+
+.terminal-tab-list {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1;  /* ✅ 占据剩余空间 */
   overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--quirel-border-color) transparent;
+}
+
+.terminal-tab-list::-webkit-scrollbar {
+  height: 4px;
+}
+
+.terminal-tab-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.terminal-tab-list::-webkit-scrollbar-thumb {
+  background: var(--quirel-border-color);
+  border-radius: var(--radius-pill);
+}
+
+.terminal-tab-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(0,0,0,0.2);
+}
+
+.terminal-tab-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;  /* ✅ 推到右侧 */
+  flex-shrink: 0;  /* ✅ 不压缩 */
+  padding-right: 8px;
+}
+
+/* Tab actions 右侧按钮：文字按钮（对齐 pd-btn/te-toolbar-btn 项目按钮语言：
+   透明底 + 1px 边框 + radius-xs，hover 才浮出 view-bg 底色） */
+.terminal-tab-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 12px;
+  height: 28px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--quirel-border-color);
+  background: transparent;
+  color: var(--quirel-text-secondary);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+  white-space: nowrap;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.terminal-tab-btn:hover {
+  background: var(--quirel-view-bg); /* hover 浮出背景（对齐 pd-btn:hover） */
+  color: var(--quirel-text-primary);
+}
+
+/* ── 连接状态指示（tab 栏右侧）：CSS 圆点 + 服务器名 ── */
+.terminal-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--quirel-text-secondary);
+  font-family: var(--font-ui);
+  white-space: nowrap;
+}
+
+/* 状态圆点：6px 圆形（替代原 ●/○ 文本字符） */
+.terminal-status-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--quirel-text-secondary);
+  flex-shrink: 0;
+}
+
+/* 已连接远程：绿色圆点 */
+.terminal-status.is-remote .terminal-status-dot,
+.terminal-status-dot.on {
+  background: #2ec27e; /* Adwaita success 绿 */
+}
+
+/* 本地/未连接：灰色圆点 */
+.terminal-status.is-local .terminal-status-dot,
+.terminal-status-dot.off {
+  background: var(--quirel-text-secondary);
 }
 
 .terminal-tab {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 12px;
+  gap: 4px;
+  padding: 4px 8px;
   height: 28px;
   font-size: 12px;
-  color: var(--text-secondary);
+  color: var(--quirel-text-secondary);
   border-radius: var(--radius-xs) var(--radius-xs) 0 0;
   cursor: pointer;
   border: none;
   background: transparent;
-  max-width: 200px;
-  min-width: 100px;
+  max-width: 180px;
+  min-width: 100px;  /* ✅ 修改：从 60px 改为 100px */
   white-space: nowrap;
-  flex-shrink: 0;
+  flex-shrink: 0;  /* ✅ 修改：从 1 改为 0 */
+  flex-grow: 0;
 }
 
 .terminal-tab:hover {
-  background: var(--card-bg);
-  color: var(--text-primary);
+  background: var(--quirel-card-bg);
+  color: var(--quirel-text-primary);
 }
 
 .terminal-tab.active {
-  background: var(--view-bg);
-  color: var(--text-primary);
-  border-bottom: 2px solid var(--accent-bg);
+  background: var(--quirel-view-bg);
+  color: var(--quirel-text-primary);
+  border-bottom: 2px solid var(--quirel-accent-bg);
 }
 
 .terminal-tab .tab-icon {
-  font-size: 12px;
+  font-size: 11px;
   font-family: var(--font-mono);
-  color: var(--accent-bg);
+  color: var(--quirel-accent-bg);
+  flex-shrink: 0;
+  width: 14px;
+  text-align: center;
 }
 
 .terminal-tab .tab-label {
@@ -227,31 +335,34 @@
   font-family: var(--font-ui);
   flex: 1;
   text-align: left;
+  min-width: 0;
 }
 
 .terminal-tab .tab-close {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   border-radius: 50%;
   border: none;
   background: transparent;
-  color: var(--text-secondary);
-  font-size: 14px;
+  color: var(--quirel-text-secondary);
+  font-size: 12px;
   line-height: 1;
   cursor: pointer;
   padding: 0;
-  margin-left: 4px;
+  margin-left: 2px;
   flex-shrink: 0;
   user-select: none;
   -webkit-user-select: none;
+  opacity: 0.7;
+  transition: opacity 0.15s ease-out;
 }
 
 .terminal-tab .tab-close:hover {
-  background: var(--card-hover);
-  color: var(--text-primary);
+  background: var(--quirel-card-hover);
+  color: var(--quirel-text-primary);
 }
 
 .terminal-new-tab {
@@ -263,7 +374,7 @@
   border-radius: var(--radius-xs);
   border: none;
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--quirel-text-secondary);
   font-size: 18px;
   cursor: pointer;
   margin-left: 2px;
@@ -271,20 +382,70 @@
 }
 
 .terminal-new-tab:hover {
-  background: var(--card-bg);
-  color: var(--text-primary);
+  background: var(--quirel-card-bg);
+  color: var(--quirel-text-primary);
 }
 
 /* ═════════════════════════════════════════════════════════════
    核心修复：Terminal Container & xterm.js 隔离
    ═════════════════════════════════════════════════════════════ */
 
+/* ── Status Bar - 底部状态栏（对齐 FileManager / TextEditor 状态栏样式）──
+   左组=连接信息（服务器 / host:port / 会话数），右组=显示设置（字号） */
+.terminal-status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  height: 30px;
+  flex-shrink: 0; /* 不压缩，终端区域自动让位 */
+  border-top: 1px solid var(--quirel-border-color);
+  background: var(--quirel-headerbar-bg);
+}
+
+/* 状态组：同一语义的信息聚合 */
+.terminal-status-group {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+
+/* 组间竖线分隔符（第二个组开始显示） */
+.terminal-status-group + .terminal-status-group::before {
+  content: "";
+  align-self: stretch;
+  margin: 4px 0;
+  border-left: 1px solid var(--quirel-border-color);
+}
+
+/* 状态项：含内嵌圆点（连接状态）时保持对齐 */
+.terminal-status-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--quirel-text-secondary);
+  white-space: nowrap;
+}
+
+/* 等宽数值（host:port / 字号），与编辑器路径行同款 */
+.terminal-status-mono {
+  font-family: Consolas, "Source Code Pro", monospace;
+}
+
 .terminal-container {
   flex: 1;
+  min-height: 0; /* ✅ 建立 flex 约束链（关键修复） */
   position: relative;
-  min-height: 0;
+  min-height: 200px;  /* 设置最小高度，防止窗口过小导致 xterm.js 异常 */
+  min-width: 400px;   /* 设置最小宽度，确保至少能显示合理的列数 */
   overflow: hidden;
   background: #1e1e1e;
+  display: flex;
+  flex-direction: column;
 }
 
 /* xterm.js 需要一个明确尺寸的容器 */
@@ -297,7 +458,9 @@
   padding: 0;
   margin: 0;
   background: #1e1e1e;
-  /* 不允许全局 margin/padding 影响 */
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
 }
 
 /* ── 最关键：隔离 xterm.js DOM 树不受全局样式影响 ──────
@@ -387,7 +550,7 @@
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: var(--text-secondary);
+  color: var(--quirel-text-secondary);
   gap: 12px;
 }
 
@@ -402,5 +565,5 @@
 
 .terminal-empty .empty-hint {
   font-size: 12px;
-  color: var(--text-disabled);
+  color: var(--quirel-text-disabled);
 }

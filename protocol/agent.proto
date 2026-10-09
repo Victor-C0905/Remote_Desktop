@@ -1,0 +1,151 @@
+syntax = "proto3";
+
+package agent;
+
+// Manager -> Worker 的请求消息
+message ManagerRequest {
+    uint64 request_id = 1;
+    oneof payload {
+        CreateSession create_session = 2;
+        // ResizeWindow 已移除：由 Manager 直接处理（Worker 不持有 master_fd）
+        KillSession kill_session = 4;
+        ReadDir read_dir = 5;
+        ReadFile read_file = 6;
+        WriteFile write_file = 7;
+        ExecuteCommand execute_command = 8;
+        GetSystemInfo get_system_info = 9;
+    }
+}
+
+// Worker -> Manager 的响应消息
+message WorkerResponse {
+    uint64 request_id = 1;
+    oneof payload {
+        SessionCreated session_created = 2;
+        DirListing dir_listing = 3;
+        FileContent file_content = 4;
+        WriteResult write_result = 5;
+        CommandOutput command_output = 6;
+        SystemInfo system_info = 7;
+        Error error = 8;
+    }
+}
+
+// 错误响应
+message Error {
+    uint32 code = 1;
+    string message = 2;
+}
+
+// ============================================
+// 终端会话相关消息 (TASK-004)
+// ============================================
+
+// 创建终端会话
+message CreateSession {
+    string shell = 1;
+    uint16 cols = 2;
+    uint16 rows = 3;
+    string working_directory = 4;
+    map<string, string> env = 5;
+}
+
+// 调整终端窗口大小
+message ResizeWindow {
+    string session_id = 1;
+    uint16 cols = 2;
+    uint16 rows = 3;
+}
+
+// 终止终端会话
+message KillSession {
+    string session_id = 1;
+}
+
+// 终端会话已创建
+message SessionCreated {
+    string session_id = 1;
+    int32 pid = 2;
+    // 注意: master_fd 通过 SCM_RIGHTS 发送，不在 Protobuf 中
+}
+
+// ============================================
+// 文件操作相关消息 (TASK-005)
+// ============================================
+
+// 读取目录
+message ReadDir {
+    string path = 1;
+}
+
+// 读取文件
+message ReadFile {
+    string path = 1;
+    uint64 offset = 2;
+    uint32 length = 3;
+}
+
+// 写入文件
+message WriteFile {
+    string path = 1;
+    uint64 offset = 2;
+    bytes data = 3;
+}
+
+// 目录列表
+message DirListing {
+    repeated DirEntry entries = 1;
+}
+
+message DirEntry {
+    string name = 1;
+    bool is_dir = 2;
+    uint64 size = 3;
+    uint64 modified_time = 4;
+    uint32 mode = 5;
+}
+
+// 文件内容
+message FileContent {
+    bytes data = 1;
+    bool eof = 2;
+}
+
+// 写入结果
+message WriteResult {
+    uint32 bytes_written = 1;
+}
+
+// ============================================
+// 命令执行和系统信息相关消息 (TASK-006)
+// ============================================
+
+// 执行命令
+message ExecuteCommand {
+    string command = 1;
+    repeated string args = 2;
+    string working_directory = 3;
+    map<string, string> env = 4;
+    uint32 timeout_secs = 5;
+}
+
+// 命令输出
+message CommandOutput {
+    bytes stdout = 1;
+    bytes stderr = 2;
+    int32 exit_code = 3;
+}
+
+// 获取系统信息
+message GetSystemInfo {
+    repeated string info_types = 1; // "cpu", "memory", "disk", "network"
+}
+
+// 系统信息
+message SystemInfo {
+    double cpu_percent = 1;
+    uint64 mem_total = 2;
+    uint64 mem_used = 3;
+    uint64 disk_total = 4;
+    uint64 disk_used = 5;
+}

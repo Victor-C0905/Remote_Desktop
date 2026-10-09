@@ -1,0 +1,59 @@
+[Unit]
+Description=Quireld - SSH-like Remote Management
+Documentation=https://github.com/quirel
+After=network.target network-online.target
+Wants=network-online.target
+StartLimitBurst=3
+StartLimitIntervalSec=60
+
+[Service]
+Type=simple
+User=root
+Group=root
+
+# Linux 规范：设置工作目录
+# - 证书等相对路径(cert.pem/key.pem)基于此目录解析
+# - Worker 路径通过 /proc/self/exe 获取,不依赖此目录
+WorkingDirectory=/var/lib/quireld
+
+ExecStart=/usr/local/bin/quireld \
+    --config /etc/quireld/quireld.toml \
+    --log-dir /var/log/quireld
+
+# ====================================================================
+# Phase 4 热更新配置（Manager/Worker 架构已集成，已启用）
+# ====================================================================
+# 架构迁移已完成（main.rs → Manager::start → Worker 子进程）：
+# - SIGHUP 信号由 watch_sighup 监听并触发 HotUpdateCoordinator
+# - KillMode=process：systemctl stop/restart 只杀 Manager，Worker 由
+#   Manager 优雅关闭；避免 KillMode=control-group 误杀 Worker 导致
+#   PTY 会话意外中断
+# - ExecReload：systemctl reload 发送 SIGHUP，触发热更新（不中断现有会话）
+# ====================================================================
+KillMode=process
+ExecReload=/bin/kill -HUP $MAINPID
+
+Restart=on-failure
+RestartSec=5s
+
+# 安全配置
+# 注意：不要使用 CapabilityBoundingSet 限制能力
+# quireld 需要读取所有用户的 .ssh/authorized_keys 文件（公钥认证）
+# 和切换用户身份（PAM 认证），需要完整能力
+NoNewPrivileges=false
+
+# 资源限制
+LimitNOFILE=65536
+LimitNPROC=infinity
+
+# 环境变量
+Environment="RUST_LOG=info"
+Environment="HOME=/var/lib/quireld"
+
+# 日志
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=quireld
+
+[Install]
+WantedBy=multi-user.target
