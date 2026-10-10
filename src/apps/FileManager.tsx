@@ -12,7 +12,7 @@ import { createLogger } from '../utils/logger';
 import { openRemoteFile } from './openRemoteFile';
 import { parsePermissions, matrixToOctal, octalToPermString } from './permissions';
 import type { PermMatrix } from './permissions';
-import { sortFileEntries, DEFAULT_SORT, DEFAULT_COLUMN_WIDTHS, COLUMN_MIN_WIDTHS, clampColumnWidth, buildGridTemplate, filterFileEntries, DEFAULT_FILTER } from './fileTable';
+import { sortFileEntries, DEFAULT_SORT, DEFAULT_COLUMN_WIDTHS, clampColumnWidth, buildGridTemplate, filterFileEntries, DEFAULT_FILTER } from './fileTable';
 import type { SortKey, SortState, ColumnWidths, FilterMode } from './fileTable';
 import { SymbolicIcon } from "../components/symbolic";
 import { useSettingsStore } from '../stores/settingsStore';
@@ -388,20 +388,12 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     if (!resizing) return;
     const { key, startX, startWidth } = resizing;
 
-    // 可用空间上限：容器宽 - 行内边距/列间隙 - 名称列下限 - 其余列当前宽度
-    // （防止固定列总和超出容器后右缘被 overflow 裁剪）
-    const containerWidth = listAreaRef.current?.getBoundingClientRect().width;
-    let maxWidth: number | undefined;
-    if (containerWidth) {
-      const current = useSettingsStore.getState().fileManagerColumns ?? DEFAULT_COLUMN_WIDTHS;
-      const othersWidth = (Object.keys(current) as SortKey[])
-        .filter(k => k !== key && k !== "name" && current[k] !== null)
-        .reduce((sum, k) => sum + (current[k] as number), 0);
-      maxWidth = containerWidth - 48 - COLUMN_MIN_WIDTHS.name - othersWidth;
-    }
+    // 列宽不设上限（对齐 Explorer/Nautilus）：列总和超出容器后由 .fm-list 整体
+    // 横向滚动兜底（表头 sticky 顶部、与行同滚）。此前「上限=容器剩余空间」的约束
+    // 在列总和占满容器后会互相锁死所有列（无空白可吃，任何列都拖不大）。
 
     const handleMove = (e: MouseEvent) => {
-      const w = clampColumnWidth(key, startWidth + (e.clientX - startX), maxWidth);
+      const w = clampColumnWidth(key, startWidth + (e.clientX - startX));
       dragWidthRef.current = w;
       setDragWidth(w);
     };
