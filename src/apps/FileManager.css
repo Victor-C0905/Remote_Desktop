@@ -309,10 +309,13 @@
   flex-direction: column;
   height: 100%;  /* ✅ 填满父容器 */
   min-height: 0;  /* ✅ 建立 flex 约束链 */
+  /* 滚动上提：列总和超出容器宽时整体横滚（表头与行同滚，对齐 Explorer）；
+     行多时纵滚（表头 sticky 顶部保持可见）。此前 content 独立滚动 + 横向 hidden，
+     列超宽只能裁剪，导致拖拽必须锁上限、占满后所有列互相锁死 */
+  overflow: auto;
 }
 
-/* ✅ 表头固定（flex-shrink: 0），不参与滚动
-   列宽经 --fm-cols 变量下发（fm-list 容器挂载，表头与行共用）；
+/* 列宽经 --fm-cols 变量下发（fm-list 容器挂载，表头与行共用）；
    未设置时回退到历史默认比例 */
 .fm-list .fm-list-header {
   display: grid;
@@ -322,7 +325,10 @@
   font-weight: 600;
   color: var(--quirel-text-secondary);
   padding: 8px 12px;
-  background: var(--quirel-headerbar-bg);  /* ✅ 使用标题栏背景色 */
+  background: var(--quirel-headerbar-bg);  /* ✅ 实心背景：行滚过时盖住（sticky） */
+  position: sticky;  /* 滚动上提至 .fm-list 后，纵滚时表头吸顶 */
+  top: 0;
+  z-index: 1;
   border-bottom: 1px solid var(--quirel-border-color);  /* ✅ 添加分隔线 */
   flex-shrink: 0;  /* ✅ 固定高度，不压缩 */
 }
@@ -412,17 +418,17 @@
   background: var(--quirel-accent-bg);
 }
 
-/* ✅ 文件列表滚动容器（模仿 SystemMonitor） */
+/* 文件列表行容器（滚动已上提至 .fm-list） */
 .fm-list-content {
-  flex: 1;  /* 占据剩余空间 */
-  overflow-y: auto;  /* ✅ 主内容区滚动 */
-  overflow-x: hidden;  /* ✅ 防止横向滚动 */
-  min-height: 0;  /* ✅ 建立 flex 约束链 */
+  flex: 1;  /* 空目录时仍占满，保住空白点击区（清空选中） */
+  /* 滚动已上提至 .fm-list（列超宽整体横滚 + 纵滚表头 sticky），
+     此处不再做独立滚动容器 */
 }
 
 .fm-list .fm-list-row {
   display: grid;
   grid-template-columns: var(--fm-cols, minmax(180px, 2fr) 90px 140px 90px);  /* ✅ 匹配表头列宽（--fm-cols 同源） */
+  scroll-margin-top: 40px;  /* 键盘导航 scrollIntoView 时避开 sticky 表头遮挡 */
   gap: 8px;
   padding: 6px 12px;
   border-radius: var(--radius-xs);
