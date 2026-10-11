@@ -33,7 +33,9 @@ export interface ChromeTabItem {
 }
 
 interface ChromeTabsInstance {
+  el: HTMLElement;
   init(el: HTMLElement): void;
+  layoutTabs(): void;
   addTab(
     props: { title?: string; favicon?: string | false; id?: string },
     opts?: { animate?: boolean; background?: boolean },
@@ -49,6 +51,9 @@ interface ChromeTabsInstance {
 interface ChromeTabStripProps {
   tabs: ChromeTabItem[];
   activeTabId: string;
+
+  /** 新建页签（+ 按钮） */
+  onAdd(): void;
 
   onActivate(id: string): void;
 
@@ -82,19 +87,24 @@ class ChromeTabStripErrorBoundary extends React.Component<
   }
 }
 
+/** 页签内容宽度上限（含标题区；整体宽度再加左右 9px 边距）——收窄默认页签 */
+const TAB_CONTENT_MAX_WIDTH = 170;
+
 function ChromeTabStripImpl({
   tabs,
   activeTabId,
   onActivate,
   onClose,
   onReorder,
+  onAdd,
 }: ChromeTabStripProps) {
   const elRef = useRef<HTMLDivElement>(null);
   const instanceRef = useRef<ChromeTabsInstance | null>(null);
+  const updateTabsEndRef = useRef<(() => void) | null>(null);
   /** 程序化同步期间屏蔽库事件，防止状态回环 */
   const suppressRef = useRef(false);
-  const cbRef = useRef({ onActivate, onClose, onReorder });
-  cbRef.current = { onActivate, onClose, onReorder };
+  const cbRef = useRef({ onActivate, onClose, onReorder, onAdd });
+  cbRef.current = { onActivate, onClose, onReorder, onAdd };
 
   // 初始化库 + 事件桥接（仅挂载一次）
   useEffect(() => {
@@ -103,6 +113,38 @@ function ChromeTabStripImpl({
 
     const ct = new (ChromeTabs as unknown as { new (): ChromeTabsInstance })();
     ct.init(el);
+
+    // 收窄默认页签：实例级遮蔽 tabContentWidths getter（宽度与位置都由此派生，
+    // 收窄一处即全局一致）。在 init 之后定义（el 已就绪），并手动重排一次
+    const proto = Object.getPrototypeOf(ct) as Record<string, PropertyDescriptor>;
+    // ✅ 用 getOwnPropertyDescriptor 取 getter（直接访问属性会以原型为 this 触发它）
+    const widthsGet = Object.getOwnPropertyDescriptor(proto, 'tabContentWidths')?.get?.bind(ct);
+    if (widthsGet) {
+      Object.defineProperty(ct, 'tabContentWidths', {
+        get() {
+          return widthsGet().map((w: number) => Math.min(w, TAB_CONTENT_MAX_WIDTH));
+        },
+      });
+      ct.layoutTabs();
+    }
+
+    // 维护 --tabs-end（最后一个页签右缘）：+ 按钮紧随其后
+    const updateTabsEnd = () => {
+      const content = el.querySelector('.chrome-tabs-content');
+      const tabEls = [...(content?.querySelectorAll('.chrome-tab') ?? [])];
+      const last = tabEls[tabEls.length - 1] as HTMLElement | undefined;
+      if (!content || !last) return;
+      const contentRect = content.getBoundingClientRect();
+      const lastRect = last.getBoundingClientRect();
+      el.style.setProperty('--tabs-end', `${Math.round(lastRect.right - contentRect.left)}px`);
+    };
+    updateTabsEndRef.current = updateTabsEnd;
+
+    // 容器尺寸变化（窗口缩放）后库会重排页签，跟随更新
+    const ro = new ResizeObserver(() => {
+      requestAnimationFrame(() => updateTabsEndRef.current?.());
+    });
+    ro.observe(el);
     instanceRef.current = ct;
 
     const idOf = (target: EventTarget | null): string | null =>
@@ -146,6 +188,7 @@ function ChromeTabStripImpl({
     el.addEventListener('dblclick', onDblCapture, true);
 
     return () => {
+      ro.disconnect();
       el.removeEventListener('activeTabChange', onActive);
       el.removeEventListener('tabRemove', onRemove);
       el.removeEventListener('tabReorder', onReorderEv);
@@ -212,12 +255,24 @@ function ChromeTabStripImpl({
     const activeEl = el.querySelector<HTMLElement>(`[data-tab-id="${activeTabId}"]`);
     if (activeEl && !activeEl.hasAttribute('active')) ct.setCurrentTab(activeEl);
     suppressRef.current = false;
+    updateTabsEndRef.current?.();
   }, [tabs, activeTabId]);
 
-  // 库要求的固定骨架：.chrome-tabs > .chrome-tabs-content
+  // 库要求的固定骨架：.chrome-tabs > .chrome-tabs-content；
+  // + 按钮内嵌其中，绝对定位紧随最后一个页签（--tabs-end）
   return (
     <div ref={elRef} className="te-chrome-tabs chrome-tabs">
-      <div className="chrome-tabs-content" />
+      <div className="chrome-tabs-content">
+        <button
+          type="button"
+          className="te-tab-new"
+          onClick={() => cbRef.current.onAdd()}
+          title="新建页签"
+          style={{ left: 'var(--tabs-end, 0px)' }}
+        >
+          +
+        </button>
+      </div>
     </div>
   );
 }

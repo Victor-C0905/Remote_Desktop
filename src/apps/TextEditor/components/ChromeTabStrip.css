@@ -50,3 +50,35 @@
 .te-chrome-tabs.chrome-tabs.chrome-tabs-is-sorting {
   cursor: grabbing;
 }
+
+/* ── 新建页签按钮：紧随最后一个页签，圆形悬停钮（Chrome 语言）── */
+.te-chrome-tabs .te-tab-new {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  margin-left: 6px;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--quirel-text-secondary);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.te-chrome-tabs .te-tab-new:hover {
+  background: var(--quirel-card-hover);
+  color: var(--quirel-text-primary);
+}
+
+.te-chrome-tabs .te-tab-new:active {
+  background: color-mix(in srgb, var(--quirel-accent-bg) 22%, transparent);
+  color: var(--quirel-text-primary);
+}
