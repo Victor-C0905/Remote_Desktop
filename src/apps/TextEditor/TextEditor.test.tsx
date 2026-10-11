@@ -7,7 +7,7 @@
  * 库的 activeTabChange 事件验证桥接 onActivate 链路。
  */
 
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { TextEditor } from './TextEditor';
 
@@ -74,12 +74,10 @@ describe('TextEditor 多页签', () => {
     const { unmount } = mountWithSlot(<TextEditor windowId="w3" />, 'w3');
     fireEvent.click(screen.getByTitle('新建页签'));
     const tabs = [...document.querySelectorAll('.chrome-tab')];
-    // 模拟库激活事件（draggabilly pointerDown 内部触发 activeTabChange）
-    act(() => {
-      document
-        .querySelector('.te-chrome-tabs')
-        ?.dispatchEvent(new CustomEvent('activeTabChange', { detail: { tabEl: tabs[0] } }));
-    });
+    // 库通过 draggabilly 在拖拽把手上激活页签（pointerdown，降级 mousedown）
+    const handle = tabs[0].querySelector('.chrome-tab-drag-handle');
+    fireEvent.pointerDown(handle as Element);
+    if (activeTabIndex() !== 0) fireEvent.mouseDown(handle as Element);
     expect(activeTabIndex()).toBe(0);
     unmount();
   });
