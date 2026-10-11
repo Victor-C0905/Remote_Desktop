@@ -336,28 +336,28 @@
   cursor: default;
 }
 
-/* Chrome 式连接弧：两脚向外弯入标签条表面
-   （radial-gradient 圆心在方块上角：圆内=标签条表面，圆外=标签同色） */
-.te-tab.active::before,
-.te-tab.active::after {
-  content: '';
+/* Chrome 式连接弧：内联 SVG 路径（抗锯齿，fill 走主题变量，
+   技法源自 adamschwartz/chrome-tabs 的 bottom-corner 实现；右脚水平镜像复用） */
+.te-tab-corner {
   position: absolute;
   bottom: 0;
-  width: 10px;
-  height: 10px;
+  width: 9px;
+  height: 9px;
   pointer-events: none;
+  display: block;
 }
 
-.te-tab.active::before {
-  left: -10px;
-  background: radial-gradient(circle 10px at 0 0,
-    var(--quirel-frosted-bg) 99%, var(--quirel-headerbar-bg) 100%);
+.te-tab-corner path {
+  fill: var(--quirel-headerbar-bg);
 }
 
-.te-tab.active::after {
-  right: -10px;
-  background: radial-gradient(circle 10px at 100% 0,
-    var(--quirel-frosted-bg) 99%, var(--quirel-headerbar-bg) 100%);
+.te-tab-corner-left {
+  left: -9px;
+}
+
+.te-tab-corner-right {
+  right: -9px;
+  transform: scaleX(-1);
 }
 
 /* [+] 原地新增页签：圆形幽灵按钮（Chrome 新标签同位） */

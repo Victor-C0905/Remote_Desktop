@@ -216,6 +216,27 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
               </span>
               <span className="te-tab-name">{label}</span>
               {st?.dirty && <span className="te-tab-dot" title="未保存" />}
+              {isActive && (
+                <>
+                  {/* Chrome 式连接弧（SVG 路径，抗锯齿 + 主题变量填充，右脚水平镜像复用） */}
+                  <svg
+                    className="te-tab-corner te-tab-corner-left"
+                    viewBox="0 0 9 9"
+                    preserveAspectRatio="none"
+                    aria-hidden="true"
+                  >
+                    <path d="M 0 9 L 9 9 L 9 0 A 9 9 0 0 1 0 9 Z" />
+                  </svg>
+                  <svg
+                    className="te-tab-corner te-tab-corner-right"
+                    viewBox="0 0 9 9"
+                    preserveAspectRatio="none"
+                    aria-hidden="true"
+                  >
+                    <path d="M 0 9 L 9 9 L 9 0 A 9 9 0 0 1 0 9 Z" />
+                  </svg>
+                </>
+              )}
               <span
                 className="te-tab-close"
                 title="关闭页签"
