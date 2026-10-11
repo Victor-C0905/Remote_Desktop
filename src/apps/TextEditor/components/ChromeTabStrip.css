@@ -18,21 +18,8 @@
   overflow: visible; /* 页签背景下探覆盖边界缝隙行（拖拽排序被库约束在条内，安全） */
 }
 
-/* ── 底缝遮盖（c770f4b 修复，迁移时丢失，此处恢复）──
-   页签背景 SVG 底边在符号缩放时差约 1px，会露出条面底色形成细缝。
-   ::after 全宽覆盖层：下探 2px 进入顶栏（同色不可见），覆盖亚像素缝隙行；
-   SVG 纵向拉伸 2px 让几何本体下探衔接（2/36 拉伸不可感知） */
-.te-chrome-tabs.chrome-tabs::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -2px;
-  height: 4px;
-  background: var(--quirel-headerbar-bg);
-  pointer-events: none;
-}
-
+/* 页签背景 svg 纵向拉伸 2px：几何本体下探进顶栏，衔接页签底与顶栏面
+   （2/36 拉伸不可感知；窗口级底缝桥接见 WindowShell.module.css） */
 .te-chrome-tabs .chrome-tab .chrome-tab-background > svg {
   height: calc(100% + 2px);
 }
