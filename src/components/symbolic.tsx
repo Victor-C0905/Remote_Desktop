@@ -10,7 +10,9 @@ export type SymbolicIconName =
   | "mail-unread" | "mailbox"
   | "emblem-ok" | "user-trash" | "window-close"
   | "bell" | "bell-outline"
-  | "pan-up" | "pan-down";
+  | "pan-up" | "pan-down"
+  | "funnel"
+  | "chevron-up" | "chevron-down";
 
 /** 图标内容（16×16 网格，几何近似 Adwaita symbolic 造型） */
 const ICONS: Record<SymbolicIconName, ReactNode> = {
@@ -89,6 +91,20 @@ const ICONS: Record<SymbolicIconName, ReactNode> = {
   // 实心小三角朝下（排序指示：升序，桌面文件管理器惯例）
   "pan-down": (<>
     <path d="M8 11.6 L3.6 6.4 H12.4 Z" fill="currentColor" />
+  </>),
+  // 漏斗（列筛选激活指示，文件管理器表头）
+  "funnel": (<>
+    <path d="M2.2 2.8 H13.8 L9.4 8.2 V12.6 L6.6 13.8 V8.2 Z"
+      fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+  </>),
+  // 细线 chevron（排序方向指示/表头下拉按钮，Win11 Explorer 风格）
+  "chevron-up": (<>
+    <path d="M3.5 10 L8 5.5 L12.5 10"
+      fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+  </>),
+  "chevron-down": (<>
+    <path d="M3.5 6 L8 10.5 L12.5 6"
+      fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
   </>),
 };
 
