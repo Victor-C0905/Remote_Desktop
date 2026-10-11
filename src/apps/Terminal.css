@@ -230,38 +230,8 @@
   padding-right: 8px;
 }
 
-/* Tab actions 右侧按钮：紧凑图标按钮（28×28 方形，对齐 te-icon-btn 尺寸：
-   透明底 + 1px 边框 + radius-xs，hover 浮出 view-bg 底色，激活态 accent） */
-.terminal-tab-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border-radius: var(--radius-xs);
-  border: 1px solid var(--quirel-border-color);
-  background: transparent;
-  color: var(--quirel-text-secondary);
-  font-size: 13px;
-  line-height: 1;
-  cursor: pointer;
-  flex-shrink: 0;
-  white-space: nowrap;
-  transition: all var(--duration-fast) var(--ease-out);
-}
-
-.terminal-tab-btn:hover {
-  background: var(--quirel-view-bg); /* hover 浮出背景（对齐 pd-btn:hover） */
-  color: var(--quirel-text-primary);
-}
-
-/* 激活态（搜索/设置面板开启时）：accent 底，与 EditorMode 激活语言一致 */
-.terminal-tab-btn.active {
-  background: var(--quirel-accent-bg);
-  border-color: var(--quirel-accent-bg);
-  color: var(--quirel-accent-fg);
-}
+/* 低频操作（搜索/设置开关）收纳在 ToolbarMenu（⌄ 菜单）中，
+   触发按钮复用共享组件 .tbm-trigger 的 28×28 尺度 */
 
 /* ── 连接状态指示（tab 栏右侧）：CSS 圆点 + 服务器名 ── */
 .terminal-status {

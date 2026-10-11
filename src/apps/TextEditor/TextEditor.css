@@ -115,88 +115,6 @@
 }
 
 /* ============================================================
-   编辑模式切换组件样式
-   用于在文本模式和十六进制模式之间切换
-   Adwaita 分组按钮样式（Linked Buttons）
-   ============================================================ */
-
-/* ── 编辑模式容器 ──────────────────────────────────────── */
-.te-editor-mode {
-  display: flex;
-  align-items: center;
-  gap: 0; /* 分组按钮无间距 */
-}
-
-/* ── 模式按钮基础样式（紧凑分段，对齐 te-icon-btn 尺度）──── */
-.te-mode-btn {
-  /* Adwaita Linked Button 样式（紧凑） */
-  padding: 3px 10px;
-  min-height: 28px; /* 与 te-icon-btn 同高 */
-
-  /* 边框和圆角（分组按钮：左边按钮右边圆角，右边按钮左边圆角） */
-  border: 1px solid var(--quirel-border-color);
-  border-radius: 0; /* 默认无圆角 */
-
-  /* 背景和文字（透明底，对齐 te-toolbar-btn/pd-btn） */
-  background: transparent;
-  color: var(--quirel-text-secondary);
-
-  /* 字体设置 */
-  font-family: var(--font-ui);
-  font-size: 12px; /* 紧凑字号 */
-
-  /* 交互 */
-  cursor: pointer;
-
-  /* 过渡效果 */
-  transition: all var(--duration-fast) var(--ease-out);
-}
-
-/* ── 第一个按钮：左边圆角 ────────────────────────────── */
-.te-mode-btn:first-child {
-  border-radius: var(--radius-xs) 0 0 var(--radius-xs); /* 左边圆角（radius-xs 对齐对话框按钮） */
-}
-
-/* ── 最后一个按钮：右边圆角 ──────────────────────────── */
-.te-mode-btn:last-child {
-  border-radius: 0 var(--radius-xs) var(--radius-xs) 0; /* 右边圆角 */
-}
-
-/* ── 相邻按钮边框重叠（防止双边框）────────────────────── */
-.te-mode-btn:not(:last-child) {
-  border-right: none; /* 移除右边边框 */
-}
-
-/* ── 模式按钮 Hover 状态 ──────────────────────────────── */
-.te-mode-btn:hover {
-  background: var(--quirel-view-bg); /* hover 浮出背景（对齐 te-toolbar-btn:hover） */
-  color: var(--quirel-text-primary);
-}
-
-/* ── 模式按钮 Active 状态 ────────────────────────────── */
-.te-mode-btn.active {
-  /* 激活状态使用 accent 颜色 */
-  background: var(--quirel-accent-bg);
-  color: var(--quirel-accent-fg);
-  border-color: var(--quirel-accent-bg);
-}
-
-/* ── Active 状态的相邻按钮边框 ────────────────────────── */
-.te-mode-btn.active:not(:last-child) {
-  border-right: 1px solid var(--quirel-accent-bg); /* 保留右边边框 */
-}
-
-.te-mode-btn.active:not(:first-child) {
-  border-left: 1px solid var(--quirel-accent-bg); /* 保留左边边框 */
-}
-
-/* ── 模式按钮 Disabled 状态 ───────────────────────────── */
-.te-mode-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-/* ============================================================
    状态栏组件样式
    显示文件的行数、字符数、编码、保存状态等信息
    ============================================================ */
@@ -242,31 +160,6 @@
   white-space: nowrap;
 }
 
-/* ── 状态栏开关（自动换行）：可点击的状态项，开启时 accent 着色 ── */
-.te-status-toggle {
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: var(--radius-xs);
-  font-family: var(--font-ui);
-  font-size: 12px;
-  line-height: 1.4;
-  color: var(--quirel-text-secondary);
-  white-space: nowrap;
-  transition: all var(--duration-fast) var(--ease-out);
-}
-
-.te-status-toggle:hover {
-  background: var(--quirel-view-bg);
-  color: var(--quirel-text-primary);
-}
-
-.te-status-toggle.on {
-  color: var(--quirel-accent-bg);
-  font-weight: 600;
-}
-
 /* ── 状态徽标（只读/未保存）：药丸形高亮，比纯文字更显眼 ── */
 .te-status-badge {
   display: inline-block;
@@ -293,7 +186,7 @@
 
 /* ============================================================
    文本编辑器主组件样式
-   整合所有子组件，提供完整的编辑器布局
+   三行结构（对齐 VS Code）：动作栏 → 标签栏 → 面包屑 → 编辑区
    ============================================================ */
 
 /* ── 主容器 ────────────────────────────────────────────── */
@@ -324,41 +217,141 @@
   overflow: hidden; /* 防止内容溢出 */
 }
 
-/* ── 工具栏 ────────────────────────────────────────────── */
-.te-toolbar {
+/* ── 动作栏（第一行）：纯高频动作（撤销/重做 | 保存/查找/菜单）── */
+.te-actionbar {
   display: flex;
   align-items: center;
-  justify-content: space-between; /* 左侧/右侧分离布局 */
-  padding: 0 16px;  /* 左右边距与文本编辑区一致 */
-  height: 48px; /* Adwaita HeaderBar 标准高度 */
+  justify-content: space-between;
+  padding: 0 8px;
+  height: 44px;
   background: var(--quirel-headerbar-bg);
   border-bottom: 1px solid var(--quirel-border-color);
-}
-
-/* ── 工具栏左侧区域 ─────────────────────────────────────── */
-.te-toolbar-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex: 0 1 auto; /* 不拉伸，占据内容所需空间 */
-  min-width: 0; /* 允许路径行收缩省略 */
-}
-
-/* ── 工具栏右侧区域 ─────────────────────────────────────── */
-.te-toolbar-right {
-  display: flex;
-  align-items: center;
-  gap: 6px; /* 组内紧凑间距 */
-  flex: 0 0 auto; /* 固定宽度，不拉伸 */
-}
-
-/* ── 分组分隔线：文件操作 | 视图模式 ─────────────────────── */
-.te-toolbar-divider {
-  width: 1px;
-  height: 20px;
-  background: var(--quirel-border-color);
-  margin: 0 4px;
   flex-shrink: 0;
+}
+
+.te-actionbar-left,
+.te-actionbar-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+/* ── 标签栏（第二行）：文档标签 ──────────────────────────── */
+.te-tabbar {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  padding: 6px 8px 0;
+  height: 36px;
+  background: var(--quirel-headerbar-bg);
+  border-bottom: 1px solid var(--quirel-border-color);
+  flex-shrink: 0;
+}
+
+/* 文档标签：active 标签以 view-bg 底色与编辑区连成一体（VS Code 同款视觉） */
+.te-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 240px;
+  height: 30px;
+  padding: 0 8px 0 10px;
+  background: var(--quirel-view-bg);
+  border: 1px solid var(--quirel-border-color);
+  border-bottom: none;
+  border-radius: var(--radius-xs) var(--radius-xs) 0 0;
+  min-width: 0; /* 允许收缩省略 */
+}
+
+.te-tab-icon {
+  font-size: 13px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.te-tab-name {
+  font-family: var(--font-ui);
+  font-size: 12px;
+  color: var(--quirel-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 未保存圆点 */
+.te-tab-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--quirel-accent-bg);
+  flex-shrink: 0;
+}
+
+/* 关闭按钮：小方形，hover 浮出 */
+.te-tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-xs);
+  font-size: 13px;
+  line-height: 1;
+  color: var(--quirel-text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.te-tab-close:hover {
+  background: var(--quirel-card-hover);
+  color: var(--quirel-text-primary);
+}
+
+/* [+] 新建编辑器窗口（标签行尾部，VS Code 新标签同位） */
+.te-tab-new {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-bottom: 3px;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--quirel-text-secondary);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.te-tab-new:hover {
+  background: var(--quirel-view-bg);
+  color: var(--quirel-text-primary);
+}
+
+/* ── 面包屑（第三行，仅已打开文件）：服务器 › 目录 › 文件 ── */
+.te-breadcrumb {
+  height: 24px;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  background: var(--quirel-window-bg);
+  border-bottom: 1px solid var(--quirel-border-color);
+
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--quirel-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* 路径过长时优先保留末尾（文件名）：方向反转使省略号出现在左侧
+     （与 FileManager 拖放层同款技巧） */
+  direction: rtl;
+  unicode-bidi: plaintext;
 }
 
 /* ── 紧凑图标按钮（28×28 方形，Adwaita 命名按钮尺度）──────── */
@@ -402,58 +395,6 @@
   background: var(--quirel-accent-hover);
   border-color: var(--quirel-accent-hover);
   color: var(--quirel-accent-fg);
-}
-
-/* ── 文件图标（工具栏左侧，与 FileManager 图标语言一致） ── */
-.te-file-icon {
-  font-size: 20px;
-  line-height: 1;
-  flex-shrink: 0; /* 图标不压缩 */
-}
-
-/* ── 文件 meta 容器：文件名 + 路径两行 ── */
-.te-file-meta {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0; /* 关键：允许子元素 ellipsis 生效 */
-}
-
-/* ── 文件名显示 ─────────────────────────────────────────── */
-.te-filename {
-  display: flex;
-  align-items: center;
-  gap: 6px; /* 文件名与未保存标记间距 */
-}
-
-.te-filename-text {
-  font-family: var(--font-ui);
-  font-size: 15px; /* 稍大字号，标题感 */
-  font-weight: 600;
-  color: var(--quirel-text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 400px; /* 允许更长的文件名 */
-}
-
-/* ── 文件路径行（次级信息）：服务器:路径，等宽小字 ────────── */
-.te-filepath {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--quirel-text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  opacity: 0.85;
-}
-
-/* ── 未保存标记 ─────────────────────────────────────────── */
-.te-unsaved-marker {
-  color: var(--quirel-accent-bg);
-  font-weight: 700;
-  font-size: 14px;
-  margin-left: 2px; /* 与文件名间距 */
 }
 
 /* ── 加载状态 ────────────────────────────────────────────── */
