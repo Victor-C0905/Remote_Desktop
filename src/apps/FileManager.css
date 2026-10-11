@@ -116,43 +116,6 @@
   color: var(--quirel-text-on-accent);
 }
 
-/* ── 过滤分段控件（全部/文件夹/文件，会话内不持久化）────── */
-.fm-toolbar-filter {
-  display: flex;
-  align-items: center;
-  flex-shrink: 0;  /* 工具栏空间不足时挤压路径栏，不挤压分段控件 */
-}
-
-.fm-seg-btn {
-  height: 28px;
-  padding: 0 10px;
-  display: flex;
-  align-items: center;
-  background: none;
-  border: 1px solid var(--quirel-border-color);
-  color: var(--quirel-text-secondary);
-  font-family: var(--font-ui);
-  font-size: calc(var(--font-body) - 1px);  /* 与面包屑一致的紧凑字号 */
-  cursor: pointer;
-  transition: background var(--duration-fast) var(--ease-out);
-}
-
-/* 连体分段：中间无竖线，圆角只留在两端 */
-.fm-seg-btn + .fm-seg-btn { border-left: none; }
-.fm-seg-btn:first-of-type { border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
-.fm-seg-btn:last-of-type { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
-
-.fm-seg-btn:hover {
-  background: var(--quirel-border-color);
-  color: var(--quirel-text-primary);
-}
-
-.fm-seg-btn.active {
-  background: var(--quirel-accent-bg);
-  border-color: var(--quirel-accent-bg);
-  color: var(--quirel-text-on-accent);
-}
-
 /* ── Breadcrumb ──────────────────────────────────────── */
 .fm-breadcrumb {
   display: flex;
@@ -319,7 +282,7 @@
    未设置时回退到历史默认比例 */
 .fm-list .fm-list-header {
   display: grid;
-  grid-template-columns: var(--fm-cols, minmax(130px, 2fr) 90px 140px 90px);
+  grid-template-columns: var(--fm-cols, minmax(130px, 2fr) 90px 140px 90px 90px);
   gap: 8px;
   font-size: var(--font-small);
   font-weight: 600;
@@ -399,6 +362,7 @@
 .fm-list.col-hover-name .fm-list-header [data-col="name"]::before,
 .fm-list.col-hover-size .fm-list-header [data-col="size"]::before,
 .fm-list.col-hover-mtime .fm-list-header [data-col="mtime"]::before,
+.fm-list.col-hover-type .fm-list-header [data-col="type"]::before,
 .fm-list.col-hover-perm .fm-list-header [data-col="perm"]::before {
   background: color-mix(in srgb, var(--quirel-accent-bg) 10%, transparent);
 }
@@ -515,7 +479,7 @@
 
 .fm-list .fm-list-row {
   display: grid;
-  grid-template-columns: var(--fm-cols, minmax(180px, 2fr) 90px 140px 90px);  /* ✅ 匹配表头列宽（--fm-cols 同源） */
+  grid-template-columns: var(--fm-cols, minmax(180px, 2fr) 90px 140px 90px 90px);  /* ✅ 匹配表头列宽（--fm-cols 同源） */
   scroll-margin-top: 40px;  /* 键盘导航 scrollIntoView 时避开 sticky 表头遮挡 */
   gap: 8px;
   padding: 6px 12px;
@@ -577,6 +541,7 @@
 
 .fm-list .fm-list-row .fm-file-size,
 .fm-list .fm-list-row .fm-file-mtime,
+.fm-list .fm-list-row .fm-file-type,
 .fm-list .fm-list-row .fm-file-perm {
   font-size: var(--font-small);
   color: var(--quirel-text-secondary);
@@ -589,6 +554,7 @@
 
 .fm-list .fm-list-row.selected .fm-file-size,
 .fm-list .fm-list-row.selected .fm-file-mtime,
+.fm-list .fm-list-row.selected .fm-file-type,
 .fm-list .fm-list-row.selected .fm-file-perm {
   color: rgba(255, 255, 255, 0.75);
 }
@@ -704,6 +670,9 @@
 .fm-header-menu {
   position: fixed;
   min-width: 210px;
+  /* 类型列桶为当前目录动态清单，可能很长：限高滚动，不撑出视口 */
+  max-height: min(420px, 60vh);
+  overflow-y: auto;
   background: var(--quirel-view-bg);
   border: 1px solid var(--quirel-border-color);
   border-radius: var(--radius-sm);

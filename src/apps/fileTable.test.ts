@@ -1,5 +1,5 @@
 // src/apps/fileTable.test.ts
-// 文件列表表头领域逻辑单测：排序（点击表头翻转）+ 过滤（目录/文件）+ 列宽（拖拽调节/持久化默认值）
+// 文件列表表头领域逻辑单测：排序（点击表头翻转）+ 列筛选（表头下拉）+ 列宽（拖拽调节/持久化默认值）
 import { describe, it, expect } from "vitest";
 import {
   sortFileEntries,
@@ -8,11 +8,12 @@ import {
   COLUMN_MIN_WIDTHS,
   clampColumnWidth,
   buildGridTemplate,
-  filterFileEntries,
-  DEFAULT_FILTER,
   sizeBucketOf,
   mtimeBucketOf,
   nameBucketOf,
+  typeKeyOf,
+  typeKeyLabel,
+  listFileTypeBuckets,
   toggleBucket,
   filterByColumnFilters,
   hasActiveColumnFilters,
@@ -59,7 +60,7 @@ describe("sortFileEntries", () => {
   });
 
   it("所有排序键下目录始终排在文件前", () => {
-    for (const key of ["name", "size", "mtime", "perm"] as const) {
+    for (const key of ["name", "size", "mtime", "type", "perm"] as const) {
       for (const dir of ["asc", "desc"] as const) {
         const sorted = sortFileEntries(FIXTURES, { key, dir });
         const dirCount = sorted.filter((e) => e.is_dir).length;
@@ -136,23 +137,65 @@ describe("sortFileEntries", () => {
     const single = [entry({ name: "only", is_dir: true })];
     expect(sortFileEntries(single, { key: "mtime", dir: "desc" })).toHaveLength(1);
   });
+
+  it("type asc/desc：文件组按扩展名字典序，同类型回退名称；无扩展名排组内最后", () => {
+    const pool = [
+      entry({ name: "z.md", mtime: "2026-10-01T00:00:00Z" }),
+      entry({ name: "a.txt" }),
+      entry({ name: "b.TXT" }),      // 同类型（大小写归一）
+      entry({ name: "c.md" }),
+      entry({ name: "noext", is_dir: false, permissions: "-rw-r--r--" }),  // 无扩展名视同未知类型
+    ];
+    const asc = sortFileEntries(pool, { key: "type", dir: "asc" });
+    // md 组：c.md < z.md（同类型回退名称）；txt 组：a.txt < b.TXT；无扩展名排最后（同 mtime 空值惯例）
+    expect(names(asc)).toEqual(["c.md", "z.md", "a.txt", "b.TXT", "noext"]);
+    const desc = sortFileEntries(pool, { key: "type", dir: "desc" });
+    // 主键翻转（txt 组先于 md 组），名称次级键仍恒升序，无扩展名仍排最后
+    expect(names(desc)).toEqual(["a.txt", "b.TXT", "c.md", "z.md", "noext"]);
+  });
 });
 
-/* ── 过滤（目录/文件）──────────────────────────────────── */
+/* ── 类型列（文件类型表头 + 动态类型筛选）────────────────── */
 
-describe("filterFileEntries", () => {
-  it("默认 all 模式：原样返回全部条目", () => {
-    expect(DEFAULT_FILTER).toBe("all");
-    expect(filterFileEntries(FIXTURES, "all")).toHaveLength(6);
+describe("typeKeyOf / typeKeyLabel", () => {
+  it("目录 → __dir（标签「文件夹」）；无扩展名文件 → __none（标签「文件」）", () => {
+    expect(typeKeyOf(entry({ name: "dir", is_dir: true }))).toBe("__dir");
+    expect(typeKeyOf(entry({ name: "README" }))).toBe("__none");
+    expect(typeKeyOf(entry({ name: ".hidden" }))).toBe("__none");  // 隐藏文件无扩展名语义
+    expect(typeKeyLabel("__dir")).toBe("文件夹");
+    expect(typeKeyLabel("__none")).toBe("文件");
   });
 
-  it("dirs 模式：只保留目录", () => {
-    expect(names(filterFileEntries(FIXTURES, "dirs"))).toEqual(["alpha", "config"]);
+  it("扩展名小写归一（同一类型不同大小写同组）", () => {
+    expect(typeKeyOf(entry({ name: "A.TXT" }))).toBe("txt");
+    expect(typeKeyOf(entry({ name: "b.md" }))).toBe("md");
+    expect(typeKeyOf(entry({ name: "archive.tar.gz" }))).toBe("gz");  // 取最后一段
+    expect(typeKeyOf(entry({ name: "empty." }))).toBe("__none");      // 点结尾无扩展名
+    expect(typeKeyLabel("txt")).toBe("TXT");
+    expect(typeKeyLabel("gz")).toBe("GZ");
+  });
+});
+
+describe("listFileTypeBuckets", () => {
+  it("列出当前目录实际出现的类型：文件夹置顶，其余按类型字母序去重", () => {
+    const pool = [
+      entry({ name: "a.txt", is_dir: false }),
+      entry({ name: "b.TXT", is_dir: false }),      // 与 a.txt 同类型
+      entry({ name: "c.md", is_dir: false }),
+      entry({ name: "dir1", is_dir: true }),
+      entry({ name: "dir2", is_dir: true }),
+    ];
+    expect(listFileTypeBuckets(pool)).toEqual([
+      { key: "__dir", label: "文件夹" },
+      { key: "md", label: "MD" },
+      { key: "txt", label: "TXT" },
+    ]);
   });
 
-  it("files 模式：只保留文件（含零大小/空时间条目）", () => {
-    expect(names(filterFileEntries(FIXTURES, "files")))
-      .toEqual(["zeta.log", "beta.md", "Alpha.txt", "gamma"]);
+  it("空目录返回空清单；无目录时不列文件夹项", () => {
+    expect(listFileTypeBuckets([])).toEqual([]);
+    expect(listFileTypeBuckets([entry({ name: "a.txt" })]))
+      .toEqual([{ key: "txt", label: "TXT" }]);
   });
 });
 
@@ -162,6 +205,7 @@ describe("clampColumnWidth", () => {
   it("低于列最小值时夹取到最小值", () => {
     expect(clampColumnWidth("size", 10)).toBe(COLUMN_MIN_WIDTHS.size);
     expect(clampColumnWidth("name", 10)).toBe(COLUMN_MIN_WIDTHS.name);
+    expect(clampColumnWidth("type", 10)).toBe(COLUMN_MIN_WIDTHS.type);
   });
 
   it("超出上限时夹取（不低于最小值兜底）", () => {
@@ -177,22 +221,22 @@ describe("clampColumnWidth", () => {
 });
 
 describe("buildGridTemplate", () => {
-  it("默认值：名称列弹性（minmax），其余固定 px", () => {
+  it("默认值：名称列弹性（minmax），其余固定 px（列序 name/size/mtime/type/perm）", () => {
     expect(buildGridTemplate(DEFAULT_COLUMN_WIDTHS)).toBe(
-      "minmax(130px, 2fr) 90px 140px 90px"
+      "minmax(130px, 2fr) 90px 140px 90px 90px"
     );
   });
 
   it("名称列被拖拽后转为固定 px", () => {
     expect(
-      buildGridTemplate({ name: 400, size: 100, mtime: 150, perm: 80 })
-    ).toBe("400px 100px 150px 80px");
+      buildGridTemplate({ name: 400, size: 100, mtime: 150, type: 90, perm: 80 })
+    ).toBe("400px 100px 150px 90px 80px");
   });
 });
 
 describe("DEFAULT_COLUMN_WIDTHS", () => {
   it("与 CSS 历史默认列宽一致", () => {
-    expect(DEFAULT_COLUMN_WIDTHS).toEqual({ name: null, size: 90, mtime: 140, perm: 90 });
+    expect(DEFAULT_COLUMN_WIDTHS).toEqual({ name: null, size: 90, mtime: 140, type: 90, perm: 90 });
   });
 });
 
@@ -286,7 +330,7 @@ describe("filterByColumnFilters", () => {
     entry({ name: "huge.img", size: 2 * GB, mtime: "" }),
   ];
   const f = (size: any[], mtime: any[]) =>
-    filterByColumnFilters(POOL, { size, mtime, name: [] }, NOW);
+    filterByColumnFilters(POOL, { size, mtime, name: [], type: [] }, NOW);
   const nm = (es: FileEntry[]) => es.map((e) => e.name);
 
   it("无筛选：原样返回（不复制数组，零开销）", () => {
@@ -333,13 +377,28 @@ describe("filterByColumnFilters", () => {
       entry({ name: "dir-a", is_dir: true }),
     ];
     const nm = (es: FileEntry[]) => es.map((e) => e.name);
-    expect(nm(filterByColumnFilters(pool, { name: ["aToF"], size: [], mtime: [] }, NOW)))
+    expect(nm(filterByColumnFilters(pool, { name: ["aToF"], size: [], mtime: [], type: [] }, NOW)))
       .toEqual(["a.txt", "宝.zip", "dir-a"]);
-    expect(nm(filterByColumnFilters(pool, { name: ["other"], size: [], mtime: [] }, NOW)))
+    expect(nm(filterByColumnFilters(pool, { name: ["other"], size: [], mtime: [], type: [] }, NOW)))
       .toEqual(["0.txt"]);
     // 与大小筛选叠加（AND）
-    expect(nm(filterByColumnFilters(pool, { name: ["sToZ"], size: [], mtime: [] }, NOW)))
+    expect(nm(filterByColumnFilters(pool, { name: ["sToZ"], size: [], mtime: [], type: [] }, NOW)))
       .toEqual(["z.txt"]);
+  });
+
+  it("类型筛选：按勾选类型并集过滤；目录经 __dir 组同参与", () => {
+    const pool = [
+      entry({ name: "a.txt" }),
+      entry({ name: "b.md" }),
+      entry({ name: "noext" }),                       // __none 组
+      entry({ name: "dir1", is_dir: true }),
+    ];
+    const nm = (es: FileEntry[]) => es.map((e) => e.name);
+    expect(nm(filterByColumnFilters(pool, { name: [], size: [], mtime: [], type: ["txt"] }, NOW)))
+      .toEqual(["a.txt"]);
+    // 多选并集（文件夹 + md）；过滤保持输入顺序，排序由 sortFileEntries 单独负责
+    expect(nm(filterByColumnFilters(pool, { name: [], size: [], mtime: [], type: ["__dir", "md"] }, NOW)))
+      .toEqual(["b.md", "dir1"]);
   });
 });
 
@@ -378,9 +437,10 @@ describe("nameBucketOf", () => {
 describe("hasActiveColumnFilters / 桶清单", () => {
   it("默认无筛选；任一列勾选即激活", () => {
     expect(hasActiveColumnFilters(DEFAULT_COLUMN_FILTERS)).toBe(false);
-    expect(hasActiveColumnFilters({ size: [], mtime: ["today"], name: [] })).toBe(true);
-    expect(hasActiveColumnFilters({ size: ["empty"], mtime: [], name: [] })).toBe(true);
-    expect(hasActiveColumnFilters({ size: [], mtime: [], name: ["aToF"] })).toBe(true);
+    expect(hasActiveColumnFilters({ size: [], mtime: ["today"], name: [], type: [] })).toBe(true);
+    expect(hasActiveColumnFilters({ size: ["empty"], mtime: [], name: [], type: [] })).toBe(true);
+    expect(hasActiveColumnFilters({ size: [], mtime: [], name: ["aToF"], type: [] })).toBe(true);
+    expect(hasActiveColumnFilters({ size: [], mtime: [], name: [], type: ["txt"] })).toBe(true);
   });
 
   it("桶清单与 Win11 Explorer 分组一致（大小六档、时间五组），key 与标签一一对应", () => {

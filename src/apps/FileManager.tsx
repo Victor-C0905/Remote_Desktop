@@ -12,8 +12,8 @@ import { createLogger } from '../utils/logger';
 import { openRemoteFile } from './openRemoteFile';
 import { parsePermissions, matrixToOctal, octalToPermString } from './permissions';
 import type { PermMatrix } from './permissions';
-import { sortFileEntries, DEFAULT_SORT, DEFAULT_COLUMN_WIDTHS, clampColumnWidth, buildGridTemplate, filterFileEntries, DEFAULT_FILTER, filterByColumnFilters, hasActiveColumnFilters, toggleBucket, DEFAULT_COLUMN_FILTERS, SIZE_BUCKETS, MTIME_BUCKETS, NAME_BUCKETS } from './fileTable';
-import type { SortKey, SortState, ColumnWidths, FilterMode, ColumnFilterState, SizeBucket, MtimeBucket, NameBucket } from './fileTable';
+import { sortFileEntries, DEFAULT_SORT, DEFAULT_COLUMN_WIDTHS, clampColumnWidth, buildGridTemplate, filterByColumnFilters, toggleBucket, DEFAULT_COLUMN_FILTERS, SIZE_BUCKETS, MTIME_BUCKETS, NAME_BUCKETS, typeKeyOf, typeKeyLabel, listFileTypeBuckets } from './fileTable';
+import type { SortKey, SortState, ColumnWidths, ColumnFilterState, SizeBucket, MtimeBucket, NameBucket } from './fileTable';
 import { SymbolicIcon } from "../components/symbolic";
 import { useSettingsStore } from '../stores/settingsStore';
 import "./FileManager.css";
@@ -110,6 +110,7 @@ const FILE_COLUMNS: { key: SortKey; label: string }[] = [
   { key: "name", label: "名称" },
   { key: "size", label: "大小" },
   { key: "mtime", label: "修改时间" },
+  { key: "type", label: "类型" },
   { key: "perm", label: "权限" },
 ];
 
@@ -158,22 +159,19 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   const [homeDir, setHomeDir] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("list");
 
-  // ── 目录/文件过滤（工具栏分段控件）────────────────────────
-  // 会话内状态，刻意不持久化：每次打开默认"全部"（用户约定）
-  const [filterMode, setFilterMode] = useState<FilterMode>(DEFAULT_FILTER);
-
   // ── 列筛选（表头下拉菜单，Win11 Explorer 风格）────────────
-  // 会话内状态不持久化（与 filterMode 同决策）；大小/时间列可勾选区间组，
-  // 勾选为并集（OR），与 filterMode 两层独立叠加
+  // 会话内状态不持久化：每次打开默认无筛选；名称/大小/时间/类型列可勾选组，
+  // 勾选为并集（OR），多列 AND 叠加（目录/文件粗过滤由类型列 __dir 组承担，
+  // 原工具栏「全部/文件夹/文件」分段控件已移除）
   const [columnFilters, setColumnFilters] = useState<ColumnFilterState>(DEFAULT_COLUMN_FILTERS);
   // 打开中的表头下拉菜单：锚点列 + 视口坐标（fixed 定位，portal 渲染）
   const [headerMenu, setHeaderMenu] = useState<{ key: SortKey; x: number; y: number } | null>(null);
 
-  // 显示列表 = 已排序的 entries 依次过「目录/文件模式」与「列筛选」；
+  // 显示列表 = 已排序的 entries 过「列筛选」；
   // 渲染与键盘导航均以此为准（entries 保持全量，切换过滤/排序不重新加载目录）
   const visibleEntries = useMemo(
-    () => filterByColumnFilters(filterFileEntries(entries, filterMode), columnFilters),
-    [entries, filterMode, columnFilters]
+    () => filterByColumnFilters(entries, columnFilters),
+    [entries, columnFilters]
   );
 
   // ── 表头排序（点击翻转）────────────────────────────────
@@ -187,7 +185,9 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   // ── 列宽（拖拽调节 + 持久化）────────────────────────────
   // 持久值来自设置存储（zustand persist → Tauri Store，Rust 侧写盘）；
   // 拖拽会话中用本地临时值即时预览，mouseup 才提交持久层（避免拖动过程频繁写盘）
-  const persistedColumns = useSettingsStore(s => s.fileManagerColumns) ?? DEFAULT_COLUMN_WIDTHS;
+  const storedColumns = useSettingsStore(s => s.fileManagerColumns);
+  // 旧持久化数据缺 type 字段（类型列为后加列）：合并默认值兜底，避免类型列宽 undefined
+  const persistedColumns: ColumnWidths = { ...DEFAULT_COLUMN_WIDTHS, ...(storedColumns ?? {}) };
   const setFileManagerColumns = useSettingsStore(s => s.setFileManagerColumns);
   const [resizing, setResizing] = useState<{ key: SortKey; startX: number; startWidth: number } | null>(null);
   // 悬停的表头列：整列（表头+数据行）淡聚焦染色，让列宽可视化（col-hover-* 容器类 + CSS 选择器）
@@ -394,16 +394,17 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   }, []);
 
   /** 勾选/取消一个筛选桶：菜单保持打开（可连续多选，Win11 同款）
-   *  name/size/mtime 三列可筛选（perm 无筛选区） */
-  const toggleColumnFilter = useCallback((key: SortKey, bucket: SizeBucket | MtimeBucket | NameBucket) => {
-    if (key !== "size" && key !== "mtime" && key !== "name") return;
+   *  name/size/mtime/type 四列可筛选（perm 无筛选区）；type 桶为动态 string 键 */
+  const toggleColumnFilter = useCallback((key: SortKey, bucket: SizeBucket | MtimeBucket | NameBucket | string) => {
+    if (key !== "size" && key !== "mtime" && key !== "name" && key !== "type") return;
     setColumnFilters(prev => key === "size"
       ? { ...prev, size: toggleBucket(prev.size, bucket as SizeBucket) }
       : key === "mtime"
         ? { ...prev, mtime: toggleBucket(prev.mtime, bucket as MtimeBucket) }
-        : { ...prev, name: toggleBucket(prev.name, bucket as NameBucket) });
-    // 筛选改变可见列表：清空选中（过滤后的可见索引与旧选中位不再对应，
-    // 与 filterMode 切换同一处理）
+        : key === "name"
+          ? { ...prev, name: toggleBucket(prev.name, bucket as NameBucket) }
+          : { ...prev, type: toggleBucket(prev.type, bucket) });
+    // 筛选改变可见列表：清空选中（过滤后的可见索引与旧选中位不再对应）
     setSelectedIdx(null);
   }, []);
 
@@ -1802,26 +1803,6 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
               <button className="fm-toolbar-btn" title="搜索">🔍</button>
             </div>
 
-            {/* Dir/File Filter：目录/文件分段过滤（会话内不持久化，默认"全部"） */}
-            <div className="fm-toolbar-filter" role="group" aria-label="显示内容过滤">
-              {([
-                { key: "all", label: "全部" },
-                { key: "dirs", label: "文件夹" },
-                { key: "files", label: "文件" },
-              ] as { key: FilterMode; label: string }[]).map(seg => (
-                <button
-                  key={seg.key}
-                  className={`fm-seg-btn${filterMode === seg.key ? " active" : ""}`}
-                  onClick={() => {
-                    // 切换过滤清空选中：过滤后的可见索引与旧选中位不再对应
-                    setFilterMode(seg.key);
-                    setSelectedIdx(null);
-                  }}
-                  title={`仅显示${seg.label}`}
-                >{seg.label}</button>
-              ))}
-            </div>
-
             {/* View Toggle */}
             <div className="fm-toolbar-view">
               <button
@@ -1898,21 +1879,16 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
               <div className="fm-empty-text">{permissionDenied ? "无权限读取此目录内容" : "空目录"}</div>
             </div>
           ) : visibleEntries.length === 0 ? (
-            /* ── 过滤无匹配：目录非空，但当前过滤/筛选下无可见项
-                  （列筛选激活时优先提示筛选无匹配，不误报"没有文件"）── */
+            /* ── 筛选无匹配：目录非空，但当前列筛选下无可见项
+                  （无筛选时不可达：filterByColumnFilters 无勾选原样返回，
+                  真空目录由上面的 entries.length === 0 分支呈现）── */
             <div
               className="fm-empty"
               onContextMenu={handleEmptyContextMenu}
               onClick={handleEmptyClick}
             >
-              <div className="fm-empty-icon">
-                {hasActiveColumnFilters(columnFilters) ? "🔍" : filterMode === "dirs" ? "📁" : "📄"}
-              </div>
-              <div className="fm-empty-text">
-                {hasActiveColumnFilters(columnFilters)
-                  ? "没有符合当前筛选的条目"
-                  : filterMode === "dirs" ? "此目录下没有文件夹" : "此目录下没有文件"}
-              </div>
+              <div className="fm-empty-icon">🔍</div>
+              <div className="fm-empty-text">没有符合当前筛选的条目</div>
             </div>
           ) : viewMode === "list" ? (
             <div
@@ -1924,11 +1900,12 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                   点击列头翻转排序；列间手柄拖拽调宽（宽度经 --fm-cols 下发给表头与行） */}
               <div className="fm-list-header">
                 {FILE_COLUMNS.map(col => {
-                  // 该列筛选是否激活（name/size/mtime 有筛选区）：列头显示漏斗指示
+                  // 该列筛选是否激活（name/size/mtime/type 有筛选区）：列头显示漏斗指示
                   const filterActive = col.key === "size"
                     ? columnFilters.size.length > 0
                     : col.key === "mtime" ? columnFilters.mtime.length > 0
-                    : col.key === "name" ? columnFilters.name.length > 0 : false;
+                    : col.key === "name" ? columnFilters.name.length > 0
+                    : col.key === "type" ? columnFilters.type.length > 0 : false;
                   return (
                   <span
                     key={col.key}
@@ -1947,11 +1924,11 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                         className="fm-sort-indicator"
                       />
                     )}
-                    {/* ▾ 下拉按钮：名称/大小/修改时间列提供（可筛选），hover 列头浮现
+                    {/* ▾ 下拉按钮：名称/大小/修改时间/类型列提供（可筛选），hover 列头浮现
                         （Win11 Explorer 同款）；筛选激活时按钮常驻并显示漏斗图标
                         （激活指示与入口合一，不再在文字后另放符号）；
                         点击弹筛选菜单，不触发表头点击排序 */}
-                    {(col.key === "size" || col.key === "mtime" || col.key === "name") && (
+                    {(col.key === "size" || col.key === "mtime" || col.key === "name" || col.key === "type") && (
                       <button
                         className="fm-col-menu-btn"
                         title="筛选"
@@ -2029,6 +2006,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                     </div>
                     <span className="fm-file-size">{entry.is_dir ? "—" : formatSize(entry.size)}</span>
                     <span className="fm-file-mtime">{formatDate(entry.mtime)}</span>
+                    <span className="fm-file-type">{typeKeyLabel(typeKeyOf(entry))}</span>
                     <span className="fm-file-perm">{entry.permissions}</span>
                   </div>
                 ))}
@@ -2110,7 +2088,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
 
       {/* Header Dropdown Menu - Win11 Explorer 风格列头下拉（列筛选），
           Portal 渲染到 body：fixed 定位相对视口，不受滚动容器影响。
-          仅大小/修改时间列可打开（名称/权限列无筛选区，不渲染下拉按钮） */}
+          名称/大小/修改时间/类型列可打开（权限列无筛选区，不渲染下拉按钮） */}
       {headerMenu && createPortal(
         <div
           className="fm-header-menu"
@@ -2119,14 +2097,19 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
           onClick={(e) => e.stopPropagation()}
         >
           {/* 筛选区：勾选为并集（OR），菜单保持打开可连续多选；全不勾 = 该列不过滤
-              名称=字母/拼音组、大小=区间组、时间=日期组（按钮只在可筛选列渲染） */}
+              名称=字母/拼音组、大小=区间组、时间=日期组、类型=当前目录动态清单
+              （类型桶按全量 entries 生成，不随其他列筛选跳变；按钮只在可筛选列渲染） */}
           {(headerMenu.key === "size" ? SIZE_BUCKETS
-            : headerMenu.key === "mtime" ? MTIME_BUCKETS : NAME_BUCKETS).map(b => {
+            : headerMenu.key === "mtime" ? MTIME_BUCKETS
+            : headerMenu.key === "type" ? listFileTypeBuckets(entries)
+            : NAME_BUCKETS).map(b => {
             const checked = headerMenu.key === "size"
               ? columnFilters.size.includes(b.key as SizeBucket)
               : headerMenu.key === "mtime"
                 ? columnFilters.mtime.includes(b.key as MtimeBucket)
-                : columnFilters.name.includes(b.key as NameBucket);
+                : headerMenu.key === "type"
+                  ? columnFilters.type.includes(b.key)
+                  : columnFilters.name.includes(b.key as NameBucket);
             return (
               <label key={b.key} className="fm-hm-check">
                 <input
