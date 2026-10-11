@@ -184,10 +184,10 @@
 .terminal-tabs-container {
   display: flex;
   align-items: center;
-  height: 48px;
+  height: 42px;
   background: var(--quirel-headerbar-bg);
   border-bottom: 1px solid var(--quirel-border-color);
-  padding: 0 4px;
+  padding: 0 8px;
   flex-shrink: 0;
   z-index: 1; /* ✅ 内容层，相对于父容器，无需高 z-index */
   position: relative;
@@ -272,10 +272,10 @@
   align-items: center;
   gap: 4px;
   padding: 4px 8px;
-  height: 28px;
+  height: 30px;
   font-size: 12px;
   color: var(--quirel-text-secondary);
-  border-radius: var(--radius-xs) var(--radius-xs) 0 0;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   border: none;
   background: transparent;
@@ -284,6 +284,7 @@
   white-space: nowrap;
   flex-shrink: 0;  /* ✅ 修改：从 1 改为 0 */
   flex-grow: 0;
+  transition: background var(--duration-fast) var(--ease-out);
 }
 
 .terminal-tab:hover {
@@ -294,7 +295,7 @@
 .terminal-tab.active {
   background: var(--quirel-view-bg);
   color: var(--quirel-text-primary);
-  border-bottom: 2px solid var(--quirel-accent-bg);
+  box-shadow: var(--shadow-card);
 }
 
 .terminal-tab .tab-icon {

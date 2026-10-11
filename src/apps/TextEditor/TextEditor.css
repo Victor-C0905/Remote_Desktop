@@ -186,7 +186,7 @@
 
 /* ============================================================
    文本编辑器主组件样式
-   三行结构（对齐 VS Code）：动作栏 → 标签栏 → 面包屑 → 编辑区
+   三行结构（对齐 VS Code）：菜单栏 → 标签栏 → 面包屑 → 编辑区
    ============================================================ */
 
 /* ── 主容器 ────────────────────────────────────────────── */
@@ -217,50 +217,40 @@
   overflow: hidden; /* 防止内容溢出 */
 }
 
-/* ── 动作栏（第一行）：纯高频动作（撤销/重做 | 保存/查找/菜单）── */
-.te-actionbar {
+/* ── 菜单栏（第一行）：文件/编辑/视图，全部功能按类归位 ────── */
+/* 菜单标签样式由共享组件 .tmb-root/.tmb-label 提供（ToolbarMenu.css） */
+.te-menubar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  height: 34px;
   padding: 0 8px;
-  height: 44px;
   background: var(--quirel-headerbar-bg);
-  border-bottom: 1px solid var(--quirel-border-color);
   flex-shrink: 0;
 }
 
-.te-actionbar-left,
-.te-actionbar-right {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex: 0 0 auto;
-}
-
-/* ── 标签栏（第二行）：文档标签 ──────────────────────────── */
+/* ── 标签栏（第二行）：Chrome 式标签条（与菜单栏同一表面）─── */
 .te-tabbar {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: 4px;
-  padding: 6px 8px 0;
-  height: 36px;
+  padding: 5px 8px;
+  height: 38px;
   background: var(--quirel-headerbar-bg);
   border-bottom: 1px solid var(--quirel-border-color);
   flex-shrink: 0;
 }
 
-/* 文档标签：active 标签以 view-bg 底色与编辑区连成一体（VS Code 同款视觉） */
+/* Chrome 式标签：活动标签为浮动圆角块（浅色表面），非活动透明悬停浮现 */
 .te-tab {
   display: flex;
   align-items: center;
   gap: 6px;
-  max-width: 240px;
-  height: 30px;
-  padding: 0 8px 0 10px;
+  max-width: 220px;
+  height: 28px;
+  padding: 0 6px 0 10px;
+  border-radius: var(--radius-sm);
   background: var(--quirel-view-bg);
-  border: 1px solid var(--quirel-border-color);
-  border-bottom: none;
-  border-radius: var(--radius-xs) var(--radius-xs) 0 0;
+  box-shadow: var(--shadow-card);
   min-width: 0; /* 允许收缩省略 */
 }
 
@@ -288,14 +278,14 @@
   flex-shrink: 0;
 }
 
-/* 关闭按钮：小方形，hover 浮出 */
+/* 关闭按钮：圆形，悬停浮现（Chrome 关闭钮语言） */
 .te-tab-close {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 18px;
   height: 18px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-pill);
   font-size: 13px;
   line-height: 1;
   color: var(--quirel-text-secondary);
@@ -309,16 +299,15 @@
   color: var(--quirel-text-primary);
 }
 
-/* [+] 新建编辑器窗口（标签行尾部，VS Code 新标签同位） */
+/* [+] 新建编辑器窗口：圆形幽灵按钮（Chrome 新标签同位） */
 .te-tab-new {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
-  margin-bottom: 3px;
+  width: 26px;
+  height: 26px;
   border: none;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-pill);
   background: transparent;
   color: var(--quirel-text-secondary);
   font-size: 16px;
@@ -329,72 +318,67 @@
 }
 
 .te-tab-new:hover {
-  background: var(--quirel-view-bg);
+  background: var(--quirel-card-hover);
   color: var(--quirel-text-primary);
 }
 
-/* ── 面包屑（第三行，仅已打开文件）：服务器 › 目录 › 文件 ── */
+/* ── 面包屑（第三行，仅已打开文件）：Chrome 式分段胶囊 ───── */
 .te-breadcrumb {
-  height: 24px;
-  padding: 0 12px;
+  height: 26px;
+  padding: 0 10px;
   display: flex;
   align-items: center;
+  gap: 1px;
   background: var(--quirel-window-bg);
   border-bottom: 1px solid var(--quirel-border-color);
-
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--quirel-text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  /* 路径过长时优先保留末尾（文件名）：方向反转使省略号出现在左侧
-     （与 FileManager 拖放层同款技巧） */
-  direction: rtl;
-  unicode-bidi: plaintext;
-}
-
-/* ── 紧凑图标按钮（28×28 方形，Adwaita 命名按钮尺度）──────── */
-.te-icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: 1px solid var(--quirel-border-color);
-  border-radius: var(--radius-xs);
-  background: transparent;
-  color: var(--quirel-text-secondary);
-  font-size: 13px;
-  line-height: 1;
-  cursor: pointer;
   flex-shrink: 0;
+
+  /* 空间不足时从左侧自然裁剪，始终保留末级文件名 */
+  justify-content: flex-end;
+  overflow: hidden;
   white-space: nowrap;
-  transition: all var(--duration-fast) var(--ease-out);
 }
 
-.te-icon-btn:hover:not(:disabled) {
-  background: var(--quirel-view-bg);
+/* 路径分段：圆角胶囊，悬停浮出底色（Chrome 面包屑语言） */
+.te-crumb {
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--quirel-text-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.te-crumb:hover {
+  background: var(--quirel-card-hover);
+}
+
+/* 服务器名首段：accent 淡底区分来源 */
+.te-crumb-server {
+  color: var(--quirel-accent-bg);
+  background: color-mix(in srgb, var(--quirel-accent-bg) 10%, transparent);
+  font-weight: 600;
+}
+
+.te-crumb-server:hover {
+  background: color-mix(in srgb, var(--quirel-accent-bg) 18%, transparent);
+}
+
+/* 末级文件名：主色加重（当前位置强调） */
+.te-crumb-current {
   color: var(--quirel-text-primary);
+  font-weight: 600;
 }
 
-.te-icon-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-/* ── 保存按钮（主操作）：accent 底图标 ────────────────────── */
-.te-icon-btn-accent {
-  background: var(--quirel-accent-bg);
-  border-color: var(--quirel-accent-bg);
-  color: var(--quirel-accent-fg);
-}
-
-.te-icon-btn-accent:hover:not(:disabled) {
-  background: var(--quirel-accent-hover);
-  border-color: var(--quirel-accent-hover);
-  color: var(--quirel-accent-fg);
+/* 分隔箭头 */
+.te-crumb-sep {
+  font-size: 10px;
+  color: var(--quirel-text-disabled);
+  flex-shrink: 0;
+  padding: 0 1px;
 }
 
 /* ── 加载状态 ────────────────────────────────────────────── */
