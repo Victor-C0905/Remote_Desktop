@@ -1174,111 +1174,9 @@
   cursor: not-allowed;
 }
 
-/* ── Path Error Dialog (路径不存在弹窗 - 模态) ─────────────────── */
-/* 遮罩层：覆盖整个文件管理器，阻止点击穿透 */
-.fm-path-error-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.4);
-  z-index: var(--z-app-modal); /* ✅ Layer 70: 应用内部模态对话框遮罩 */
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  /* 阻止所有交互 */
-  pointer-events: auto;
-}
-
-/* 弹窗本身：允许交互 */
-.fm-path-error-dialog {
-  position: relative;
-  width: 400px;
-  background: var(--quirel-card-bg);
-  border: 1px solid var(--quirel-border-color);
-  border-radius: var(--radius-md);
-  padding: 20px;
-  box-shadow: var(--shadow-popup);
-  /* 允许弹窗内的交互 */
-  pointer-events: auto;
-}
-
-.ped-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 12px;
-}
-
-.ped-icon {
-  font-size: 22px;
-}
-
-.ped-title {
-  font-size: 14pt;
-  font-weight: 600;
-  color: var(--quirel-text-primary);
-}
-
-.ped-message {
-  color: var(--quirel-text-secondary);
-  font-size: var(--font-body);
-  margin-bottom: 16px;
-  padding: 8px 12px;
-  background: var(--quirel-view-bg);
-  border-radius: var(--radius-xs);
-  word-break: break-all;
-}
-
-.ped-footer {
-  display: flex;
-  justify-content: flex-end;
-}
-
-.ped-footer button {
-  padding: 6px 20px;
-  background: var(--quirel-accent-bg);
-  color: var(--quirel-accent-fg);
-  border: none;
-  border-radius: var(--radius-xs);
-  cursor: pointer;
-  font-size: var(--font-body);
-  transition: background var(--duration-fast) var(--ease-out);
-}
-
-.ped-footer button:hover {
-  background: var(--quirel-accent-hover);
-}
-
-/* ── Rename Dialog (重命名弹窗) ─────────────────── */
-.fm-rename-dialog {
-  position: relative;
-  width: 480px;
-  background: var(--quirel-card-bg);
-  border: 1px solid var(--quirel-border-color);
-  border-radius: var(--radius-md);
-  padding: 20px;
-  box-shadow: var(--shadow-popup);
-  pointer-events: auto;
-}
-
-.rd-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 16px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--quirel-border-color);
-}
-
-.rd-icon {
-  font-size: 22px;
-}
-
-.rd-title {
-  font-size: 14pt;
-  font-weight: 600;
-  color: var(--quirel-text-primary);
-}
-
+/* ── Rename Dialog (重命名弹窗) ───────────────────
+   底座（遮罩/卡片/按钮）已迁移到共享组件 Dialog（dg-*）；
+   此处仅保留弹窗内容细节：原始名展示、输入框、字节计数 */
 .rd-content {
   margin-bottom: 16px;
 }
@@ -1349,52 +1247,6 @@
   color: var(--quirel-text-secondary);
   opacity: 0.7;
   margin-left: 4px;
-}
-
-.rd-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  margin-top: 16px;
-  padding-top: 12px;
-  border-top: 1px solid var(--quirel-border-color);
-}
-
-.rd-btn-cancel {
-  padding: 8px 20px;
-  background: transparent;
-  color: var(--quirel-text-secondary);
-  border: 1px solid var(--quirel-border-color);
-  border-radius: var(--radius-xs);
-  cursor: pointer;
-  font-size: var(--font-body);
-  transition: all var(--duration-fast) var(--ease-out);
-}
-
-.rd-btn-cancel:hover {
-  background: var(--quirel-view-bg);
-  color: var(--quirel-text-primary);
-}
-
-.rd-btn-confirm {
-  padding: 8px 20px;
-  background: var(--quirel-accent-bg);
-  color: var(--quirel-accent-fg);
-  border: none;
-  border-radius: var(--radius-xs);
-  cursor: pointer;
-  font-size: var(--font-body);
-  font-weight: 500;
-  transition: background var(--duration-fast) var(--ease-out);
-}
-
-.rd-btn-confirm:hover:not(:disabled) {
-  background: var(--quirel-accent-hover);
-}
-
-.rd-btn-confirm:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 
 /* ── Offline Empty State (离线空状态) ─────────────────── */

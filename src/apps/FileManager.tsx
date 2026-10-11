@@ -15,6 +15,8 @@ import type { PermMatrix } from './permissions';
 import { sortFileEntries, DEFAULT_SORT, DEFAULT_COLUMN_WIDTHS, clampColumnWidth, buildGridTemplate, filterByColumnFilters, toggleBucket, DEFAULT_COLUMN_FILTERS, SIZE_BUCKETS, MTIME_BUCKETS, NAME_BUCKETS, typeKeyOf, typeKeyLabel, listFileTypeBuckets } from './fileTable';
 import type { SortKey, SortState, ColumnWidths, ColumnFilterState, SizeBucket, MtimeBucket, NameBucket } from './fileTable';
 import { SymbolicIcon } from "../components/symbolic";
+import { ConfirmDialog } from "../components/Dialog/ConfirmDialog";
+import { Dialog } from "../components/Dialog/Dialog";
 import { useSettingsStore } from '../stores/settingsStore';
 import "./FileManager.css";
 
@@ -1173,11 +1175,13 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     }
   }, [finishRename, cancelRename]);
 
-  const handleDelete = useCallback(async (entry: FileEntry) => {
-    // 使用简单的 confirm
-    const confirmed = confirm(`确定删除 "${entry.name}"?\n\n${entry.is_dir ? "这将删除文件夹及其所有内容。" : "此操作无法撤销。"}`);
-    if (!confirmed) return;
+  // ── 删除确认（应用内 ConfirmDialog，替代原生 confirm）────
+  // UI 入口（右键菜单）先 setDeleteTarget 打开确认弹窗，确认后才执行删除；
+  // 危险操作：红色警示图标 + 初始焦点在取消上（防回车误触）
+  const [deleteTarget, setDeleteTarget] = useState<FileEntry | null>(null);
 
+  // 执行删除（仅由 ConfirmDialog 确认回调调用）
+  const doDelete = useCallback(async (entry: FileEntry) => {
     // 构建路径（Linux 格式）
     const sep = "/";
     const path = currentPath === "/"
@@ -2176,7 +2180,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
               <div className="fm-ctx-item" onClick={() => { handleRename(contextMenu.entry!); setContextMenu(null); }}>
                 <span className="fm-ctx-icon">✏️</span> 重命名
               </div>
-              <div className="fm-ctx-item" onClick={() => { handleDelete(contextMenu.entry!); setContextMenu(null); }}>
+              <div className="fm-ctx-item" onClick={() => { setDeleteTarget(contextMenu.entry!); setContextMenu(null); }}>
                 <span className="fm-ctx-icon">🗑️</span> 删除
               </div>
 
@@ -2235,37 +2239,42 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         document.body
       )}
 
-      {/* Path Error Dialog — 路径不存在时弹窗提示（模态）- 使用 Portal */}
-      {pathErrorDialog && createPortal(
-        <div className="fm-path-error-overlay">
-          <div className="fm-path-error-dialog">
-            <div className="ped-header">
-              <span className="ped-icon">⚠️</span>
-              <span className="ped-title">路径不存在</span>
-            </div>
-            <div className="ped-message">{pathErrorDialog}</div>
-            <div className="ped-footer">
-              <button autoFocus onClick={() => setPathErrorDialog(null)}>确定</button>
-            </div>
-          </div>
-        </div>,
-        document.body
+      {/* 删除确认弹窗：危险操作（红色警示图标 + 焦点默认在取消上防回车误触） */}
+      {deleteTarget && (
+        <ConfirmDialog
+          title="删除"
+          message={`确定删除 "${deleteTarget.name}"？`}
+          highlight={deleteTarget.name}
+          detail={deleteTarget.is_dir ? "这将删除文件夹及其所有内容。" : "此操作无法撤销。"}
+          confirmLabel="删除"
+          danger
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={() => { const t = deleteTarget; setDeleteTarget(null); doDelete(t); }}
+        />
       )}
 
-      {/* Rename Dialog - 文件名过长时弹窗重命名（模态）- 使用 Portal */}
-      {renameDialog && createPortal(
-        <div
-          className="fm-path-error-overlay"
-          onClick={(e) => e.stopPropagation()}
-          onKeyDown={(e) => e.stopPropagation()}
-          onKeyUp={(e) => e.stopPropagation()}
-          onKeyPress={(e) => e.stopPropagation()}
-        >
-          <div className="fm-rename-dialog">
-            <div className="rd-header">
-              <span className="rd-icon">📝</span>
-              <span className="rd-title">文件名过长，请重命名</span>
-            </div>
+      {/* Path Error Dialog — 路径不存在时弹窗提示（统一弹窗底座） */}
+      {pathErrorDialog && (
+        <Dialog onClose={() => setPathErrorDialog(null)}>
+          <div className="dg-title">路径不存在</div>
+          <div className="dg-message">{pathErrorDialog}</div>
+          <div className="dg-actions">
+            <button className="dg-btn-primary" autoFocus onClick={() => setPathErrorDialog(null)}>确定</button>
+          </div>
+        </Dialog>
+      )}
+
+      {/* Rename Dialog - 文件名过长时弹窗重命名（统一弹窗底座）。
+          事件 stopPropagation 防止按键冒泡到列表快捷键（原行为保留） */}
+      {renameDialog && (
+        <Dialog onClose={() => setRenameDialog(null)} width={480}>
+          <div
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
+            onKeyUp={(e) => e.stopPropagation()}
+            onKeyPress={(e) => e.stopPropagation()}
+          >
+            <div className="dg-title">文件名过长，请重命名</div>
             <div className="rd-content">
               <div className="rd-original">
                 <div className="rd-label">原始文件名：</div>
@@ -2301,10 +2310,6 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                         handleUploadWithNewName(renameDialog.localPath, renameDialog.newName.trim());
                       }
                     }
-                    // Escape 键取消
-                    if (e.key === 'Escape') {
-                      setRenameDialog(null);
-                    }
                   }}
                   onKeyUp={(e) => e.stopPropagation()}
                   onKeyPress={(e) => e.stopPropagation()}
@@ -2331,12 +2336,10 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                 })()}
               </div>
             </div>
-            <div className="rd-footer">
-              <button className="rd-btn-cancel" onClick={() => setRenameDialog(null)}>
-                取消
-              </button>
+            <div className="dg-actions">
+              <button className="dg-btn" onClick={() => setRenameDialog(null)}>取消</button>
               <button
-                className="rd-btn-confirm"
+                className="dg-btn-primary"
                 disabled={new TextEncoder().encode(renameDialog.newName).length > renameDialog.maxBytes || renameDialog.newName.trim() === ''}
                 onClick={() => {
                   const newName = renameDialog.newName.trim();
@@ -2352,8 +2355,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
               </button>
             </div>
           </div>
-        </div>,
-        document.body
+        </Dialog>
       )}
 
       {/* Properties Dialog - 使用 Portal（分页：常规=只读信息 / 权限=可编辑 chmod+chown） */}
