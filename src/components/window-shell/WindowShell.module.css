@@ -110,6 +110,22 @@
   text-overflow: ellipsis;
 }
 
+/* 应用注入槽位：应用将自定义内容（如 Chrome 式标签条）portal 到此。
+   占据标题与控制按钮之间的全部空间，空白区域保持拖拽/双击最大化；
+   槽位内有内容时自动隐藏默认标题（Chrome 标题栏即标签条形态）。 */
+.windowHeaderSlot {
+  flex: 1 1 auto;
+  min-width: 0;
+  align-self: stretch;
+  display: flex;
+  align-items: flex-end;
+  overflow: visible;
+}
+
+.windowHeaderBar:has(.windowHeaderSlot:not(:empty)) .windowTitle {
+  display: none;
+}
+
 /* ═════════════════════════════════════════════════════════════
    ContentFrame - 隔离层
    ═════════════════════════════════════════════════════════════ */

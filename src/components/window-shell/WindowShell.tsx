@@ -609,6 +609,14 @@ export function WindowShell({
           onDoubleClick={handleHeaderBarDoubleClick}
         >
           <div className={styles.windowTitle}>{title}</div>
+          {/* 应用注入槽位：应用可将自定义内容（如 Chrome 式标签条）portal 到此。
+              槽位内有内容时标题自动隐藏（CSS :has）。
+              槽位空白区域仍可拖拽窗口/双击最大化；
+              交互元素（页签/菜单）自行阻止双击冒泡。 */}
+          <div
+            className={styles.windowHeaderSlot}
+            data-titlebar-slot={windowId}
+          />
           <WindowControls onClose={onClose} onMinimize={onMinimize} onMaximize={onMaximize} />
         </div>
       )}
