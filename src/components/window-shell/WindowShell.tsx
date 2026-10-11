@@ -141,50 +141,6 @@ export function WindowShell({
     return () => clearTimeout(timer);
   }, []);
 
-  // ── 拖拽开始 ────────────────────────────────────────
-  // 只在 standard 模式下通过 HeaderBar 拖拽
-  // frameless 模式下应用自己实现拖拽（通过回调API）
-  // ✅ Windows 11 风格:从最大化/snap 状态按下标题栏 → 立即还原 + 跟随光标
-  const handleDragStart = useCallback(
-    (e: React.MouseEvent) => {
-      if (mode === 'frameless') return;
-
-      e.preventDefault();
-      e.stopPropagation();
-      onFocus();
-
-      // ✅ Windows 行为:tear-off 只在真正拖动(mousemove 超过 3px 阈值)时发生,
-      //    单纯点击标题栏(不拖动)不还原 snap/maximize 状态。
-      //    mousedown 只记录起点;由 handleMouseMove 检测到拖动后才执行 tear-off 还原。
-      mousedownPosRef.current = { x: e.clientX, y: e.clientY };
-      tornOffRef.current = false;
-
-      // 记录拖拽偏移(普通窗口用;maximized/snap 窗口在 tear-off 时会重算 dragStartPos)
-      const currentState = windowStateRef.current;
-      dragStartPos.current = {
-        x: e.clientX - currentState.x,
-        y: e.clientY - currentState.y,
-      };
-
-      setIsDragging(true);
-    },
-    [onFocus, mode],
-  );
-
-  // ── 双击标题栏最大化（Adwaita 标准）────────────────────
-  const handleHeaderBarDoubleClick = useCallback(
-    (e: React.MouseEvent) => {
-      // frameless 模式下，不处理双击
-      if (mode === 'frameless') return;
-
-      // ✅ Adwaita 标准：双击 HeaderBar 触发最大化/取消最大化
-      e.preventDefault();
-      e.stopPropagation();
-      onMaximize();
-    },
-    [mode, onMaximize]
-  );
-
   // ── 拖拽移动（使用 requestAnimationFrame 优化性能）────
   useEffect(() => {
     if (!isDragging) return;
@@ -555,12 +511,54 @@ export function WindowShell({
   }, [isResizing, resizeDirection, onPositionChange, onSizeChange, isOpening]); // ✅ 添加 isOpening
 
   const windowRef = useRef<HTMLDivElement>(null);
+  const headerRef = useRef<HTMLDivElement>(null);
 
   // ── 窗口聚焦（点击窗口任意区域）──────────────────────
-  const handleWindowMouseDown = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    onFocus();
-  };
+  // ✅ 用原生监听而非 React onMouseDown：portal 进标题栏的应用内容
+  //    （如编辑器页签条）的事件沿 DOM 树冒泡，沿 React 树冒泡到不了这里
+  useEffect(() => {
+    const el = windowRef.current;
+    if (!el) return;
+    const onDown = (e: MouseEvent) => {
+      e.stopPropagation();
+      onFocus();
+    };
+    el.addEventListener('mousedown', onDown);
+    return () => el.removeEventListener('mousedown', onDown);
+  }, [onFocus]);
+
+  // ── 标题栏拖拽/双击最大化：原生监听（理由同上）────────
+  useEffect(() => {
+    if (mode === 'frameless') return;
+    const el = headerRef.current;
+    if (!el) return;
+
+    const onDown = (e: MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      onFocus();
+      mousedownPosRef.current = { x: e.clientX, y: e.clientY };
+      tornOffRef.current = false;
+      const currentState = windowStateRef.current;
+      dragStartPos.current = {
+        x: e.clientX - currentState.x,
+        y: e.clientY - currentState.y,
+      };
+      setIsDragging(true);
+    };
+    const onDbl = (e: MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      onMaximize();
+    };
+
+    el.addEventListener('mousedown', onDown);
+    el.addEventListener('dblclick', onDbl);
+    return () => {
+      el.removeEventListener('mousedown', onDown);
+      el.removeEventListener('dblclick', onDbl);
+    };
+  }, [mode, onFocus, onMaximize]);
 
   // ── Aero Snap 预览渲染（通过 Portal 渲染到 body，避免被父级 transform/overflow 影响）──
   const snapPreviewNode = snapPreview ? createPortal(
@@ -597,16 +595,14 @@ export function WindowShell({
             ? 'opacity 0.2s ease-out'
             : 'opacity 0.2s ease-out, transform 300ms cubic-bezier(0.25, 0, 0, 1), width 300ms cubic-bezier(0.25, 0, 0, 1), height 300ms cubic-bezier(0.25, 0, 0, 1)',
       }}
-      onMouseDown={handleWindowMouseDown}
     >
       {/* ── HeaderBar - 窗口标题栏（由 Shell 提供）────────── */}
       {/* standard 模式：显示标准 HeaderBar + WindowControls */}
       {/* frameless 模式：不显示 HeaderBar，应用自己实现控制按钮 */}
       {mode === 'standard' && (
         <div
+          ref={headerRef}
           className={styles.windowHeaderBar}
-          onMouseDown={handleDragStart}
-          onDoubleClick={handleHeaderBarDoubleClick}
         >
           <div className={styles.windowTitle}>{title}</div>
           {/* 应用注入槽位：应用可将自定义内容（如 Chrome 式标签条）portal 到此。

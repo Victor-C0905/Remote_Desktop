@@ -1,0 +1,231 @@
+/**
+ * ChromeTabStrip — chrome-tabs 库桥接组件
+ *
+ * 使用成熟的 chrome-tabs 库（adamschwartz/chrome-tabs，MIT）渲染
+ * Chrome 式页签条：标签几何（SVG 连接弧）、拖拽排序、关闭按钮全部由库提供，
+ * React 只负责状态，通过命令式 API 双向同步。
+ *
+ * 集成要点（踩坑总结）：
+ * - 库要求固定骨架：.chrome-tabs > .chrome-tabs-content（缺省会在
+ *   layoutTabs 处抛 clientWidth of null）
+ * - 库没有 destroy API：resize 监听器与延迟回调永久存活。卸载时把实例
+ *   重定向到带骨架的哑元素，让残留调用安全空转
+ * - 组件只经 portal 渲染进标题栏槽位，不在应用内回退——树位置切换的
+ *   重挂载会触发上述残留问题
+ * - 错误边界隔离库的运行时异常，崩溃只损失页签条不炸窗口
+ * - 库的"双击空白新建"与标题栏双击最大化冲突 → 捕获阶段禁用
+ * - × 关闭走脏确认：捕获阶段拦截库的直接删除
+ */
+
+import React, { useEffect, useRef } from 'react';
+import ChromeTabs from 'chrome-tabs';
+import 'chrome-tabs/css/chrome-tabs.css';
+import './ChromeTabStrip.css';
+
+/** 未保存圆点（借用库的 favicon 槽位渲染，accent 色） */
+const DIRTY_FAVICON =
+  "data:image/svg+xml;utf8,<svg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27><circle cx=%278%27 cy=%278%27 r=%273.2%27 fill=%27%2315aa70%27/></svg>";
+
+export interface ChromeTabItem {
+  id: string;
+  label: string;
+  dirty: boolean;
+}
+
+interface ChromeTabsInstance {
+  init(el: HTMLElement): void;
+  addTab(
+    props: { title?: string; favicon?: string | false; id?: string },
+    opts?: { animate?: boolean; background?: boolean },
+  ): void;
+  removeTab(tabEl: HTMLElement): void;
+  updateTab(
+    tabEl: HTMLElement,
+    props: { title?: string; favicon?: string | false; id?: string },
+  ): void;
+  setCurrentTab(tabEl: HTMLElement): void;
+}
+
+interface ChromeTabStripProps {
+  tabs: ChromeTabItem[];
+  activeTabId: string;
+
+  onActivate(id: string): void;
+
+  /** 页签关闭（库 × 与确认流程统一入口；脏页签由上层拦截确认） */
+  onClose(id: string): void;
+
+  /** 拖拽排序（库 originIndex → destinationIndex） */
+  onReorder(from: number, to: number): void;
+}
+
+/**
+ * 错误边界：隔离第三方库运行时异常，
+ * 页签条崩溃时只隐藏自身，不炸整个应用窗口树
+ */
+class ChromeTabStripErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(err: Error) {
+    console.warn('[ChromeTabStrip] 崩溃已隔离:', err);
+  }
+
+  render() {
+    return this.state.hasError ? null : this.props.children;
+  }
+}
+
+function ChromeTabStripImpl({
+  tabs,
+  activeTabId,
+  onActivate,
+  onClose,
+  onReorder,
+}: ChromeTabStripProps) {
+  const elRef = useRef<HTMLDivElement>(null);
+  const instanceRef = useRef<ChromeTabsInstance | null>(null);
+  /** 程序化同步期间屏蔽库事件，防止状态回环 */
+  const suppressRef = useRef(false);
+  const cbRef = useRef({ onActivate, onClose, onReorder });
+  cbRef.current = { onActivate, onClose, onReorder };
+
+  // 初始化库 + 事件桥接（仅挂载一次）
+  useEffect(() => {
+    const el = elRef.current;
+    if (!el) return;
+
+    const ct = new (ChromeTabs as unknown as { new (): ChromeTabsInstance })();
+    ct.init(el);
+    instanceRef.current = ct;
+
+    const idOf = (target: EventTarget | null): string | null =>
+      (target as HTMLElement | null)?.dataset?.tabId ?? null;
+
+    const onActive = (e: Event) => {
+      if (suppressRef.current) return;
+      const id = idOf((e as CustomEvent).detail?.tabEl);
+      if (id) cbRef.current.onActivate(id);
+    };
+    const onRemove = (e: Event) => {
+      if (suppressRef.current) return;
+      const id = idOf((e as CustomEvent).detail?.tabEl);
+      // 库的 × 已直接删除 DOM；脏页签被确认取消时，同步 effect 会按状态重建
+      if (id) cbRef.current.onClose(id);
+    };
+    const onReorderEv = (e: Event) => {
+      if (suppressRef.current) return;
+      const { originIndex, destinationIndex } = (e as CustomEvent).detail ?? {};
+      if (typeof originIndex === 'number' && typeof destinationIndex === 'number') {
+        cbRef.current.onReorder(originIndex, destinationIndex);
+      }
+    };
+    // × 点击：捕获阶段拦截（脏确认），阻止库的直接删除
+    const onClickCapture = (e: MouseEvent) => {
+      const target = e.target as Element;
+      if (target.closest?.('.chrome-tab-close')) {
+        e.stopPropagation();
+        e.preventDefault();
+        const id = idOf(target.closest('.chrome-tab'));
+        if (id) cbRef.current.onClose(id);
+      }
+    };
+    // 双击空白新建与标题栏双击最大化冲突 → 禁用
+    const onDblCapture = (e: MouseEvent) => e.stopImmediatePropagation();
+
+    el.addEventListener('activeTabChange', onActive);
+    el.addEventListener('tabRemove', onRemove);
+    el.addEventListener('tabReorder', onReorderEv);
+    el.addEventListener('click', onClickCapture, true);
+    el.addEventListener('dblclick', onDblCapture, true);
+
+    return () => {
+      el.removeEventListener('activeTabChange', onActive);
+      el.removeEventListener('tabRemove', onRemove);
+      el.removeEventListener('tabReorder', onReorderEv);
+      el.removeEventListener('click', onClickCapture, true);
+      el.removeEventListener('dblclick', onDblCapture, true);
+      // 库没有 destroy API：resize 监听器与延迟回调会永久存活。
+      // 把实例重定向到带骨架的哑元素，让残留调用永远安全空转，
+      // 避免打在已分离/已清空的 DOM 上抛错。
+      const dummy = document.createElement('div');
+      dummy.innerHTML = '<div class="chrome-tabs-content"></div>';
+      (ct as unknown as { el: HTMLElement }).el = dummy;
+      instanceRef.current = null;
+    };
+  }, []);
+
+  // 状态 → 库 同步（最小 diff：删多余/改标题/保激活；顺序不符时整表重建）
+  useEffect(() => {
+    const ct = instanceRef.current;
+    const el = elRef.current;
+    if (!ct || !el) return;
+
+    const domEls = () => [...el.querySelectorAll<HTMLElement>('.chrome-tab')];
+
+    // 删除：DOM 有但状态没有
+    domEls().forEach((tabEl) => {
+      if (!tabs.some((t) => t.id === tabEl.dataset.tabId)) {
+        suppressRef.current = true;
+        ct.removeTab(tabEl);
+        suppressRef.current = false;
+      }
+    });
+
+    // 顺序校验：不符（新增/拖拽后的状态回流）→ 整表重建保序
+    let els = domEls();
+    const orderOk =
+      tabs.every((t, i) => els[i]?.dataset.tabId === t.id) && els.length === tabs.length;
+    if (!orderOk) {
+      suppressRef.current = true;
+      els.forEach((tabEl) => ct.removeTab(tabEl));
+      tabs.forEach((t) => {
+        ct.addTab(
+          { title: t.label, favicon: t.dirty ? DIRTY_FAVICON : false, id: t.id },
+          { animate: false, background: t.id !== activeTabId },
+        );
+      });
+      const activeEl = el.querySelector<HTMLElement>(`[data-tab-id="${activeTabId}"]`);
+      if (activeEl) ct.setCurrentTab(activeEl);
+      suppressRef.current = false;
+      return;
+    }
+
+    // 原位更新：标题 / 脏点 / 激活态
+    suppressRef.current = true;
+    tabs.forEach((t) => {
+      const tabEl = el.querySelector<HTMLElement>(`[data-tab-id="${t.id}"]`);
+      if (tabEl) {
+        ct.updateTab(tabEl, {
+          title: t.label,
+          favicon: t.dirty ? DIRTY_FAVICON : false,
+          id: t.id,
+        });
+      }
+    });
+    const activeEl = el.querySelector<HTMLElement>(`[data-tab-id="${activeTabId}"]`);
+    if (activeEl && !activeEl.hasAttribute('active')) ct.setCurrentTab(activeEl);
+    suppressRef.current = false;
+  }, [tabs, activeTabId]);
+
+  // 库要求的固定骨架：.chrome-tabs > .chrome-tabs-content
+  return (
+    <div ref={elRef} className="te-chrome-tabs chrome-tabs">
+      <div className="chrome-tabs-content" />
+    </div>
+  );
+}
+
+export function ChromeTabStrip(props: ChromeTabStripProps) {
+  return (
+    <ChromeTabStripErrorBoundary>
+      <ChromeTabStripImpl {...props} />
+    </ChromeTabStripErrorBoundary>
+  );
+}
