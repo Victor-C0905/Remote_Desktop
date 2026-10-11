@@ -535,8 +535,10 @@ export function WindowShell({
     if (!el) return;
 
     const onDown = (e: MouseEvent) => {
-      // 点在窗口控制按钮（红绿灯）上不启动拖拽
-      if ((e.target as Element).closest?.('button')) return;
+      // 点在控制按钮（红绿灯）或页签上不启动窗口拖拽
+      // （页签有自己的拖拽排序，两者不能同时进行）
+      const target = e.target as Element;
+      if (target.closest?.('button') || target.closest?.('.chrome-tab')) return;
       e.preventDefault();
       e.stopPropagation();
       onFocus();
