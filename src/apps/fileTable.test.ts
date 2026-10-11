@@ -10,6 +10,16 @@ import {
   buildGridTemplate,
   filterFileEntries,
   DEFAULT_FILTER,
+  sizeBucketOf,
+  mtimeBucketOf,
+  nameBucketOf,
+  toggleBucket,
+  filterByColumnFilters,
+  hasActiveColumnFilters,
+  DEFAULT_COLUMN_FILTERS,
+  SIZE_BUCKETS,
+  MTIME_BUCKETS,
+  NAME_BUCKETS,
 } from "./fileTable";
 import type { FileEntry } from "./FileManager";
 
@@ -183,5 +193,204 @@ describe("buildGridTemplate", () => {
 describe("DEFAULT_COLUMN_WIDTHS", () => {
   it("与 CSS 历史默认列宽一致", () => {
     expect(DEFAULT_COLUMN_WIDTHS).toEqual({ name: null, size: 90, mtime: 140, perm: 90 });
+  });
+});
+
+/* ── 列筛选（表头下拉菜单，Win11 Explorer 风格）──────────── */
+
+const KB = 1024, MB = 1024 * 1024, GB = 1024 * 1024 * 1024;
+
+describe("sizeBucketOf", () => {
+  it("空文件 → empty（0 字节独立成组）", () => {
+    expect(sizeBucketOf(entry({ name: "a", size: 0 }))).toBe("empty");
+  });
+
+  it("区间左开右闭：16 KB 归极小、1 MB 归小、128 MB 归中、1 GB 归大", () => {
+    expect(sizeBucketOf(entry({ name: "t1", size: 1 }))).toBe("tiny");
+    expect(sizeBucketOf(entry({ name: "t2", size: 16 * KB }))).toBe("tiny");
+    expect(sizeBucketOf(entry({ name: "s1", size: 16 * KB + 1 }))).toBe("small");
+    expect(sizeBucketOf(entry({ name: "s2", size: 1 * MB }))).toBe("small");
+    expect(sizeBucketOf(entry({ name: "m1", size: 1 * MB + 1 }))).toBe("medium");
+    expect(sizeBucketOf(entry({ name: "m2", size: 128 * MB }))).toBe("medium");
+    expect(sizeBucketOf(entry({ name: "l1", size: 128 * MB + 1 }))).toBe("large");
+    expect(sizeBucketOf(entry({ name: "l2", size: 1 * GB }))).toBe("large");
+    expect(sizeBucketOf(entry({ name: "h", size: 1 * GB + 1 }))).toBe("huge");
+  });
+
+  it("目录 → null：size 恒为 0 但无意义，不参与大小筛选（对齐 Explorer：文件夹不落任何区间）", () => {
+    expect(sizeBucketOf(entry({ name: "d", is_dir: true, size: 0 }))).toBeNull();
+    expect(sizeBucketOf(entry({ name: "d2", is_dir: true, size: 4096 }))).toBeNull();
+  });
+});
+
+describe("mtimeBucketOf", () => {
+  // 固定 now = 2026-10-08（周四）12:00 本地时间 → 周一=10-05，昨天=10-07，上周=09-28~10-04
+  // mtime 用无时区字符串（本地解释），保证测试在任何时区的机器上都稳定
+  const NOW = new Date(2026, 9, 8, 12, 0).getTime();
+  const bucket = (mtime: string) => mtimeBucketOf(entry({ name: "x", mtime }), NOW);
+
+  it("今天：当日 0 点起至未来（同日），日界即边界", () => {
+    expect(bucket("2026-10-08T00:00:00")).toBe("today");
+    expect(bucket("2026-10-08T23:59:59")).toBe("today");
+    expect(bucket("2026-10-08T18:00:00")).toBe("today");  // 未来时间（晚于 now）也归今天
+  });
+
+  it("昨天：前一本地日历日", () => {
+    expect(bucket("2026-10-07T00:00:00")).toBe("yesterday");
+    expect(bucket("2026-10-07T23:59:59")).toBe("yesterday");
+  });
+
+  it("本周：周一起（不含今昨），周一 0 点为周界", () => {
+    expect(bucket("2026-10-05T00:00:00")).toBe("thisWeek");
+    expect(bucket("2026-10-06T12:00:00")).toBe("thisWeek");
+  });
+
+  it("上周：上一个完整周（上周一 0 点 ~ 上周日 24 点）", () => {
+    expect(bucket("2026-09-28T00:00:00")).toBe("lastWeek");
+    expect(bucket("2026-10-04T23:59:59")).toBe("lastWeek");
+  });
+
+  it("更早：上周一 0 点之前", () => {
+    expect(bucket("2026-09-27T23:59:59")).toBe("earlier");
+    expect(bucket("2020-01-01T00:00:00")).toBe("earlier");
+  });
+
+  it("空时间与不可解析时间 → null，不落任何时间组", () => {
+    expect(bucket("")).toBeNull();
+    expect(bucket("not-a-date")).toBeNull();
+  });
+});
+
+describe("toggleBucket", () => {
+  it("不在列表 → 追加到末尾（新数组，不改入参）", () => {
+    const prev: ("a" | "b")[] = ["a"];
+    expect(toggleBucket(prev, "b")).toEqual(["a", "b"]);
+    expect(prev).toEqual(["a"]);
+  });
+
+  it("已在列表 → 移除并保序", () => {
+    expect(toggleBucket(["a", "b", "c"] as ("a" | "b" | "c")[], "b")).toEqual(["a", "c"]);
+  });
+});
+
+describe("filterByColumnFilters", () => {
+  const NOW = new Date(2026, 9, 8, 12, 0).getTime();
+  // 覆盖：各大小区间 + 各时间组 + 目录（参与时间筛选、不参与大小筛选）+ 无时间条目
+  const POOL: FileEntry[] = [
+    entry({ name: "dir-today", is_dir: true, size: 0, mtime: "2026-10-08T09:00:00" }),
+    entry({ name: "empty.txt", size: 0, mtime: "2026-10-08T10:00:00" }),
+    entry({ name: "tiny.txt", size: 512, mtime: "2026-10-07T10:00:00" }),
+    entry({ name: "small.txt", size: 100 * KB, mtime: "2026-10-06T10:00:00" }),
+    entry({ name: "med.bin", size: 5 * MB, mtime: "2026-10-02T10:00:00" }),
+    entry({ name: "big.iso", size: 500 * MB, mtime: "2025-01-01T10:00:00" }),
+    entry({ name: "huge.img", size: 2 * GB, mtime: "" }),
+  ];
+  const f = (size: any[], mtime: any[]) =>
+    filterByColumnFilters(POOL, { size, mtime, name: [] }, NOW);
+  const nm = (es: FileEntry[]) => es.map((e) => e.name);
+
+  it("无筛选：原样返回（不复制数组，零开销）", () => {
+    expect(filterByColumnFilters(POOL, DEFAULT_COLUMN_FILTERS, NOW)).toBe(POOL);
+  });
+
+  it("大小筛选：命中区间并集；目录被滤除（不参与大小筛选）", () => {
+    expect(nm(f(["empty"], []))).toEqual(["empty.txt"]);
+    // 多选 = 并集
+    expect(nm(f(["empty", "huge"], []))).toEqual(["empty.txt", "huge.img"]);
+    expect(nm(f(["small", "medium"], []))).toEqual(["small.txt", "med.bin"]);
+  });
+
+  it("时间筛选：目录同参与；无时间条目被滤除", () => {
+    expect(nm(f([], ["today"]))).toEqual(["dir-today", "empty.txt"]);
+    // 昨天 = tiny.txt；目录 dir-today 不属昨天组
+    expect(nm(f([], ["yesterday"]))).toEqual(["tiny.txt"]);
+    expect(nm(f([], ["thisWeek"]))).toEqual(["small.txt"]);
+    expect(nm(f([], ["lastWeek"]))).toEqual(["med.bin"]);
+    expect(nm(f([], ["earlier"]))).toEqual(["big.iso"]);
+    // 无时间条目（huge.img）不落任何组：勾选任何组都不可见
+    expect(nm(f([], ["today", "yesterday", "thisWeek", "lastWeek", "earlier"]))).toHaveLength(6);
+  });
+
+  it("大小+时间同时激活：先过大小再过时间（AND 叠加）", () => {
+    // today 组里的文件中只有 empty.txt 是 empty 区间
+    expect(nm(f(["empty"], ["today"]))).toEqual(["empty.txt"]);
+    // yesterday 组里 tiny.txt 在 tiny 区间
+    expect(nm(f(["tiny"], ["yesterday"]))).toEqual(["tiny.txt"]);
+    // 交集为空
+    expect(nm(f(["large"], ["today"]))).toEqual([]);
+  });
+
+  it("空数组与全量默认值不崩溃", () => {
+    expect(filterByColumnFilters([], DEFAULT_COLUMN_FILTERS, NOW)).toEqual([]);
+  });
+
+  it("名称筛选：按字母/拼音组并集过滤；目录同参与（名称组无 null 情形）", () => {
+    const pool = [
+      entry({ name: "a.txt" }),
+      entry({ name: "宝.zip" }),      // 拼音 bǎo → b → A–F
+      entry({ name: "z.txt" }),
+      entry({ name: "0.txt" }),       // 数字开头 → 其他
+      entry({ name: "dir-a", is_dir: true }),
+    ];
+    const nm = (es: FileEntry[]) => es.map((e) => e.name);
+    expect(nm(filterByColumnFilters(pool, { name: ["aToF"], size: [], mtime: [] }, NOW)))
+      .toEqual(["a.txt", "宝.zip", "dir-a"]);
+    expect(nm(filterByColumnFilters(pool, { name: ["other"], size: [], mtime: [] }, NOW)))
+      .toEqual(["0.txt"]);
+    // 与大小筛选叠加（AND）
+    expect(nm(filterByColumnFilters(pool, { name: ["sToZ"], size: [], mtime: [] }, NOW)))
+      .toEqual(["z.txt"]);
+  });
+});
+
+describe("nameBucketOf", () => {
+  it("ASCII 字母按首字母归组（不区分大小写，段边界 g/m/s）", () => {
+    expect(nameBucketOf(entry({ name: "Alpha.txt" }))).toBe("aToF");
+    expect(nameBucketOf(entry({ name: "file.bin" }))).toBe("aToF");   // f
+    expect(nameBucketOf(entry({ name: "git" }))).toBe("gToL");
+    expect(nameBucketOf(entry({ name: "list.txt" }))).toBe("gToL");  // l
+    expect(nameBucketOf(entry({ name: "map.json" }))).toBe("mToR");
+    expect(nameBucketOf(entry({ name: "run.sh" }))).toBe("mToR");     // r
+    expect(nameBucketOf(entry({ name: "system.log" }))).toBe("sToZ");
+    expect(nameBucketOf(entry({ name: "zeta.log" }))).toBe("sToZ");
+  });
+
+  it("汉字按拼音首字母归组（zh collation 拼音序）", () => {
+    expect(nameBucketOf(entry({ name: "宝库.zip" }))).toBe("aToF");     // bǎo → b
+    expect(nameBucketOf(entry({ name: "工作目录" }))).toBe("gToL");    // gōng → g
+    expect(nameBucketOf(entry({ name: "蚂蚁笔记.md" }))).toBe("mToR");  // mǎ → m
+    expect(nameBucketOf(entry({ name: "系统配置" }))).toBe("sToZ");     // xì → x
+  });
+
+  it("数字/符号/隐藏文件/emoji 归入其他组", () => {
+    expect(nameBucketOf(entry({ name: "123.log" }))).toBe("other");
+    expect(nameBucketOf(entry({ name: ".hidden" }))).toBe("other");
+    expect(nameBucketOf(entry({ name: "_cache" }))).toBe("other");
+    expect(nameBucketOf(entry({ name: "😀图片.png" }))).toBe("other");
+  });
+
+  it("NAME_BUCKETS 清单四段字母 + 其他，标签非空", () => {
+    expect(NAME_BUCKETS.map((b) => b.key)).toEqual(["aToF", "gToL", "mToR", "sToZ", "other"]);
+    expect(NAME_BUCKETS.every((b) => b.label.length > 0)).toBe(true);
+  });
+});
+
+describe("hasActiveColumnFilters / 桶清单", () => {
+  it("默认无筛选；任一列勾选即激活", () => {
+    expect(hasActiveColumnFilters(DEFAULT_COLUMN_FILTERS)).toBe(false);
+    expect(hasActiveColumnFilters({ size: [], mtime: ["today"], name: [] })).toBe(true);
+    expect(hasActiveColumnFilters({ size: ["empty"], mtime: [], name: [] })).toBe(true);
+    expect(hasActiveColumnFilters({ size: [], mtime: [], name: ["aToF"] })).toBe(true);
+  });
+
+  it("桶清单与 Win11 Explorer 分组一致（大小六档、时间五组），key 与标签一一对应", () => {
+    expect(SIZE_BUCKETS.map((b) => b.key)).toEqual([
+      "empty", "tiny", "small", "medium", "large", "huge",
+    ]);
+    expect(SIZE_BUCKETS.every((b) => b.label.length > 0)).toBe(true);
+    expect(MTIME_BUCKETS.map((b) => b.key)).toEqual([
+      "today", "yesterday", "thisWeek", "lastWeek", "earlier",
+    ]);
+    expect(MTIME_BUCKETS.every((b) => b.label.length > 0)).toBe(true);
   });
 });

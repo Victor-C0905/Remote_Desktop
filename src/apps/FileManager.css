@@ -324,7 +324,7 @@
   font-size: var(--font-small);
   font-weight: 600;
   color: var(--quirel-text-secondary);
-  padding: 8px 12px;
+  padding: 0 12px;  /* 垂直 padding 下放至各列头自身：聚焦背景才能铺满整个表头高 */
   background: var(--quirel-headerbar-bg);  /* ✅ 实心背景：行滚过时盖住（sticky） */
   position: sticky;  /* 滚动上提至 .fm-list 后，纵滚时表头吸顶 */
   top: 0;
@@ -339,10 +339,26 @@
   display: flex;
   align-items: center;
   gap: 4px;
+  /* 垂直 padding 铺满整个表头高；水平 16px 让每列表头文字与背景块
+     左缘都有呼吸空间（行内单元格同步缩进 16px，表头与数据保持对齐） */
+  padding: 8px 16px;
   cursor: pointer;
   user-select: none;
   overflow: visible;       /* 手柄跨列间隙，不被裁剪 */
   transition: color var(--duration-fast) var(--ease-out);
+}
+
+/* 首尾列头盒外扩吃掉 header 左右 padding：聚焦背景铺满整个表头宽，
+   与行的全宽 hover/选中背景左右对齐（否则名称左侧留有空白条）。
+   首列额外补回外扩量：文字距窗口左缘 12+16=28px，与行内名称文字
+   （行 padding 12 + 单元格 16）绝对位置一致 */
+.fm-list .fm-list-header .fm-col-header:first-child {
+  margin-left: -12px;
+  padding-left: 28px;
+}
+.fm-list .fm-list-header .fm-col-header:last-child {
+  margin-right: -12px;
+  padding-right: 12px;
 }
 
 /* 悬停/当前排序列：文字转主色，示意可交互 */
@@ -351,28 +367,40 @@
   color: var(--quirel-text-primary);
 }
 
+/* 聚焦背景基座：伪元素右扩 8px 盖住列间 gap——高亮块与右邻列头无缝相接
+   （背景直接画在盒上会让 gap 露缝；删 grid gap 则表头轨道与行错位，不可取）。
+   ::before 按树序最先绘制，文字与拖拽手柄均在其上，不受影响 */
+.fm-list .fm-list-header .fm-col-header::before {
+  content: "";
+  position: absolute;
+  inset: 0 -8px 0 0;
+  background: transparent;
+}
+
+/* 尾列右邻是表头外缘，无 gap 可盖，扩出反而引起 8px 横滚 → 收回 */
+.fm-list .fm-list-header .fm-col-header:last-child::before {
+  inset: 0;
+}
+
 /* 当前排序列淡聚焦：背景条横跨整列头，列宽（含拖拽调节后）一目了然
-   列头为 grid 直接子项且默认 stretch，背景即精确覆盖整列轨道宽度 */
-.fm-list .fm-list-header .fm-col-header.sorted {
+   列头为 grid 直接子项且默认 stretch，背景即精确覆盖整列轨道宽度与整个表头高 */
+.fm-list .fm-list-header .fm-col-header.sorted::before {
   background: var(--quirel-hover-bg);
-  border-radius: var(--radius-sm);
 }
 
 /* 拖拽调宽中的列：淡 accent 聚焦背景（比排序列的中性高亮更进一级） */
-.fm-list .fm-list-header .fm-col-header.resizing {
+.fm-list .fm-list-header .fm-col-header.resizing::before {
   background: color-mix(in srgb, var(--quirel-accent-bg) 14%, transparent);
-  border-radius: var(--radius-sm);
 }
 
 /* ── 悬停列头：列头淡聚焦 ──────────────────────────────
-   容器挂 col-hover-<key> 类，CSS 按列选中表头；背景条横跨整列
-   轨道宽度，肉眼即可看出这一列有多宽、边界在哪 */
-.fm-list.col-hover-name .fm-list-header [data-col="name"],
-.fm-list.col-hover-size .fm-list-header [data-col="size"],
-.fm-list.col-hover-mtime .fm-list-header [data-col="mtime"],
-.fm-list.col-hover-perm .fm-list-header [data-col="perm"] {
+   容器挂 col-hover-<key> 类，CSS 按列选中表头；背景横跨整列
+   轨道宽度并铺满整个表头高，肉眼即可看出这一列有多宽、边界在哪 */
+.fm-list.col-hover-name .fm-list-header [data-col="name"]::before,
+.fm-list.col-hover-size .fm-list-header [data-col="size"]::before,
+.fm-list.col-hover-mtime .fm-list-header [data-col="mtime"]::before,
+.fm-list.col-hover-perm .fm-list-header [data-col="perm"]::before {
   background: color-mix(in srgb, var(--quirel-accent-bg) 10%, transparent);
-  border-radius: var(--radius-sm);
 }
 
 /* 表头列标签：列拖窄时与指示符共存，文本收缩截断 */
@@ -384,38 +412,98 @@
   white-space: nowrap;
 }
 
-/* 排序方向指示（升序 ▼ / 降序 ▲，桌面文件管理器惯例） */
+/* 排序方向指示（升序 chevron 向上 / 降序向下，Win11 Explorer 惯例，
+   细线样式与下拉按钮的实心区域区分开） */
 .fm-list .fm-list-header .fm-col-header .fm-sort-indicator {
   flex-shrink: 0;
   opacity: 0.9;
 }
 
-/* 列宽拖拽手柄：覆盖列间隙，命中区上下外扩，hover 显示分隔线 */
+/* 列宽拖拽手柄：命中区中心对准列分界线（右列左缘 = 右缘外 8px，与 ::after
+   分界线同一位置），±4px 命中；覆盖整个表头高 */
 .fm-list .fm-list-header .fm-col-header .fm-col-resizer {
   position: absolute;
-  top: -8px;      /* 外扩表头 padding，提高命中 */
-  bottom: -8px;
-  right: -8px;    /* 覆盖 8px 列间隙的一半 */
+  top: 0;         /* 垂直 padding 已在列头盒内，覆盖列头即整个表头高 */
+  bottom: 0;
+  right: -12px;   /* 8px 命中区 [右缘+4px, 右缘+12px]，中心 = 右缘+8px = 分界线 */
   width: 8px;
   cursor: col-resize;
   z-index: 1;
 }
 
-.fm-list .fm-list-header .fm-col-header .fm-col-resizer::after {
+/* 表头列分界线：常驻淡色竖线，与右侧表头的左边缘重合（right:-8px 恰跨过
+   8px 列间距），作为两列的视觉分界；尾列（perm）右侧无相邻列，不画。
+   hover/拖拽调宽手柄时同一根线 accent 高亮，指示可拖拽的列界 */
+.fm-list .fm-list-header .fm-col-header:not(:last-child)::after {
   content: "";
   position: absolute;
-  top: 25%;
-  bottom: 25%;
-  left: 3px;
-  width: 2px;
-  border-radius: 1px;
-  background: transparent;
+  top: 6px;      /* 近贯穿表头高（上下留 6px 不与边框相接） */
+  bottom: 6px;
+  right: -8px;   /* 与右列左缘重合 = 两列分界线（right:-8px 跨过 8px 列间距） */
+  width: 1px;
+  background: var(--quirel-border-color);
   transition: background var(--duration-fast) var(--ease-out);
 }
 
-.fm-list .fm-list-header .fm-col-header .fm-col-resizer:hover::after,
-.fm-list .fm-list-header .fm-col-header .fm-col-resizer:active::after {
+/* 手柄 hover / 拖拽中：分界线转 accent（:has 匹配子手柄状态；拖拽中
+   .resizing 类挂在列头上，鼠标移出手柄仍保持高亮） */
+.fm-list .fm-list-header .fm-col-header:has(.fm-col-resizer:hover)::after,
+.fm-list .fm-list-header .fm-col-header.resizing::after {
   background: var(--quirel-accent-bg);
+}
+
+/* ── 列头 ▾ 下拉按钮（Win11 Explorer 同款）─────────────────
+   绝对定位浮于列头右端：不参与 flex 布局，浮现时不挤压列头文字（无位移感）。
+   平时 opacity:0 且禁点（该区域点击落到列头=排序）；hover 列头、菜单打开
+   或该列筛选激活（.filtered，图标切为漏斗）时浮现 */
+.fm-list .fm-list-header .fm-col-header .fm-col-menu-btn {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--radius-xs);
+  color: var(--quirel-text-secondary);
+  cursor: pointer;
+  z-index: 2;  /* 高于拖拽手柄（手柄 z-index:1），按钮区域由按钮接管 */
+  opacity: 0;
+  pointer-events: none;  /* 隐藏时不拦截点击：该区域点击仍触发列头排序 */
+  transition: opacity var(--duration-fast) var(--ease-out),
+              background var(--duration-fast) var(--ease-out);
+}
+
+/* hover 列头 / 本列菜单打开 / 该列筛选激活（.filtered）时：按钮浮现并可点
+   （筛选激活时按钮图标为漏斗，常驻提示该列有勾选的筛选） */
+.fm-list .fm-list-header .fm-col-header:hover .fm-col-menu-btn,
+.fm-list .fm-list-header .fm-col-header.menu-open .fm-col-menu-btn,
+.fm-list .fm-list-header .fm-col-header.filtered .fm-col-menu-btn {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* 幽灵按钮视觉语言：平时透明，hover 底色浮出 */
+.fm-list .fm-list-header .fm-col-header .fm-col-menu-btn:hover {
+  background: var(--quirel-hover-bg);
+  color: var(--quirel-text-primary);
+}
+
+/* 按钮与列头文本的分隔线：按钮左缘淡竖线，随按钮一起浮现/隐藏
+   （点击区与列头文字界限清晰，UI 更易辨认） */
+.fm-list .fm-list-header .fm-col-header .fm-col-menu-btn::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 3px;
+  bottom: 3px;
+  width: 1px;
+  background: var(--quirel-border-color);
 }
 
 /* 文件列表行容器（滚动已上提至 .fm-list） */
@@ -450,6 +538,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  padding-left: 16px;  /* 与表头列头水平内距同步，表头文字与数据文字对齐 */
   min-width: 0;  /* 列宽交由 --fm-cols 轨道管理（可拖拽调窄），文本自身用省略号截断 */
   overflow: hidden;
 }
@@ -491,6 +580,7 @@
 .fm-list .fm-list-row .fm-file-perm {
   font-size: var(--font-small);
   color: var(--quirel-text-secondary);
+  padding-left: 16px;  /* 与表头列头水平内距同步 */
   /* 固定 px 列超宽文本（长日期/权限串）用省略号截断，不撑开轨道 */
   overflow: hidden;
   text-overflow: ellipsis;
@@ -607,6 +697,69 @@
   height: 1px;
   background: var(--quirel-border-color);
   margin: 4px 0;
+}
+
+/* ── Header Dropdown Menu（列头下拉：列筛选复选列表）────── */
+/* 视觉与右键菜单同源（同背景/边框/阴影/层级/入场动画） */
+.fm-header-menu {
+  position: fixed;
+  min-width: 210px;
+  background: var(--quirel-view-bg);
+  border: 1px solid var(--quirel-border-color);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-popup);
+  z-index: var(--z-app-dropdown);  /* 与右键菜单同层级：应用内部弹层 */
+  padding: 4px 0;
+  animation: menuFadeIn 120ms var(--ease-out);
+}
+
+/* 筛选复选行：hover 用中性底（勾选为多选操作，不用 accent 悬浮
+   以免整行 accent 高亮与勾选态争抢注意力） */
+.fm-header-menu .fm-hm-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  font-size: var(--font-body);
+  color: var(--quirel-text-primary);
+  cursor: pointer;
+  user-select: none;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.fm-header-menu .fm-hm-check:hover {
+  background: var(--quirel-hover-bg);
+}
+
+/* 自绘复选框：accent 选中态 + 白勾（与项目 checkbox 视觉一致） */
+.fm-header-menu .fm-hm-check input {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  flex-shrink: 0;
+  border: 1px solid var(--quirel-border-color);
+  border-radius: 3px;
+  background: var(--quirel-view-bg);
+  cursor: pointer;
+  position: relative;
+}
+
+.fm-header-menu .fm-hm-check input:checked {
+  background: var(--quirel-accent-bg);
+  border-color: var(--quirel-accent-bg);
+}
+
+.fm-header-menu .fm-hm-check input:checked::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--quirel-text-on-accent);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
 }
 
 /* ── Status Bar ──────────────────────────────────────── */

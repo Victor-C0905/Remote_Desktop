@@ -12,8 +12,8 @@ import { createLogger } from '../utils/logger';
 import { openRemoteFile } from './openRemoteFile';
 import { parsePermissions, matrixToOctal, octalToPermString } from './permissions';
 import type { PermMatrix } from './permissions';
-import { sortFileEntries, DEFAULT_SORT, DEFAULT_COLUMN_WIDTHS, clampColumnWidth, buildGridTemplate, filterFileEntries, DEFAULT_FILTER } from './fileTable';
-import type { SortKey, SortState, ColumnWidths, FilterMode } from './fileTable';
+import { sortFileEntries, DEFAULT_SORT, DEFAULT_COLUMN_WIDTHS, clampColumnWidth, buildGridTemplate, filterFileEntries, DEFAULT_FILTER, filterByColumnFilters, hasActiveColumnFilters, toggleBucket, DEFAULT_COLUMN_FILTERS, SIZE_BUCKETS, MTIME_BUCKETS, NAME_BUCKETS } from './fileTable';
+import type { SortKey, SortState, ColumnWidths, FilterMode, ColumnFilterState, SizeBucket, MtimeBucket, NameBucket } from './fileTable';
 import { SymbolicIcon } from "../components/symbolic";
 import { useSettingsStore } from '../stores/settingsStore';
 import "./FileManager.css";
@@ -161,11 +161,19 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   // ── 目录/文件过滤（工具栏分段控件）────────────────────────
   // 会话内状态，刻意不持久化：每次打开默认"全部"（用户约定）
   const [filterMode, setFilterMode] = useState<FilterMode>(DEFAULT_FILTER);
-  // 显示列表 = 已排序的 entries 按当前过滤模式筛选；渲染与键盘导航均以此为准
-  // （entries 保持全量，切换过滤/排序不会丢失数据或需要重新加载目录）
+
+  // ── 列筛选（表头下拉菜单，Win11 Explorer 风格）────────────
+  // 会话内状态不持久化（与 filterMode 同决策）；大小/时间列可勾选区间组，
+  // 勾选为并集（OR），与 filterMode 两层独立叠加
+  const [columnFilters, setColumnFilters] = useState<ColumnFilterState>(DEFAULT_COLUMN_FILTERS);
+  // 打开中的表头下拉菜单：锚点列 + 视口坐标（fixed 定位，portal 渲染）
+  const [headerMenu, setHeaderMenu] = useState<{ key: SortKey; x: number; y: number } | null>(null);
+
+  // 显示列表 = 已排序的 entries 依次过「目录/文件模式」与「列筛选」；
+  // 渲染与键盘导航均以此为准（entries 保持全量，切换过滤/排序不重新加载目录）
   const visibleEntries = useMemo(
-    () => filterFileEntries(entries, filterMode),
-    [entries, filterMode]
+    () => filterByColumnFilters(filterFileEntries(entries, filterMode), columnFilters),
+    [entries, filterMode, columnFilters]
   );
 
   // ── 表头排序（点击翻转）────────────────────────────────
@@ -369,6 +377,44 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     setEntries(prevEntries => sortFileEntries(prevEntries, next));
   }, []);
 
+  /* ── 表头下拉菜单（列筛选，Win11 Explorer 风格）─────────── */
+
+  /** 打开/切换关闭表头下拉菜单：锚定按钮下方、左缘对齐列头
+   *  （右溢出时向左收进视口）；再点同列按钮 = 关闭。
+   *  仅大小/修改时间列有筛选区（名称/权限列不渲染下拉按钮） */
+  const openHeaderMenu = useCallback((e: React.MouseEvent, key: SortKey) => {
+    e.stopPropagation();  // 不触发表头点击排序
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const MENU_WIDTH = 210;
+    setHeaderMenu(prev => {
+      if (prev?.key === key) return null;
+      const x = Math.max(8, Math.min(rect.left, window.innerWidth - MENU_WIDTH - 8));
+      return { key, x, y: Math.round(rect.bottom) + 2 };
+    });
+  }, []);
+
+  /** 勾选/取消一个筛选桶：菜单保持打开（可连续多选，Win11 同款）
+   *  name/size/mtime 三列可筛选（perm 无筛选区） */
+  const toggleColumnFilter = useCallback((key: SortKey, bucket: SizeBucket | MtimeBucket | NameBucket) => {
+    if (key !== "size" && key !== "mtime" && key !== "name") return;
+    setColumnFilters(prev => key === "size"
+      ? { ...prev, size: toggleBucket(prev.size, bucket as SizeBucket) }
+      : key === "mtime"
+        ? { ...prev, mtime: toggleBucket(prev.mtime, bucket as MtimeBucket) }
+        : { ...prev, name: toggleBucket(prev.name, bucket as NameBucket) });
+    // 筛选改变可见列表：清空选中（过滤后的可见索引与旧选中位不再对应，
+    // 与 filterMode 切换同一处理）
+    setSelectedIdx(null);
+  }, []);
+
+  // 点击菜单外关闭（与右键菜单同一模式：window 级 click 兜底）
+  useEffect(() => {
+    if (!headerMenu) return;
+    const close = () => setHeaderMenu(null);
+    window.addEventListener("click", close);
+    return () => window.removeEventListener("click", close);
+  }, [headerMenu]);
+
   /* ── 列宽拖拽：mousedown 预览、mouseup 提交持久层 ────────── */
 
   /** 开始拖拽列宽：记录起点与该列当前渲染宽度（名称列自此从弹性转固定） */
@@ -376,8 +422,17 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     e.preventDefault();    // 阻止拖拽选中文本
     e.stopPropagation();  // 不触发表头排序
     const colEl = (e.currentTarget as HTMLElement).parentElement;
-    if (!colEl) return;
-    const startWidth = colEl.getBoundingClientRect().width;
+    const headerEl = colEl?.parentElement;
+    if (!colEl || !headerEl) return;
+    // 起始宽度取 grid 轨道宽（computed used value），不能用列头盒 getBoundingClientRect——
+    // 首列盒为铺满表头左缘有 margin-left: -12px 外扩，盒宽 = 轨道 + 12px，用它当起点
+    // 会让名称列每次 mousedown 都膨胀 12px（点击边界尚未拖动列就右移）。
+    const headerGrid = getComputedStyle(headerEl).gridTemplateColumns;
+    const colIndex = FILE_COLUMNS.findIndex(c => c.key === key);
+    const trackPx = parseFloat(headerGrid.split(" ")[colIndex]);
+    const startWidth = Number.isFinite(trackPx)
+      ? trackPx
+      : colEl.getBoundingClientRect().width;  // 解析失败兜底（如浏览器返回 used 值异常）
     dragWidthRef.current = startWidth;
     setDragWidth(startWidth);
     setResizing({ key, startX: e.clientX, startWidth });
@@ -1568,6 +1623,12 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     // 如果正在编辑文件名，不处理任何键盘事件（编辑输入框会处理）
     if (editingEntry) return;
 
+    // 表头下拉菜单打开时：Esc 关闭，其余按键不透传（菜单为当前键盘焦点层）
+    if (headerMenu) {
+      if (e.key === "Escape") setHeaderMenu(null);
+      return;
+    }
+
     if (e.key === "Backspace") { e.preventDefault(); goUp(); }
     if (e.key === "Enter" && selectedIdx !== null) {
       handleOpen(visibleEntries[selectedIdx]);
@@ -1581,7 +1642,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       e.preventDefault();
       setSelectedIdx(prev => Math.max((prev ?? 0) - 1, 0));
     }
-  }, [visibleEntries, selectedIdx, goUp, handleOpen, editingEntry, isEditingPath]);
+  }, [visibleEntries, selectedIdx, goUp, handleOpen, editingEntry, isEditingPath, headerMenu]);
 
   // ── 监听上传完成事件 ─────────────────────────────────
   useEffect(() => {
@@ -1837,14 +1898,21 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
               <div className="fm-empty-text">{permissionDenied ? "无权限读取此目录内容" : "空目录"}</div>
             </div>
           ) : visibleEntries.length === 0 ? (
-            /* ── 过滤无匹配：目录非空，但当前过滤模式下无可见项 ── */
+            /* ── 过滤无匹配：目录非空，但当前过滤/筛选下无可见项
+                  （列筛选激活时优先提示筛选无匹配，不误报"没有文件"）── */
             <div
               className="fm-empty"
               onContextMenu={handleEmptyContextMenu}
               onClick={handleEmptyClick}
             >
-              <div className="fm-empty-icon">{filterMode === "dirs" ? "📁" : "📄"}</div>
-              <div className="fm-empty-text">{filterMode === "dirs" ? "此目录下没有文件夹" : "此目录下没有文件"}</div>
+              <div className="fm-empty-icon">
+                {hasActiveColumnFilters(columnFilters) ? "🔍" : filterMode === "dirs" ? "📁" : "📄"}
+              </div>
+              <div className="fm-empty-text">
+                {hasActiveColumnFilters(columnFilters)
+                  ? "没有符合当前筛选的条目"
+                  : filterMode === "dirs" ? "此目录下没有文件夹" : "此目录下没有文件"}
+              </div>
             </div>
           ) : viewMode === "list" ? (
             <div
@@ -1855,11 +1923,17 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
               {/* ✅ 表头固定（flex-shrink: 0），不参与滚动
                   点击列头翻转排序；列间手柄拖拽调宽（宽度经 --fm-cols 下发给表头与行） */}
               <div className="fm-list-header">
-                {FILE_COLUMNS.map(col => (
+                {FILE_COLUMNS.map(col => {
+                  // 该列筛选是否激活（name/size/mtime 有筛选区）：列头显示漏斗指示
+                  const filterActive = col.key === "size"
+                    ? columnFilters.size.length > 0
+                    : col.key === "mtime" ? columnFilters.mtime.length > 0
+                    : col.key === "name" ? columnFilters.name.length > 0 : false;
+                  return (
                   <span
                     key={col.key}
                     data-col={col.key}
-                    className={`fm-col-header${sortState.key === col.key ? " sorted" : ""}${resizing?.key === col.key ? " resizing" : ""}`}
+                    className={`fm-col-header${sortState.key === col.key ? " sorted" : ""}${resizing?.key === col.key ? " resizing" : ""}${headerMenu?.key === col.key ? " menu-open" : ""}${filterActive ? " filtered" : ""}`}
                     onClick={() => toggleSort(col.key)}
                     onMouseEnter={() => setHoveredCol(col.key)}
                     /* 拖拽调宽期间保持整列高亮（鼠标常会移出列头），结束时统一清理 */
@@ -1868,10 +1942,23 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                     <span className="fm-col-label">{col.label}</span>
                     {sortState.key === col.key && (
                       <SymbolicIcon
-                        name={sortState.dir === "asc" ? "pan-down" : "pan-up"}
+                        name={sortState.dir === "asc" ? "chevron-up" : "chevron-down"}
                         size={12}
                         className="fm-sort-indicator"
                       />
+                    )}
+                    {/* ▾ 下拉按钮：名称/大小/修改时间列提供（可筛选），hover 列头浮现
+                        （Win11 Explorer 同款）；筛选激活时按钮常驻并显示漏斗图标
+                        （激活指示与入口合一，不再在文字后另放符号）；
+                        点击弹筛选菜单，不触发表头点击排序 */}
+                    {(col.key === "size" || col.key === "mtime" || col.key === "name") && (
+                      <button
+                        className="fm-col-menu-btn"
+                        title="筛选"
+                        onClick={(e) => openHeaderMenu(e, col.key)}
+                      >
+                        <SymbolicIcon name={filterActive ? "funnel" : "chevron-down"} size={10} />
+                      </button>
                     )}
                     {col.key !== "perm" && (
                       <span
@@ -1881,7 +1968,8 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                       />
                     )}
                   </span>
-                ))}
+                  );
+                })}
               </div>
               {/* ✅ 文件列表滚动容器（flex: 1 + overflow-y: auto） */}
               <div
@@ -2019,6 +2107,39 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
           <TransferStatusBar />
         </div>
       </div>
+
+      {/* Header Dropdown Menu - Win11 Explorer 风格列头下拉（列筛选），
+          Portal 渲染到 body：fixed 定位相对视口，不受滚动容器影响。
+          仅大小/修改时间列可打开（名称/权限列无筛选区，不渲染下拉按钮） */}
+      {headerMenu && createPortal(
+        <div
+          className="fm-header-menu"
+          style={{ left: headerMenu.x, top: headerMenu.y }}
+          /* 菜单内点击（含复选框连续勾选）不冒泡到 window 的外部关闭监听 */
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* 筛选区：勾选为并集（OR），菜单保持打开可连续多选；全不勾 = 该列不过滤
+              名称=字母/拼音组、大小=区间组、时间=日期组（按钮只在可筛选列渲染） */}
+          {(headerMenu.key === "size" ? SIZE_BUCKETS
+            : headerMenu.key === "mtime" ? MTIME_BUCKETS : NAME_BUCKETS).map(b => {
+            const checked = headerMenu.key === "size"
+              ? columnFilters.size.includes(b.key as SizeBucket)
+              : headerMenu.key === "mtime"
+                ? columnFilters.mtime.includes(b.key as MtimeBucket)
+                : columnFilters.name.includes(b.key as NameBucket);
+            return (
+              <label key={b.key} className="fm-hm-check">
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => toggleColumnFilter(headerMenu.key, b.key)}
+                />
+                <span>{b.label}</span>
+              </label>
+            );
+          })}
+        </div>
+      , document.body)}
 
       {/* Context Menu - 使用 Portal 渲染到 body，确保 position: fixed 相对于视口 */}
       {contextMenu && createPortal(
