@@ -11,6 +11,7 @@ import { SearchAddon } from '@xterm/addon-search';
 // xterm.js 基础样式（必须导入，否则 canvas/text-layer 无法正确定位）
 import '@xterm/xterm/css/xterm.css';
 import { useServerManager } from '../context/ServerManager';
+import { ToolbarMenu } from '../components/ToolbarMenu/ToolbarMenu';
 // import { useWindowState } from '../window-system/hooks/useWindowState'; // 未来集成时使用
 import { useWindowEvent } from '../window-system/hooks/useWindowEvent';
 import { describeTerminalFailure } from '../types/errors';
@@ -827,22 +828,21 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
 
         {/* Actions and Status */}
         <div className="terminal-tab-actions">
-          {/* 紧凑图标按钮：开启面板时显示 accent 激活态（对齐 EditorMode/FileManager 视图切换） */}
-          <button
-            className={`terminal-tab-btn${showSearch ? ' active' : ''}`}
-            onClick={() => setShowSearch((v) => !v)}
-            title="在终端输出中搜索"
-          >🔍</button>
-          <button
-            className={`terminal-tab-btn${showSettings ? ' active' : ''}`}
-            onClick={() => setShowSettings((v) => !v)}
-            title="字号 / 光标闪烁设置"
-          >⚙️</button>
           {/* 连接状态：CSS 圆点（绿=已连接，灰=本地），服务器名常规字重 */}
           <span className={`terminal-status ${activeServer ? 'is-remote' : 'is-local'}`} title={activeServer ? `${activeServer.host}:${activeServer.port}` : '未连接远程服务器'}>
             <span className="terminal-status-dot" />
             {activeServer ? activeServer.name : '本地'}
           </span>
+          {/* 低频操作收纳进 ⌄ 菜单（Windows Terminal 同款布局）：
+              搜索/设置面板的开关，开启时菜单项打勾 */}
+          <ToolbarMenu
+            icon="⌄"
+            title="更多操作"
+            items={[
+              { label: '搜索', checked: showSearch, onClick: () => setShowSearch((v) => !v) },
+              { label: '设置', checked: showSettings, onClick: () => setShowSettings((v) => !v) },
+            ]}
+          />
         </div>
       </div>
 

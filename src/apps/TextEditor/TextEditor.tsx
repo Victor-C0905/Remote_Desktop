@@ -29,12 +29,14 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { createLogger } from '../../utils/logger';
 import { AppLayout } from '../../components/app-shell/AppLayout';
+import { ToolbarMenu } from '../../components/ToolbarMenu/ToolbarMenu';
+import type { ToolbarMenuItem, ToolbarMenuSeparator } from '../../components/ToolbarMenu/ToolbarMenu';
 import { useServerManager } from '../../context/ServerManager';
+import { useWindowManager } from '../../window-system/WindowManagerContext';
 import { useFileManager } from './hooks/useFileManager';
 import { TextEditorPane } from './components/TextEditorPane';
-import type { CursorPosition, DocStats } from './components/TextEditorPane';
+import type { CursorPosition, DocStats, TextEditorPaneHandle } from './components/TextEditorPane';
 import { HexEditorPane } from './components/HexEditorPane';
-import { EditorMode } from './components/EditorMode';
 import { StatusBar } from './components/StatusBar';
 import { SaveDialog } from './components/SaveDialog';
 import { getFileIconForName } from '../fileIcons';
@@ -85,8 +87,11 @@ interface TextEditorProps {
  * ```
  */
 export function TextEditor({ windowId, preloadData }: TextEditorProps) {
-  // 获取服务器管理器（用于获取活跃服务器信息：保存目标 + 工具栏路径前缀显示）
+  // 获取服务器管理器（用于获取活跃服务器信息：保存目标 + 面包屑前缀显示）
   const { activeServerId, activeServer } = useServerManager();
+
+  // 窗口管理器（标签栏：× 关闭本窗口，+ 新建编辑器窗口）
+  const { manager } = useWindowManager();
 
   // 文件管理 Hook（管理文件状态和操作）
   const {
@@ -124,6 +129,9 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
 
   // 二进制文件自动切换 hex 的标记（只在加载完成时执行一次，不劫持用户手动切换）
   const autoHexSwitched = useRef(false);
+
+  // 编辑面板命令句柄（撤销/重做/查找按钮直连 CodeMirror 命令）
+  const paneRef = useRef<TextEditorPaneHandle>(null);
 
   /**
    * 预加载文件（仅执行一次）
@@ -219,15 +227,6 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
   };
 
   /**
-   * 处理编辑模式切换
-   *
-   * @param mode - 新的编辑模式
-   */
-  const handleModeChange = (mode: EditorModeType) => {
-    setEditorMode(mode);
-  };
-
-  /**
    * 窗口关闭时释放资源
    *
    * 清理文件状态，释放内存
@@ -263,13 +262,19 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
   }, [handleSave]); // 依赖 handleSave 函数
 
   /**
-   * 渲染工具栏
-   *
-   * Adwaita HeaderBar 风格：
-   * - 左侧：文件图标（按扩展名映射）+ 文件名 + 路径两行 meta
-   * - 右侧：保存 + 另存为 + 编辑模式切换
+   * 当前文件显示名（标签栏/标题）
    */
-  const renderToolbar = () => {
+  const fileName = fileState ? fileState.path.split('/').pop() || fileState.path : '未命名文件';
+
+  /**
+   * 渲染动作栏（第一行）
+   *
+   * 对齐 VS Code 极简动作栏：高频编辑动作，仅此而已。
+   * - 左组：撤销/重做（编辑核心动作，GNOME Text Editor 同款位置）
+   * - 右组：保存（accent 主操作）、查找面板、更多操作菜单
+   *   低频操作（另存为/十六进制/自动换行）全部收进 ⋮ 菜单
+   */
+  const renderActionBar = () => {
     // 判断是否可以保存
     // 新文件（fileState == null）：只要有内容就可以保存
     // 已打开文件（fileState != null）：文本文件且有未保存变更时可以保存
@@ -280,35 +285,53 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
       (fileState && fileState.fileType === 'text' && hasUnsavedChanges())
     );
 
-    // 文件名显示：已打开文件显示路径，新文件显示"未命名文件"
-    const fileName = fileState ? fileState.path.split('/').pop() || fileState.path : '未命名文件';
+    const menuItems: Array<ToolbarMenuItem | ToolbarMenuSeparator> = [
+      {
+        label: '另存为…',
+        disabled: !fileState || isSaving,
+        onClick: () => setShowSaveDialog(true),
+      },
+      { separator: true },
+      {
+        label: '十六进制模式',
+        checked: editorMode === 'hex',
+        keepOpen: true,
+        onClick: () => setEditorMode((m) => (m === 'hex' ? 'text' : 'hex')),
+      },
+      {
+        label: '自动换行',
+        checked: wrapText,
+        keepOpen: true,
+        onClick: () => setWrapText((w) => !w),
+      },
+    ];
 
     return (
-      <div className="te-toolbar">
-        {/* 左侧：文件图标 + 文件名/路径两行 meta（对齐 FileManager 信息密度） */}
-        <div className="te-toolbar-left">
-          <span className="te-file-icon">{fileState ? getFileIconForName(fileName) : '📝'}</span>
-          <div className="te-file-meta">
-            <div className="te-filename">
-              <span className="te-filename-text">{fileName}</span>
-              {/* 未保存标记 */}
-              {hasUnsavedChanges() && (
-                <span className="te-unsaved-marker" title="未保存">●</span>
-              )}
-            </div>
-            {/* 次级行：服务器:完整路径（等宽小字，悬浮显示全文） */}
-            <div className="te-filepath" title={fileState?.path}>
-              {fileState
-                ? `${activeServer ? `${activeServer.name}:` : ''}${fileState.path}`
-                : '尚未打开文件'}
-            </div>
-          </div>
+      <div className="te-actionbar">
+        {/* 左组：编辑历史 */}
+        <div className="te-actionbar-left">
+          <button
+            type="button"
+            className="te-icon-btn"
+            onClick={() => paneRef.current?.undo()}
+            title="撤销 (Ctrl+Z)"
+          >
+            ↩️
+          </button>
+          <button
+            type="button"
+            className="te-icon-btn"
+            onClick={() => paneRef.current?.redo()}
+            title="重做 (Ctrl+Y)"
+          >
+            ↪️
+          </button>
         </div>
 
-        {/* 右侧：操作按钮组（紧凑图标按钮 + 分组分隔线） */}
-        <div className="te-toolbar-right">
-          {/* 保存（主操作）：accent 底图标按钮 */}
+        {/* 右组：保存 / 查找 / 更多操作 */}
+        <div className="te-actionbar-right">
           <button
+            type="button"
             className="te-icon-btn te-icon-btn-accent"
             onClick={handleSave}
             disabled={!canSave}
@@ -316,23 +339,73 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
           >
             💾
           </button>
-
-          {/* 另存为：💾+ 图标（对齐 FileManager 📁+ 的图标语言），悬浮提示说明 */}
           <button
+            type="button"
             className="te-icon-btn"
-            onClick={() => setShowSaveDialog(true)}
-            disabled={!fileState || isSaving}
-            title="另存为新文件"
+            onClick={() => paneRef.current?.openSearch()}
+            title="查找 / 替换 (Ctrl+F)"
           >
-            💾+
+            🔍
           </button>
-
-          {/* 分组分隔线：文件操作 | 视图模式 */}
-          <div className="te-toolbar-divider" />
-
-          {/* 编辑模式切换 */}
-          <EditorMode mode={editorMode} onChange={handleModeChange} />
+          <ToolbarMenu title="更多操作" items={menuItems} />
         </div>
+      </div>
+    );
+  };
+
+  /**
+   * 渲染标签栏（第二行）
+   *
+   * 对齐现代编辑器的文档标签：文件图标 + 文件名 + 未保存圆点 + 关闭；
+   * 右侧 [+] 新建编辑器窗口。单标签即当前窗口文档，为多标签迭代预留结构。
+   */
+  const renderTabBar = () => {
+    return (
+      <div className="te-tabbar">
+        <div
+          className="te-tab active"
+          title={fileState ? fileState.path : '未命名文件'}
+        >
+          <span className="te-tab-icon">{fileState ? getFileIconForName(fileName) : '📝'}</span>
+          <span className="te-tab-name">{fileName}</span>
+          {hasUnsavedChanges() && <span className="te-tab-dot" title="未保存" />}
+          <span
+            className="te-tab-close"
+            title="关闭窗口"
+            onClick={(e) => {
+              e.stopPropagation();
+              manager.close(windowId);
+            }}
+          >
+            ×
+          </span>
+        </div>
+        <button
+          type="button"
+          className="te-tab-new"
+          onClick={() => manager.create('editor', {})}
+          title="新建编辑器窗口"
+        >
+          +
+        </button>
+      </div>
+    );
+  };
+
+  /**
+   * 渲染面包屑（第三行，仅已打开文件时）
+   *
+   * 对齐 VS Code 面包屑：服务器名 › 逐级目录 › 文件名；
+   * 过长时左侧收缩省略（direction: rtl 技巧，与 FileManager 拖放层一致），
+   * 悬浮显示完整路径。
+   */
+  const renderBreadcrumb = () => {
+    if (!fileState) return null;
+    const segments = fileState.path.split('/').filter(Boolean);
+    const text = `${activeServer ? `${activeServer.name} › ` : ''}${segments.join(' › ')}`;
+    return (
+      <div className="te-breadcrumb" title={fileState.path}>
+        {text}
       </div>
     );
   };
@@ -404,6 +477,7 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
         if (fileState.fileType === 'text') {
           return (
             <TextEditorPane
+              ref={paneRef}
               content={fileState.content}
               onChange={handleContentChange}
               onCursorChange={setCursorPosition}
@@ -431,6 +505,7 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
     // 未打开文件（新文件） - 像记事本一样默认可编辑
     return (
       <TextEditorPane
+        ref={paneRef}
         content={localContent}
         onChange={handleContentChange}
         onCursorChange={setCursorPosition}
@@ -444,7 +519,8 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
   /**
    * 渲染状态栏
    *
-   * 显示文件的行数、字符数、编码、保存状态、光标位置等
+   * 纯信息展示：光标位置、行数、字符数、语言、编码、换行符、保存状态、修改时间
+   * （操作类入口已按频率归位：高频→动作栏，低频→⋮ 菜单）
    */
   const renderStatusBar = () => {
     return (
@@ -454,8 +530,6 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
         cursorPosition={cursorPosition}
         newFileCharCount={docStats?.chars ?? localContent.length}
         docStats={docStats}
-        wrapText={wrapText}
-        onToggleWrap={() => setWrapText((w) => !w)}
       />
     );
   };
@@ -463,7 +537,15 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
   return (
     <div className="te-app">
       <div className="te-app-content">
-        <AppLayout toolbar={renderToolbar()}>
+        <AppLayout
+          toolbar={
+            <>
+              {renderActionBar()}
+              {renderTabBar()}
+              {renderBreadcrumb()}
+            </>
+          }
+        >
           <div className="te-content-wrapper">
             {renderErrorBanner()}
             {renderBody()}

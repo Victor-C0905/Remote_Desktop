@@ -14,9 +14,12 @@
  * - 光标/选区/文档统计 → onCursorChange / onStatsChange（状态栏展示）
  */
 
-import { useEffect, useRef } from 'react';
-import { Compartment, EditorState } from '@codemirror/state';import { EditorView, placeholder as cmPlaceholder } from '@codemirror/view';
+import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
+import { Compartment, EditorState } from '@codemirror/state';
+import { EditorView, placeholder as cmPlaceholder } from '@codemirror/view';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
+import { undo, redo } from '@codemirror/commands';
+import { openSearchPanel } from '@codemirror/search';
 import { tags as t } from '@lezer/highlight';
 import { basicSetup } from 'codemirror';
 import { findLanguageForPath } from '../utils/language';
@@ -65,6 +68,18 @@ interface TextEditorPaneProps {
 
   /** 文档为空时的占位提示（可选） */
   placeholder?: string;
+}
+
+/**
+ * 编辑面板命令句柄（工具栏按钮直连 CodeMirror 命令）
+ */
+export interface TextEditorPaneHandle {
+  /** 撤销 */
+  undo(): void;
+  /** 重做 */
+  redo(): void;
+  /** 打开查找替换面板（同 Ctrl+F） */
+  openSearch(): void;
 }
 
 /**
@@ -237,7 +252,7 @@ const semanticHighlighting = syntaxHighlighting(
  * };
  * ```
  */
-export function TextEditorPane({
+export const TextEditorPane = forwardRef<TextEditorPaneHandle, TextEditorPaneProps>(function TextEditorPane({
   content,
   onChange,
   onCursorChange,
@@ -245,7 +260,7 @@ export function TextEditorPane({
   filePath,
   wrapText = false,
   placeholder,
-}: TextEditorPaneProps) {
+}, ref) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
 
@@ -256,6 +271,22 @@ export function TextEditorPane({
   // 回调通过 ref 透传，避免 updateListener 闭包过期
   const callbacksRef = useRef({ onChange, onCursorChange, onStatsChange });
   callbacksRef.current = { onChange, onCursorChange, onStatsChange };
+
+  // 命令句柄：工具栏撤销/重做/查找按钮直连 CodeMirror 命令
+  useImperativeHandle(ref, () => ({
+    undo: () => {
+      if (viewRef.current) undo(viewRef.current);
+    },
+    redo: () => {
+      if (viewRef.current) redo(viewRef.current);
+    },
+    openSearch: () => {
+      const view = viewRef.current;
+      if (!view) return;
+      openSearchPanel(view);
+      view.focus();
+    },
+  }), []);
 
   // 创建 EditorView（仅挂载时一次；doc 取挂载时刻的 content）
   useEffect(() => {
@@ -359,4 +390,4 @@ export function TextEditorPane({
   }, [wrapText]);
 
   return <div ref={hostRef} className="te-cm-host" />;
-}
+});

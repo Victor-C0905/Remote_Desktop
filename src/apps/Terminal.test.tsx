@@ -1,5 +1,5 @@
 // src/apps/Terminal.test.tsx
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { TerminalApp } from './Terminal';
 
@@ -34,9 +34,10 @@ describe('TerminalApp', () => {
 
   it('renders header bar', () => {
     render(<TerminalApp windowId="test-window-2" />);
-    // 工具栏为紧凑图标按钮（🔍/⚙️），以 title 悬浮提示作为可发现性契约
-    expect(screen.getByTitle('在终端输出中搜索')).toBeInTheDocument();
-    expect(screen.getByTitle('字号 / 光标闪烁设置')).toBeInTheDocument();
+    // 搜索/设置收纳进 ⌄ 更多操作菜单（Windows Terminal 式低频收纳）
+    fireEvent.click(screen.getByTitle('更多操作'));
+    expect(screen.getByRole('menuitemcheckbox', { name: '搜索' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitemcheckbox', { name: '设置' })).toBeInTheDocument();
   });
 
   it('renders tab bar', () => {

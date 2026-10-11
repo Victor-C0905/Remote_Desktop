@@ -1,0 +1,95 @@
+/* ============================================================
+   ToolbarMenu — 工具栏下拉菜单（共享组件）
+   配色全部走 --quirel-* 变量，亮暗主题自动跟随
+   ============================================================ */
+
+/* ── 触发按钮（28×28，对齐 te-icon-btn 尺寸语言）────────── */
+.tbm-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--quirel-border-color);
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--quirel-text-secondary);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.tbm-trigger:hover,
+.tbm-trigger.open {
+  background: var(--quirel-view-bg);
+  color: var(--quirel-text-primary);
+}
+
+/* ── 菜单面板（portal 到 body，fixed 定位）───────────────── */
+.tbm-menu {
+  position: fixed;
+  z-index: 400; /* 高于窗口内容，低于模态对话框 */
+  min-width: 168px;
+  padding: 4px;
+  background: var(--quirel-view-bg);
+  border: 1px solid var(--quirel-border-color);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-popup);
+  transform: translateX(-100%); /* 以触发按钮右缘为锚，面板右对齐 */
+}
+
+/* ── 菜单项 ──────────────────────────────────────────────── */
+.tbm-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--quirel-text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--font-small);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.tbm-item:hover:not(:disabled) {
+  background: var(--quirel-card-hover);
+}
+
+.tbm-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 勾选列：固定宽度保证文案对齐 */
+.tbm-item-check {
+  width: 14px;
+  flex-shrink: 0;
+  color: var(--quirel-accent-bg);
+  font-weight: 700;
+}
+
+/* 勾选项文案用 accent 强调当前开启状态 */
+.tbm-item.checked .tbm-item-label {
+  color: var(--quirel-accent-bg);
+  font-weight: 600;
+}
+
+.tbm-item-label {
+  flex: 1;
+  white-space: nowrap;
+}
+
+/* ── 分隔线 ──────────────────────────────────────────────── */
+.tbm-separator {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--quirel-border-color);
+}

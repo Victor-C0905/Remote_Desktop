@@ -35,12 +35,6 @@ interface StatusBarProps {
 
   /** CodeMirror 文档统计（可选；缺省时从 content 回退计算） */
   docStats?: DocStats | null;
-
-  /** 是否自动换行 */
-  wrapText: boolean;
-
-  /** 切换自动换行 */
-  onToggleWrap: () => void;
 }
 
 /**
@@ -102,7 +96,8 @@ function detectLineEnding(content: string): 'LF' | 'CRLF' {
  *
  * 显示文件信息：
  * - 未打开文件：显示"未命名文件"、光标位置、字符数
- * - 已打开文件：左组（光标位置、选中数、行数、字符数或大小）+ 右组（语言、编码、换行符、自动换行开关、保存状态、修改时间）
+ * - 已打开文件：左组（光标位置、选中数、行数、字符数或大小）+ 右组（语言、编码、换行符、保存状态、修改时间）
+ *   纯信息展示，不含操作入口（操作按频率归位：高频→动作栏，低频→⋮ 菜单）
  *
  * @param props - 组件属性
  *
@@ -123,8 +118,6 @@ export function StatusBar({
   cursorPosition,
   newFileCharCount,
   docStats,
-  wrapText,
-  onToggleWrap,
 }: StatusBarProps): React.ReactElement {
   // 未打开文件时显示"未命名文件"
   if (!fileState) {
@@ -140,16 +133,8 @@ export function StatusBar({
             {docStats?.chars ?? newFileCharCount ?? 0} 个字符
           </span>
         </div>
-        {/* 右组：自动换行开关 + 新建状态提示 */}
+        {/* 右组：新建状态提示 */}
         <div className="te-status-group">
-          <button
-            type="button"
-            className={`te-status-toggle${wrapText ? ' on' : ''}`}
-            onClick={onToggleWrap}
-            title="切换自动换行"
-          >
-            自动换行 {wrapText ? '开' : '关'}
-          </button>
           {hasUnsavedChanges && (
             <span className="te-status-badge te-status-badge-unsaved">未保存</span>
           )}
@@ -206,7 +191,7 @@ export function StatusBar({
         </span>
       </div>
 
-      {/* 右组：文件属性（语言 / 编码 / 换行符 / 自动换行 / 保存状态 / 修改时间） */}
+      {/* 右组：文件属性（语言 / 编码 / 换行符 / 保存状态 / 修改时间） */}
       <div className="te-status-group">
         {/* 语言（从扩展名推断，仅文本文件显示） */}
         {fileState.fileType === 'text' && (
@@ -225,18 +210,6 @@ export function StatusBar({
           <span className="te-status-item">
             {detectLineEnding(fileState.content)}
           </span>
-        )}
-
-        {/* 自动换行开关（仅文本文件显示） */}
-        {fileState.fileType === 'text' && (
-          <button
-            type="button"
-            className={`te-status-toggle${wrapText ? ' on' : ''}`}
-            onClick={onToggleWrap}
-            title="切换自动换行"
-          >
-            自动换行 {wrapText ? '开' : '关'}
-          </button>
         )}
 
         {/* 保存状态徽标（仅文本文件显示）：未保存=橙色徽标，已保存=普通灰字 */}
