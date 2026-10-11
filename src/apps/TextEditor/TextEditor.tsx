@@ -190,12 +190,63 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [activeServerId, activeStatus, activeTab, handleStatus]);
 
-  /** 阻止双击冒泡到标题栏（避免在页签/菜单上双击触发最大化） */
+  /** 阻止双击冒泡到标题栏（避免在页签上双击触发最大化） */
   const stopDoubleClick = (e: React.MouseEvent) => e.stopPropagation();
 
-  // ── 渲染：单行标签条（菜单栏 + 页签 + 新建） ──────────────
+  // ── 渲染：标题栏页签条（仅页签 + 新建；空白区域可拖拽窗口）──
 
-  const renderStrip = () => {
+  const renderTabs = () => {
+    return (
+      <div className="te-tabstrip">
+        {/* 文档页签（Chrome 式：活动页签底部与内容区融合） */}
+        {tabs.map((t) => {
+          const st = tabStatuses[t.id];
+          const label = st?.label ?? (t.initialPath ? pathTail(t.initialPath) : '未命名文件');
+          const isActive = t.id === activeTab.id;
+          return (
+            <div
+              key={t.id}
+              className={`te-tab${isActive ? ' active' : ''}`}
+              onClick={() => setActiveTabId(t.id)}
+              onDoubleClick={stopDoubleClick}
+              title={st?.path ?? label}
+            >
+              <span className="te-tab-icon">
+                {st?.path ? getFileIconForName(label) : t.initialPath ? getFileIconForName(label) : '📝'}
+              </span>
+              <span className="te-tab-name">{label}</span>
+              {st?.dirty && <span className="te-tab-dot" title="未保存" />}
+              <span
+                className="te-tab-close"
+                title="关闭页签"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  closeTab(t.id);
+                }}
+              >
+                ×
+              </span>
+            </div>
+          );
+        })}
+
+        {/* 原地新增页签 */}
+        <button
+          type="button"
+          className="te-tab-new"
+          onClick={addTab}
+          title="新建页签"
+        >
+          +
+        </button>
+      </div>
+    );
+  };
+
+  // ── 渲染：应用内顶栏（菜单栏 + 路径面包屑，单行） ─────────
+  // 菜单栏不进标题栏（与页签分层），与路径上下文同行节省纵向空间
+
+  const renderTopbar = () => {
     // 保存可用性：有变更、非保存中；未打开文件需有内容（dirty 已覆盖）
     const canSave = !!activeStatus
       && !activeStatus.isSaving
@@ -203,9 +254,8 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
       && (activeStatus.path ? activeStatus.fileType === 'text' : true);
 
     return (
-      <div className="te-tabstrip">
-        {/* 菜单栏：全部功能按类归位（双击不触发最大化） */}
-        <div className="te-menubar" onDoubleClick={stopDoubleClick}>
+      <div className="te-topbar">
+        <div className="te-menubar">
           <MenuBar
             menus={[
               {
@@ -263,78 +313,30 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
           />
         </div>
 
-        {/* 菜单栏与页签的分隔竖线 */}
+        {/* 菜单栏与路径的分隔竖线 */}
         <div className="te-strip-divider" />
 
-        {/* 文档页签（Chrome 式：活动页签底部与内容区融合） */}
-        {tabs.map((t) => {
-          const st = tabStatuses[t.id];
-          const label = st?.label ?? (t.initialPath ? pathTail(t.initialPath) : '未命名文件');
-          const isActive = t.id === activeTab.id;
-          return (
-            <div
-              key={t.id}
-              className={`te-tab${isActive ? ' active' : ''}`}
-              onClick={() => setActiveTabId(t.id)}
-              onDoubleClick={stopDoubleClick}
-              title={st?.path ?? label}
-            >
-              <span className="te-tab-icon">
-                {st?.path ? getFileIconForName(label) : t.initialPath ? getFileIconForName(label) : '📝'}
-              </span>
-              <span className="te-tab-name">{label}</span>
-              {st?.dirty && <span className="te-tab-dot" title="未保存" />}
-              <span
-                className="te-tab-close"
-                title="关闭页签"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  closeTab(t.id);
-                }}
-              >
-                ×
-              </span>
-            </div>
-          );
-        })}
-
-        {/* 原地新增页签 */}
-        <button
-          type="button"
-          className="te-tab-new"
-          onClick={addTab}
-          title="新建页签"
-        >
-          +
-        </button>
-      </div>
-    );
-  };
-
-  // ── 渲染：面包屑（活动页签已打开文件时） ──────────────────
-
-  const renderBreadcrumb = () => {
-    if (!activeStatus?.path) return null;
-    const segments = activeStatus.path.split('/').filter(Boolean);
-
-    return (
-      <div className="te-breadcrumb" title={activeStatus.path}>
-        {activeServer && (
-          <>
-            <span className="te-crumb te-crumb-server">{activeServer.name}</span>
-            <span className="te-crumb-sep">›</span>
-          </>
+        {/* 路径面包屑（仅已打开文件时显示分段） */}
+        {activeStatus?.path && (
+          <div className="te-breadcrumb" title={activeStatus.path}>
+            {activeServer && (
+              <>
+                <span className="te-crumb te-crumb-server">{activeServer.name}</span>
+                <span className="te-crumb-sep">›</span>
+              </>
+            )}
+            {activeStatus.path.split('/').filter(Boolean).map((seg, i, arr) => (
+              <Fragment key={i}>
+                {i > 0 && <span className="te-crumb-sep">›</span>}
+                <span
+                  className={`te-crumb${i === arr.length - 1 ? ' te-crumb-current' : ''}`}
+                >
+                  {seg}
+                </span>
+              </Fragment>
+            ))}
+          </div>
         )}
-        {segments.map((seg, i) => (
-          <Fragment key={i}>
-            {i > 0 && <span className="te-crumb-sep">›</span>}
-            <span
-              className={`te-crumb${i === segments.length - 1 ? ' te-crumb-current' : ''}`}
-            >
-              {seg}
-            </span>
-          </Fragment>
-        ))}
       </div>
     );
   };
@@ -383,13 +385,13 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
 
   return (
     <div className="te-app">
-      {/* 标签条 portal 进窗口标题栏（Chrome 形态）；槽位缺失时回退应用内 */}
+      {/* 页签 portal 进窗口标题栏（Chrome 形态）；槽位缺失时回退应用内 */}
       {titlebarSlot
-        ? createPortal(renderStrip(), titlebarSlot)
-        : renderStrip()}
+        ? createPortal(renderTabs(), titlebarSlot)
+        : renderTabs()}
       <div className="te-app-content">
         <AppLayout
-          toolbar={renderBreadcrumb()}
+          toolbar={renderTopbar()}
         >
           <div className="te-content-wrapper">
             {renderErrorBanner()}
