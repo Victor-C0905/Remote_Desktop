@@ -1,48 +1,58 @@
 /**
  * 文本编辑器主组件
  *
- * 这是文件编辑器的核心组件，负责：
- * - 整合所有子组件（编辑面板、状态栏、模式切换等）
- * - 管理文件状态（通过 useFileManager Hook）
- * - 管理编辑模式（text/hex）
- * - 管理未保存变更状态
- * - 预加载文件（通过 preloadData）
- * - 窗口关闭时释放资源
+ * 多页签文档窗口（Chrome 式）：
+ * - 一个窗口承载多个文档页签，每个页签一个 EditorDocument 实例
+ *   （内容、脏标记、撤销历史互相独立，非活动页签保持挂载）
+ * - [+] 在窗口内原地新增页签（不再打开新窗口）
+ * - 菜单栏与页签同行（菜单在左、页签居右），低频操作收进菜单
+ * - 页签 × 关闭：脏页签先确认，最后一个页签关闭时关闭窗口
  *
  * 整体架构：
- * ┌─────────────────────────────────────┐
- * │ AppLayout                            │
- * │ ┌─────────────────────────────────┐ │
- * │ │ Toolbar（文件名 + 保存 + 模式） │ │
- * │ └─────────────────────────────────┘ │
- * │ ┌─────────────────────────────────┐ │
- * │ │ 错误横幅（内联，仅出错时）       │ │
- * │ ├─────────────────────────────────┤ │
- * │ │ Content（CodeMirror 编辑面板）  │ │
- * │ └─────────────────────────────────┘ │
- * │ ┌─────────────────────────────────┐ │
- * │ │ StatusBar（状态栏）             │ │
- * │ └─────────────────────────────────┘ │
- * └─────────────────────────────────────┘
+ * ┌──────────────────────────────────────────┐
+ * │ [文件 编辑 视图] ┊ [📄 a.ts ● ×][📄 b] [+] │ ← 单行标签条
+ * │ [server › path › to › file.ts]            │ ← 面包屑（仅已打开文件）
+ * │ 错误横幅（内联，仅出错时）                  │
+ * │ 活动文档（CodeMirror / Hex）               │
+ * │ StatusBar（纯信息）                        │
+ * └──────────────────────────────────────────┘
  */
 
-import { Fragment, useEffect, useState, useRef, useCallback } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { createLogger } from '../../utils/logger';
 import { AppLayout } from '../../components/app-shell/AppLayout';
 import { MenuBar } from '../../components/ToolbarMenu/ToolbarMenu';
+import { ConfirmDialog } from '../../components/Dialog/ConfirmDialog';
 import { useServerManager } from '../../context/ServerManager';
 import { useWindowManager } from '../../window-system/WindowManagerContext';
-import { useFileManager } from './hooks/useFileManager';
-import { TextEditorPane } from './components/TextEditorPane';
-import type { CursorPosition, DocStats, TextEditorPaneHandle } from './components/TextEditorPane';
-import { HexEditorPane } from './components/HexEditorPane';
+import { EditorDocument } from './components/EditorDocument';
+import type { DocStatus, EditorDocumentHandle } from './components/EditorDocument';
 import { StatusBar } from './components/StatusBar';
 import { SaveDialog } from './components/SaveDialog';
 import { getFileIconForName } from '../fileIcons';
-import type { EditorMode as EditorModeType } from './types/editor';
 import './TextEditor.css';
 
 const log = createLogger('TextEditor');
+
+/** 页签元数据（文档状态由 EditorDocument 异步上报） */
+interface EditorTab {
+  id: string;
+
+  /** 初始打开的远程文件（可选；不传则为未命名新文件） */
+  initialPath?: string;
+  initialServerId?: string;
+}
+
+let tabSeq = 0;
+function nextTabId(): string {
+  tabSeq += 1;
+  return `tab-${tabSeq}`;
+}
+
+function pathTail(path: string): string {
+  return path.split('/').pop() || path;
+}
 
 /**
  * TextEditor 组件 Props
@@ -51,7 +61,7 @@ interface TextEditorProps {
   /** 窗口 ID（用于窗口管理） */
   windowId: string;
 
-  /** 预加载的数据（可选） */
+  /** 预加载的数据（可选；作为首个页签打开） */
   preloadData?: {
     /** 文件路径 */
     path: string;
@@ -61,24 +71,16 @@ interface TextEditorProps {
 }
 
 /**
- * 文本编辑器主组件
- *
- * 提供完整的文件编辑功能，包括：
- * - 文件打开、保存、关闭
- * - 文本编辑（CodeMirror 6：行号/语法高亮/查找替换）和十六进制查看
- * - 状态显示（行数、字符数、保存状态等）
- * - 预加载文件支持
+ * 文本编辑器主组件（多页签文档窗口）
  *
  * @param props - 组件属性
- * @param props.windowId - 窗口 ID
- * @param props.preloadData - 预加载的数据（可选）
  *
  * @example
  * ```tsx
- * // 基本用法
+ * // 空窗口（一个未命名页签）
  * <TextEditor windowId="editor-1" />
  *
- * // 预加载文件
+ * // 以预加载文件作为首个页签
  * <TextEditor
  *   windowId="editor-2"
  *   preloadData={{ path: '/home/user/file.txt', serverId: 'server-1' }}
@@ -86,281 +88,222 @@ interface TextEditorProps {
  * ```
  */
 export function TextEditor({ windowId, preloadData }: TextEditorProps) {
-  // 获取服务器管理器（用于获取活跃服务器信息：保存目标 + 面包屑前缀显示）
   const { activeServerId, activeServer } = useServerManager();
-
-  // 窗口管理器（标签栏：× 关闭本窗口，+ 新建编辑器窗口）
   const { manager } = useWindowManager();
 
-  // 文件管理 Hook（管理文件状态和操作）
-  const {
-    fileState,
-    isLoading,
-    isSaving,
-    error,
-    localContent,
-    openFile,
-    saveFile,
-    saveAs,
-    closeFile,
-    updateContent,
-    hasUnsavedChanges,
-    clearError,
-  } = useFileManager();
+  // 页签与活动页签（首渲染时按 preloadData 初始化一次）
+  const initialTabs = useRef<EditorTab[] | null>(null);
+  if (initialTabs.current === null) {
+    initialTabs.current = preloadData?.path
+      ? [{ id: nextTabId(), initialPath: preloadData.path, initialServerId: preloadData.serverId }]
+      : [{ id: nextTabId() }];
+    log.info('窗口初始化页签:', initialTabs.current);
+  }
+  const [tabs, setTabs] = useState<EditorTab[]>(initialTabs.current);
+  const [activeTabId, setActiveTabId] = useState<string>(initialTabs.current[0].id);
 
-  // 编辑模式状态（text/hex）
-  const [editorMode, setEditorMode] = useState<EditorModeType>('text');
+  // 各页签文档状态（EditorDocument 上报）
+  const [tabStatuses, setTabStatuses] = useState<Record<string, DocStatus>>({});
 
-  // 光标位置状态（行号、列号）
-  const [cursorPosition, setCursorPosition] = useState<CursorPosition>({ line: 1, column: 1 });
-
-  // 文档统计（行数/字符数/选中数，由编辑面板上报）
-  const [docStats, setDocStats] = useState<DocStats | null>(null);
-
-  // 自动换行开关
+  // 自动换行（窗口级设置）
   const [wrapText, setWrapText] = useState(false);
 
-  // 保存对话框状态
+  // 另存为对话框（绑定活动页签）
   const [showSaveDialog, setShowSaveDialog] = useState(false);
 
-  // 防止重复打开同一个文件（关键修复）
-  const lastOpenedPath = useRef<string | null>(null);
+  // 待确认关闭的脏页签
+  const [confirmCloseTabId, setConfirmCloseTabId] = useState<string | null>(null);
 
-  // 二进制文件自动切换 hex 的标记（只在加载完成时执行一次，不劫持用户手动切换）
-  const autoHexSwitched = useRef(false);
+  // 各页签文档句柄（菜单栏操作入口）
+  const docRefs = useRef<Map<string, EditorDocumentHandle>>(new Map());
 
-  // 编辑面板命令句柄（撤销/重做/查找按钮直连 CodeMirror 命令）
-  const paneRef = useRef<TextEditorPaneHandle>(null);
-
-  /**
-   * 预加载文件（仅执行一次）
-   *
-   * 当窗口创建时，如果提供了 preloadData，自动打开文件
-   * 使用 ref 防止重复打开同一个文件
-   */
+  // 标签条挂载点：窗口标题栏槽位（Chrome 形态——标题栏即标签条）。
+  // WindowShell 的 HeaderBar 先于应用内容渲染，挂载时槽位必已存在；
+  // 找不到时（异常形态）回退到应用内工具栏。
+  const [titlebarSlot, setTitlebarSlot] = useState<HTMLElement | null>(null);
   useEffect(() => {
-    if (preloadData && preloadData.path && preloadData.serverId) {
-      // 检查是否已经打开过这个文件
-      if (lastOpenedPath.current === preloadData.path) {
-        log.debug('文件已打开，跳过重复打开:', preloadData.path);
-        return;
+    setTitlebarSlot(document.querySelector<HTMLElement>(`[data-titlebar-slot="${windowId}"]`));
+  }, [windowId]);
+
+  const activeTab = tabs.find((t) => t.id === activeTabId) ?? tabs[0];
+  const activeStatus: DocStatus | null = tabStatuses[activeTab.id] ?? null;
+
+  /** 文档状态上报（引用稳定，避免 EditorDocument memo 失效） */
+  const handleStatus = useCallback((tabId: string, status: DocStatus) => {
+    setTabStatuses((prev) => ({ ...prev, [tabId]: status }));
+  }, []);
+
+  /** 原地新增页签（未命名新文件） */
+  const addTab = useCallback(() => {
+    const id = nextTabId();
+    setTabs((prev) => [...prev, { id }]);
+    setActiveTabId(id);
+  }, []);
+
+  /** 移除页签；最后一个页签关闭时关闭窗口 */
+  const removeTab = useCallback((tabId: string) => {
+    setTabs((prev) => {
+      const idx = prev.findIndex((t) => t.id === tabId);
+      if (idx === -1) return prev;
+      const next = prev.filter((t) => t.id !== tabId);
+      if (next.length === 0) {
+        manager.close(windowId);
+        return prev;
       }
-
-      log.info('预加载文件:', preloadData.path);
-      lastOpenedPath.current = preloadData.path; // 记录已打开的文件
-
-      openFile(preloadData.serverId, preloadData.path).catch((err) => {
-        log.error('预加载文件失败:', err);
-        lastOpenedPath.current = null; // 失败时重置，允许重试
+      // 若关闭的是活动页签，激活相邻页签（优先左侧）
+      setActiveTabId((cur) => {
+        if (cur !== tabId) return cur;
+        return next[Math.max(0, idx - 1)].id;
       });
-    }
-  }, [preloadData, openFile]);
+      return next;
+    });
+  }, [manager, windowId]);
 
-  /**
-   * 二进制文件自动切换到十六进制模式
-   *
-   * 仅在首次检测到二进制文件时切换一次；用户随后手动切回文本模式不被劫持
-   */
-  useEffect(() => {
-    if (fileState?.fileType === 'binary' && !autoHexSwitched.current) {
-      autoHexSwitched.current = true;
-      setEditorMode('hex');
-    }
-  }, [fileState]);
-
-  /**
-   * 处理保存文件
-   *
-   * 如果是新文件（fileState == null），弹出对话框让用户输入路径
-   * 如果是已打开文件（fileState != null），直接保存
-   * 使用 useCallback 包装，避免不必要的重新创建
-   */
-  const handleSave = useCallback(async () => {
-    // 检查是否有活跃服务器
-    if (!activeServerId) {
-      log.error('未连接到服务器，无法保存文件');
+  /** 页签 ×：脏页签先确认，干净页签直接关 */
+  const closeTab = useCallback((tabId: string) => {
+    if (tabStatuses[tabId]?.dirty) {
+      setConfirmCloseTabId(tabId);
       return;
     }
-
-    // 如果是新文件（未打开文件）
-    if (!fileState) {
-      // 打开保存对话框
-      setShowSaveDialog(true);
-      return;
-    }
-
-    // 如果是已打开文件，直接保存
-    await saveFile(activeServerId);
-  }, [activeServerId, fileState, saveFile]); // 依赖项
+    removeTab(tabId);
+  }, [tabStatuses, removeTab]);
 
   /**
-   * 处理另存为
-   *
-   * @param path - 保存路径
-   */
-  const handleSaveAs = async (path: string) => {
-    if (!activeServerId) return;
-
-    // 保存到指定路径
-    await saveAs(activeServerId, path);
-
-    // 关闭对话框
-    setShowSaveDialog(false);
-  };
-
-  /**
-   * 处理取消保存
-   */
-  const handleCancelSave = () => {
-    setShowSaveDialog(false);
-  };
-
-  /**
-   * 处理内容变更
-   *
-   * @param newContent - 新的文件内容
-   */
-  const handleContentChange = (newContent: string) => {
-    // 更新本地文件内容
-    updateContent(newContent);
-  };
-
-  /**
-   * 窗口关闭时释放资源
-   *
-   * 清理文件状态，释放内存
-   */
-  useEffect(() => {
-    return () => {
-      log.info('窗口关闭，清理资源:', windowId);
-      closeFile();
-    };
-  }, [windowId, closeFile]);
-
-  /**
-   * Ctrl+S 快捷键保存
-   *
-   * 监听键盘事件，当按下 Ctrl+S 时触发保存操作
+   * Ctrl+S 快捷键保存（保存活动页签）
    */
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      // 检查是否按下 Ctrl+S（或 Cmd+S 在 Mac 上）
       if ((event.ctrlKey || event.metaKey) && event.key === 's') {
-        event.preventDefault(); // 阻止浏览器默认的保存行为
-        handleSave();
+        event.preventDefault();
+        if (activeServerId) {
+          if (activeStatus?.path) {
+            docRefs.current.get(activeTab.id)?.save(activeServerId);
+          } else {
+            // 未命名文件：走另存为流程
+            setShowSaveDialog(true);
+          }
+        }
       }
     };
 
-    // 添加键盘事件监听
     window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeServerId, activeStatus, activeTab, handleStatus]);
 
-    // 清理监听器
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [handleSave]); // 依赖 handleSave 函数
+  /** 阻止双击冒泡到标题栏（避免在页签/菜单上双击触发最大化） */
+  const stopDoubleClick = (e: React.MouseEvent) => e.stopPropagation();
 
-  /**
-   * 当前文件显示名（标签栏/标题）
-   */
-  const fileName = fileState ? fileState.path.split('/').pop() || fileState.path : '未命名文件';
+  // ── 渲染：单行标签条（菜单栏 + 页签 + 新建） ──────────────
 
-  /**
-   * 渲染菜单栏（第一行）
-   *
-   * 传统桌面应用菜单栏：全部功能按类别归位，不散落按钮。
-   * - 文件：保存 / 另存为 / 关闭窗口
-   * - 编辑：撤销 / 重做 / 查找替换（直连 CodeMirror 命令）
-   * - 视图：十六进制模式 / 自动换行（勾选项）
-   */
-  const renderMenuBar = () => {
-    // 判断是否可以保存
-    // 新文件（fileState == null）：只要有内容就可以保存
-    // 已打开文件（fileState != null）：文本文件且有未保存变更时可以保存
-    const canSave = !isSaving && (
-      // 新文件：有内容就可以保存
-      (!fileState && localContent.length > 0) ||
-      // 已打开文件：文本文件且有未保存变更
-      (fileState && fileState.fileType === 'text' && hasUnsavedChanges())
-    );
+  const renderStrip = () => {
+    // 保存可用性：有变更、非保存中；未打开文件需有内容（dirty 已覆盖）
+    const canSave = !!activeStatus
+      && !activeStatus.isSaving
+      && activeStatus.dirty
+      && (activeStatus.path ? activeStatus.fileType === 'text' : true);
 
     return (
-      <div className="te-menubar">
-        <MenuBar
-          menus={[
-            {
-              label: '文件',
-              items: [
-                { label: '保存', shortcut: 'Ctrl+S', disabled: !canSave, onClick: handleSave },
-                { label: '另存为…', disabled: !fileState || isSaving, onClick: () => setShowSaveDialog(true) },
-                { separator: true },
-                { label: '关闭窗口', onClick: () => manager.close(windowId) },
-              ],
-            },
-            {
-              label: '编辑',
-              items: [
-                { label: '撤销', shortcut: 'Ctrl+Z', onClick: () => paneRef.current?.undo() },
-                { label: '重做', shortcut: 'Ctrl+Y', onClick: () => paneRef.current?.redo() },
-                { separator: true },
-                { label: '查找 / 替换', shortcut: 'Ctrl+F', onClick: () => paneRef.current?.openSearch() },
-              ],
-            },
-            {
-              label: '视图',
-              items: [
-                {
-                  label: '十六进制模式',
-                  checked: editorMode === 'hex',
-                  keepOpen: true,
-                  onClick: () => setEditorMode((m) => (m === 'hex' ? 'text' : 'hex')),
-                },
-                {
-                  label: '自动换行',
-                  checked: wrapText,
-                  keepOpen: true,
-                  onClick: () => setWrapText((w) => !w),
-                },
-              ],
-            },
-          ]}
-        />
-      </div>
-    );
-  };
-
-  /**
-   * 渲染标签栏（第二行）
-   *
-   * 对齐现代编辑器的文档标签：文件图标 + 文件名 + 未保存圆点 + 关闭；
-   * 右侧 [+] 新建编辑器窗口。单标签即当前窗口文档，为多标签迭代预留结构。
-   */
-  const renderTabBar = () => {
-    return (
-      <div className="te-tabbar">
-        <div
-          className="te-tab active"
-          title={fileState ? fileState.path : '未命名文件'}
-        >
-          <span className="te-tab-icon">{fileState ? getFileIconForName(fileName) : '📝'}</span>
-          <span className="te-tab-name">{fileName}</span>
-          {hasUnsavedChanges() && <span className="te-tab-dot" title="未保存" />}
-          <span
-            className="te-tab-close"
-            title="关闭窗口"
-            onClick={(e) => {
-              e.stopPropagation();
-              manager.close(windowId);
-            }}
-          >
-            ×
-          </span>
+      <div className="te-tabstrip">
+        {/* 菜单栏：全部功能按类归位（双击不触发最大化） */}
+        <div className="te-menubar" onDoubleClick={stopDoubleClick}>
+          <MenuBar
+            menus={[
+              {
+                label: '文件',
+                items: [
+                  {
+                    label: '保存',
+                    shortcut: 'Ctrl+S',
+                    disabled: !canSave,
+                    onClick: () => {
+                      if (activeServerId && activeStatus?.path) {
+                        docRefs.current.get(activeTab.id)?.save(activeServerId);
+                      } else {
+                        // 未命名文件：走另存为流程
+                        setShowSaveDialog(true);
+                      }
+                    },
+                  },
+                  {
+                    label: '另存为…',
+                    disabled: !activeStatus?.path || activeStatus.isSaving,
+                    onClick: () => setShowSaveDialog(true),
+                  },
+                  { separator: true },
+                  { label: '关闭窗口', onClick: () => manager.close(windowId) },
+                ],
+              },
+              {
+                label: '编辑',
+                items: [
+                  { label: '撤销', shortcut: 'Ctrl+Z', onClick: () => docRefs.current.get(activeTab.id)?.undo() },
+                  { label: '重做', shortcut: 'Ctrl+Y', onClick: () => docRefs.current.get(activeTab.id)?.redo() },
+                  { separator: true },
+                  { label: '查找 / 替换', shortcut: 'Ctrl+F', onClick: () => docRefs.current.get(activeTab.id)?.openSearch() },
+                ],
+              },
+              {
+                label: '视图',
+                items: [
+                  {
+                    label: '十六进制模式',
+                    checked: activeStatus?.hexMode ?? false,
+                    keepOpen: true,
+                    onClick: () => docRefs.current.get(activeTab.id)?.toggleHexMode(),
+                  },
+                  {
+                    label: '自动换行',
+                    checked: wrapText,
+                    keepOpen: true,
+                    onClick: () => setWrapText((w) => !w),
+                  },
+                ],
+              },
+            ]}
+          />
         </div>
+
+        {/* 菜单栏与页签的分隔竖线 */}
+        <div className="te-strip-divider" />
+
+        {/* 文档页签（Chrome 式：活动页签底部与内容区融合） */}
+        {tabs.map((t) => {
+          const st = tabStatuses[t.id];
+          const label = st?.label ?? (t.initialPath ? pathTail(t.initialPath) : '未命名文件');
+          const isActive = t.id === activeTab.id;
+          return (
+            <div
+              key={t.id}
+              className={`te-tab${isActive ? ' active' : ''}`}
+              onClick={() => setActiveTabId(t.id)}
+              onDoubleClick={stopDoubleClick}
+              title={st?.path ?? label}
+            >
+              <span className="te-tab-icon">
+                {st?.path ? getFileIconForName(label) : t.initialPath ? getFileIconForName(label) : '📝'}
+              </span>
+              <span className="te-tab-name">{label}</span>
+              {st?.dirty && <span className="te-tab-dot" title="未保存" />}
+              <span
+                className="te-tab-close"
+                title="关闭页签"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  closeTab(t.id);
+                }}
+              >
+                ×
+              </span>
+            </div>
+          );
+        })}
+
+        {/* 原地新增页签 */}
         <button
           type="button"
           className="te-tab-new"
-          onClick={() => manager.create('editor', {})}
-          title="新建编辑器窗口"
+          onClick={addTab}
+          title="新建页签"
         >
           +
         </button>
@@ -368,18 +311,14 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
     );
   };
 
-  /**
-   * 渲染面包屑（第三行，仅已打开文件时）
-   *
-   * Chrome 式分段胶囊：每级目录一个圆角分段（悬停浮出底色），
-   * 细箭头分隔，末级文件名加重强调；服务器名作为首段。
-   * 空间不足时从左侧自然裁剪（flex-end 对齐），始终保留文件名。
-   */
+  // ── 渲染：面包屑（活动页签已打开文件时） ──────────────────
+
   const renderBreadcrumb = () => {
-    if (!fileState) return null;
-    const segments = fileState.path.split('/').filter(Boolean);
+    if (!activeStatus?.path) return null;
+    const segments = activeStatus.path.split('/').filter(Boolean);
+
     return (
-      <div className="te-breadcrumb" title={fileState.path}>
+      <div className="te-breadcrumb" title={activeStatus.path}>
         {activeServer && (
           <>
             <span className="te-crumb te-crumb-server">{activeServer.name}</span>
@@ -400,157 +339,102 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
     );
   };
 
-  /**
-   * 渲染内联错误横幅
-   *
-   * 错误不再替换整个内容区（对齐大型编辑器惯例）：
-   * 横幅出现在编辑区上方，文件内容/编辑能力保持可用
-   */
+  // ── 渲染：内联错误横幅（活动页签出错时） ──────────────────
+
   const renderErrorBanner = () => {
-    if (!error) return null;
+    if (!activeStatus?.error) return null;
     return (
       <div className="te-error-banner" role="alert">
         <span className="te-error-banner-icon">⚠️</span>
-        <span className="te-error-banner-text">{error}</span>
-        <button className="te-error-banner-close" onClick={clearError} title="关闭">
+        <span className="te-error-banner-text">{activeStatus.error}</span>
+        <button
+          className="te-error-banner-close"
+          onClick={() => docRefs.current.get(activeTab.id)?.clearError()}
+          title="关闭"
+        >
           ✕
         </button>
       </div>
     );
   };
 
-  /**
-   * 渲染加载态
-   *
-   * 居中 spinner + 文件名（复用 FileManager 的视觉语言）
-   */
-  const renderLoading = () => {
-    const fileName = fileState?.path.split('/').pop() || preloadData?.path.split('/').pop() || '';
+  // ── 待关闭脏页签确认框 ────────────────────────────────────
+
+  const renderCloseConfirm = () => {
+    if (!confirmCloseTabId) return null;
+    const st = tabStatuses[confirmCloseTabId];
     return (
-      <div className="te-loading">
-        <div className="te-spinner" aria-hidden="true" />
-        <span className="te-loading-text">正在加载{fileName ? ` ${fileName}` : '文件'}...</span>
-      </div>
-    );
-  };
-
-  /**
-   * 渲染编辑主体
-   *
-   * 根据状态渲染不同的内容：
-   * - 加载中：居中 spinner
-   * - 已打开文件：根据编辑模式渲染编辑面板
-   * - 未打开文件：像记事本一样默认可编辑的新文件
-   */
-  const renderBody = () => {
-    // 加载中
-    if (isLoading) {
-      return renderLoading();
-    }
-
-    // 已打开文件
-    if (fileState) {
-      // 根据编辑模式渲染不同的编辑面板
-      if (editorMode === 'hex') {
-        // 十六进制模式
-        return (
-          <HexEditorPane
-            data={fileState.fileType === 'binary' ? fileState.binaryData : undefined}
-            onChange={() => {
-              // 当前版本十六进制编辑器为只读
-              log.warn('十六进制编辑器当前不支持编辑');
-            }}
-          />
-        );
-      } else {
-        // 文本模式
-        if (fileState.fileType === 'text') {
-          return (
-            <TextEditorPane
-              ref={paneRef}
-              content={fileState.content}
-              onChange={handleContentChange}
-              onCursorChange={setCursorPosition}
-              onStatsChange={setDocStats}
-              filePath={fileState.path}
-              wrapText={wrapText}
-            />
-          );
-        } else if (fileState.fileType === 'binary') {
-          // 二进制文件在文本模式下显示提示
-          return (
-            <div className="te-binary-warning">
-              <span className="te-binary-warning-text">
-                此文件是二进制文件，请在十六进制模式下查看
-              </span>
-            </div>
-          );
-        } else {
-          // 加载中状态（不应该出现在这里，但作为兜底处理）
-          return renderLoading();
-        }
-      }
-    }
-
-    // 未打开文件（新文件） - 像记事本一样默认可编辑
-    return (
-      <TextEditorPane
-        ref={paneRef}
-        content={localContent}
-        onChange={handleContentChange}
-        onCursorChange={setCursorPosition}
-        onStatsChange={setDocStats}
-        wrapText={wrapText}
-        placeholder="开始输入…"
-      />
-    );
-  };
-
-  /**
-   * 渲染状态栏
-   *
-   * 纯信息展示：光标位置、行数、字符数、语言、编码、换行符、保存状态、修改时间
-   * （操作类入口已按频率归位：高频→动作栏，低频→⋮ 菜单）
-   */
-  const renderStatusBar = () => {
-    return (
-      <StatusBar
-        fileState={fileState}
-        hasUnsavedChanges={hasUnsavedChanges()}
-        cursorPosition={cursorPosition}
-        newFileCharCount={docStats?.chars ?? localContent.length}
-        docStats={docStats}
+      <ConfirmDialog
+        title="关闭页签"
+        message="确定关闭该页签？"
+        highlight={st?.label}
+        detail="该文档有未保存的更改，关闭后将丢失。"
+        confirmLabel="放弃更改并关闭"
+        danger
+        onConfirm={() => {
+          const id = confirmCloseTabId;
+          setConfirmCloseTabId(null);
+          removeTab(id);
+        }}
+        onCancel={() => setConfirmCloseTabId(null)}
       />
     );
   };
 
   return (
     <div className="te-app">
+      {/* 标签条 portal 进窗口标题栏（Chrome 形态）；槽位缺失时回退应用内 */}
+      {titlebarSlot
+        ? createPortal(renderStrip(), titlebarSlot)
+        : renderStrip()}
       <div className="te-app-content">
         <AppLayout
-          toolbar={
-            <>
-              {renderMenuBar()}
-              {renderTabBar()}
-              {renderBreadcrumb()}
-            </>
-          }
+          toolbar={renderBreadcrumb()}
         >
           <div className="te-content-wrapper">
             {renderErrorBanner()}
-            {renderBody()}
+            {/* 文档层：所有页签保持挂载，仅活动页签可见 */}
+            <div className="te-docs">
+              {tabs.map((t) => (
+                <EditorDocument
+                  key={t.id}
+                  ref={(handle) => {
+                    if (handle) {
+                      docRefs.current.set(t.id, handle);
+                    } else {
+                      docRefs.current.delete(t.id);
+                    }
+                  }}
+                  tabId={t.id}
+                  initialPath={t.initialPath}
+                  initialServerId={t.initialServerId}
+                  hidden={t.id !== activeTab.id}
+                  wrapText={wrapText}
+                  onStatus={handleStatus}
+                />
+              ))}
+            </div>
           </div>
         </AppLayout>
       </div>
-      {renderStatusBar()}
 
-      {/* 保存对话框 */}
+      <StatusBar status={activeStatus} serverName={activeServer?.name ?? null} />
+
+      {/* 另存为对话框（绑定活动页签） */}
       <SaveDialog
         isOpen={showSaveDialog}
         defaultPath="/home/user/untitled.txt"
-        onSave={handleSaveAs}
-        onCancel={handleCancelSave}
+        onSave={async (path) => {
+          if (activeServerId) {
+            await docRefs.current.get(activeTab.id)?.saveAs(activeServerId, path);
+          }
+          setShowSaveDialog(false);
+        }}
+        onCancel={() => setShowSaveDialog(false)}
       />
+
+      {/* 脏页签关闭确认 */}
+      {renderCloseConfirm()}
     </div>
   );
 }
