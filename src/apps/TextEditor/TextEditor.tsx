@@ -23,6 +23,7 @@ import { createPortal } from 'react-dom';
 import { createLogger } from '../../utils/logger';
 import { AppLayout } from '../../components/app-shell/AppLayout';
 import { MenuBar } from '../../components/ToolbarMenu/ToolbarMenu';
+import { ChromeTabStrip } from './components/ChromeTabStrip';
 import { ConfirmDialog } from '../../components/Dialog/ConfirmDialog';
 import { useServerManager } from '../../context/ServerManager';
 import { useWindowManager } from '../../window-system/WindowManagerContext';
@@ -30,7 +31,6 @@ import { EditorDocument } from './components/EditorDocument';
 import type { DocStatus, EditorDocumentHandle } from './components/EditorDocument';
 import { StatusBar } from './components/StatusBar';
 import { SaveDialog } from './components/SaveDialog';
-import { getFileIconForName } from '../fileIcons';
 import './TextEditor.css';
 
 const log = createLogger('TextEditor');
@@ -190,66 +190,32 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [activeServerId, activeStatus, activeTab, handleStatus]);
 
-  /** 阻止双击冒泡到标题栏（避免在页签上双击触发最大化） */
-  const stopDoubleClick = (e: React.MouseEvent) => e.stopPropagation();
-
-  // ── 渲染：标题栏页签条（仅页签 + 新建；空白区域可拖拽窗口）──
+  // ── 渲染：标题栏页签条（chrome-tabs 库；空白区域可拖拽窗口）──
 
   const renderTabs = () => {
     return (
       <div className="te-tabstrip">
-        {/* 文档页签（Chrome 式：活动页签底部与内容区融合） */}
-        {tabs.map((t) => {
-          const st = tabStatuses[t.id];
-          const label = st?.label ?? (t.initialPath ? pathTail(t.initialPath) : '未命名文件');
-          const isActive = t.id === activeTab.id;
-          return (
-            <div
-              key={t.id}
-              className={`te-tab${isActive ? ' active' : ''}`}
-              onClick={() => setActiveTabId(t.id)}
-              onDoubleClick={stopDoubleClick}
-              title={st?.path ?? label}
-            >
-              <span className="te-tab-icon">
-                {st?.path ? getFileIconForName(label) : t.initialPath ? getFileIconForName(label) : '📝'}
-              </span>
-              <span className="te-tab-name">{label}</span>
-              {st?.dirty && <span className="te-tab-dot" title="未保存" />}
-              {isActive && (
-                <>
-                  {/* Chrome 式连接弧（SVG 路径，抗锯齿 + 主题变量填充，右脚水平镜像复用） */}
-                  <svg
-                    className="te-tab-corner te-tab-corner-left"
-                    viewBox="0 0 9 9"
-                    preserveAspectRatio="none"
-                    aria-hidden="true"
-                  >
-                    <path d="M 0 9 L 9 9 L 9 0 A 9 9 0 0 1 0 9 Z" />
-                  </svg>
-                  <svg
-                    className="te-tab-corner te-tab-corner-right"
-                    viewBox="0 0 9 9"
-                    preserveAspectRatio="none"
-                    aria-hidden="true"
-                  >
-                    <path d="M 0 9 L 9 9 L 9 0 A 9 9 0 0 1 0 9 Z" />
-                  </svg>
-                </>
-              )}
-              <span
-                className="te-tab-close"
-                title="关闭页签"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  closeTab(t.id);
-                }}
-              >
-                ×
-              </span>
-            </div>
-          );
-        })}
+        <ChromeTabStrip
+          tabs={tabs.map((t) => {
+            const st = tabStatuses[t.id];
+            return {
+              id: t.id,
+              label: st?.label ?? (t.initialPath ? pathTail(t.initialPath) : '未命名文件'),
+              dirty: st?.dirty ?? false,
+            };
+          })}
+          activeTabId={activeTab.id}
+          onActivate={setActiveTabId}
+          onClose={closeTab}
+          onReorder={(from, to) =>
+            setTabs((prev) => {
+              const arr = [...prev];
+              const [moved] = arr.splice(from, 1);
+              arr.splice(to, 0, moved);
+              return arr;
+            })
+          }
+        />
 
         {/* 原地新增页签 */}
         <button
