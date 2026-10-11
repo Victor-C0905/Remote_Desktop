@@ -90,6 +90,14 @@ class ChromeTabStripErrorBoundary extends React.Component<
 /** 页签内容宽度上限（含标题区；整体宽度再加左右 9px 边距）——收窄默认页签 */
 const TAB_CONTENT_MAX_WIDTH = 170;
 
+/**
+ * 放大版页签几何路径（viewBox 0 0 214 36）：
+ * 库默认脚弧/顶角为 9/8px，视觉阶梯感明显；此处放大到 12px 并保持
+ * 切线连续（脚弧起端水平、末端垂直衔接侧壁，顶角同理）
+ */
+const CHROME_TAB_GEOMETRY_D =
+  'M22 0 H214 V36 H0 V34 C6 34 12 29.5 12 24 V10 C12 4.5 17.5 0 22 0 Z';
+
 function ChromeTabStripImpl({
   tabs,
   activeTabId,
@@ -116,7 +124,7 @@ function ChromeTabStripImpl({
 
     // 收窄默认页签：实例级遮蔽 tabContentWidths getter（宽度与位置都由此派生，
     // 收窄一处即全局一致）。在 init 之后定义（el 已就绪），并手动重排一次
-    const proto = Object.getPrototypeOf(ct) as Record<string, PropertyDescriptor>;
+    const proto = Object.getPrototypeOf(ct) as Record<string, unknown>;
     // ✅ 用 getOwnPropertyDescriptor 取 getter（直接访问属性会以原型为 this 触发它）
     const widthsGet = Object.getOwnPropertyDescriptor(proto, 'tabContentWidths')?.get?.bind(ct);
     if (widthsGet) {
@@ -127,6 +135,26 @@ function ChromeTabStripImpl({
       });
       ct.layoutTabs();
     }
+
+    // 放大连接弧与顶部圆角（库默认 9/8px 偏小，阶梯感明显 → 12px 更圆润）。
+    // 库的页签模板内嵌 <symbol id="chrome-tab-geometry-left">（右脚镜像复用左脚），
+    // 同 id 符号以文档中首个为准——包装 createNewTabEl 让每个新页签都写入放大后的路径
+    const patchGeometry = (root: HTMLElement) => {
+      root.querySelectorAll('symbol[id="chrome-tab-geometry-left"] path').forEach((p) => {
+        p.setAttribute('d', CHROME_TAB_GEOMETRY_D);
+      });
+    };
+    const origCreate = proto.createNewTabEl as
+      | ((this: ChromeTabsInstance) => HTMLElement)
+      | undefined;
+    if (origCreate) {
+      proto.createNewTabEl = function (this: ChromeTabsInstance) {
+        const tabEl = origCreate.call(this);
+        patchGeometry(tabEl);
+        return tabEl;
+      } as unknown as typeof proto.createNewTabEl;
+    }
+    patchGeometry(el);
 
     // 维护 --tabs-end（最后一个页签右缘）：+ 按钮紧随其后
     const updateTabsEnd = () => {

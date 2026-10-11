@@ -6,8 +6,11 @@
    - 活动页签 = 应用内顶栏同色（底部与顶栏融为一体）
    ============================================================ */
 
+/* 不透明条面（比页签略深一档，Chrome 同款结构）：
+   页签两脚的 SVG 抗锯齿边缘与不透明表面同色系混色，弧线才干净圆滑；
+   半透明毛玻璃会让边缘混入透出的桌面色而发脏 */
 .te-chrome-tabs.chrome-tabs {
-  background: transparent;
+  background: color-mix(in srgb, var(--quirel-headerbar-bg) 92%, var(--quirel-text-primary) 8%);
   height: 100%;
   padding: 12px 2px 0;
   border-radius: 0;
