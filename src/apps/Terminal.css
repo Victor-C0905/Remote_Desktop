@@ -183,11 +183,11 @@
 /* ── Tab Bar ─────────────────────────────────────────────── */
 .terminal-tabs-container {
   display: flex;
-  align-items: center;
-  height: 42px;
+  align-items: flex-end;
+  height: 40px;
   background: var(--quirel-headerbar-bg);
   border-bottom: 1px solid var(--quirel-border-color);
-  padding: 0 8px;
+  padding: 5px 8px 0;
   flex-shrink: 0;
   z-index: 1; /* ✅ 内容层，相对于父容器，无需高 z-index */
   position: relative;
@@ -226,6 +226,7 @@
   align-items: center;
   gap: 6px;
   margin-left: auto;  /* ✅ 推到右侧 */
+  margin-bottom: 5px; /* 标签条底对齐布局下回正垂直居中 */
   flex-shrink: 0;  /* ✅ 不压缩 */
   padding-right: 8px;
 }
@@ -268,6 +269,7 @@
 }
 
 .terminal-tab {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -275,7 +277,7 @@
   height: 30px;
   font-size: 12px;
   color: var(--quirel-text-secondary);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
   cursor: pointer;
   border: none;
   background: transparent;
@@ -284,6 +286,7 @@
   white-space: nowrap;
   flex-shrink: 0;  /* ✅ 修改：从 1 改为 0 */
   flex-grow: 0;
+  margin-bottom: -1px; /* 盖住标签条底线，实现"底部融合" */
   transition: background var(--duration-fast) var(--ease-out);
 }
 
@@ -295,7 +298,30 @@
 .terminal-tab.active {
   background: var(--quirel-view-bg);
   color: var(--quirel-text-primary);
-  box-shadow: var(--shadow-card);
+  z-index: 1;
+}
+
+/* Chrome 式连接弧：两脚向外弯入标签条表面 */
+.terminal-tab.active::before,
+.terminal-tab.active::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  width: 10px;
+  height: 10px;
+  pointer-events: none;
+}
+
+.terminal-tab.active::before {
+  left: -10px;
+  background: radial-gradient(circle 10px at 0 0,
+    var(--quirel-headerbar-bg) 99%, var(--quirel-view-bg) 100%);
+}
+
+.terminal-tab.active::after {
+  right: -10px;
+  background: radial-gradient(circle 10px at 100% 0,
+    var(--quirel-headerbar-bg) 99%, var(--quirel-view-bg) 100%);
 }
 
 .terminal-tab .tab-icon {
@@ -350,6 +376,7 @@
   justify-content: center;
   width: 28px;
   height: 28px;
+  margin-bottom: 6px; /* 标签条底对齐布局下回正垂直居中 */
   border-radius: var(--radius-xs);
   border: none;
   background: transparent;
