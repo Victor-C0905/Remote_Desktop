@@ -10,6 +10,7 @@ import { AppLayout } from "../components/app-shell";
 import { TransferStatusBar } from "../components/TransferStatusBar";
 import { createLogger } from '../utils/logger';
 import { openRemoteFile } from './openRemoteFile';
+import { FOLDER_ICON, getFileIconForName } from './fileIcons';
 import { parsePermissions, matrixToOctal, octalToPermString } from './permissions';
 import type { PermMatrix } from './permissions';
 import { sortFileEntries, DEFAULT_SORT, DEFAULT_COLUMN_WIDTHS, clampColumnWidth, buildGridTemplate, filterByColumnFilters, toggleBucket, DEFAULT_COLUMN_FILTERS, SIZE_BUCKETS, MTIME_BUCKETS, NAME_BUCKETS, typeKeyOf, typeKeyLabel, listFileTypeBuckets } from './fileTable';
@@ -60,29 +61,11 @@ interface SidebarSection {
   items: SidebarItem[];
 }
 
-/* ── Icon Map ──────────────────────────────────────────── */
-
-const FOLDER_ICON = "📁";
-const FILE_ICONS: Record<string, string> = {
-  ".txt": "📄", ".md": "📝", ".json": "📋", ".toml": "⚙️",
-  ".yaml": "⚙️", ".yml": "⚙️", ".rs": "🦀", ".ts": "📘",
-  ".tsx": "📘", ".js": "📙", ".py": "🐍", ".css": "🎨",
-  ".html": "🌐", ".sh": "🔧", ".conf": "⚙️", ".log": "📜",
-  ".png": "🖼️", ".jpg": "🖼️", ".jpeg": "🖼️", ".svg": "🖼️",
-  ".mp4": "🎬", ".mp3": "🎵", ".zip": "📦", ".tar": "📦",
-  ".gz": "📦", ".db": "🗃️", ".sql": "🗃️",
-};
+/* ── Icon Map（已提取至 ./fileIcons，与 TextEditor 共用） ── */
 
 function getFileIcon(entry: FileEntry): string {
   if (entry.is_dir) return FOLDER_ICON;
-  const ext = entry.name.lastIndexOf(".");
-  if (ext >= 0) {
-    const icon = FILE_ICONS[entry.name.slice(ext).toLowerCase()];
-    if (icon) return icon;
-  }
-  // Hidden files
-  if (entry.name.startsWith(".")) return "🔒";
-  return "📄";
+  return getFileIconForName(entry.name);
 }
 
 function formatSize(bytes: number): string {
