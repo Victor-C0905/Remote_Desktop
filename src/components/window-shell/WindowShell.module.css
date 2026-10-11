@@ -80,6 +80,7 @@
 
 .windowHeaderBar {
   position: relative; /* 标题绝对居中的定位基准 */
+  justify-content: flex-end; /* 标题绝对定位/空槽位隐藏后，控制按钮保持在右侧 */
   height: var(--headerbar-height); /* 48px */
   /* 毛玻璃效果：引用全局变量，与 TopBar 保持一致 */
   background: var(--quirel-frosted-bg);
