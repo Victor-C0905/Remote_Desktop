@@ -305,27 +305,30 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
           </div>
         </div>
 
-        {/* 右侧：操作按钮区域 */}
+        {/* 右侧：操作按钮组（紧凑图标按钮 + 分组分隔线） */}
         <div className="te-toolbar-right">
-          {/* 保存按钮 */}
+          {/* 保存（主操作）：accent 底图标按钮 */}
           <button
-            className="te-toolbar-btn te-save-btn"
+            className="te-icon-btn te-icon-btn-accent"
             onClick={handleSave}
             disabled={!canSave}
-            title="保存文件 (Ctrl+S)"
+            title={isSaving ? '保存中...' : '保存文件 (Ctrl+S)'}
           >
-            {isSaving ? '保存中...' : '保存'}
+            💾
           </button>
 
-          {/* 另存为：复用已有 SaveDialog */}
+          {/* 另存为：💾+ 图标（对齐 FileManager 📁+ 的图标语言），悬浮提示说明 */}
           <button
-            className="te-toolbar-btn"
+            className="te-icon-btn"
             onClick={() => setShowSaveDialog(true)}
             disabled={!fileState || isSaving}
             title="另存为新文件"
           >
-            另存为
+            💾+
           </button>
+
+          {/* 分组分隔线：文件操作 | 视图模式 */}
+          <div className="te-toolbar-divider" />
 
           {/* 编辑模式切换 */}
           <EditorMode mode={editorMode} onChange={handleModeChange} />

@@ -34,8 +34,9 @@ describe('TerminalApp', () => {
 
   it('renders header bar', () => {
     render(<TerminalApp windowId="test-window-2" />);
-    expect(screen.getByRole('button', { name: '搜索' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '设置' })).toBeInTheDocument();
+    // 工具栏为紧凑图标按钮（🔍/⚙️），以 title 悬浮提示作为可发现性契约
+    expect(screen.getByTitle('在终端输出中搜索')).toBeInTheDocument();
+    expect(screen.getByTitle('字号 / 光标闪烁设置')).toBeInTheDocument();
   });
 
   it('renders tab bar', () => {
