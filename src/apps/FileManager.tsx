@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import React, { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -209,6 +209,8 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     type: 'file' | 'empty';  // 菜单类型：文件菜单或空白区域菜单
     entry?: FileEntry;       // 文件信息（仅文件菜单）
   } | null>(null);
+  // 右键菜单 DOM 引用：挂载后按实测尺寸做视口边界校正（x/y 仅是鼠标锚点）
+  const ctxMenuRef = useRef<HTMLDivElement>(null);
   const [propertiesEntry, setPropertiesEntry] = useState<FileEntry | null>(null);
   // 属性对话框可编辑状态（打开时从 entry 初始化；应用时与初始值比对决定是否发请求）
   const [permMatrix, setPermMatrix] = useState<PermMatrix>(parsePermissions(undefined));
@@ -1565,31 +1567,49 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   }, [activeServerId, currentPath]);
 
   // ── Context Menu ─────────────────────────────────────
-  // 智能计算右键菜单位置，紧贴鼠标右下角，避免超出屏幕边界
+  // 右键菜单锚点：鼠标右下方 +3 紧贴。
+  // 边界溢出的翻转校正在菜单挂载后按实测尺寸进行（见 ctxMenuRef 的
+  // useLayoutEffect）——菜单宽高随类型动态（min-width 180、菜单项可增减），
+  // 预先估尺寸不可靠，渲染后测量才精确
   const calculateMenuPosition = useCallback((mouseX: number, mouseY: number) => {
     const offset = 3;  // 距离鼠标的距离（紧贴）
-
-    // 简化：直接使用鼠标位置 + offset，不做边界检测
-    // 让 CSS 的 position: fixed 自动处理
-    const x = mouseX + offset;
-    const y = mouseY + offset;
-
-    return { x, y };
+    return { x: mouseX + offset, y: mouseY + offset };
   }, []);
+
+  // 菜单挂载后按实测尺寸校正位置：右/下溢出视口时翻转到鼠标左/上方
+  // （与 +3 锚点对称：翻转后菜单右/下缘贴鼠标左/上 3px）；
+  // 视口过窄两侧都放不下时钳到视口边。useLayoutEffect 在浏览器 paint 前同步执行，
+  // 校正不可见（无中间态闪烁），且任意菜单宽高（文件/空白菜单、条件项）都精确
+  useLayoutEffect(() => {
+    const el = ctxMenuRef.current;
+    if (!el || !contextMenu) return;
+    const MARGIN = 8;  // 距视口边缘最小留白（与表头下拉菜单钳制一致）
+    const w = el.offsetWidth, h = el.offsetHeight;
+    let { x, y } = contextMenu;
+    if (x + w > window.innerWidth - MARGIN) {
+      x = Math.max(MARGIN, x - w - 6);  // 6 = 两侧各 3px 锚点偏移
+    }
+    if (y + h > window.innerHeight - MARGIN) {
+      y = Math.max(MARGIN, y - h - 6);
+    }
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
+  }, [contextMenu]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent, entry: FileEntry, idx: number) => {
     e.preventDefault();
     e.stopPropagation();  // 阻止事件冒泡到父容器
 
+    const { x, y } = calculateMenuPosition(e.clientX, e.clientY);
     // 只有当前已选中该文件时，才显示文件菜单
     // 否则显示刷新菜单（和空白区域一样）
     if (selectedIdx === idx) {
-      setContextMenu({ x: e.clientX + 3, y: e.clientY + 3, type: 'file', entry });
+      setContextMenu({ x, y, type: 'file', entry });
     } else {
       // 未选中该文件，显示刷新菜单
-      setContextMenu({ x: e.clientX + 3, y: e.clientY + 3, type: 'empty' });
+      setContextMenu({ x, y, type: 'empty' });
     }
-  }, [selectedIdx]);
+  }, [selectedIdx, calculateMenuPosition]);
 
   // 空白区域右键菜单
   const handleEmptyContextMenu = useCallback((e: React.MouseEvent) => {
@@ -2127,6 +2147,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       {/* Context Menu - 使用 Portal 渲染到 body，确保 position: fixed 相对于视口 */}
       {contextMenu && createPortal(
         <div
+          ref={ctxMenuRef}
           className="fm-context-menu"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
