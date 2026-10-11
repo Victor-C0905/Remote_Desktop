@@ -37,6 +37,16 @@ vi.mock('@tauri-apps/plugin-store', () => {
   };
 });
 
+// ResizeObserver mock：jsdom 未实现，CodeMirror 6 视图渲染必需
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  class ResizeObserverMock {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  (globalThis as Record<string, unknown>).ResizeObserver = ResizeObserverMock;
+}
+
 // 全局测试配置
 beforeEach(() => {
   // 清除所有 mock

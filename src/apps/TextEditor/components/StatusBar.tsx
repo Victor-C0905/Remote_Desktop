@@ -5,12 +5,17 @@
  * 遵循 Adwaita 设计规范的状态栏样式
  *
  * 布局：左右分组（左侧=编辑信息，右侧=文件属性），组间竖线分隔（CSS 实现，非文本 |）
+ *
+ * 数据来源：
+ * - 行数/字符数/选中数优先取 CodeMirror 上报的 docStats（编辑时实时、免重算）
+ * - docStats 缺省时回退为从 content 计算（兼容新文件初始渲染）
  */
 
 import React from 'react';
 import '../TextEditor.css'; // 导入样式文件
 import type { FileState } from '../types/editor';
-import type { CursorPosition } from './TextEditorPane';
+import type { CursorPosition, DocStats } from './TextEditorPane';
+import { detectLanguage } from '../utils/language';
 
 /**
  * StatusBar 组件 Props
@@ -27,6 +32,15 @@ interface StatusBarProps {
 
   /** 新文件的字符数（可选，仅用于未打开文件时） */
   newFileCharCount?: number;
+
+  /** CodeMirror 文档统计（可选；缺省时从 content 回退计算） */
+  docStats?: DocStats | null;
+
+  /** 是否自动换行 */
+  wrapText: boolean;
+
+  /** 切换自动换行 */
+  onToggleWrap: () => void;
 }
 
 /**
@@ -63,7 +77,7 @@ function formatTime(timestamp: number): string {
 }
 
 /**
- * 计算文本文件的行数
+ * 计算文本文件的行数（docStats 缺省时的回退计算）
  *
  * @param content - 文本内容
  * @returns 行数
@@ -71,32 +85,6 @@ function formatTime(timestamp: number): string {
 function countLines(content: string): number {
   if (!content) return 0;
   return content.split('\n').length;
-}
-
-/**
- * 根据扩展名推断编辑语言（状态栏显示用）
- *
- * @param path - 文件路径
- * @returns 语言显示名（例如：TypeScript、Markdown）
- */
-function detectLanguage(path: string): string {
-  const ext = path.split('.').pop()?.toLowerCase() || '';
-  const langMap: Record<string, string> = {
-    ts: 'TypeScript', tsx: 'TypeScript React',
-    js: 'JavaScript', jsx: 'JavaScript React', mjs: 'JavaScript',
-    py: 'Python', rs: 'Rust', go: 'Go', java: 'Java', kt: 'Kotlin',
-    c: 'C', h: 'C Header', cpp: 'C++', cc: 'C++', hpp: 'C++',
-    cs: 'C#', rb: 'Ruby', php: 'PHP', swift: 'Swift',
-    css: 'CSS', scss: 'SCSS', less: 'Less',
-    html: 'HTML', htm: 'HTML', xml: 'XML', json: 'JSON', jsonc: 'JSON',
-    md: 'Markdown', markdown: 'Markdown', rst: 'reStructuredText',
-    sh: 'Shell', bash: 'Shell', zsh: 'Shell', fish: 'Shell',
-    yml: 'YAML', yaml: 'YAML', toml: 'TOML', ini: 'INI', conf: 'Config',
-    sql: 'SQL', lua: 'Lua', vim: 'Vim Script',
-    dockerfile: 'Dockerfile', makefile: 'Makefile',
-    txt: '纯文本', log: '日志',
-  };
-  return langMap[ext] || (ext ? ext.toUpperCase() : '纯文本');
 }
 
 /**
@@ -114,12 +102,9 @@ function detectLineEnding(content: string): 'LF' | 'CRLF' {
  *
  * 显示文件信息：
  * - 未打开文件：显示"未命名文件"、光标位置、字符数
- * - 已打开文件：左组（光标位置、行数、字符数）+ 右组（语言、编码、换行符、保存状态、修改时间）
+ * - 已打开文件：左组（光标位置、选中数、行数、字符数或大小）+ 右组（语言、编码、换行符、自动换行开关、保存状态、修改时间）
  *
  * @param props - 组件属性
- * @param props.fileState - 当前文件状态
- * @param props.hasUnsavedChanges - 是否有未保存的变更
- * @param props.cursorPosition - 光标位置（行号、列号）
  *
  * @example
  * ```tsx
@@ -127,10 +112,20 @@ function detectLineEnding(content: string): 'LF' | 'CRLF' {
  *   fileState={currentFile}
  *   hasUnsavedChanges={hasUnsavedChanges}
  *   cursorPosition={{ line: 1, column: 1 }}
+ *   wrapText={false}
+ *   onToggleWrap={() => setWrapText(w => !w)}
  * />
  * ```
  */
-export function StatusBar({ fileState, hasUnsavedChanges, cursorPosition, newFileCharCount }: StatusBarProps): React.ReactElement {
+export function StatusBar({
+  fileState,
+  hasUnsavedChanges,
+  cursorPosition,
+  newFileCharCount,
+  docStats,
+  wrapText,
+  onToggleWrap,
+}: StatusBarProps): React.ReactElement {
   // 未打开文件时显示"未命名文件"
   if (!fileState) {
     return (
@@ -142,11 +137,19 @@ export function StatusBar({ fileState, hasUnsavedChanges, cursorPosition, newFil
             行 {cursorPosition.line}, 列 {cursorPosition.column}
           </span>
           <span className="te-status-item">
-            {newFileCharCount || 0} 个字符
+            {docStats?.chars ?? newFileCharCount ?? 0} 个字符
           </span>
         </div>
-        {/* 右组：新建状态提示 */}
+        {/* 右组：自动换行开关 + 新建状态提示 */}
         <div className="te-status-group">
+          <button
+            type="button"
+            className={`te-status-toggle${wrapText ? ' on' : ''}`}
+            onClick={onToggleWrap}
+            title="切换自动换行"
+          >
+            自动换行 {wrapText ? '开' : '关'}
+          </button>
           {hasUnsavedChanges && (
             <span className="te-status-badge te-status-badge-unsaved">未保存</span>
           )}
@@ -155,15 +158,19 @@ export function StatusBar({ fileState, hasUnsavedChanges, cursorPosition, newFil
     );
   }
 
-  // 根据文件类型计算状态信息
-  const lineCount = fileState.fileType === 'text' ? countLines(fileState.content) : 0;
-  const charCount = fileState.fileType === 'text' ? fileState.content.length : 0;
+  // 根据文件类型计算状态信息（行数/字符数优先用 CodeMirror 上报值）
+  const lineCount = fileState.fileType === 'text'
+    ? docStats?.lines ?? countLines(fileState.content)
+    : 0;
+  const charCount = fileState.fileType === 'text'
+    ? docStats?.chars ?? fileState.content.length
+    : 0;
   const fileSize = fileState.fileType === 'binary' ? formatFileSize(fileState.binaryData.length) : formatFileSize(charCount);
   const encoding = fileState.fileType === 'text' ? 'UTF-8' : '二进制';
 
   return (
     <div className="te-status-bar">
-      {/* 左组：编辑信息（光标位置 / 行数 / 字符数或大小） */}
+      {/* 左组：编辑信息（光标位置 / 选中数 / 行数 / 字符数或大小） */}
       <div className="te-status-group">
         {/* 只读标识（二进制文件） */}
         {fileState.fileType === 'binary' && (
@@ -176,6 +183,13 @@ export function StatusBar({ fileState, hasUnsavedChanges, cursorPosition, newFil
         {fileState.fileType === 'text' && (
           <span className="te-status-item">
             行 {cursorPosition.line}, 列 {cursorPosition.column}
+          </span>
+        )}
+
+        {/* 选中字符数（有选区时显示，对齐大型编辑器惯例） */}
+        {fileState.fileType === 'text' && (docStats?.selected ?? 0) > 0 && (
+          <span className="te-status-item">
+            选中 {docStats!.selected} 字符
           </span>
         )}
 
@@ -192,7 +206,7 @@ export function StatusBar({ fileState, hasUnsavedChanges, cursorPosition, newFil
         </span>
       </div>
 
-      {/* 右组：文件属性（语言 / 编码 / 换行符 / 保存状态 / 修改时间） */}
+      {/* 右组：文件属性（语言 / 编码 / 换行符 / 自动换行 / 保存状态 / 修改时间） */}
       <div className="te-status-group">
         {/* 语言（从扩展名推断，仅文本文件显示） */}
         {fileState.fileType === 'text' && (
@@ -211,6 +225,18 @@ export function StatusBar({ fileState, hasUnsavedChanges, cursorPosition, newFil
           <span className="te-status-item">
             {detectLineEnding(fileState.content)}
           </span>
+        )}
+
+        {/* 自动换行开关（仅文本文件显示） */}
+        {fileState.fileType === 'text' && (
+          <button
+            type="button"
+            className={`te-status-toggle${wrapText ? ' on' : ''}`}
+            onClick={onToggleWrap}
+            title="切换自动换行"
+          >
+            自动换行 {wrapText ? '开' : '关'}
+          </button>
         )}
 
         {/* 保存状态徽标（仅文本文件显示）：未保存=橙色徽标，已保存=普通灰字 */}

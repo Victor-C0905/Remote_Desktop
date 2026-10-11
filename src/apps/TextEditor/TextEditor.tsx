@@ -16,7 +16,9 @@
  * │ │ Toolbar（文件名 + 保存 + 模式） │ │
  * │ └─────────────────────────────────┘ │
  * │ ┌─────────────────────────────────┐ │
- * │ │ Content（编辑面板）             │ │
+ * │ │ 错误横幅（内联，仅出错时）       │ │
+ * │ ├─────────────────────────────────┤ │
+ * │ │ Content（CodeMirror 编辑面板）  │ │
  * │ └─────────────────────────────────┘ │
  * │ ┌─────────────────────────────────┐ │
  * │ │ StatusBar（状态栏）             │ │
@@ -30,11 +32,12 @@ import { AppLayout } from '../../components/app-shell/AppLayout';
 import { useServerManager } from '../../context/ServerManager';
 import { useFileManager } from './hooks/useFileManager';
 import { TextEditorPane } from './components/TextEditorPane';
-import type { CursorPosition } from './components/TextEditorPane';
+import type { CursorPosition, DocStats } from './components/TextEditorPane';
 import { HexEditorPane } from './components/HexEditorPane';
 import { EditorMode } from './components/EditorMode';
 import { StatusBar } from './components/StatusBar';
 import { SaveDialog } from './components/SaveDialog';
+import { getFileIconForName } from '../fileIcons';
 import type { EditorMode as EditorModeType } from './types/editor';
 import './TextEditor.css';
 
@@ -61,7 +64,7 @@ interface TextEditorProps {
  *
  * 提供完整的文件编辑功能，包括：
  * - 文件打开、保存、关闭
- * - 文本编辑和十六进制查看
+ * - 文本编辑（CodeMirror 6：行号/语法高亮/查找替换）和十六进制查看
  * - 状态显示（行数、字符数、保存状态等）
  * - 预加载文件支持
  *
@@ -107,11 +110,20 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
   // 光标位置状态（行号、列号）
   const [cursorPosition, setCursorPosition] = useState<CursorPosition>({ line: 1, column: 1 });
 
+  // 文档统计（行数/字符数/选中数，由编辑面板上报）
+  const [docStats, setDocStats] = useState<DocStats | null>(null);
+
+  // 自动换行开关
+  const [wrapText, setWrapText] = useState(false);
+
   // 保存对话框状态
   const [showSaveDialog, setShowSaveDialog] = useState(false);
 
   // 防止重复打开同一个文件（关键修复）
   const lastOpenedPath = useRef<string | null>(null);
+
+  // 二进制文件自动切换 hex 的标记（只在加载完成时执行一次，不劫持用户手动切换）
+  const autoHexSwitched = useRef(false);
 
   /**
    * 预加载文件（仅执行一次）
@@ -136,6 +148,18 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
       });
     }
   }, [preloadData, openFile]);
+
+  /**
+   * 二进制文件自动切换到十六进制模式
+   *
+   * 仅在首次检测到二进制文件时切换一次；用户随后手动切回文本模式不被劫持
+   */
+  useEffect(() => {
+    if (fileState?.fileType === 'binary' && !autoHexSwitched.current) {
+      autoHexSwitched.current = true;
+      setEditorMode('hex');
+    }
+  }, [fileState]);
 
   /**
    * 处理保存文件
@@ -204,20 +228,6 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
   };
 
   /**
-   * 预加载文件
-   *
-   * 如果提供了 preloadData，在组件挂载时自动打开文件
-   */
-  useEffect(() => {
-    if (preloadData && preloadData.path && preloadData.serverId) {
-      log.info('预加载文件:', preloadData.path);
-      openFile(preloadData.serverId, preloadData.path).catch((err) => {
-        log.error('预加载文件失败:', err);
-      });
-    }
-  }, [preloadData, openFile]);
-
-  /**
    * 窗口关闭时释放资源
    *
    * 清理文件状态，释放内存
@@ -256,8 +266,8 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
    * 渲染工具栏
    *
    * Adwaita HeaderBar 风格：
-   * - 左侧：文件名显示（如果有）+ 未保存标记
-   * - 右侧：保存按钮 + 编辑模式切换
+   * - 左侧：文件图标（按扩展名映射）+ 文件名 + 路径两行 meta
+   * - 右侧：保存 + 另存为 + 编辑模式切换
    */
   const renderToolbar = () => {
     // 判断是否可以保存
@@ -277,7 +287,7 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
       <div className="te-toolbar">
         {/* 左侧：文件图标 + 文件名/路径两行 meta（对齐 FileManager 信息密度） */}
         <div className="te-toolbar-left">
-          <span className="te-file-icon">{fileState ? '📄' : '📝'}</span>
+          <span className="te-file-icon">{fileState ? getFileIconForName(fileName) : '📝'}</span>
           <div className="te-file-meta">
             <div className="te-filename">
               <span className="te-filename-text">{fileName}</span>
@@ -325,36 +335,51 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
   };
 
   /**
-   * 渲染内容区域
+   * 渲染内联错误横幅
+   *
+   * 错误不再替换整个内容区（对齐大型编辑器惯例）：
+   * 横幅出现在编辑区上方，文件内容/编辑能力保持可用
+   */
+  const renderErrorBanner = () => {
+    if (!error) return null;
+    return (
+      <div className="te-error-banner" role="alert">
+        <span className="te-error-banner-icon">⚠️</span>
+        <span className="te-error-banner-text">{error}</span>
+        <button className="te-error-banner-close" onClick={clearError} title="关闭">
+          ✕
+        </button>
+      </div>
+    );
+  };
+
+  /**
+   * 渲染加载态
+   *
+   * 居中 spinner + 文件名（复用 FileManager 的视觉语言）
+   */
+  const renderLoading = () => {
+    const fileName = fileState?.path.split('/').pop() || preloadData?.path.split('/').pop() || '';
+    return (
+      <div className="te-loading">
+        <div className="te-spinner" aria-hidden="true" />
+        <span className="te-loading-text">正在加载{fileName ? ` ${fileName}` : '文件'}...</span>
+      </div>
+    );
+  };
+
+  /**
+   * 渲染编辑主体
    *
    * 根据状态渲染不同的内容：
-   * - 加载中：显示加载提示
+   * - 加载中：居中 spinner
    * - 已打开文件：根据编辑模式渲染编辑面板
-   * - 未打开文件：显示空状态提示
+   * - 未打开文件：像记事本一样默认可编辑的新文件
    */
-  const renderContent = () => {
-    // 错误提示
-    if (error) {
-      return (
-        <div className="te-error">
-          <div className="te-error-content">
-            <span className="te-error-icon">⚠️</span>
-            <span className="te-error-text">{error}</span>
-            <button className="te-error-close" onClick={clearError}>
-              ✕
-            </button>
-          </div>
-        </div>
-      );
-    }
-
+  const renderBody = () => {
     // 加载中
     if (isLoading) {
-      return (
-        <div className="te-loading">
-          <span className="te-loading-text">正在加载文件...</span>
-        </div>
-      );
+      return renderLoading();
     }
 
     // 已打开文件
@@ -379,6 +404,9 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
               content={fileState.content}
               onChange={handleContentChange}
               onCursorChange={setCursorPosition}
+              onStatsChange={setDocStats}
+              filePath={fileState.path}
+              wrapText={wrapText}
             />
           );
         } else if (fileState.fileType === 'binary') {
@@ -392,11 +420,7 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
           );
         } else {
           // 加载中状态（不应该出现在这里，但作为兜底处理）
-          return (
-            <div className="te-loading">
-              <span className="te-loading-text">正在加载文件...</span>
-            </div>
-          );
+          return renderLoading();
         }
       }
     }
@@ -407,6 +431,9 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
         content={localContent}
         onChange={handleContentChange}
         onCursorChange={setCursorPosition}
+        onStatsChange={setDocStats}
+        wrapText={wrapText}
+        placeholder="开始输入…"
       />
     );
   };
@@ -422,7 +449,10 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
         fileState={fileState}
         hasUnsavedChanges={hasUnsavedChanges()}
         cursorPosition={cursorPosition}
-        newFileCharCount={localContent.length}
+        newFileCharCount={docStats?.chars ?? localContent.length}
+        docStats={docStats}
+        wrapText={wrapText}
+        onToggleWrap={() => setWrapText((w) => !w)}
       />
     );
   };
@@ -431,7 +461,10 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
     <div className="te-app">
       <div className="te-app-content">
         <AppLayout toolbar={renderToolbar()}>
-          {renderContent()}
+          <div className="te-content-wrapper">
+            {renderErrorBanner()}
+            {renderBody()}
+          </div>
         </AppLayout>
       </div>
       {renderStatusBar()}
