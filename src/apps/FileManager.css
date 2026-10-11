@@ -302,6 +302,9 @@
   display: flex;
   align-items: center;
   gap: 4px;
+  /* 固定表头高 32px：与下拉按钮区的两线距离 20px 构成 5:8 黄金比例
+     （Fibonacci 近似 φ），按钮区显高瘦；分界线 ::after 长 20px 与之呼应 */
+  height: 32px;
   /* 垂直 padding 铺满整个表头高；水平 16px 让每列表头文字与背景块
      左缘都有呼吸空间（行内单元格同步缩进 16px，表头与数据保持对齐） */
   padding: 8px 16px;
@@ -418,14 +421,17 @@
 
 /* ── 列头 ▾ 下拉按钮（Win11 Explorer 同款）─────────────────
    绝对定位浮于列头右端：不参与 flex 布局，浮现时不挤压列头文字（无位移感）。
+   黄金比例体系：两线距离 20px（::before -12px ↔ 列分界线 +8px）: 表头高
+   32px = 5:8 ≈ φ，按钮区显高瘦；按钮 [-8,+4] 中心 -2px 恰为两线中点，
+   距左右线各 4px 居中。按钮自身 20 高 × 12 宽 = 5:3 亦随黄金基调。
    平时 opacity:0 且禁点（该区域点击落到列头=排序）；hover 列头、菜单打开
    或该列筛选激活（.filtered，图标切为漏斗）时浮现 */
 .fm-list .fm-list-header .fm-col-header .fm-col-menu-btn {
   position: absolute;
-  right: 4px;
+  right: -4px;
   top: 50%;
   transform: translateY(-50%);
-  width: 20px;
+  width: 12px;
   height: 20px;
   display: flex;
   align-items: center;
@@ -458,12 +464,14 @@
   color: var(--quirel-text-primary);
 }
 
-/* 按钮与列头文本的分隔线：按钮左缘淡竖线，随按钮一起浮现/隐藏
-   （点击区与列头文字界限清晰，UI 更易辨认） */
+/* 按钮与列头文本的分隔线：淡竖线，随按钮一起浮现/隐藏
+   （点击区与列头文字界限清晰，UI 更易辨认）。
+   left:-4px 使线落在 -12px：与列分界线（+8px）相距 20px，
+   同表头高 32px 构成 5:8 黄金比例；按钮居于两线正中 */
 .fm-list .fm-list-header .fm-col-header .fm-col-menu-btn::before {
   content: "";
   position: absolute;
-  left: 0;
+  left: -4px;
   top: 3px;
   bottom: 3px;
   width: 1px;
