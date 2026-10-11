@@ -215,17 +215,8 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
               return arr;
             })
           }
+          onAdd={addTab}
         />
-
-        {/* 原地新增页签 */}
-        <button
-          type="button"
-          className="te-tab-new"
-          onClick={addTab}
-          title="新建页签"
-        >
-          +
-        </button>
       </div>
     );
   };

@@ -86,7 +86,7 @@
   background: var(--quirel-frosted-bg);
   backdrop-filter: var(--quirel-frosted-blur);
   -webkit-backdrop-filter: var(--quirel-frosted-blur);
-  border-bottom: 1px solid var(--quirel-frosted-border);
+  /* 无底线：活动页签与下方内容区的融合更连贯（Chrome 同款） */
   display: flex;
   align-items: center;
   padding: 0 12px;

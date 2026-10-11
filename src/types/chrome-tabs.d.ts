@@ -13,5 +13,6 @@ declare module 'chrome-tabs' {
       props: { title?: string; favicon?: string | false; id?: string },
     ): void;
     setCurrentTab(tabEl: HTMLElement): void;
+    layoutTabs(): void;
   }
 }
