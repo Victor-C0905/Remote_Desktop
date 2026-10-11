@@ -101,6 +101,16 @@ WindowShell HeaderBar
 只剩 4px 不可见。占满可用宽度后页签恢复 Chrome 行为（单页签 258px、标题
 180px 完整可见）。
 
+### 修订 4：隐藏库自带的 chrome-tabs-bottom-bar 白条
+
+用户反馈标题栏底部（页签右侧"+"下方）有一条横线。实测定位：不是任何
+border，而是库自带的 `.chrome-tabs-bottom-bar`——4px 高、全宽、纯白、
+z-index:10 的横条（库 demo 中作"页签下方工具栏表面"），其下边缘与奶油色
+顶栏相接形成硬边，还盖住页签底部 4px。库 JS 对该元素零依赖。项目顶栏
+自己承担工具栏表面角色，故 `display: none` 隐藏；活动页签经 SVG 下探
+2px 与顶栏直接融合（seam=0），即 Chrome 原版"页签条与工具栏连续表面"
+形态。用户设想的"tab 下移"无需——页签本就贴条底。
+
 ### 已知瞬态（接受）
 
 库的布局是异步链（rAF + mouseEnter 延迟布局），开窗/增删页签后 content

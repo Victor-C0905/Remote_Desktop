@@ -71,6 +71,15 @@
   cursor: grabbing;
 }
 
+/* 库自带的 chrome-tabs-bottom-bar（4px 全宽纯白横条，z-index:10）是其
+   demo 里"页签下方工具栏表面"，本项目顶栏自己承担该角色；留着它会在
+   标题栏底部压出一条白带并与顶栏顶出一道硬边。隐藏后活动页签经 SVG
+   下探 2px 与顶栏直接融合（Chrome 原版形态：页签条与工具栏连续表面）。
+   库 JS 对该元素零依赖，隐藏安全 */
+.chrome-tabs .chrome-tabs-bottom-bar {
+  display: none;
+}
+
 /* ── + 新建页签按钮：库官方 pinnedRight 插槽（流内跟在 content 之后）──
    库常量 TAB_CONTENT_MARGIN=9、content 记账宽 = Σ把手宽 + 8 − (N−1)，
    最后一个页签的渲染右缘恒定超出 content 盒 2×9−8 = 10px（与页签数无关）；
