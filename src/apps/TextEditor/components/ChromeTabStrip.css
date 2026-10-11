@@ -72,6 +72,14 @@
   background-color: var(--quirel-card-hover) !important;
 }
 
+/* 关闭库的新页签入场动画（addTab 默认给新页签加 chrome-tab-was-just-added：
+   top:10px + 120ms 动画归零，观感为先矮 10px 再长到正常高度）。
+   top:0 必须同置，否则动画停用后页签会停在压矮状态 */
+.te-chrome-tabs .chrome-tab.chrome-tab-was-just-added {
+  top: 0;
+  animation: none;
+}
+
 /* 拖拽排序时光标 */
 .te-chrome-tabs.chrome-tabs.chrome-tabs-is-sorting {
   cursor: grabbing;
