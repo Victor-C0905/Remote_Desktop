@@ -6,16 +6,34 @@
    - 活动页签 = 应用内顶栏同色（底部与顶栏融为一体）
    ============================================================ */
 
-/* 不透明条面（比页签略深一档，Chrome 同款结构）：
-   页签两脚的 SVG 抗锯齿边缘与不透明表面同色系混色，弧线才干净圆滑；
-   半透明毛玻璃会让边缘混入透出的桌面色而发脏 */
 .te-chrome-tabs.chrome-tabs {
-  background: color-mix(in srgb, var(--quirel-headerbar-bg) 92%, var(--quirel-text-primary) 8%);
+  background: transparent;
   height: 100%;
   padding: 12px 2px 0;
   border-radius: 0;
   flex: 1 1 auto;
   min-width: 0;
+  overflow: visible; /* 页签背景需下探覆盖边界缝隙行（拖拽排序被库约束在条内，安全） */
+}
+
+/* ── 底缝遮盖：页签背景 SVG 的底边在符号缩放时差约 1px，
+   会露出条面底色形成细缝；用 1px 顶栏同色覆盖层补齐。
+   层级低于页签本体（z-index），不影响页签内容与两脚弧线 ── */
+.te-chrome-tabs.chrome-tabs::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -2px;
+  height: 4px; /* 下探 2px 进入顶栏（同色不可见），覆盖亚像素渲染的缝隙行 */
+  background: var(--quirel-headerbar-bg);
+  pointer-events: none;
+}
+
+/* 页签背景 svg 下探 2px：亚像素渲染的边界缝隙行被页签同色覆盖
+   （活动页签色 = 顶栏背景色，衔接处视觉无缝；几何纵向拉伸 2/36 不可感知） */
+.te-chrome-tabs .chrome-tab .chrome-tab-background > svg {
+  height: calc(100% + 2px);
 }
 
 /* 页签几何：非活动页签用顶栏同色的暗调（默认淡出不可见，悬停浮现） */
