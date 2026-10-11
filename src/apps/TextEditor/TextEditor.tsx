@@ -23,7 +23,7 @@ import { createPortal } from 'react-dom';
 import { createLogger } from '../../utils/logger';
 import { AppLayout } from '../../components/app-shell/AppLayout';
 import { MenuBar } from '../../components/ToolbarMenu/ToolbarMenu';
-import { ChromeTabStrip } from './components/ChromeTabStrip';
+import { ChromeTabStrip } from '../../components/ChromeTabStrip/ChromeTabStrip';
 import { ConfirmDialog } from '../../components/Dialog/ConfirmDialog';
 import { useServerManager } from '../../context/ServerManager';
 import { useWindowManager } from '../../window-system/WindowManagerContext';
@@ -194,30 +194,28 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
 
   const renderTabs = () => {
     return (
-      <div className="te-tabstrip">
-        <ChromeTabStrip
-          tabs={tabs.map((t) => {
-            const st = tabStatuses[t.id];
-            return {
-              id: t.id,
-              label: st?.label ?? (t.initialPath ? pathTail(t.initialPath) : '未命名文件'),
-              dirty: st?.dirty ?? false,
-            };
-          })}
-          activeTabId={activeTab.id}
-          onActivate={setActiveTabId}
-          onClose={closeTab}
-          onAdd={addTab}
-          onReorder={(from, to) =>
-            setTabs((prev) => {
-              const arr = [...prev];
-              const [moved] = arr.splice(from, 1);
-              arr.splice(to, 0, moved);
-              return arr;
-            })
-          }
-        />
-      </div>
+      <ChromeTabStrip
+        tabs={tabs.map((t) => {
+          const st = tabStatuses[t.id];
+          return {
+            id: t.id,
+            label: st?.label ?? (t.initialPath ? pathTail(t.initialPath) : '未命名文件'),
+            dirty: st?.dirty ?? false,
+          };
+        })}
+        activeTabId={activeTab.id}
+        onActivate={setActiveTabId}
+        onClose={closeTab}
+        onAdd={addTab}
+        onReorder={(from, to) =>
+          setTabs((prev) => {
+            const arr = [...prev];
+            const [moved] = arr.splice(from, 1);
+            arr.splice(to, 0, moved);
+            return arr;
+          })
+        }
+      />
     );
   };
 

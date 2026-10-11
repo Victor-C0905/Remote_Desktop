@@ -28,8 +28,8 @@ vi.mock('../context/ServerManager', () => ({
 describe('TerminalApp', () => {
   it('renders terminal app', () => {
     render(<TerminalApp windowId="test-window-1" />);
-    // 新建标签按钮：内容为 "+"，提示文字「新建标签」（对齐当前 UI）
-    expect(screen.getByTitle('新建标签')).toBeInTheDocument();
+    // 新建页签按钮：提示文字「新建页签」（ChromeTabStrip pinnedRight 插槽）
+    expect(screen.getByTitle('新建页签')).toBeInTheDocument();
   });
 
   it('renders header bar', () => {

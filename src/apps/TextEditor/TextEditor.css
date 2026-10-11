@@ -236,18 +236,9 @@
   display: none;
 }
 
-/* ── 标签条：menu + 页签，portal 进窗口标题栏（Chrome 形态）──
-   背景透明——标题栏毛玻璃表面即标签条表面；
-   空白区域可拖拽窗口，交互元素已阻止双击最大化 */
-.te-tabstrip {
-  display: flex;
-  align-items: flex-end;
-  height: 100%;
-  flex: 1 1 auto;
-  min-width: 0;
-  padding: 0 4px 0 0;
-  background: transparent;
-}
+/* ── 标签条：portal 进窗口标题栏（Chrome 形态）──
+   页签条本体是共享组件（src/components/ChromeTabStrip/），
+   行 wrapper 已内建；空白区域可拖拽窗口，交互元素已阻止双击最大化 */
 
 /* 行内菜单栏（垂直居中；标签样式由共享组件 .tmb-* 提供） */
 .te-menubar {
