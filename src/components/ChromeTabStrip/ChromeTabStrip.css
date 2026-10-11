@@ -8,6 +8,18 @@
      内容宽钳制 60~240），条面收缩会导致页签被压到最小宽
    ============================================================ */
 
+/* 行 wrapper：portal 进标题栏槽位后填满槽位（槽位自身是 flex 容器），
+   children（状态灯/菜单等行内附件）垂直居中 */
+.chrome-tabstrip-row {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0 4px 0 0;
+  background: transparent;
+}
+
 .te-chrome-tabs.chrome-tabs {
   background: transparent;
   height: 100%;

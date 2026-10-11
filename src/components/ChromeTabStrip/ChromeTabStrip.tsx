@@ -1,5 +1,5 @@
 /**
- * ChromeTabStrip — @sinm/react-chrome-tabs 桥接
+ * ChromeTabStrip — @sinm/react-chrome-tabs 桥接（共享组件）
  *
  * React 原生 Chrome 式页签组件（Adam Schwartz chrome-tabs 引擎的 React 移植，
  * MIT，持续维护）：标签几何（SVG 连接弧）、拖拽排序、关闭按钮、宽度自适应
@@ -9,9 +9,12 @@
  * - onTabClose → 脏页签确认流程（库只发事件，移除由 React 状态驱动）
  * - onTabActive / onTabReorder → 直接映射上层回调
  * - "+ 新建页签"按钮走库官方 pinnedRight 插槽（流内渲染在页签 content 之后）
+ * - 行 wrapper（.chrome-tabstrip-row）内建：portal 进标题栏槽位后 flex:1
+ *   填满槽位；children 渲染在页签条之后（状态灯/菜单等行内附件）
  * - CSS 覆盖：几何配色走 --quirel-* 令牌（ChromeTabStrip.css）
  */
 
+import type { ReactNode } from 'react';
 import { Tabs } from '@sinm/react-chrome-tabs';
 import '@sinm/react-chrome-tabs/css/chrome-tabs.css';
 import './ChromeTabStrip.css';
@@ -36,6 +39,9 @@ interface ChromeTabStripProps {
 
   /** 拖拽排序（库 fromIndex → toIndex） */
   onReorder(from: number, to: number): void;
+
+  /** 行内附件（状态灯、菜单等），渲染在页签条之后 */
+  children?: ReactNode;
 }
 
 export function ChromeTabStrip({
@@ -45,31 +51,35 @@ export function ChromeTabStrip({
   onActivate,
   onClose,
   onReorder,
+  children,
 }: ChromeTabStripProps) {
   return (
-    <Tabs
-      className="te-chrome-tabs"
-      draggable
-      tabs={tabs.map((t) => ({
-        id: t.id,
-        title: t.label,
-        active: t.id === activeTabId,
-        faviconClass: t.dirty ? 'te-tab-dirty' : undefined,
-        isCloseIconVisible: true,
-      }))}
-      pinnedRight={
-        <button
-          type="button"
-          className="te-tab-new"
-          onClick={onAdd}
-          title="新建页签"
-        >
-          +
-        </button>
-      }
-      onTabActive={onActivate}
-      onTabClose={onClose}
-      onTabReorder={(_tabId, fromIndex, toIndex) => onReorder(fromIndex, toIndex)}
-    />
+    <div className="chrome-tabstrip-row">
+      <Tabs
+        className="te-chrome-tabs"
+        draggable
+        tabs={tabs.map((t) => ({
+          id: t.id,
+          title: t.label,
+          active: t.id === activeTabId,
+          faviconClass: t.dirty ? 'te-tab-dirty' : undefined,
+          isCloseIconVisible: true,
+        }))}
+        pinnedRight={
+          <button
+            type="button"
+            className="te-tab-new"
+            onClick={onAdd}
+            title="新建页签"
+          >
+            +
+          </button>
+        }
+        onTabActive={onActivate}
+        onTabClose={onClose}
+        onTabReorder={(_tabId, fromIndex, toIndex) => onReorder(fromIndex, toIndex)}
+      />
+      {children}
+    </div>
   );
 }

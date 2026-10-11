@@ -3,6 +3,7 @@
 // 支持远程 PTY 连接（通过 QUIC Stream）和本地演示模式
 // 集成窗口系统：每个窗口实例独立状态，支持多窗口运行
 import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { Terminal } from '@xterm/xterm';
@@ -12,6 +13,7 @@ import { SearchAddon } from '@xterm/addon-search';
 import '@xterm/xterm/css/xterm.css';
 import { useServerManager } from '../context/ServerManager';
 import { ToolbarMenu } from '../components/ToolbarMenu/ToolbarMenu';
+import { ChromeTabStrip } from '../components/ChromeTabStrip/ChromeTabStrip';
 // import { useWindowState } from '../window-system/hooks/useWindowState'; // 未来集成时使用
 import { useWindowEvent } from '../window-system/hooks/useWindowEvent';
 import { describeTerminalFailure } from '../types/errors';
@@ -573,6 +575,14 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
   // ── 窗口实例独立状态（每个窗口实例有自己的 tabs、设置等）────────────
   const [tabs, setTabs] = useState<TerminalTabMeta[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
+
+  // 页签条挂载点：窗口标题栏槽位（Chrome 形态——标题栏即标签条）。
+  // WindowShell 的 HeaderBar 先于应用内容渲染，挂载时槽位必已存在；
+  // 找不到时（异常形态）回退到应用内。
+  const [titlebarSlot, setTitlebarSlot] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    setTitlebarSlot(document.querySelector<HTMLElement>(`[data-titlebar-slot="${windowId}"]`));
+  }, [windowId]);
   const [showSearch, setShowSearch] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
@@ -806,45 +816,49 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
     }
   });
 
+  // ── 页签条行：ChromeTabStrip + 行内附件（连接状态、⌄ 菜单）──
+  // portal 进窗口标题栏（Chrome 形态，Windows Terminal 式行内附件）；
+  // 槽位缺失时（异常形态）回退渲染在应用内
+  const renderTabRow = () => (
+    <ChromeTabStrip
+      tabs={tabs.map((t) => ({ id: t.id, label: t.label, dirty: false }))}
+      activeTabId={activeTabId ?? tabs[0]?.id ?? ''}
+      onActivate={setActiveTabId}
+      onClose={(id) => handleCloseTab(id)}
+      onAdd={handleNewTab}
+      onReorder={(from, to) =>
+        setTabs((prev) => {
+          const arr = [...prev];
+          const [moved] = arr.splice(from, 1);
+          arr.splice(to, 0, moved);
+          return arr;
+        })
+      }
+    >
+      {/* 连接状态：CSS 圆点（绿=已连接，灰=本地），服务器名常规字重 */}
+      <span
+        className={`terminal-status ${activeServer ? 'is-remote' : 'is-local'}`}
+        title={activeServer ? `${activeServer.host}:${activeServer.port}` : '未连接远程服务器'}
+      >
+        <span className="terminal-status-dot" />
+        {activeServer ? activeServer.name : '本地'}
+      </span>
+      {/* 低频操作收纳进 ⌄ 菜单：搜索/设置面板的开关，开启时菜单项打勾 */}
+      <ToolbarMenu
+        icon="⌄"
+        title="更多操作"
+        items={[
+          { label: '搜索', checked: showSearch, onClick: () => setShowSearch((v) => !v) },
+          { label: '设置', checked: showSettings, onClick: () => setShowSettings((v) => !v) },
+        ]}
+      />
+    </ChromeTabStrip>
+  );
+
   return (
     <div className="terminal-app" onClick={() => { if (contextMenu) setContextMenu(null); }}>
-      {/* Tab Bar - 整合原HeaderBar功能 */}
-      <div className="terminal-tabs-container">
-        {/* Tab List */}
-        <div className="terminal-tab-list">
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              className={`terminal-tab ${tab.id === activeTabId ? 'active' : ''}`}
-              onClick={() => setActiveTabId(tab.id)}
-            >
-              <span className="tab-icon">$</span>
-              <span className="tab-label">{tab.label}</span>
-              <span className="tab-close" onClick={(e) => handleCloseTab(tab.id, e)} title="关闭标签">×</span>
-            </button>
-          ))}
-          <button className="terminal-new-tab" onClick={handleNewTab} title="新建标签">+</button>
-        </div>
-
-        {/* Actions and Status */}
-        <div className="terminal-tab-actions">
-          {/* 连接状态：CSS 圆点（绿=已连接，灰=本地），服务器名常规字重 */}
-          <span className={`terminal-status ${activeServer ? 'is-remote' : 'is-local'}`} title={activeServer ? `${activeServer.host}:${activeServer.port}` : '未连接远程服务器'}>
-            <span className="terminal-status-dot" />
-            {activeServer ? activeServer.name : '本地'}
-          </span>
-          {/* 低频操作收纳进 ⌄ 菜单（Windows Terminal 同款布局）：
-              搜索/设置面板的开关，开启时菜单项打勾 */}
-          <ToolbarMenu
-            icon="⌄"
-            title="更多操作"
-            items={[
-              { label: '搜索', checked: showSearch, onClick: () => setShowSearch((v) => !v) },
-              { label: '设置', checked: showSettings, onClick: () => setShowSettings((v) => !v) },
-            ]}
-          />
-        </div>
-      </div>
+      {/* Tab Bar —— 标题栏即标签条 */}
+      {titlebarSlot ? createPortal(renderTabRow(), titlebarSlot) : renderTabRow()}
 
       {/* Search Bar */}
       {showSearch && (
