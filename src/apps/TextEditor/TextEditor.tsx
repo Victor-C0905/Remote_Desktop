@@ -26,11 +26,10 @@
  * └─────────────────────────────────────┘
  */
 
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { Fragment, useEffect, useState, useRef, useCallback } from 'react';
 import { createLogger } from '../../utils/logger';
 import { AppLayout } from '../../components/app-shell/AppLayout';
-import { ToolbarMenu } from '../../components/ToolbarMenu/ToolbarMenu';
-import type { ToolbarMenuItem, ToolbarMenuSeparator } from '../../components/ToolbarMenu/ToolbarMenu';
+import { MenuBar } from '../../components/ToolbarMenu/ToolbarMenu';
 import { useServerManager } from '../../context/ServerManager';
 import { useWindowManager } from '../../window-system/WindowManagerContext';
 import { useFileManager } from './hooks/useFileManager';
@@ -267,14 +266,14 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
   const fileName = fileState ? fileState.path.split('/').pop() || fileState.path : '未命名文件';
 
   /**
-   * 渲染动作栏（第一行）
+   * 渲染菜单栏（第一行）
    *
-   * 对齐 VS Code 极简动作栏：高频编辑动作，仅此而已。
-   * - 左组：撤销/重做（编辑核心动作，GNOME Text Editor 同款位置）
-   * - 右组：保存（accent 主操作）、查找面板、更多操作菜单
-   *   低频操作（另存为/十六进制/自动换行）全部收进 ⋮ 菜单
+   * 传统桌面应用菜单栏：全部功能按类别归位，不散落按钮。
+   * - 文件：保存 / 另存为 / 关闭窗口
+   * - 编辑：撤销 / 重做 / 查找替换（直连 CodeMirror 命令）
+   * - 视图：十六进制模式 / 自动换行（勾选项）
    */
-  const renderActionBar = () => {
+  const renderMenuBar = () => {
     // 判断是否可以保存
     // 新文件（fileState == null）：只要有内容就可以保存
     // 已打开文件（fileState != null）：文本文件且有未保存变更时可以保存
@@ -285,70 +284,47 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
       (fileState && fileState.fileType === 'text' && hasUnsavedChanges())
     );
 
-    const menuItems: Array<ToolbarMenuItem | ToolbarMenuSeparator> = [
-      {
-        label: '另存为…',
-        disabled: !fileState || isSaving,
-        onClick: () => setShowSaveDialog(true),
-      },
-      { separator: true },
-      {
-        label: '十六进制模式',
-        checked: editorMode === 'hex',
-        keepOpen: true,
-        onClick: () => setEditorMode((m) => (m === 'hex' ? 'text' : 'hex')),
-      },
-      {
-        label: '自动换行',
-        checked: wrapText,
-        keepOpen: true,
-        onClick: () => setWrapText((w) => !w),
-      },
-    ];
-
     return (
-      <div className="te-actionbar">
-        {/* 左组：编辑历史 */}
-        <div className="te-actionbar-left">
-          <button
-            type="button"
-            className="te-icon-btn"
-            onClick={() => paneRef.current?.undo()}
-            title="撤销 (Ctrl+Z)"
-          >
-            ↩️
-          </button>
-          <button
-            type="button"
-            className="te-icon-btn"
-            onClick={() => paneRef.current?.redo()}
-            title="重做 (Ctrl+Y)"
-          >
-            ↪️
-          </button>
-        </div>
-
-        {/* 右组：保存 / 查找 / 更多操作 */}
-        <div className="te-actionbar-right">
-          <button
-            type="button"
-            className="te-icon-btn te-icon-btn-accent"
-            onClick={handleSave}
-            disabled={!canSave}
-            title={isSaving ? '保存中...' : '保存文件 (Ctrl+S)'}
-          >
-            💾
-          </button>
-          <button
-            type="button"
-            className="te-icon-btn"
-            onClick={() => paneRef.current?.openSearch()}
-            title="查找 / 替换 (Ctrl+F)"
-          >
-            🔍
-          </button>
-          <ToolbarMenu title="更多操作" items={menuItems} />
-        </div>
+      <div className="te-menubar">
+        <MenuBar
+          menus={[
+            {
+              label: '文件',
+              items: [
+                { label: '保存', shortcut: 'Ctrl+S', disabled: !canSave, onClick: handleSave },
+                { label: '另存为…', disabled: !fileState || isSaving, onClick: () => setShowSaveDialog(true) },
+                { separator: true },
+                { label: '关闭窗口', onClick: () => manager.close(windowId) },
+              ],
+            },
+            {
+              label: '编辑',
+              items: [
+                { label: '撤销', shortcut: 'Ctrl+Z', onClick: () => paneRef.current?.undo() },
+                { label: '重做', shortcut: 'Ctrl+Y', onClick: () => paneRef.current?.redo() },
+                { separator: true },
+                { label: '查找 / 替换', shortcut: 'Ctrl+F', onClick: () => paneRef.current?.openSearch() },
+              ],
+            },
+            {
+              label: '视图',
+              items: [
+                {
+                  label: '十六进制模式',
+                  checked: editorMode === 'hex',
+                  keepOpen: true,
+                  onClick: () => setEditorMode((m) => (m === 'hex' ? 'text' : 'hex')),
+                },
+                {
+                  label: '自动换行',
+                  checked: wrapText,
+                  keepOpen: true,
+                  onClick: () => setWrapText((w) => !w),
+                },
+              ],
+            },
+          ]}
+        />
       </div>
     );
   };
@@ -395,17 +371,31 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
   /**
    * 渲染面包屑（第三行，仅已打开文件时）
    *
-   * 对齐 VS Code 面包屑：服务器名 › 逐级目录 › 文件名；
-   * 过长时左侧收缩省略（direction: rtl 技巧，与 FileManager 拖放层一致），
-   * 悬浮显示完整路径。
+   * Chrome 式分段胶囊：每级目录一个圆角分段（悬停浮出底色），
+   * 细箭头分隔，末级文件名加重强调；服务器名作为首段。
+   * 空间不足时从左侧自然裁剪（flex-end 对齐），始终保留文件名。
    */
   const renderBreadcrumb = () => {
     if (!fileState) return null;
     const segments = fileState.path.split('/').filter(Boolean);
-    const text = `${activeServer ? `${activeServer.name} › ` : ''}${segments.join(' › ')}`;
     return (
       <div className="te-breadcrumb" title={fileState.path}>
-        {text}
+        {activeServer && (
+          <>
+            <span className="te-crumb te-crumb-server">{activeServer.name}</span>
+            <span className="te-crumb-sep">›</span>
+          </>
+        )}
+        {segments.map((seg, i) => (
+          <Fragment key={i}>
+            {i > 0 && <span className="te-crumb-sep">›</span>}
+            <span
+              className={`te-crumb${i === segments.length - 1 ? ' te-crumb-current' : ''}`}
+            >
+              {seg}
+            </span>
+          </Fragment>
+        ))}
       </div>
     );
   };
@@ -540,7 +530,7 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
         <AppLayout
           toolbar={
             <>
-              {renderActionBar()}
+              {renderMenuBar()}
               {renderTabBar()}
               {renderBreadcrumb()}
             </>

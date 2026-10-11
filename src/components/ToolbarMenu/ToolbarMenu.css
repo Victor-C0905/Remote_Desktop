@@ -28,6 +28,34 @@
   color: var(--quirel-text-primary);
 }
 
+/* ── 菜单栏（MenuBar）：传统桌面应用菜单栏 ───────────────── */
+.tmb-root {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 100%;
+}
+
+.tmb-label {
+  padding: 4px 10px;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--quirel-text-secondary);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.tmb-label:hover,
+.tmb-label.open {
+  background: var(--quirel-view-bg);
+  color: var(--quirel-text-primary);
+}
+
 /* ── 菜单面板（portal 到 body，fixed 定位）───────────────── */
 .tbm-menu {
   position: fixed;
@@ -38,7 +66,7 @@
   border: 1px solid var(--quirel-border-color);
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-popup);
-  transform: translateX(-100%); /* 以触发按钮右缘为锚，面板右对齐 */
+  /* 对齐方式由组件内联控制：ToolbarMenu 右对齐触发按钮，MenuBar 左对齐标签 */
 }
 
 /* ── 菜单项 ──────────────────────────────────────────────── */
@@ -84,6 +112,15 @@
 
 .tbm-item-label {
   flex: 1;
+  white-space: nowrap;
+}
+
+/* 快捷键提示列（右对齐，弱化展示） */
+.tbm-item-shortcut {
+  margin-left: 16px;
+  font-family: var(--font-ui);
+  font-size: 10px;
+  color: var(--quirel-text-secondary);
   white-space: nowrap;
 }
 
