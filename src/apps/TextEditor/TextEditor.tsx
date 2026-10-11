@@ -207,6 +207,7 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
           activeTabId={activeTab.id}
           onActivate={setActiveTabId}
           onClose={closeTab}
+          onAdd={addTab}
           onReorder={(from, to) =>
             setTabs((prev) => {
               const arr = [...prev];
@@ -215,7 +216,6 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
               return arr;
             })
           }
-          onAdd={addTab}
         />
       </div>
     );

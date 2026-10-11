@@ -66,10 +66,51 @@ WindowShell HeaderBar
 - vendor CSS（`chrome-tabs-vendor.css`）：库包内未发布 CSS，从官方 tarball
   vendor，保留。
 
+## 实施修订（浏览器实测发现，均已验证）
+
+实施后用真实浏览器逐项验证时，发现设计中的两处假设与库的真实行为不符，按
+实测修正：
+
+### 修订 1："+"按钮改走库官方 `pinnedRight` 插槽
+
+原设计的"flex 兄弟按钮"方案基于"库条面收窄至页签总宽"的假设——实测为假：
+库的模型是把条面可用宽度**均分给各页签**（Chrome 真实行为，内容宽钳制
+60~240，`tabContentWidths` 分配逻辑），条面并不随页签收窄。
+
+同时实测发现库的 content 盒记账宽度恒定比最后一个页签的渲染右缘**短
+`2×TAB_CONTENT_MARGIN − 8 = 10px`**（`TAB_CONTENT_MARGIN=9`、
+`getTabsWidth() = Σ把手宽 + 8 − (N−1)`），因此旧 WIP 的两种"+"方案（portal
+按 content 右缘定位、兄弟节点按塌缩条面定位）都存在约 4~10px 的重叠——
+迁移中途两个"+"按钮恰好叠在同一位置，视觉上被掩盖，测试却因多元素命中而
+失败。
+
+修正："+"按钮放进库官方 `pinnedRight` 插槽（`chrome-tabs-toolbar-right`，
+流内跟在 content 之后），配 `margin-left: 14px`（10px 清空 + 4px 间隙），
+实测 N=1/2/3 页签均无重叠。零 portal、零 ResizeObserver 追踪。
+
+### 修订 2：删除 vendor CSS，改用包内官方 CSS
+
+`chrome-tabs-vendor.css` 的前提"库包内未发布 CSS"已过时——实测
+`@sinm/react-chrome-tabs` 包内发布 `css/chrome-tabs.css`，且与 vendor 文件
+**零差异**。改为官方导入
+`import '@sinm/react-chrome-tabs/css/chrome-tabs.css'`，vendor 文件删除。
+
+### 修订 3：条面从 `flex: 0 1 auto` 改为 `flex: 1 1 auto`
+
+条面收缩会让库把极小的可用宽度均分给页签，页签被压到最小宽 78px、标题
+只剩 4px 不可见。占满可用宽度后页签恢复 Chrome 行为（单页签 258px、标题
+180px 完整可见）。
+
+### 已知瞬态（接受）
+
+库的布局是异步链（rAF + mouseEnter 延迟布局），开窗/增删页签后 content
+宽度与"+"位置在约 1s 内有一次自愈式重排（实测瞬时偏差 −6px → 稳态 +4px）。
+属库内部时序，不值得为消除它引入追踪机制。
+
 ## 验证标准
 
 1. `vitest run src/apps/TextEditor/TextEditor.test.tsx` 全绿（含此前因重复
-   按钮失败的 2 例）。
-2. `tsc --noEmit` 通过；全量测试无回归。
-3. 视觉验收：dev server 截图标题栏——单个"+"按钮紧随页签、页签几何与主题
-   令牌配色正常、活动页签与顶栏融合。
+   按钮失败的 2 例）。✅ 实测 5/5
+2. `tsc --noEmit` 通过；全量测试无回归。✅ 实测 297/297
+3. 视觉验收：dev server 截图标题栏——单个"+"按钮紧随页签（间隙 4px，无
+   重叠）、页签几何与主题令牌配色正常、活动页签与顶栏融合。✅ 实测通过
