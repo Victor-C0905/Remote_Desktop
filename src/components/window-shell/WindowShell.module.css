@@ -79,6 +79,7 @@
    ═════════════════════════════════════════════════════════════ */
 
 .windowHeaderBar {
+  position: relative; /* 标题绝对居中的定位基准 */
   height: var(--headerbar-height); /* 48px */
   /* 毛玻璃效果：引用全局变量，与 TopBar 保持一致 */
   background: var(--quirel-frosted-bg);
@@ -100,14 +101,19 @@
 }
 
 .windowTitle {
+  /* 绝对居中：不受右侧控制按钮宽度挤压（flex 盒居中会偏左半格） */
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 160px); /* 预留两侧：左槽位/右控制按钮 */
   font-size: var(--font-small); /* 9pt */
   font-weight: 600;
-  color: var(--quirel-text-primary); /* ✅ 使用主题文字颜色(亮色: rgba(0,0,0,0.87), 暗色: rgba(255,255,255,0.87)) */
-  flex: 1;
+  color: var(--quirel-text-primary);
   text-align: center;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  pointer-events: none; /* 纯展示：不挡标题栏拖拽 */
 }
 
 /* 应用注入槽位：应用将自定义内容（如 Chrome 式标签条）portal 到此。
@@ -123,6 +129,11 @@
 }
 
 .windowHeaderBar:has(.windowHeaderSlot:not(:empty)) .windowTitle {
+  display: none;
+}
+
+/* 未注入内容的应用（FileManager 等）：槽位不占空间，标题保持整栏居中 */
+.windowHeaderSlot:empty {
   display: none;
 }
 

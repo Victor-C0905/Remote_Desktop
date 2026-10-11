@@ -519,8 +519,9 @@ export function WindowShell({
   useEffect(() => {
     const el = windowRef.current;
     if (!el) return;
-    const onDown = (e: MouseEvent) => {
-      e.stopPropagation();
+    const onDown = () => {
+      // 注意：这里不能 stopPropagation——会切断事件到达 React 委托根，
+      // 导致窗口内所有 React onMouseDown（缩放把手等）失效
       onFocus();
     };
     el.addEventListener('mousedown', onDown);
@@ -534,6 +535,8 @@ export function WindowShell({
     if (!el) return;
 
     const onDown = (e: MouseEvent) => {
+      // 点在窗口控制按钮（红绿灯）上不启动拖拽
+      if ((e.target as Element).closest?.('button')) return;
       e.preventDefault();
       e.stopPropagation();
       onFocus();
