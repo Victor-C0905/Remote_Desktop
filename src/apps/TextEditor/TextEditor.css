@@ -186,7 +186,7 @@
 
 /* ============================================================
    文本编辑器主组件样式
-   两行结构（对齐 Chrome）：单行标签条（菜单+页签）→ 面包屑 → 编辑区
+   结构（对齐 Chrome）：标题栏=页签条(portal)，应用内顶栏=菜单+面包屑，下接编辑区
    ============================================================ */
 
 /* ── 主容器 ────────────────────────────────────────────── */
@@ -329,9 +329,9 @@
   color: var(--quirel-text-primary);
 }
 
-/* 活动标签：与下方内容区同色，分隔线在此断开 */
+/* 活动标签：与下方顶栏同色，标题栏底线在此断开 */
 .te-tab.active {
-  background: var(--quirel-window-bg);
+  background: var(--quirel-headerbar-bg);
   z-index: 1;
   cursor: default;
 }
@@ -351,13 +351,13 @@
 .te-tab.active::before {
   left: -10px;
   background: radial-gradient(circle 10px at 0 0,
-    var(--quirel-frosted-bg) 99%, var(--quirel-window-bg) 100%);
+    var(--quirel-frosted-bg) 99%, var(--quirel-headerbar-bg) 100%);
 }
 
 .te-tab.active::after {
   right: -10px;
   background: radial-gradient(circle 10px at 100% 0,
-    var(--quirel-frosted-bg) 99%, var(--quirel-window-bg) 100%);
+    var(--quirel-frosted-bg) 99%, var(--quirel-headerbar-bg) 100%);
 }
 
 /* [+] 原地新增页签：圆形幽灵按钮（Chrome 新标签同位） */
@@ -384,24 +384,46 @@
   color: var(--quirel-text-primary);
 }
 
-/* ── 面包屑（第三行，仅已打开文件）：Chrome 式分段胶囊 ───── */
+/* ── 应用内顶栏（菜单栏 + 路径面包屑，单行）───────────────── */
+.te-topbar {
+  display: flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 8px;
+  background: var(--quirel-headerbar-bg);
+  border-bottom: 1px solid var(--quirel-border-color);
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+/* 行内菜单栏（标签样式由共享组件 .tmb-* 提供） */
+.te-menubar {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+/* 菜单栏与路径的分隔竖线 */
+.te-strip-divider {
+  width: 1px;
+  height: 16px;
+  background: var(--quirel-border-color);
+  margin: 0 8px;
+  flex-shrink: 0;
+}
+
+/* 路径面包屑（Chrome 式胶囊分段），空间不足时左侧裁剪保留文件名 */
 .te-breadcrumb {
-  height: 26px;
-  padding: 0 10px;
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 1px;
-  background: var(--quirel-window-bg);
-  border-bottom: 1px solid var(--quirel-border-color);
-  flex-shrink: 0;
-
-  /* 空间不足时从左侧自然裁剪，始终保留末级文件名 */
-  justify-content: flex-end;
   overflow: hidden;
   white-space: nowrap;
+  justify-content: flex-end;
 }
 
-/* 路径分段：圆角胶囊，悬停浮出底色（Chrome 面包屑语言） */
 .te-crumb {
   padding: 2px 8px;
   border-radius: var(--radius-pill);
