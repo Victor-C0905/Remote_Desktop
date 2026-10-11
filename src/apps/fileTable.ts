@@ -1,11 +1,11 @@
 // src/apps/fileTable.ts
-// 文件列表表头领域逻辑：排序（点击表头翻转）+ 列宽（拖拽调节/持久化）
+// 文件列表表头领域逻辑：排序（点击表头翻转）+ 列筛选（表头下拉）+ 列宽（拖拽调节/持久化）
 // 纯函数模块，与 permissions.ts 同模式：不含 React 依赖，单测覆盖（fileTable.test.ts）
 import type { FileEntry } from "./FileManager";
 
 /* ── 排序 ─────────────────────────────────────────────────── */
 
-export type SortKey = "name" | "size" | "mtime" | "perm";
+export type SortKey = "name" | "size" | "mtime" | "type" | "perm";
 export type SortDir = "asc" | "desc";
 
 export interface SortState {
@@ -32,6 +32,11 @@ function primaryValue(key: SortKey, e: FileEntry): number | string | null {
       if (!e.mtime) return null;
       const t = Date.parse(e.mtime);
       return Number.isNaN(t) ? null : t;
+    }
+    case "type": {
+      // 无扩展名视同未知类型 → null：排组内最后（同 mtime 空值惯例，不随方向翻转）
+      const k = typeKeyOf(e);
+      return k === "__none" ? null : k;
     }
     case "perm":
       return e.permissions || null;
@@ -66,20 +71,6 @@ export function sortFileEntries(entries: FileEntry[], sort: SortState): FileEntr
   return [...dirs].sort(cmp).concat([...files].sort(cmp));
 }
 
-/* ── 过滤（目录/文件，工具栏分段控件）───────────────────── */
-
-export type FilterMode = "all" | "dirs" | "files";
-
-/** 默认显示全部（会话内状态不持久化，每次打开默认全部显示） */
-export const DEFAULT_FILTER: FilterMode = "all";
-
-/** 过滤文件列表：dirs=仅目录，files=仅文件；all 原样返回（不复制数组） */
-export function filterFileEntries(entries: FileEntry[], mode: FilterMode): FileEntry[] {
-  if (mode === "dirs") return entries.filter((e) => e.is_dir);
-  if (mode === "files") return entries.filter((e) => !e.is_dir);
-  return entries;
-}
-
 /* ── 列筛选（表头下拉菜单，Win11 Explorer 风格）───────────── */
 
 /** 大小区间（Win11 Explorer 分组：空/极小/小/中/大/巨大），区间左开右闭 */
@@ -91,15 +82,17 @@ export type MtimeBucket = "today" | "yesterday" | "thisWeek" | "lastWeek" | "ear
 /** 名称组（字母/拼音首字母范围）：A–F / G–L / M–R / S–Z / 其他（数字与符号） */
 export type NameBucket = "aToF" | "gToL" | "mToR" | "sToZ" | "other";
 
-/** 列筛选状态：各列为已勾选的桶集合（空数组 = 该列不过滤）；会话内状态不持久化 */
+/** 列筛选状态：各列为已勾选的桶集合（空数组 = 该列不过滤）；会话内状态不持久化
+ *  type 为动态清单（当前目录实际出现的扩展名），键为 string 而非固定枚举 */
 export interface ColumnFilterState {
   size: SizeBucket[];
   mtime: MtimeBucket[];
   name: NameBucket[];
+  type: string[];
 }
 
-/** 默认无筛选（对齐 filterMode 的会话内决策：每次打开默认全部显示） */
-export const DEFAULT_COLUMN_FILTERS: ColumnFilterState = { size: [], mtime: [], name: [] };
+/** 默认无筛选（会话内决策：每次打开默认全部显示） */
+export const DEFAULT_COLUMN_FILTERS: ColumnFilterState = { size: [], mtime: [], name: [], type: [] };
 
 /** 下拉菜单展示用桶清单（顺序即菜单勾选顺序） */
 export const SIZE_BUCKETS: { key: SizeBucket; label: string }[] = [
@@ -126,6 +119,38 @@ export const NAME_BUCKETS: { key: NameBucket; label: string }[] = [
   { key: "sToZ", label: "S – Z" },
   { key: "other", label: "其他（数字与符号）" },
 ];
+
+/** 条目所属类型键：目录 → __dir；无扩展名（含隐藏文件点前缀、点结尾）→ __none；
+ *  其余取最后一个点后的扩展名并小写归一（同一类型不同大小写同组） */
+export function typeKeyOf(e: FileEntry): string {
+  if (e.is_dir) return "__dir";
+  const dot = e.name.lastIndexOf(".");
+  if (dot <= 0 || dot === e.name.length - 1) return "__none";
+  return e.name.slice(dot + 1).toLowerCase();
+}
+
+/** 类型键的用户可见标签：__dir → 文件夹、__none → 文件、扩展名 → 大写（TXT/MD） */
+export function typeKeyLabel(key: string): string {
+  if (key === "__dir") return "文件夹";
+  if (key === "__none") return "文件";
+  return key.toUpperCase();
+}
+
+/** 列出当前目录实际出现的类型（类型列下拉菜单的动态桶清单）：
+ *  文件夹置顶，其余按扩展名字母序去重——与 Win11 按当前内容动态生成类型组一致 */
+export function listFileTypeBuckets(entries: FileEntry[]): { key: string; label: string }[] {
+  const seen = new Set<string>();
+  let hasDir = false;
+  for (const e of entries) {
+    const k = typeKeyOf(e);
+    if (k === "__dir") hasDir = true;
+    else seen.add(k);
+  }
+  const list = [...seen]
+    .sort((a, b) => a.localeCompare(b))
+    .map((k) => ({ key: k, label: typeKeyLabel(k) }));
+  return hasDir ? [{ key: "__dir", label: "文件夹" }, ...list] : list;
+}
 
 const KB = 1024, MB = 1024 * 1024, GB = 1024 * 1024 * 1024;
 
@@ -203,11 +228,11 @@ export function toggleBucket<T extends string>(list: readonly T[], bucket: T): T
 
 /** 是否有任何列筛选激活（空状态文案、列头漏斗指示共用） */
 export function hasActiveColumnFilters(f: ColumnFilterState): boolean {
-  return f.size.length > 0 || f.mtime.length > 0 || f.name.length > 0;
+  return f.size.length > 0 || f.mtime.length > 0 || f.name.length > 0 || f.type.length > 0;
 }
 
 /** 列筛选：勾选桶为并集（OR），多列同时激活为 AND；无勾选原样返回（不复制）
- *  叠加在 filterFileEntries（全部/文件夹/文件）之后，两层过滤独立组合 */
+ *  目录/文件的粗过滤已由类型列 __dir 组承担（原工具栏分段控件已移除） */
 export function filterByColumnFilters(
   entries: FileEntry[],
   filters: ColumnFilterState,
@@ -231,6 +256,10 @@ export function filterByColumnFilters(
     // 名称组对目录同样生效（首字符分组无 null 情形）
     result = result.filter((e) => (filters.name as readonly string[]).includes(nameBucketOf(e)));
   }
+  if (filters.type.length > 0) {
+    // 类型组对目录同样生效（__dir 组）；首字符分组无 null 情形
+    result = result.filter((e) => (filters.type as readonly string[]).includes(typeKeyOf(e)));
+  }
   return result;
 }
 
@@ -245,11 +274,12 @@ export interface ColumnWidths {
   name: number | null;
   size: number;
   mtime: number;
+  type: number;
   perm: number;
 }
 
 /** 默认列宽：与 CSS 历史值一致（fm-list-header 的 grid-template-columns） */
-export const DEFAULT_COLUMN_WIDTHS: ColumnWidths = { name: null, size: 90, mtime: 140, perm: 90 };
+export const DEFAULT_COLUMN_WIDTHS: ColumnWidths = { name: null, size: 90, mtime: 140, type: 90, perm: 90 };
 
 /** 各列最小宽度（名称列与 minmax 下限一致，防止拖拽把列压没了）
  *  name=130：图标 18 + 间距 8 + 文本区约 100px（≈10 个中文字符），
@@ -258,6 +288,7 @@ export const COLUMN_MIN_WIDTHS: Record<SortKey, number> = {
   name: 130,
   size: 56,
   mtime: 90,
+  type: 60,
   perm: 70,
 };
 
@@ -276,5 +307,6 @@ export function clampColumnWidth(key: SortKey, width: number, maxWidth?: number)
 /** 生成 grid-template-columns：表头与行共用，经 CSS 变量 --fm-cols 下发一次 */
 export function buildGridTemplate(widths: ColumnWidths): string {
   const nameCol = widths.name === null ? "minmax(130px, 2fr)" : `${widths.name}px`;
-  return `${nameCol} ${widths.size}px ${widths.mtime}px ${widths.perm}px`;
+  // 列序：名称 / 大小 / 修改时间 / 类型 / 权限（类型列插在时间与权限之间）
+  return `${nameCol} ${widths.size}px ${widths.mtime}px ${widths.type}px ${widths.perm}px`;
 }
