@@ -57,14 +57,6 @@ export class WindowCollection {
   }
 
   /**
-   * Get windows sorted by activation time (oldest first)
-   * Used for z-index ordering (oldest = lowest z-index)
-   */
-  getSortedByActivation(): Window[] {
-    return this.getAll().sort((a, b) => a.activatedAt - b.activatedAt);
-  }
-
-  /**
    * Check if a window exists
    */
   has(windowId: string): boolean {
