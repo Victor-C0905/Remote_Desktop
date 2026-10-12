@@ -19,6 +19,7 @@
   --quirel-card-bg:        #faf5f3;      /* RGB(250,245,243) - 卡片背景（最浅） */
   --quirel-card-hover:     #ebe5d9;      /* RGB(235,229,217) - 卡片悬停（较深） */
   --quirel-headerbar-bg:   #f5f0e6;      /* RGB(245,240,230) - HeaderBar（中等） */
+  --quirel-terminal-bg:    #1e1e1e;      /* 终端表面（xterm 画布同色）；Chrome 页签 dark 变体与其无缝融合 */
   --quirel-sidebar-bg:     #f5f0e6;      /* RGB(245,240,230) - 侧边栏（中等） */
   --quirel-sidebar-fg:     #3f3f3f;
   --quirel-sidebar-border: #d5d0c4;      /* RGB(213,208,196) - 边框（最深） */

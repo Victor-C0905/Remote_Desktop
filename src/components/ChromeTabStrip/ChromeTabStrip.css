@@ -3,7 +3,13 @@
    库自带配色为 Chrome 原版灰，这里全部改写为 --quirel-* 令牌：
    - 条面透明（标题栏毛玻璃即标签条表面）
    - 非活动页签淡出，悬停浮现
-   - 活动页签 = 应用内顶栏同色（底部与顶栏融为一体）
+   - 活动页签 = 页签条正下方表面的颜色（Chrome 形态：页签伸入下方
+     内容），按 variant 三档：
+       缺省   → 应用内顶栏 --quirel-headerbar-bg
+       light  → 内容区浅色 --quirel-window-bg（TextEditor）
+       dark   → 终端黑 --quirel-terminal-bg（Terminal，标题反白）
+     底缝桥接的随动改色见 WindowShell.module.css（:has 按行 wrapper
+     的 data-tabstrip-variant 区分）
    - 条面占满可用宽度：库按条面宽度均分页签（Chrome 行为，
      内容宽钳制 60~240），条面收缩会导致页签被压到最小宽
    ============================================================ */
@@ -43,6 +49,31 @@
 
 .te-chrome-tabs .chrome-tab[active] .chrome-tab-background > svg .chrome-tab-geometry {
   fill: var(--quirel-headerbar-bg);
+}
+
+/* ── variant：活动页签改为融合下方表面 ──
+   light（TextEditor）：页签与 te-topbar/内容区连成一块浅色表面，
+   与毛玻璃标题栏拉开明暗（Chrome 光模式：框深、活动页签+工具栏浅）；
+   dark（Terminal）：页签伸入黑色终端区，标题/关闭钮反白 */
+.chrome-tabstrip-row[data-tabstrip-variant='light'] .chrome-tab[active] .chrome-tab-background > svg .chrome-tab-geometry {
+  fill: var(--quirel-window-bg);
+}
+
+.chrome-tabstrip-row[data-tabstrip-variant='dark'] .chrome-tab[active] .chrome-tab-background > svg .chrome-tab-geometry {
+  fill: var(--quirel-terminal-bg);
+}
+
+.chrome-tabstrip-row[data-tabstrip-variant='dark'] .chrome-tab[active] .chrome-tab-title {
+  color: rgba(255, 255, 255, 0.92);
+}
+
+/* 关闭钮图标是深色 data-URI，黑页签上换浅色描边；hover 底色同步换白系 */
+.chrome-tabstrip-row[data-tabstrip-variant='dark'] .chrome-tab[active] .chrome-tab-close {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'><path stroke='rgba(255, 255, 255, 0.75)' stroke-linecap='square' stroke-width='1.5' d='M0 0 L8 8 M8 0 L0 8'></path></svg>");
+}
+
+.chrome-tabstrip-row[data-tabstrip-variant='dark'] .chrome-tab[active] .chrome-tab-close:hover {
+  background-color: rgba(255, 255, 255, 0.14) !important;
 }
 
 /* 分隔线弱化 */

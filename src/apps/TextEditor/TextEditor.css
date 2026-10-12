@@ -258,12 +258,15 @@
 }
 
 /* ── 应用内顶栏（菜单栏 + 路径面包屑，单行）───────────────── */
+/* 面用内容区浅色而非 headerbar：活动页签（variant="light"，同色）伸入
+   后与顶栏、内容区连成一整块浅色表面，和毛玻璃标题栏拉开明暗（Chrome 光
+   模式：框深、活动页签+工具栏浅）；底缝桥接在 WindowShell 中随动同色 */
 .te-topbar {
   display: flex;
   align-items: center;
   height: 30px;
   padding: 0 8px;
-  background: var(--quirel-headerbar-bg);
+  background: var(--quirel-window-bg);
   border-bottom: 1px solid var(--quirel-border-color);
   flex-shrink: 0;
   min-width: 0;

@@ -99,9 +99,17 @@
 /* ── 底缝桥接：毛玻璃底边伪影的全宽遮盖 ──
    backdrop-filter 在 header 最底 1-2 行会采样到下方更深的壁纸渐变，
    与下方顶栏交界处形成一条比两侧都暗的过渡带（实测行 116-117，
-   RGB 比毛玻璃面/顶栏面深 30-40）。应用顶栏面即 --quirel-headerbar-bg，
-   用同色 4px 覆盖层下探 2px 盖掉暗带（2px 进入顶栏同色不可见）。
-   必须在窗口级全宽铺：页签条等应用局部桥接盖不到槽位之外的裸露带 */
+   RGB 比毛玻璃面/顶栏面深 30-40）。桥接用"标题栏正下方表面"的同色
+   4px 覆盖层下探 2px 盖掉暗带（2px 进入下方表面同色不可见）。
+   必须在窗口级全宽铺：页签条等应用局部桥接盖不到槽位之外的裸露带。
+
+   桥接色 = 下方表面色是页签底部圆角"圆滑"的关键机制：页签 SVG 底缘
+   最后一行是抗锯齿半透明行，颜色 = 填充色 × 背后垫色（桥接层），
+   桥接若与页签/下方表面不同色，交界行就是一条异色细带，切断页签
+   底部凹弧（flare）与下方表面的连续。有 ChromeTabStrip 的应用按行
+   wrapper 的 data-tabstrip-variant 随动：
+   - light（TextEditor）：下方是 te-topbar/内容区 --quirel-window-bg
+   - dark（Terminal）：下方是黑色终端区 --quirel-terminal-bg */
 .windowHeaderBar::after {
   content: '';
   position: absolute;
@@ -111,6 +119,14 @@
   height: 4px;
   background: var(--quirel-headerbar-bg);
   pointer-events: none; /* 不挡拖拽与双击最大化 */
+}
+
+.windowHeaderBar:has([data-tabstrip-variant='light'])::after {
+  background: var(--quirel-window-bg);
+}
+
+.windowHeaderBar:has([data-tabstrip-variant='dark'])::after {
+  background: var(--quirel-terminal-bg);
 }
 
 /* ✅ 最大化时标题栏不显示拖拽光标 */

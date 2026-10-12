@@ -195,6 +195,7 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
   const renderTabs = () => {
     return (
       <ChromeTabStrip
+        variant="light"
         tabs={tabs.map((t) => {
           const st = tabStatuses[t.id];
           return {

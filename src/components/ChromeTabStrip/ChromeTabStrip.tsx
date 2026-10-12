@@ -29,6 +29,15 @@ interface ChromeTabStripProps {
   tabs: ChromeTabItem[];
   activeTabId: string;
 
+  /**
+   * 活动页签融合的下方表面（Chrome 形态：活动页签 = 页签条正下方表面的颜色）：
+   * - 'light'：内容区浅色 --quirel-window-bg（TextEditor，页签伸入 te-topbar 与内容连成一体）
+   * - 'dark' ：终端黑 --quirel-terminal-bg（Terminal，页签伸入黑色终端区）
+   * - 缺省  ：应用内顶栏 --quirel-headerbar-bg（历史行为）
+   * 同时以 data-tabstrip-variant 标在行 wrapper 上，供 WindowShell 调整底缝桥接色
+   */
+  variant?: 'light' | 'dark';
+
   /** 新建页签（+ 按钮，pinnedRight 插槽） */
   onAdd(): void;
 
@@ -47,6 +56,7 @@ interface ChromeTabStripProps {
 export function ChromeTabStrip({
   tabs,
   activeTabId,
+  variant,
   onAdd,
   onActivate,
   onClose,
@@ -54,7 +64,10 @@ export function ChromeTabStrip({
   children,
 }: ChromeTabStripProps) {
   return (
-    <div className="chrome-tabstrip-row">
+    <div
+      className="chrome-tabstrip-row"
+      data-tabstrip-variant={variant}
+    >
       <Tabs
         className="te-chrome-tabs"
         draggable
