@@ -141,6 +141,37 @@ export function WindowShell({
     return () => clearTimeout(timer);
   }, []);
 
+  // ── 开窗动画归位后的 resize 补偿 ──────────────────────
+  // 开窗动画用 transform scale(0.96→1)。任何在缩放期间做 gBCR 测量的子组件
+  // 都会拿到缩水 4% 的宽度，且归位后布局盒不再变化、无法自行重算——页签引擎
+  // （@sinm/react-chrome-tabs）正是如此：getTabsWidth() 用 gBCR 记账页签总宽
+  // 写入 content div，之后不再重算，页签布局与 + 按钮定位被冻结在 96%，
+  // 直到第一次新增页签才恢复。scale 归位后补发一次 window resize，让引擎
+  // （监听 resize → layoutTabs）按真实尺寸重排；其余 resize 监听方读到的
+  // 都是当前布局，幂等无副作用。
+  // 触发：本窗口容器 transform 过渡结束（transitionend，精确）；另设 650ms
+  // 兜底定时器（翻转发生在 200ms，transform 过渡 300ms，500ms 归位；
+  // reduced-motion 等场景 transitionend 可能不触发）
+  useEffect(() => {
+    if (isOpening) return;
+    let done = false;
+    const fire = () => {
+      if (done) return;
+      done = true;
+      window.dispatchEvent(new Event('resize'));
+    };
+    const el = windowRef.current;
+    const onEnd = (e: TransitionEvent) => {
+      if (e.target === el && e.propertyName === 'transform') fire();
+    };
+    el?.addEventListener('transitionend', onEnd);
+    const fallback = setTimeout(fire, 650);
+    return () => {
+      el?.removeEventListener('transitionend', onEnd);
+      clearTimeout(fallback);
+    };
+  }, [isOpening]);
+
   // ── 拖拽移动（使用 requestAnimationFrame 优化性能）────
   useEffect(() => {
     if (!isDragging) return;

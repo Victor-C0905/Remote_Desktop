@@ -81,7 +81,13 @@
 .windowHeaderBar {
   position: relative; /* 标题绝对居中的定位基准 */
   justify-content: flex-end; /* 标题绝对定位/空槽位隐藏后，控制按钮保持在右侧 */
-  height: var(--headerbar-height); /* 48px */
+  height: 44px;
+  /* 不用 --headerbar-height（48px，BrowserApp/Settings/SystemMonitor 等应用内
+     顶栏共享该变量）。44px = 顶部 8px 呼吸空隙 + 36px 页签（库原生高度）：
+     页签保持底部锚定，下方融合色（2px 下探 + 底缝桥接）与 48px 时代完全一致；
+     顶部留空后「页签文字与控制圆点同线」无法靠高度相等达成（数学上要求
+     页签满高），改由页签内容整体上移 G/2 = 4px 实现（见 ChromeTabStrip.css
+     .chrome-tab-content 规则），页签几何零变形 */
   /* 毛玻璃效果：引用全局变量，与 TopBar 保持一致 */
   background: var(--quirel-frosted-bg);
   backdrop-filter: var(--quirel-frosted-blur);
