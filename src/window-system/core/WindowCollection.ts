@@ -4,7 +4,7 @@ import { Window } from './Window';
 
 /**
  * Window collection for managing multiple windows
- * Provides CRUD operations and sorting by activation time
+ * Provides CRUD operations (activation ordering lives in WindowManager's MRU stack)
  */
 export class WindowCollection {
   private windows: Map<string, Window> = new Map();
@@ -42,18 +42,6 @@ export class WindowCollection {
    */
   getByAppId(appId: string): Window[] {
     return this.getAll().filter(w => w.appId === appId);
-  }
-
-  /**
-   * Get the most recently activated window
-   */
-  getActive(): Window | undefined {
-    const windows = this.getAll();
-    if (windows.length === 0) return undefined;
-
-    return windows.reduce((latest, current) => {
-      return current.activatedAt > latest.activatedAt ? current : latest;
-    });
   }
 
   /**

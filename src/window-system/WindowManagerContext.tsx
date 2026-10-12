@@ -63,10 +63,9 @@ function globalStateEqual(a: GlobalState, b: GlobalState): boolean {
  * ⚠️ 幂等：数据未变时返回同一缓存引用，避免 useSyncExternalStore 无限循环
  */
 function getGlobalStateSnapshot(manager: WindowManager): GlobalState {
-  // ⚠️ 回退：不按 activatedAt 排序（保持窗口创建顺序）。
-  // 排序使 windowList 顺序随每次窗口激活翻转，Desktop 的 children 数组
-  // 随之重排，与「切换窗口导致窗口内容重载」问题时间线吻合（dev 无排序无问题）。
-  // 层叠功能待因果确认后用「渲染时按 activatedAt 计算 zIndex」方案恢复。
+  // ⚠️ windowList 保持创建顺序（Map 插入序），绝不在此排序——
+  // 排序会翻转 Desktop children 数组，React 重排 DOM 触发窗口内容重载。
+  // MRU 层叠由 per-window 快照的 zRank（激活栈内排名）驱动内联 zIndex 表达。
   const windows = manager.getAll();
   const activeWindow = manager.getActive();
 
@@ -235,7 +234,9 @@ interface WindowInstanceState {
   minimized: boolean;
   maximized: boolean;
   isActive: boolean;
-  activatedAt: number;
+  // ✅ MRU 层叠：本窗口在激活栈中的排名（0=最旧，栈顶=最近激活）。
+  // 栈变化会改变相关窗口的排名 → 快照变化 → 订阅窗口重渲染更新 zIndex。
+  zRank: number;
 }
 
 /**
@@ -256,7 +257,7 @@ function windowStateEqual(a: WindowInstanceState, b: WindowInstanceState): boole
     a.minimized === b.minimized &&
     a.maximized === b.maximized &&
     a.isActive === b.isActive &&
-    a.activatedAt === b.activatedAt;
+    a.zRank === b.zRank;
 }
 
 /** 默认窗口状态（窗口不存在时的回退值） */
@@ -266,7 +267,7 @@ const DEFAULT_WINDOW_STATE: WindowInstanceState = {
   minimized: false,
   maximized: false,
   isActive: false,
-  activatedAt: 0,
+  zRank: 0,
 };
 
 /**
@@ -287,7 +288,9 @@ function getWindowStateSnapshot(windowId: string, manager: WindowManager): Windo
     minimized: win.minimized,
     maximized: win.maximized,
     isActive: win.id === activeWindowId,
-    activatedAt: win.activatedAt,
+    // ✅ MRU 层叠：激活栈内排名（indexOf 不可能为 -1——窗口存在必在栈中，
+    //   但防御 clamp 到 0）
+    zRank: Math.max(0, manager.activationOrder.indexOf(win.id)),
   };
 
   const cached = windowStateCaches.get(windowId);
@@ -371,8 +374,13 @@ export function initWindowEventBridge(manager: WindowManager) {
 
   LIST_EVENTS.forEach(eventType => {
     manager.on(eventType, (event: WindowEvent) => {
-      // 聚焦事件：同时通知旧窗口和新窗口（isActive 变化）
-      if (eventType === 'window:focused') {
+      // ✅ 影响激活栈（MRU 层叠）的事件：通知所有窗口。
+      // focused/restored 把窗口移到栈顶、closed 从栈中移除，
+      // 都会改变其他窗口的 zRank（层叠排名）；
+      // created 仅压栈顶不影响既有排名，无需全量通知。
+      if (eventType === 'window:focused' ||
+          eventType === 'window:restored' ||
+          eventType === 'window:closed') {
         windowStateListeners.forEach((_, wId) => {
           notifyWindowStateChange(wId);
         });

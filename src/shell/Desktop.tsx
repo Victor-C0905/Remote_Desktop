@@ -72,6 +72,15 @@ const DesktopWindow = memo(function DesktopWindow({
 
   if (!win || !app || !windowState) return null;
 
+  // ── MRU 层叠：非激活窗口按激活栈排名计算 z-index ──
+  // DOM 顺序保持创建顺序（React reconcile 稳定，避免 children 重排），
+  // 层叠改由内联 zIndex 表达：zRank = 激活栈中的排名（末尾=最近激活）。
+  // 激活窗口传 undefined（走 .windowShellActive 的 30）；
+  // 非激活 rank 挤压到 ≤9（z ≤ 29），保证任何情况下低于激活窗口。
+  const mruZIndex = windowState.isActive
+    ? undefined
+    : 20 + Math.min(windowState.zRank, 9);
+
   // 最大化尺寸（工作区占满屏幕）
   const maxWindowSize = {
     width: window.innerWidth,
@@ -87,6 +96,7 @@ const DesktopWindow = memo(function DesktopWindow({
       isActive={windowState.isActive}
       isMinimized={windowState.minimized}
       isMaximized={windowState.maximized}
+      zIndex={mruZIndex}
       mode="standard"
       position={windowState.position}
       size={windowState.size}

@@ -21,6 +21,11 @@ export interface WindowShellProps {
   position: { x: number; y: number };
   size: { width: number; height: number };
   // ✅ 删除 zIndex prop，改用 CSS 固定规则
+  // zIndex（可选）：非激活窗口的层叠序。内联样式优先级高于 CSS 类，
+  // 仅在非激活时传入（激活窗口传 undefined，走 .windowShellActive 的 30）。
+  // 用于 MRU 层叠：按激活历史排名计算（20+rank），DOM 顺序保持创建顺序，
+  // 避免重排 React children 数组（曾引发窗口内容重载，见 WindowManagerContext 回退注释）。
+  zIndex?: number;
   isMinimized?: boolean;
   isMaximized?: boolean; // ✅ 新增：最大化状态
   // ✅ Aero Snap 新增 props（由 Desktop 注入）
@@ -74,7 +79,7 @@ export function WindowShell({
   isActive,
   position,
   size,
-  // ✅ 删除 zIndex prop，改用 CSS 固定规则
+  zIndex, // 可选：非激活窗口层叠序（内联覆盖 CSS 的 20；激活窗口传 undefined 走 CSS 的 30）
   isMinimized = false,
   isMaximized = false, // ✅ 新增：最大化状态
   // ✅ Aero Snap 新增 props
@@ -622,6 +627,8 @@ export function WindowShell({
         width: size.width,
         height: size.height,
         display: isMinimized ? 'none' : 'flex',
+        // 层叠：非激活窗口用激活历史排名（20+rank），激活窗口 undefined 走 CSS 30
+        zIndex,
         transform: `translate(${position.x}px, ${position.y}px) scale(${isOpening ? 0.96 : 1})`,
         willChange: isDragging ? 'transform' : 'auto',
         opacity: isOpening ? 0 : 1,

@@ -20,7 +20,6 @@ export class Window {
   private _updatedAt: number;
 
   // Runtime state (not persisted)
-  private _activatedAt: number;
   private _preloadState: 'loading' | 'ready' | 'error';
   private _preloadData: any;
   private _maximized: boolean; // ✅ 最大化状态
@@ -29,10 +28,13 @@ export class Window {
     size: { width: number; height: number };
   } | null;
   private _snapZone: SnapZone | null = null; // ✅ snap 区状态(半屏/四分之一屏)
-  private _preSnapState: { // ✅ snap 前的位置和尺寸
+  private _preSnapState: { // ✅ snap 前的位置/尺寸
     position: { x: number; y: number };
     size: { width: number; height: number };
   } | null;
+
+  // MRU 层叠不依赖窗口自身字段：激活顺序由 WindowManager._activationOrder
+  // 栈统一维护（末尾=最近激活），Window 只保留窗口本体状态。
 
   constructor(
     id: string,
@@ -48,7 +50,6 @@ export class Window {
     this._layout = 'free';
     this._createdAt = Date.now();
     this._updatedAt = Date.now();
-    this._activatedAt = Date.now();
     this._preloadState = 'loading';
     this._preloadData = null;
     this._maximized = false;
@@ -95,23 +96,6 @@ export class Window {
   setLayout(layout: LayoutType): void {
     this._layout = layout;
     this._updatedAt = Date.now();
-  }
-
-  // Activation time (for z-index ordering)
-  get activatedAt(): number {
-    return this._activatedAt;
-  }
-
-  activate(): void {
-    this._activatedAt = Date.now();
-  }
-
-  /**
-   * Set activation time directly (for WindowManager to control z-index)
-   * Used when creating new windows to ensure proper z-index ordering
-   */
-  setActivatedAt(timestamp: number): void {
-    this._activatedAt = timestamp;
   }
 
   // Preload state
@@ -270,7 +254,6 @@ export class Window {
     window._createdAt = data.createdAt;
     window._updatedAt = data.updatedAt;
     // Runtime state defaults
-    window._activatedAt = Date.now();
     window._preloadState = 'loading';
     window._preloadData = null;
     window._maximized = false; // ✅ 反序列化时最大化状态为 false
