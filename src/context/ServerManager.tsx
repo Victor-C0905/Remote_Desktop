@@ -10,8 +10,9 @@ import {
 } from "../stores/serversStore";
 import type { ServerConfig } from "../stores/serversStore";
 import { useNotificationStore } from "../stores/notificationStore";
-import { parseConnectError, getErrorInfo, buildConnectFailureText, isRetryableConnectError } from "../types/errors";
+import { parseConnectError, getErrorInfo, buildConnectFailureText, isRetryableConnectError, AuthErrorCode } from "../types/errors";
 import { createLogger } from "../utils/logger";
+import { isTauri } from "../utils/environment";
 
 /* ── Types ─────────────────────────────────────────────── */
 
@@ -251,6 +252,15 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
   // 连接核心逻辑：认证凭据 → remote_connect → 状态更新 → 订阅指标
   // 手动连接（connectServer）与自动重连（attemptReconnect）共用
   const performConnect = useCallback(async (server: ServerConfig) => {
+    // 浏览器模式（无 Tauri 运行时）：连接能力由 Rust 后端提供，直接短路。
+    // 抛结构化错误 → 复用 connectServer 现有失败通知链，避免暴露 invoke 实现细节
+    if (!isTauri()) {
+      throw {
+        code: AuthErrorCode.Unknown,
+        detail: "浏览器调试模式不支持连接服务器，请使用桌面客户端",
+      };
+    }
+
     // 准备认证凭据（使用 snake_case 命名以匹配 Rust 后端）
     // 兼容旧配置：如果 server.auth 不存在，使用默认值
     const defaultAuth = {

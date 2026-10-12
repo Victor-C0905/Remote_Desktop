@@ -2,7 +2,7 @@
 // 标准 xterm.js 集成：每个 tab 一个独立子组件，由 React 生命周期管理
 // 支持远程 PTY 连接（通过 QUIC Stream）和本地演示模式
 // 集成窗口系统：每个窗口实例独立状态，支持多窗口运行
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
@@ -39,6 +39,15 @@ interface TerminalTabMeta {
 
 let tabIdCounter = 0;
 const newTabId = () => `tab-${++tabIdCounter}`;
+
+// ── 诊断：TerminalInstance 实例序号 ──────────────────────────────────
+// 模块级自增。同一 tab 的 instance 序号若在运行中变大，说明组件被
+// 卸载重建（remount）；序号不变但 effect 重跑，则是连接依赖值变化。
+// 用于排查「切换窗口后终端会话重建」问题，日志落盘 client.log 可精确归因。
+let terminalInstanceSeq = 0;
+// 模块级 setup 次数：页面生命周期内 effect 启动的总次数（不受组件重置影响）。
+// 若 setup# 序号回卷（如 #3 之后又见 #1），说明 JS 模块上下文被重置（页面重载/HMR）。
+let terminalSetupCount = 0;
 
 // 页签标题用自增序号区分会话（不显示服务器名：服务器信息统一在底部状态栏展示）；
 // 取已有标签的最大序号 + 1，避免关闭中间页签后新建出现重复编号
@@ -85,10 +94,22 @@ function TerminalInstance({
   const isComposingRef = useRef(false);
   const composingTimerRef = useRef<number | null>(null);
   const [initializationStatus, setInitializationStatus] = useState<string>('等待容器挂载...');
+  // 诊断：实例生命周期内稳定的序号（remount 时会自增）
+  const instanceId = useMemo(() => ++terminalInstanceSeq, []);
 
   // ── 创建 xterm 实例并连接远程 PTY ──────────
   useEffect(() => {
     const container = containerRef.current;
+    // 诊断：记录本次 effect 的全部依赖值，与 cleanup 日志对照可精确定位
+    // 「会话重建」的触发源（remount / 某个依赖变化）
+    terminalSetupCount++;
+    log.info(`[诊断] Terminal effect 启动: instance=${instanceId} setup#${terminalSetupCount} seq=${terminalInstanceSeq}`, {
+      activeServerId,
+      activeServerName,
+      activeServerHost,
+      activeServerPort,
+      stack: new Error().stack?.split('\n').slice(1, 5).join(' << ').slice(0, 500),
+    });
     if (!container) {
       setInitializationStatus('❌ 容器 ref 为空');
       return;
@@ -322,6 +343,17 @@ function TerminalInstance({
       });
 
       return () => {
+        // 诊断：与「effect 启动」日志对照——instance 相同 = 依赖变化触发重跑；
+        // instance 变大 = 组件 remount（上层卸载重建）。stack 显示 React 提交路径，
+        // 若出现 react-refresh 字样则为 HMR 热更新触发。
+        log.info(`[诊断] Terminal effect 清理: instance=${instanceId} setup#${terminalSetupCount}`, {
+          closingSessionId: sessionIdRef.current,
+          activeServerId,
+          activeServerName,
+          activeServerHost,
+          activeServerPort,
+          stack: new Error().stack?.split('\n').slice(1, 5).join(' << ').slice(0, 500),
+        });
         // 清理所有监听器和观察器
         unlistenRefs.current.forEach(fn => fn());
         unlistenRefs.current = [];

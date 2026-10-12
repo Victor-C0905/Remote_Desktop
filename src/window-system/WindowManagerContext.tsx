@@ -106,6 +106,15 @@ export function WindowManagerProvider({ children }: { children: ReactNode }) {
     return new WindowManager(registry);
   }, [registry]);
 
+  // 初始化事件桥接：将 Manager 事件路由到 per-window 通知
+  // ⚠️ 必须独立于 hydration 初始化——桥是纯前端事件路由，不依赖存储。
+  //    若放入 boot() 等待 hydration 之后，无 Tauri 环境（纯浏览器 dev）下
+  //    hydration 失败挂起 → 桥永不初始化 → window:moved/maximized/minimized
+  //    等事件无法通知 useWindowState → 拖拽/最大化/最小化在 UI 层全部失效。
+  useEffect(() => {
+    initWindowEventBridge(manager as WindowManager);
+  }, [manager]);
+
   // 加载持久化窗口（受用户设置控制：关闭则每次启动干净桌面）
   // mount-only：只在启动时读一次设置值；运行时切换开关只影响 save（save 内动态读取），
   // 若把设置值放进依赖会导致切换开关时重复 load() → 窗口重复恢复。
@@ -115,15 +124,18 @@ export function WindowManagerProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
     const boot = async () => {
       if (!useSettingsStore.persist.hasHydrated()) {
-        await new Promise<void>((resolve) =>
-          useSettingsStore.persist.onFinishHydration(() => resolve())
-        );
+        // 超时兜底：无 Tauri 环境（纯浏览器 dev）下 Tauri Store 不可用，
+        // hydration 可能永不完成，不能让窗口恢复逻辑永久挂起
+        await Promise.race([
+          new Promise<void>((resolve) =>
+            useSettingsStore.persist.onFinishHydration(() => resolve())
+          ),
+          new Promise<void>((resolve) => setTimeout(resolve, 3000)),
+        ]);
       }
       if (cancelled) return;
       if (!useSettingsStore.getState().restoreWindowsOnStartup) return;
       manager.load();
-      // 初始化事件桥接：将 Manager 事件路由到 per-window 通知
-      initWindowEventBridge(manager as WindowManager);
     };
     boot();
     return () => { cancelled = true; };
@@ -294,13 +306,16 @@ function getWindowStateSnapshot(windowId: string, manager: WindowManager): Windo
  * 窗口状态 Hook：按 windowId 分片订阅
  * 只在对应窗口状态变化时重渲染
  * 其他窗口的拖动/调整大小不影响此 Hook 的订阅者
+ *
+ * ⚠️ Rules of Hooks：不得在 useSyncExternalStore 之前提前 return。
+ *    窗口从 manager Map 消失的瞬间（关闭窗口/会话恢复重建窗口对象），
+ *    若此处提前 return 会少调用一个 hook，React 抛
+ *    「Rendered fewer hooks than expected」→ 无 ErrorBoundary 时整树
+ *    卸载重建 → 所有窗口内容丢失（终端会话重建、编辑器输入清空）。
+ *    窗口不存在时由快照回退值兜底（见 getWindowStateSnapshot）。
  */
-export function useWindowState(windowId: string): WindowInstanceState | null {
+export function useWindowState(windowId: string): WindowInstanceState {
   const { manager } = useWindowManager();
-
-  // 检查窗口是否存在
-  const win = manager.getById(windowId);
-  if (!win) return null;
 
   return useSyncExternalStore(
     // subscribe: 注册指定窗口的状态监听器
@@ -313,7 +328,7 @@ export function useWindowState(windowId: string): WindowInstanceState | null {
         windowStateListeners.get(windowId)?.delete(callback);
       };
     },
-    // getSnapshot: 返回当前窗口状态快照（幂等）
+    // getSnapshot: 返回当前窗口状态快照（幂等，窗口不存在时回退缓存/默认值）
     () => getWindowStateSnapshot(windowId, manager as WindowManager),
     // getServerSnapshot: SSR 兼容
     () => windowStateCaches.get(windowId) ?? DEFAULT_WINDOW_STATE
