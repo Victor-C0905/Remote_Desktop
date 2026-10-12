@@ -63,11 +63,11 @@ function globalStateEqual(a: GlobalState, b: GlobalState): boolean {
  * ⚠️ 幂等：数据未变时返回同一缓存引用，避免 useSyncExternalStore 无限循环
  */
 function getGlobalStateSnapshot(manager: WindowManager): GlobalState {
-  // ✅ 按激活时间升序（旧→新）排序：所有非激活窗口共享同一 z-index，
-  // 其相对层叠由 DOM 顺序决定。按激活历史排序保证「最近使用的窗口」
-  // 位于其他非激活窗口之上，而非回退到创建顺序。
-  // getAll() 返回新数组，原地 sort 不影响 Map 内部顺序。
-  const windows = manager.getAll().sort((a, b) => a.activatedAt - b.activatedAt);
+  // ⚠️ 回退：不按 activatedAt 排序（保持窗口创建顺序）。
+  // 排序使 windowList 顺序随每次窗口激活翻转，Desktop 的 children 数组
+  // 随之重排，与「切换窗口导致窗口内容重载」问题时间线吻合（dev 无排序无问题）。
+  // 层叠功能待因果确认后用「渲染时按 activatedAt 计算 zIndex」方案恢复。
+  const windows = manager.getAll();
   const activeWindow = manager.getActive();
 
   const newState: GlobalState = {
