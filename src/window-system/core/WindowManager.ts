@@ -27,6 +27,10 @@ export class WindowManager implements IWindowManager {
   private registry: WindowRegistry;
   private eventBus: WindowEventBus;
   private activeWindowId: string | null = null;
+  // ✅ MRU 层叠：激活顺序栈（末尾=栈顶=最近激活）。
+  // focus=移除+压顶、create=压顶、close=移除——纯栈操作，
+  // 不依赖时间戳，天然无同毫秒并列问题。
+  private _activationOrder: string[] = [];
   private saveTimer: ReturnType<typeof setTimeout> | null = null; // ✅ 修复：使用 ReturnType<typeof setTimeout> 代替 NodeJS.Timeout
 
   constructor(registry: WindowRegistry) {
@@ -40,6 +44,36 @@ export class WindowManager implements IWindowManager {
    */
   private generateWindowId(appId: string): string {
     return `win-${appId}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  }
+
+  /**
+   * ✅ MRU 层叠：激活顺序栈（只读视图，末尾=最近激活）。
+   * 消费方（快照层）用 indexOf 得到窗口的层叠排名。
+   */
+  get activationOrder(): readonly string[] {
+    return this._activationOrder;
+  }
+
+  /**
+   * 把窗口移到激活栈顶（focus/restore/create 共用）
+   */
+  private pushActivationTop(windowId: string): void {
+    this._activationOrder = this._activationOrder.filter(id => id !== windowId);
+    this._activationOrder.push(windowId);
+  }
+
+  /**
+   * 从激活栈顶向下找下一个可激活窗口（排除 excludeId 与最小化窗口）。
+   * 用于关闭/最小化当前激活窗口时挑选继任者。
+   */
+  private pickNextActive(excludeId: string): string | null {
+    for (let i = this._activationOrder.length - 1; i >= 0; i--) {
+      const id = this._activationOrder[i];
+      if (id === excludeId) continue;
+      const w = this.windows.get(id);
+      if (w && !w.minimized) return id;
+    }
+    return null;
   }
 
   /**
@@ -117,24 +151,9 @@ export class WindowManager implements IWindowManager {
     const windowId = this.generateWindowId(appId);
     const newWindow = new Window(windowId, appId, position, size);
 
-    // Ensure new window has highest activatedAt (for z-index ordering)
-    // Get current timestamp
-    const currentTimestamp = Date.now();
-
-    // Set new window's activatedAt to current timestamp
-    newWindow.setActivatedAt(currentTimestamp);
-
-    // Force old active window's activatedAt to be 1ms older (if any)
-    // This ensures new window always gets highest z-index
-    if (this.activeWindowId) {
-      const oldActiveWindow = this.windows.get(this.activeWindowId);
-      if (oldActiveWindow) {
-        oldActiveWindow.setActivatedAt(currentTimestamp - 1);
-      }
-    }
-
     // Add to collection
     this.windows.add(newWindow);
+    this._activationOrder.push(windowId); // ✅ 新窗口压入激活栈顶（MRU 层叠）
     this.activeWindowId = windowId;
 
     // Emit created event
@@ -188,10 +207,11 @@ export class WindowManager implements IWindowManager {
     }
 
     this.windows.remove(windowId);
+    this._activationOrder = this._activationOrder.filter(id => id !== windowId); // ✅ 出栈
 
     // Update active window
     if (this.activeWindowId === windowId) {
-      this.activeWindowId = this.windows.getActive()?.id ?? null;
+      this.activeWindowId = this.pickNextActive(windowId);
     }
 
     // Emit closed event
@@ -219,8 +239,8 @@ export class WindowManager implements IWindowManager {
       window.setMinimized(false);
     }
 
-    // Update activation time
-    window.activate();
+    // ✅ MRU 层叠：聚焦=移到激活栈顶
+    this.pushActivationTop(windowId);
     this.activeWindowId = windowId;
 
     // Emit focused event
@@ -242,7 +262,7 @@ export class WindowManager implements IWindowManager {
 
     // Update active window
     if (this.activeWindowId === windowId) {
-      this.activeWindowId = this.windows.getActive()?.id ?? null;
+      this.activeWindowId = this.pickNextActive(windowId);
     }
 
     // Emit minimized event
@@ -261,7 +281,8 @@ export class WindowManager implements IWindowManager {
     if (!window) return;
 
     window.setMinimized(false);
-    window.activate();
+    // ✅ MRU 层叠：恢复=移到激活栈顶
+    this.pushActivationTop(windowId);
     this.activeWindowId = windowId;
 
     // Emit restored event
@@ -459,6 +480,8 @@ export class WindowManager implements IWindowManager {
         }
 
         this.windows.add(window);
+        // ✅ 激活栈按恢复顺序重建（持久化顺序=创建顺序），初始层叠=创建序
+        this._activationOrder.push(window.id);
       });
     } catch (error) {
       log.error('Failed to load window states', error);

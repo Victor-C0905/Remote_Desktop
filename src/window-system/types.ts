@@ -120,6 +120,8 @@ export interface IWindowManager {
   getByAppId(appId: string): AppWindow[];
   getAll(): AppWindow[];
   getActive(): AppWindow | undefined;
+  // ✅ MRU 层叠：激活顺序栈（只读视图，末尾=最近激活）
+  readonly activationOrder: readonly string[];
   getApp(appId: string): AppDefinition | undefined;
   getRegisteredApps(): AppDefinition[];
   on(eventType: WindowEventType, handler: EventHandler): Unsubscribe;
