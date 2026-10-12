@@ -442,3 +442,22 @@
 .app-placeholder .placeholder-text {
   font-size: var(--font-body);
 }
+
+/* ─── 浏览器模式提示横幅（无 Tauri 运行时时显示）────────── */
+.browser-mode-banner {
+  position: fixed;
+  top: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 60vw;
+  padding: 6px 16px;
+  border-radius: var(--radius-lg);
+  background: rgba(120, 78, 20, 0.85);
+  color: #ffe9c2;
+  font-size: var(--font-caption, 12px);
+  line-height: 1.5;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
+  z-index: 45; /* 高于非激活窗口(20)，低于 TopBar(50) */
+  pointer-events: none; /* 纯提示，不拦截任何交互 */
+}

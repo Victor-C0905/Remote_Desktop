@@ -15,6 +15,7 @@ import { WindowManagerProvider, useWindowManager, useWindowGlobalState, useWindo
 import { AppDefinition } from "../window-system/types";
 import { listen } from "@tauri-apps/api/event";
 import { createLogger } from "../utils/logger";
+import { isTauri } from "../utils/environment";
 import "./Desktop.css";
 
 const log = createLogger('Desktop');
@@ -292,6 +293,13 @@ function DesktopContent() {
 
   return (
     <div className="shell" style={getWallpaperStyle(wallpaper)}>
+      {/* 浏览器模式提示：无 Tauri 运行时时连接/存储功能不可用 */}
+      {!isTauri() && (
+        <div className="browser-mode-banner" role="status">
+          浏览器模式：连接服务器与数据持久化不可用，仅用于界面调试，请使用桌面客户端获得完整功能
+        </div>
+      )}
+
       {/* Top Bar */}
       <TopBar
         metrics={metrics}
