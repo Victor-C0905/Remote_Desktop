@@ -55,6 +55,9 @@ const MemoizedAppContent = memo(function AppContent({
 });
 
 // ─── 独立窗口组件：用 useWindowState 独立订阅 ────────
+// ── 诊断：DesktopWindow 挂载/卸载追踪（外壳层 remount = 窗口内容全部重建）──
+let __diagWinMountSeq = 0;
+
 const DesktopWindow = memo(function DesktopWindow({
   windowId,
   appId,
@@ -68,6 +71,15 @@ const DesktopWindow = memo(function DesktopWindow({
 
   // 用 useWindowState 独立订阅此窗口的状态
   const windowState = useWindowState(windowId);
+
+  // ── 诊断 ──
+  const __diagWinMountId = useRef(++__diagWinMountSeq);
+  useEffect(() => {
+    console.log(`[诊断] DesktopWindow 挂载 win#${__diagWinMountId.current} ${appId}/${windowId}`);
+    return () => {
+      console.log(`[诊断] DesktopWindow 卸载 win#${__diagWinMountId.current} ${appId}/${windowId}`);
+    };
+  }, []);
 
   if (!win || !app || !windowState) return null;
 
