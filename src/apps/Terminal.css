@@ -8,7 +8,7 @@
   flex-direction: column;
   height: 100%;
   min-height: 0; /* ✅ 建立 flex 约束链（关键修复） */
-  background: #1e1e1e;
+  background: var(--quirel-terminal-bg);
 }
 
 /* ── Header Bar ─────────────────────────────────────────────── */
@@ -286,7 +286,7 @@
   min-height: 200px;  /* 设置最小高度，防止窗口过小导致 xterm.js 异常 */
   min-width: 400px;   /* 设置最小宽度，确保至少能显示合理的列数 */
   overflow: hidden;
-  background: #1e1e1e;
+  background: var(--quirel-terminal-bg);
   display: flex;
   flex-direction: column;
 }
@@ -300,7 +300,7 @@
   bottom: 0;
   padding: 0;
   margin: 0;
-  background: #1e1e1e;
+  background: var(--quirel-terminal-bg);
   width: 100%;
   height: 100%;
   box-sizing: border-box;
@@ -346,7 +346,7 @@
 }
 
 .terminal-instance .xterm-viewport {
-  background: #1e1e1e !important;
+  background: var(--quirel-terminal-bg) !important;
   overflow-y: auto !important;
   overflow-x: hidden !important;
   width: 100% !important;

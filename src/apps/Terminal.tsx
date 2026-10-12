@@ -821,6 +821,7 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
   // 槽位缺失时（异常形态）回退渲染在应用内
   const renderTabRow = () => (
     <ChromeTabStrip
+      variant="dark"
       tabs={tabs.map((t) => ({ id: t.id, label: t.label, dirty: false }))}
       activeTabId={activeTabId ?? tabs[0]?.id ?? ''}
       onActivate={setActiveTabId}
