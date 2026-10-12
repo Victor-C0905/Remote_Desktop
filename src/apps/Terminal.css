@@ -195,7 +195,7 @@
 /* 低频操作（搜索/设置开关）收纳在 ToolbarMenu（⌄ 菜单）中，
    触发按钮复用共享组件 .tbm-trigger 的 28×28 尺度 */
 
-/* ── 连接状态指示（tab 栏右侧）：CSS 圆点 + 服务器名 ── */
+/* ── 连接状态指示（tab 栏右侧）：仅 CSS 圆点，服务器名移至底部状态栏 ── */
 .terminal-status {
   display: flex;
   align-items: center;

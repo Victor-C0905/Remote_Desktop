@@ -28,7 +28,7 @@ vi.mock('../context/ServerManager', () => ({
 describe('TerminalApp', () => {
   it('renders terminal app', () => {
     render(<TerminalApp windowId="test-window-1" />);
-    // 新建页签按钮：提示文字「新建页签」（ChromeTabStrip pinnedRight 插槽）
+    // 新建页签按钮：提示文字「新建页签」（ChromeTabStrip 行级附件位）
     expect(screen.getByTitle('新建页签')).toBeInTheDocument();
   });
 
@@ -42,8 +42,8 @@ describe('TerminalApp', () => {
 
   it('renders tab bar', () => {
     render(<TerminalApp windowId="test-window-3" />);
-    // 未连接服务器时 tab label 为「本地演示」（activeServer?.name || '本地演示'）
-    expect(screen.getByText('本地演示')).toBeInTheDocument();
+    // 页签标题不显示服务器名，用自增序号区分会话；首个 tab 为「终端 1」
+    expect(screen.getByText('终端 1')).toBeInTheDocument();
   });
 
   it('renders terminal container', () => {

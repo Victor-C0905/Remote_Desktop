@@ -15,8 +15,10 @@
    ============================================================ */
 
 /* 行 wrapper：portal 进标题栏槽位后填满槽位（槽位自身是 flex 容器），
-   children（状态灯/菜单等行内附件）垂直居中 */
+   children（状态灯/菜单等行尾附件）垂直居中；position: relative 作为
+   + 按钮绝对定位的锚点 */
 .chrome-tabstrip-row {
+  position: relative;
   display: flex;
   align-items: center;
   height: 100%;
@@ -29,11 +31,31 @@
 .te-chrome-tabs.chrome-tabs {
   background: transparent;
   height: 100%;
-  padding: 12px 2px 0;
+  /* 顶部 8px 呼吸空隙 + 底部 0：页签 36px（库原生高度）底部锚定，
+     与下方表面的融合色（2px 下探 + 底缝桥接）保持原验证过的形态 */
+  padding: 8px 2px 0;
   border-radius: 0;
   flex: 1 1 auto;
   min-width: 0;
-  overflow: visible; /* 页签背景下探覆盖边界缝隙行（拖拽排序被库约束在条内，安全） */
+  /* 右缘预留 30px 给 + 按钮（溢出钳制槽）：条面裁剪边 = 内边缘，
+     槽在条面之外，页签溢出时最多画到条面内边缘，永不画进槽里 */
+  margin-right: 30px;
+  /* 水平裁剪 + 垂直放行（库默认 overflow: hidden，但会连页签背景 2px 底部
+     下探一起裁掉，故不能整体照搬）。窗口收窄时页签内容宽被库钳制 60px 下限，
+     总宽超过条面，绝对定位页签会横向溢出，盖住右侧 + 按钮与窗口控制圆点；
+     overflow-x: clip 在条面内边缘截断溢出页签 —— clip 是唯一可与 visible
+     组合的裁剪值（hidden 会把另一轴的 visible 强制为 auto，破坏下探融合）。
+     库内建的 wheel 横向平移与活动页签自动滚入（translateToView）不受影响 */
+  overflow-x: clip;
+  overflow-y: visible;
+}
+
+/* 页签内容整体上移 4px：顶部留空（G=8）后页签文字自然中心在 26px，
+   与控制圆点/行内附件的中心线（栏高/2 = 22px）差 G/2；对内容盒做
+   transform 平移对齐，页签几何（SVG 背景/圆角）零变形。
+   内容盒 36px 高、内部 items ≤16px，上移 4px 不会触碰 overflow 裁剪 */
+.te-chrome-tabs .chrome-tab .chrome-tab-content {
+  transform: translateY(-4px);
 }
 
 /* 页签背景 svg 纵向拉伸 2px：几何本体下探进顶栏，衔接页签底与顶栏面
@@ -137,17 +159,34 @@
   display: none;
 }
 
-/* ── + 新建页签按钮：库官方 pinnedRight 插槽（流内跟在 content 之后）──
-   库常量 TAB_CONTENT_MARGIN=9、content 记账宽 = Σ把手宽 + 8 − (N−1)，
-   最后一个页签的渲染右缘恒定超出 content 盒 2×9−8 = 10px（与页签数无关）；
-   左边距 14px = 10px 清空 + 4px 间隙 */
+/* ── 库的 pinnedRight 容器：固定空置并隐藏 ──
+   "+ 新建页签"已挪到行级附件位（条外）。库 ChromeTabsWrapper 恒渲染该 div
+   （即使 toolbar 为空），宽度记账 tabsContentWidth = clientWidth − toolbar − 16
+   依赖它存在；display: none 后 clientWidth 恒为 0，记账退化为
+   clientWidth − 16，条内不再留 14px 死区，页签可用空间反而更足 */
 .chrome-tabs-toolbar-right {
-  display: flex;
-  align-items: flex-end;
-  margin-left: 14px;
+  display: none;
 }
 
-.te-chrome-tabs .te-tab-new {
+/* ── + 新建页签按钮：行内绝对定位，x 坐标由 TS 实测写入 ──
+   常态：紧跟末尾页签（Chrome 行为，left = 页签总宽右缘 + 6px）；
+   页签溢出：钳制到条右缘预留槽（条面 margin-right: 30px 之外区域），
+   槽在条面裁剪边之外，与溢出页签/行尾附件互不重叠 */
+.chrome-tabstrip-row > .te-tab-new {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  /* 垂直居中于栏高/2 = 22px，与页签文字/控制圆点同线 */
+}
+
+/* 行尾附件区（状态灯/菜单等 children） */
+.chrome-tabstrip-tail {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.te-tab-new {
   width: 24px;
   height: 24px;
   display: inline-flex;
@@ -156,17 +195,27 @@
   border: none;
   border-radius: var(--radius-pill);
   background: transparent;
-  color: var(--quirel-text-secondary);
-  font-size: 15px;
-  line-height: 1;
   cursor: pointer;
   padding: 0;
-  margin: 0 0 6px;
-  flex-shrink: 0;
-  transition: all var(--duration-fast) var(--ease-out);
+  transition: background-color var(--duration-fast) var(--ease-out);
 }
 
-.te-chrome-tabs .te-tab-new:hover {
+/* 图标与页签 × 关闭钮完全同规格：8×8 viewBox、1.5 线宽、方头端点
+   （库 close 钮即 8px background-size 的同款 data-URI）。用 mask 而非
+   data-URI 硬编码色：颜色走主题变量，hover 浮起为文字主色 */
+.te-tab-new::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  background-color: var(--quirel-text-secondary);
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'><path stroke='black' stroke-linecap='square' stroke-width='1.5' d='M4 0 L4 8 M0 4 L8 4'/></svg>") center / 8px 8px no-repeat;
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'><path stroke='black' stroke-linecap='square' stroke-width='1.5' d='M4 0 L4 8 M0 4 L8 4'/></svg>") center / 8px 8px no-repeat;
+}
+
+.te-tab-new:hover {
   background: var(--quirel-card-hover);
-  color: var(--quirel-text-primary);
+}
+
+.te-tab-new:hover::before {
+  background-color: var(--quirel-text-primary);
 }

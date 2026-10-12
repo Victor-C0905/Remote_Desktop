@@ -40,6 +40,11 @@ interface TerminalTabMeta {
 let tabIdCounter = 0;
 const newTabId = () => `tab-${++tabIdCounter}`;
 
+// 页签标题用自增序号区分会话（不显示服务器名：服务器信息统一在底部状态栏展示）；
+// 取已有标签的最大序号 + 1，避免关闭中间页签后新建出现重复编号
+const nextTabNumber = (tabs: { label: string }[]) =>
+  tabs.reduce((max, t) => Math.max(max, Number(/(\d+)\s*$/.exec(t.label)?.[1] ?? 0)), 0) + 1;
+
 // ===================================================================
 // TerminalInstance: 单个终端实例（每个 tab 一个）
 // - 由 React 生命周期管理 xterm 的创建、配置、释放
@@ -602,7 +607,7 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
     if (tabs.length === 0) {
       const id = newTabId();
       initialTabIdRef.current = id;
-      setTabs([{ id, label: activeServer?.name || '本地演示' }]);
+      setTabs([{ id, label: '终端 1' }]);
       setActiveTabId(id);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -611,7 +616,7 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
   // ── 新建 tab ─────────────────────────────────────────────────
   const handleNewTab = () => {
     const id = newTabId();
-    setTabs((prev) => [...prev, { id, label: activeServer?.name || '本地演示' }]);
+    setTabs((prev) => [...prev, { id, label: `终端 ${nextTabNumber(prev)}` }]);
     setActiveTabId(id);
   };
 
@@ -836,13 +841,13 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
         })
       }
     >
-      {/* 连接状态：CSS 圆点（绿=已连接，灰=本地），服务器名常规字重 */}
+      {/* 连接状态：仅 CSS 圆点（绿=已连接，灰=本地）。服务器名不在标题栏展示，
+          统一在底部状态栏显示；名称与 host:port 保留在圆点悬停提示中 */}
       <span
         className={`terminal-status ${activeServer ? 'is-remote' : 'is-local'}`}
-        title={activeServer ? `${activeServer.host}:${activeServer.port}` : '未连接远程服务器'}
+        title={activeServer ? `${activeServer.name} · ${activeServer.host}:${activeServer.port}` : '未连接远程服务器'}
       >
         <span className="terminal-status-dot" />
-        {activeServer ? activeServer.name : '本地'}
       </span>
       {/* 低频操作收纳进 ⌄ 菜单：搜索/设置面板的开关，开启时菜单项打勾 */}
       <ToolbarMenu
