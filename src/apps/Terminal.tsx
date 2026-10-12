@@ -42,6 +42,12 @@ const newTabId = () => `tab-${++tabIdCounter}`;
 // - 由 React 生命周期管理 xterm 的创建、配置、释放
 // - 支持远程 PTY 连接（通过 QUIC Stream）和本地演示模式
 // ===================================================================
+
+// ── 诊断：区分「remount」与「deps 重跑」────────────────
+// mount# 序号在模块级递增：同组件 remount 会产生新序号；
+// 同一 mount# 下主 effect 反复 setup/cleanup = deps 变化重跑。
+let __diagTerminalMountSeq = 0;
+
 interface TerminalInstanceProps {
   activeServerId: string | null;
   activeServerName: string | null;
@@ -78,8 +84,20 @@ function TerminalInstance({
   const composingTimerRef = useRef<number | null>(null);
   const [initializationStatus, setInitializationStatus] = useState<string>('等待容器挂载...');
 
+  // ── 诊断：TerminalInstance 挂载/卸载追踪 ──
+  const __diagMountId = useRef(++__diagTerminalMountSeq);
+  useEffect(() => {
+    log.info(`[诊断] TerminalInstance 挂载 mount#${__diagMountId.current}`);
+    return () => {
+      log.info(`[诊断] TerminalInstance 卸载 unmount#${__diagMountId.current}`);
+    };
+  }, []);
+
   // ── 创建 xterm 实例并连接远程 PTY ──────────
   useEffect(() => {
+    log.info(`[诊断] 主effect setup mount#${__diagMountId.current}`, {
+      activeServerId, activeServerName, activeServerHost, activeServerPort,
+    });
     const container = containerRef.current;
     if (!container) {
       setInitializationStatus('❌ 容器 ref 为空');
@@ -314,6 +332,10 @@ function TerminalInstance({
       });
 
       return () => {
+        log.info(`[诊断] 主effect cleanup mount#${__diagMountId.current}`, {
+          closingSessionId: sessionIdRef.current,
+          activeServerId, activeServerName, activeServerHost, activeServerPort,
+        });
         // 清理所有监听器和观察器
         unlistenRefs.current.forEach(fn => fn());
         unlistenRefs.current = [];
@@ -568,6 +590,15 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
   }, []);
 
   const workingDirectory = preloadData?.workingDirectory || configuredDefaultPath;
+
+  // ── 诊断：TerminalApp 挂载/卸载追踪（App 层 remount 会让所有 tab 状态重置）──
+  const __diagAppMountId = useRef(++__diagTerminalMountSeq);
+  useEffect(() => {
+    log.info(`[诊断] TerminalApp 挂载 app#${__diagAppMountId.current}`);
+    return () => {
+      log.info(`[诊断] TerminalApp 卸载 app#${__diagAppMountId.current}`);
+    };
+  }, []);
 
   // ── 窗口实例独立状态（每个窗口实例有自己的 tabs、设置等）────────────
   const [tabs, setTabs] = useState<TerminalTabMeta[]>([]);
