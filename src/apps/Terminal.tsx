@@ -86,6 +86,73 @@ function TerminalInstance({
   const composingTimerRef = useRef<number | null>(null);
   const [initializationStatus, setInitializationStatus] = useState<string>('等待容器挂载...');
 
+  // ── 会话保活：防「拖拽重排触发 effect 假重跑」丢内容 ──────────
+  // 实测（内存级事件流取证）：页签拖拽重排后约 5ms，被移动页签的同一
+  // TerminalInstance（instance 编号不变 = 未重挂载）发生 cleanup→init，
+  // 且 deps 完全未变——React 强制重跑了 effect；若 cleanup 立即销毁
+  // xterm，终端缓冲区（输入/输出历史）随之真实丢失。编辑器丢字同理。
+  // 修复策略（机制无关）：cleanup 只调度 setTimeout(0) 的延迟销毁；
+  // 紧随其后的 setup 发现「终端仍在 + deps 未变」则取消销毁直接保活。
+  // - 真实卸载：无人取消，延迟销毁照常执行，无泄漏
+  // - deps 真变（切换服务器）：setup 同步 teardownNow 后完整重建，语义不变
+  // - StrictMode 双跑：run1 建 → cleanup 调度 → run2 取消并保活，
+  //   顺带消除了双跑重复建终端的浪费
+  const teardownTimerRef = useRef<number | null>(null);
+  /** 建立当前会话时的 deps 快照（JSON）：保活判定与服务器切换判定的依据 */
+  const depsKeyRef = useRef<string | null>(null);
+  // rAF 竞态防护状态移入 ref：延迟销毁在 cleanup 闭包之外执行，
+  // 访问不到 setup 局部的 disposed/initRafId，必须经 ref 读写
+  const disposedRef = useRef(false);
+  const initRafIdRef = useRef<number | null>(null);
+
+  /** 立即销毁当前会话（可从 setup 同步调用，也可由延迟定时器触发；全 ref 化） */
+  const teardownNow = () => {
+    if (teardownTimerRef.current !== null) {
+      clearTimeout(teardownTimerRef.current);
+      teardownTimerRef.current = null;
+    }
+    // 取消排队的初始化 rAF，防止为已销毁终端建立幽灵远程会话
+    disposedRef.current = true;
+    if (initRafIdRef.current !== null) {
+      cancelAnimationFrame(initRafIdRef.current);
+      initRafIdRef.current = null;
+    }
+    // 清理所有监听器和观察器
+    unlistenRefs.current.forEach(fn => fn());
+    unlistenRefs.current = [];
+
+    // 关闭远程终端会话
+    if (sessionIdRef.current) {
+      invoke('remote_terminal_close', { sessionId: sessionIdRef.current })
+        .catch(e => log.warn('关闭远程终端失败:', e));
+      sessionIdRef.current = null;
+    }
+
+    // 释放 xterm
+    try { terminalRef.current?.dispose(); } catch (e) { log.debug('terminal.dispose 失败:', e); }
+    terminalRef.current = null;
+    fitAddonRef.current = null;
+
+    // 清理 DOM
+    const container = containerRef.current;
+    if (container) {
+      while (container.firstChild) {
+        container.removeChild(container.firstChild);
+      }
+    }
+  };
+
+  /** cleanup 入口：不立即销毁，只调度延迟销毁（假重跑的 setup 会取消它） */
+  const scheduleTeardown = () => {
+    if (teardownTimerRef.current !== null) {
+      clearTimeout(teardownTimerRef.current);
+    }
+    teardownTimerRef.current = window.setTimeout(() => {
+      teardownTimerRef.current = null;
+      teardownNow();
+    }, 0);
+  };
+
   // ── 创建 xterm 实例并连接远程 PTY ──────────
   useEffect(() => {
     const container = containerRef.current;
@@ -94,7 +161,27 @@ function TerminalInstance({
       return;
     }
 
-    // 清理容器（防止 StrictMode 下重复挂载导致脏 DOM）
+    // 取消上一次 cleanup 调度的延迟销毁：拖拽重排触发的 effect 假重跑
+    //（cleanup→init 相邻发生）在此保活，终端与远程会话原样保留
+    if (teardownTimerRef.current !== null) {
+      clearTimeout(teardownTimerRef.current);
+      teardownTimerRef.current = null;
+    }
+
+    // 会话保活判定：终端仍在 + deps 未变 = React 假重跑（页签拖拽重排），
+    // 跳过重建；但必须返回延迟销毁 cleanup，保证真实卸载时仍能清理
+    const depsKey = JSON.stringify([activeServerId, activeServerName, activeServerHost, activeServerPort]);
+    if (terminalRef.current && depsKey === depsKeyRef.current) {
+      return scheduleTeardown;
+    }
+
+    // deps 真变（如切换服务器）：先同步销毁旧会话，再走完整重建（保留原有切换语义）
+    if (terminalRef.current) {
+      teardownNow();
+    }
+    depsKeyRef.current = depsKey;
+
+    // 清理容器（防御性：切换服务器路径已被 teardownNow 清空，此处兜底脏 DOM）
     while (container.firstChild) {
       container.removeChild(container.firstChild);
     }
@@ -206,7 +293,13 @@ function TerminalInstance({
       }
 
       // 5. 等待下一帧，让浏览器完成 flex 布局后再 fit()
-      requestAnimationFrame(async () => {
+      // ⚠️ 会话卫生：rAF 句柄与 disposed 标志存入 ref（teardownNow 在 cleanup
+      //    闭包之外执行，访问不到 setup 局部变量，必须经 ref 读写）。延迟销毁
+      //    真正执行时置位 disposedRef 并取消 rAF，防止为幽灵终端建立远程会话；
+      //    假重跑保活路径不触碰两者，本 rAF 正常完成初始化。
+      disposedRef.current = false;
+      initRafIdRef.current = requestAnimationFrame(async () => {
+        if (disposedRef.current) return;
         try {
           fitAddon.fit();
           log.debug('✅ fit() 完成，cols:', terminal.cols, 'rows:', terminal.rows);
@@ -215,6 +308,19 @@ function TerminalInstance({
           if (activeServerId) {
             setInitializationStatus('连接远程终端...');
             await connectRemotePty(terminal, activeServerId, activeServerName, activeServerHost, activeServerPort, sessionIdRef, unlistenRefs, workingDirectory, initialCommand);
+            // await 期间 teardown 已执行：刚建立的会话无人使用，立即关闭防泄漏
+            if (disposedRef.current) {
+              log.warn('初始化完成前组件已清理，关闭幽灵远程会话');
+              if (sessionIdRef.current) {
+                invoke('remote_terminal_close', { sessionId: sessionIdRef.current }).catch(e => log.warn('关闭幽灵会话失败:', e));
+                sessionIdRef.current = null;
+              }
+              // connectRemotePty 在 cleanup 之后 resolve，其注册的输出/断连
+              // 监听器来不及进 cleanup 的清空批次，这里补清
+              unlistenRefs.current.forEach(fn => fn());
+              unlistenRefs.current = [];
+              return;
+            }
           } else {
             setInitializationStatus('演示模式');
             terminal.write('[演示模式] 未连接远程服务器\r\n');
@@ -321,31 +427,17 @@ function TerminalInstance({
         }
       });
 
-      return () => {
-        // 清理所有监听器和观察器
-        unlistenRefs.current.forEach(fn => fn());
-        unlistenRefs.current = [];
-
-        // 关闭远程终端会话
-        if (sessionIdRef.current) {
-          invoke('remote_terminal_close', { sessionId: sessionIdRef.current })
-            .catch(e => log.warn('关闭远程终端失败:', e));
-          sessionIdRef.current = null;
-        }
-
-        // 释放 xterm
-        try { terminal.dispose(); } catch (e) { log.debug('terminal.dispose 失败:', e); }
-        terminalRef.current = null;
-        fitAddonRef.current = null;
-
-        // 清理 DOM
-        while (container.firstChild) {
-          container.removeChild(container.firstChild);
-        }
-      };
+      // cleanup 不再立即销毁：只调度延迟销毁（0ms）。若紧随其后的 setup 判定
+      // 为假重跑（终端仍在 + deps 未变）会取消销毁实现保活；真实卸载时无人
+      // 取消，teardownNow 照常执行完整清理。诊断留痕移至 scheduleTeardown。
+      return scheduleTeardown;
     } catch (err) {
       log.error('❌ 初始化失败:', err);
       setInitializationStatus('❌ 初始化失败: ' + err);
+      // 创建半途失败：清扫半初始化状态（terminalRef 可能已赋值），并把
+      // depsKey 复位，避免下次 setup 把残缺终端误判为可保活
+      depsKeyRef.current = null;
+      teardownNow();
       container.innerHTML = `<div style="color:#ff4444;padding:12px;font-family:monospace;">终端初始化失败: ${err}</div>`;
     }
   }, [activeServerId, activeServerName, activeServerHost, activeServerPort]);
@@ -829,17 +921,19 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
       variant="dark"
       tabs={tabs.map((t) => ({ id: t.id, label: t.label, dirty: false }))}
       activeTabId={activeTabId ?? tabs[0]?.id ?? ''}
-      onActivate={setActiveTabId}
+      onActivate={(id) => {
+        setActiveTabId(id);
+      }}
       onClose={(id) => handleCloseTab(id)}
       onAdd={handleNewTab}
-      onReorder={(from, to) =>
+      onReorder={(from, to) => {
         setTabs((prev) => {
           const arr = [...prev];
           const [moved] = arr.splice(from, 1);
           arr.splice(to, 0, moved);
           return arr;
-        })
-      }
+        });
+      }}
     >
       {/* 连接状态：仅 CSS 圆点（绿=已连接，灰=本地）。服务器名不在标题栏展示，
           统一在底部状态栏显示；名称与 host:port 保留在圆点悬停提示中 */}

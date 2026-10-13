@@ -131,7 +131,13 @@ export const EditorDocument = memo(
     const autoHexSwitched = useRef(false);
 
     // 打开初始文件（仅挂载时一次；initialPath 是页签的固有属性）
+    // ⚠️ openedRef 守卫：React 对被拖动页签的子树会强制重跑 effect（deps 未变，
+    // 见 Terminal.tsx 会话保活注释）。openFile 若重跑会从服务器重载内容，
+    // 未保存修改随之丢失——因此真重跑必须跳过
+    const openedRef = useRef(false);
     useEffect(() => {
+      if (openedRef.current) return;
+      openedRef.current = true;
       if (initialPath && initialServerId) {
         log.info('页签打开文件:', initialPath);
         openFile(initialServerId, initialPath).catch((err) => {
@@ -141,9 +147,22 @@ export const EditorDocument = memo(
       // eslint-disable-next-line react-hooks/exhaustive-deps -- initialPath 为页签固有属性，仅挂载执行一次
     }, []);
 
-    // 卸载时清理文档状态
+    // 卸载时清理文档状态。⚠️ cleanup 不立即 closeFile（会清空文档内容，
+    // 未命名文件的输入随之丢失）：只调度延迟清理；假重跑（拖拽重排）的
+    // setup 会取消它实现保活，真实卸载时无人取消，照常清理
+    const closeTimerRef = useRef<number | null>(null);
     useEffect(() => {
-      return () => closeFile();
+      // 取消上一次 cleanup 调度的延迟 closeFile（假重跑保活路径）
+      if (closeTimerRef.current !== null) {
+        clearTimeout(closeTimerRef.current);
+        closeTimerRef.current = null;
+      }
+      return () => {
+        closeTimerRef.current = window.setTimeout(() => {
+          closeTimerRef.current = null;
+          closeFile();
+        }, 0);
+      };
       // eslint-disable-next-line react-hooks/exhaustive-deps -- closeFile 为稳定引用
     }, []);
 

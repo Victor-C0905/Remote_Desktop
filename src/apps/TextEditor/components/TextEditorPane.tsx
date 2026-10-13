@@ -289,8 +289,35 @@ export const TextEditorPane = forwardRef<TextEditorPaneHandle, TextEditorPanePro
   }), []);
 
   // 创建 EditorView（仅挂载时一次；doc 取挂载时刻的 content）
+  // ⚠️ 会话保活（同 Terminal.tsx）：React 对被拖动页签的子树会强制重跑
+  // effect（deps 未变仍 cleanup→init），若 cleanup 立即 destroy 视图，
+  // 撤销历史与光标随之丢失。cleanup 只调度 setTimeout(0) 的延迟销毁；
+  // 紧随其后的 setup 发现视图仍在则取消销毁直接保活。真实卸载时无人
+  // 取消，延迟销毁照常执行。
+  const destroyTimerRef = useRef<number | null>(null);
+  /** 调度延迟销毁 EditorView（真实卸载执行；假重跑被下一 setup 取消） */
+  const scheduleViewDestroy = () => {
+    destroyTimerRef.current = window.setTimeout(() => {
+      destroyTimerRef.current = null;
+      viewRef.current?.destroy();
+      viewRef.current = null;
+    }, 0);
+  };
+
   useEffect(() => {
     if (!hostRef.current) return;
+
+    // 取消上一次 cleanup 调度的延迟销毁（假重跑保活路径）
+    if (destroyTimerRef.current !== null) {
+      clearTimeout(destroyTimerRef.current);
+      destroyTimerRef.current = null;
+    }
+
+    // 视图仍在（假重跑）：跳过重建，保留撤销历史与光标；
+    // 但必须重新返回延迟销毁 cleanup，保证真实卸载仍能释放
+    if (viewRef.current) {
+      return scheduleViewDestroy;
+    }
 
     const view = new EditorView({
       parent: hostRef.current,
@@ -332,10 +359,8 @@ export const TextEditorPane = forwardRef<TextEditorPaneHandle, TextEditorPanePro
     });
     viewRef.current = view;
 
-    return () => {
-      view.destroy();
-      viewRef.current = null;
-    };
+    // cleanup 只调度延迟销毁（假重跑的 setup 会取消它；真实卸载照常执行）
+    return scheduleViewDestroy;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅挂载时创建一次
   }, []);
 

@@ -1,13 +1,15 @@
 /**
- * ChromeTabStrip — @sinm/react-chrome-tabs 桥接（共享组件）
+ * ChromeTabStrip — chrome-tabs 引擎桥接（共享组件）
  *
- * React 原生 Chrome 式页签组件（Adam Schwartz chrome-tabs 引擎的 React 移植，
- * MIT，持续维护）：标签几何（SVG 连接弧）、拖拽排序、关闭按钮、宽度自适应
- * 全部由库提供，本组件只做声明式对接：
+ * Chrome 式页签组件（Adam Schwartz chrome-tabs 引擎，@sinm/react-chrome-tabs
+ * 提供引擎类与基础 CSS，MIT，持续维护）：标签几何（SVG 连接弧）、拖拽排序、
+ * 关闭按钮、宽度自适应全部由引擎提供。库自带的 <Tabs> React 同步层因
+ * 「按位置索引盖章 + 原地 mutate props 数组」存在页签身份错位的结构性缺陷
+ * （详见 useChromeTabsHost.tsx 头注释），本组件改用自研宿主 hook 直连引擎：
  *
  * - tabs → TabProperties（脏标记借用 faviconClass 渲染 accent 圆点）
- * - onTabClose → 脏页签确认流程（库只发事件，移除由 React 状态驱动）
- * - onTabActive / onTabReorder → 直接映射上层回调
+ * - onTabClose → 脏页签确认流程（引擎只发事件，移除由 React 状态驱动）
+ * - onActivate / onReorder → 直接映射上层回调
  * - "+ 新建页签"按钮：绝对定位于行内、x 坐标实测紧跟末尾页签（Chrome 行为）；
  *   不用库的 pinnedRight 插槽——页签收窄溢出时绝对定位页签会画到条内透明
  *   按钮背后直至条面边缘，按钮挪到条外并钳制在条右缘预留槽（条面
@@ -17,11 +19,11 @@
  * - CSS 覆盖：几何配色走 --quirel-* 令牌（ChromeTabStrip.css）
  */
 
-import type { ReactNode } from 'react';
-import { useLayoutEffect, useRef, useState } from 'react';
-import { Tabs } from '@sinm/react-chrome-tabs';
+import type { CSSProperties, ReactNode } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import '@sinm/react-chrome-tabs/css/chrome-tabs.css';
 import './ChromeTabStrip.css';
+import { useChromeTabsHost } from './useChromeTabsHost';
 
 export interface ChromeTabItem {
   id: string;
@@ -84,6 +86,44 @@ export function ChromeTabStrip({
   const tailRef = useRef<HTMLDivElement>(null);
   const [newTabLeft, setNewTabLeft] = useState<number | null>(null);
 
+  // 传给引擎宿主的 TabProperties（useMemo 钉住标识：仅 tabs/activeTabId 真
+  // 变化时才产出新数组，无关重渲染不触发宿主同步 effect 重跑——同步本身
+  // 幂等，但没必要为无关渲染空转）。
+  //
+  // ⚠️ 这里刻意不用库的 <Tabs> 组件：它的同步层有三个结构性缺陷咬合出
+  // 「页签身份按位置调包」——① handleTabReorder 在拖拽中间事件原地 splice
+  // 当前 props 数组（污染 isEqual 快照防线）；② 引擎拖拽先物理移动 DOM，
+  // React 状态等 dragEnd 才更新，期间 DOM 顺序 ≠ 数组顺序；③ 同步改写按
+  // 位置索引（updateTabByIndex 把 DOM 第 index 个元素盖上数组第 index 项
+  // 的 id/标题）→ 拖拽中任何以旧顺序数组跑的同步都会把身份盖到错的元素
+  // 上，表象即「页签往后移后内容被重新加载」（前移恰好回正故无异常）。
+  // 现由 useChromeTabsHost 自研宿主按 data-tab-id 识别 + 自愈式对齐 DOM
+  // 顺序，结构上消灭整类错位。
+  const engineTabs = useMemo(
+    () =>
+      tabs.map((t) => ({
+        id: t.id,
+        title: t.label,
+        active: t.id === activeTabId,
+        faviconClass: t.dirty ? 'te-tab-dirty' : undefined,
+        isCloseIconVisible: true,
+      })),
+    [tabs, activeTabId],
+  );
+
+  // 引擎宿主：事件一律按「事件时刻元素身上的 data-tab-id」转发；tabReorder
+  // 在 dragEnd 收敛为一次回调（from/to 为累积起止索引），拖拽中间绝不触碰
+  // tabs 数组（这是库同步层页签身份被调包的源头，见上方注释）
+  const { hostRef } = useChromeTabsHost(engineTabs, activeTabId, {
+    onTabActive: (tabId) => {
+      if (tabId) onActivate(tabId);
+    },
+    onTabClose: (tabId) => {
+      if (tabId) onClose(tabId);
+    },
+    onTabReorder: (_tabId, fromIndex, toIndex) => onReorder(fromIndex, toIndex),
+  });
+
   // + 按钮 x 坐标：末尾页签右缘 + 6px（Chrome 行为）。测量必须用页签元素的
   // 布局盒宽按真实几何求和（Σ offsetWidth − 19×(n−1)，见 TAB_BOX_OVERLAP），
   // 不能读 content div 内联宽度——那是引擎 getTabsWidth() 的记账宽（多算
@@ -133,20 +173,17 @@ export function ChromeTabStrip({
       className="chrome-tabstrip-row"
       data-tabstrip-variant={variant}
     >
-      <Tabs
-        className="te-chrome-tabs"
-        draggable
-        tabs={tabs.map((t) => ({
-          id: t.id,
-          title: t.label,
-          active: t.id === activeTabId,
-          faviconClass: t.dirty ? 'te-tab-dirty' : undefined,
-          isCloseIconVisible: true,
-        }))}
-        onTabActive={onActivate}
-        onTabClose={onClose}
-        onTabReorder={(_tabId, fromIndex, toIndex) => onReorder(fromIndex, toIndex)}
-      />
+      {/* 引擎宿主 DOM：三层结构与库的 ChromeTabsWrapper 一致，引擎 init
+          在 effect 中挂到该节点并在此建页签 */}
+      <div
+        ref={hostRef}
+        className="chrome-tabs te-chrome-tabs"
+        style={{ '--tab-content-margin': '9px', display: 'flex' } as CSSProperties}
+      >
+        <div className="chrome-tabs-content" />
+        <div className="chrome-tabs-toolbar-right" style={{ zIndex: 1, position: 'relative' }} />
+        <div className="chrome-tabs-bottom-bar" />
+      </div>
       <button
         type="button"
         className="te-tab-new"
