@@ -4,6 +4,7 @@ import { settingsStorage } from "../utils/storage";
 import { ThemeId, AccentColorId } from "../config/themes";
 import { applyThemeColors } from "../utils/themeUtils";
 import { DEFAULT_COLUMN_WIDTHS, ColumnWidths } from "../apps/fileTable";
+import { applyLocale, type Locale } from "../i18n";
 
 /* ── Types ─────────────────────────────────────────────── */
 
@@ -29,6 +30,9 @@ export interface SettingsState {
 
   // 文件管理器列表列宽（用户拖拽调节后持久化；name 为 null 表示名称列弹性默认态）
   fileManagerColumns: ColumnWidths;
+
+  // 界面语言（持久化；启动时 onRehydrateStorage 应用到 i18next）
+  locale: Locale;
 }
 
 export interface SettingsActions {
@@ -53,6 +57,8 @@ export interface SettingsActions {
 
   // 文件管理器列宽（拖拽结束时提交一次，避免拖动过程频繁写盘）
   setFileManagerColumns: (widths: ColumnWidths) => void;
+
+  setLocale: (locale: Locale) => void;
 }
 
 /* ── Default Settings ──────────────────────────────────── */
@@ -79,6 +85,9 @@ const DEFAULT_SETTINGS: SettingsState = {
 
   // 文件管理器列宽默认值（与 CSS 历史列宽一致，名称列弹性）
   fileManagerColumns: DEFAULT_COLUMN_WIDTHS,
+
+  // 界面语言默认 zh-CN 与当前应用语言一致，老用户升级零感知
+  locale: "zh-CN",
 };
 
 /* ── Store ────────────────────────────────────────────── */
@@ -137,6 +146,12 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
       setFileManagerColumns: (widths) => {
         set({ fileManagerColumns: widths });
       },
+
+      setLocale: (locale) => {
+        set({ locale });
+        // 与 setTheme 同风格：action 内直接同步 DOM/i18n，切换即时生效
+        applyLocale(locale);
+      },
     }),
     {
       name: "quirel-settings",
@@ -157,6 +172,9 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
           root.style.setProperty("--font-body", `${state.fontSize}pt`);
           root.style.setProperty("--font-title", `${state.fontSize + 1}pt`);
           root.style.setProperty("--font-small", `${state.fontSize - 1}pt`);
+
+          // 界面语言（持久化值可能来自上次会话；首次启动用默认 zh-CN）
+          applyLocale(state.locale);
         }
       },
     }
