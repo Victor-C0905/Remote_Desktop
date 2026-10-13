@@ -6,8 +6,9 @@ import {
   buildConnectFailureText,
   describeTerminalFailure,
 } from "./errors";
+import i18n from "../i18n";
 
-describe("ERROR_MAP 全覆盖（每个 code 必有条目）", () => {
+describe("ERROR_SPEC 全覆盖（每个 code 必有条目）", () => {
   for (const code of Object.values(AuthErrorCode)) {
     it(`code ${code} 有映射条目`, () => {
       const info = getErrorInfo(code);
@@ -56,5 +57,14 @@ describe("describeTerminalFailure", () => {
   });
   it("未知错误保留原文", () => {
     expect(describeTerminalFailure("启动终端失败: xyz")).toBe("启动终端失败: xyz");
+  });
+});
+
+describe("i18n 集成", () => {
+  it("语言切换后错误文案跟随（en-US）", async () => {
+    await i18n.changeLanguage("en-US");
+    expect(getErrorInfo(AuthErrorCode.DnsFailed).title).toBe("Cannot resolve server address");
+    await i18n.changeLanguage("zh-CN");
+    expect(getErrorInfo(AuthErrorCode.DnsFailed).title).toBe("服务器地址无法解析");
   });
 });
