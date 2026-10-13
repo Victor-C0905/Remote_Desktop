@@ -13,6 +13,7 @@ import { TransferLimitCard } from "../components/TransferLimitCard";
 import { SymbolicIcon } from '../components/symbolic';
 import { getServerErrorInfo } from '../stores/serversStore';
 import { getSettingsStorage } from '../utils/storage';
+import { RESOURCES, type Locale } from "../i18n";
 // import { useWindowState } from "../window-system/hooks/useWindowState"; // 未来集成时使用
 import "./Settings.css";
 
@@ -521,6 +522,9 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
   const browserProxyPort = useSettingsStore((s) => s.browserProxyPort);
   // 启动时恢复上次窗口（响应式读取，勾选即时生效）
   const restoreWindowsOnStartup = useSettingsStore((s) => s.restoreWindowsOnStartup);
+  // 界面语言
+  const locale = useSettingsStore((s) => s.locale);
+  const setLocale = useSettingsStore((s) => s.setLocale);
 
   const handleTerminalPathChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
@@ -785,6 +789,22 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
         return (
           <div className="st-section">
             <div className="st-section-title text-heading">外观设置</div>
+
+            {/* 语言（label 双语：语言切换前无法依赖词典自身） */}
+            <div className="st-card">
+              <div className="st-card-header text-title">语言 / Language</div>
+              <div className="st-form-row">
+                <select
+                  className="st-form-input"
+                  value={locale}
+                  onChange={(e) => setLocale(e.target.value as Locale)}
+                >
+                  {Object.entries(RESOURCES).map(([code, { label }]) => (
+                    <option key={code} value={code}>{label}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
 
             {/* 主题选择 */}
             <div className="st-card">
