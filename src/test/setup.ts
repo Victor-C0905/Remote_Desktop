@@ -1,6 +1,9 @@
 import { vi, beforeEach, afterEach } from 'vitest';
 import '@testing-library/jest-dom';
 
+// 测试环境初始化 i18n（默认 zh-CN，与既有中文断言兼容）
+import '../i18n';
+
 // Mock Tauri API
 // invoke 必须返回 Promise：jsdom 下无 Tauri runtime，若返回 undefined，
 // 调用方的 .then/.catch/.finally 会抛 Uncaught TypeError（如 logger.persist）
