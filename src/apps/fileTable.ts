@@ -1,6 +1,7 @@
 // src/apps/fileTable.ts
 // 文件列表表头领域逻辑：排序（点击表头翻转）+ 列筛选（表头下拉）+ 列宽（拖拽调节/持久化）
 // 纯函数模块，与 permissions.ts 同模式：不含 React 依赖，单测覆盖（fileTable.test.ts）
+import i18n from "../i18n";
 import type { FileEntry } from "./FileManager";
 
 /* ── 排序 ─────────────────────────────────────────────────── */
@@ -94,30 +95,30 @@ export interface ColumnFilterState {
 /** 默认无筛选（会话内决策：每次打开默认全部显示） */
 export const DEFAULT_COLUMN_FILTERS: ColumnFilterState = { size: [], mtime: [], name: [], type: [] };
 
-/** 下拉菜单展示用桶清单（顺序即菜单勾选顺序） */
-export const SIZE_BUCKETS: { key: SizeBucket; label: string }[] = [
-  { key: "empty", label: "空（0 字节）" },
-  { key: "tiny", label: "极小（0 – 16 KB）" },
-  { key: "small", label: "小（16 KB – 1 MB）" },
-  { key: "medium", label: "中（1 – 128 MB）" },
-  { key: "large", label: "大（128 MB – 1 GB）" },
-  { key: "huge", label: "巨大（超过 1 GB）" },
+/** 下拉菜单展示用桶清单（顺序即菜单勾选顺序）；labelKey 供渲染处 t() 取当前语言 */
+export const SIZE_BUCKETS: { key: SizeBucket; labelKey: string }[] = [
+  { key: "empty", labelKey: "fileManager.bucketSizeEmpty" },
+  { key: "tiny", labelKey: "fileManager.bucketSizeTiny" },
+  { key: "small", labelKey: "fileManager.bucketSizeSmall" },
+  { key: "medium", labelKey: "fileManager.bucketSizeMedium" },
+  { key: "large", labelKey: "fileManager.bucketSizeLarge" },
+  { key: "huge", labelKey: "fileManager.bucketSizeHuge" },
 ];
 
-export const MTIME_BUCKETS: { key: MtimeBucket; label: string }[] = [
-  { key: "today", label: "今天" },
-  { key: "yesterday", label: "昨天" },
-  { key: "thisWeek", label: "本周" },
-  { key: "lastWeek", label: "上周" },
-  { key: "earlier", label: "更早" },
+export const MTIME_BUCKETS: { key: MtimeBucket; labelKey: string }[] = [
+  { key: "today", labelKey: "fileManager.bucketToday" },
+  { key: "yesterday", labelKey: "fileManager.bucketYesterday" },
+  { key: "thisWeek", labelKey: "fileManager.bucketThisWeek" },
+  { key: "lastWeek", labelKey: "fileManager.bucketLastWeek" },
+  { key: "earlier", labelKey: "fileManager.bucketEarlier" },
 ];
 
-export const NAME_BUCKETS: { key: NameBucket; label: string }[] = [
-  { key: "aToF", label: "A – F" },
-  { key: "gToL", label: "G – L" },
-  { key: "mToR", label: "M – R" },
-  { key: "sToZ", label: "S – Z" },
-  { key: "other", label: "其他（数字与符号）" },
+export const NAME_BUCKETS: { key: NameBucket; labelKey: string }[] = [
+  { key: "aToF", labelKey: "fileManager.bucketNameAToF" },
+  { key: "gToL", labelKey: "fileManager.bucketNameGToL" },
+  { key: "mToR", labelKey: "fileManager.bucketNameMToR" },
+  { key: "sToZ", labelKey: "fileManager.bucketNameSToZ" },
+  { key: "other", labelKey: "fileManager.bucketNameOther" },
 ];
 
 /** 条目所属类型键：目录 → __dir；无扩展名（含隐藏文件点前缀、点结尾）→ __none；
@@ -131,8 +132,8 @@ export function typeKeyOf(e: FileEntry): string {
 
 /** 类型键的用户可见标签：__dir → 文件夹、__none → 文件、扩展名 → 大写（TXT/MD） */
 export function typeKeyLabel(key: string): string {
-  if (key === "__dir") return "文件夹";
-  if (key === "__none") return "文件";
+  if (key === "__dir") return i18n.t("fileManager.propsFolder");
+  if (key === "__none") return i18n.t("fileManager.propsFile");
   return key.toUpperCase();
 }
 
@@ -149,7 +150,7 @@ export function listFileTypeBuckets(entries: FileEntry[]): { key: string; label:
   const list = [...seen]
     .sort((a, b) => a.localeCompare(b))
     .map((k) => ({ key: k, label: typeKeyLabel(k) }));
-  return hasDir ? [{ key: "__dir", label: "文件夹" }, ...list] : list;
+  return hasDir ? [{ key: "__dir", label: typeKeyLabel("__dir") }, ...list] : list;
 }
 
 const KB = 1024, MB = 1024 * 1024, GB = 1024 * 1024 * 1024;

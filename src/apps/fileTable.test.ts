@@ -428,9 +428,9 @@ describe("nameBucketOf", () => {
     expect(nameBucketOf(entry({ name: "😀图片.png" }))).toBe("other");
   });
 
-  it("NAME_BUCKETS 清单四段字母 + 其他，标签非空", () => {
+  it("NAME_BUCKETS 清单四段字母 + 其他，标签键非空", () => {
     expect(NAME_BUCKETS.map((b) => b.key)).toEqual(["aToF", "gToL", "mToR", "sToZ", "other"]);
-    expect(NAME_BUCKETS.every((b) => b.label.length > 0)).toBe(true);
+    expect(NAME_BUCKETS.every((b) => b.labelKey.length > 0)).toBe(true);
   });
 });
 
@@ -447,10 +447,10 @@ describe("hasActiveColumnFilters / 桶清单", () => {
     expect(SIZE_BUCKETS.map((b) => b.key)).toEqual([
       "empty", "tiny", "small", "medium", "large", "huge",
     ]);
-    expect(SIZE_BUCKETS.every((b) => b.label.length > 0)).toBe(true);
+    expect(SIZE_BUCKETS.every((b) => b.labelKey.length > 0)).toBe(true);
     expect(MTIME_BUCKETS.map((b) => b.key)).toEqual([
       "today", "yesterday", "thisWeek", "lastWeek", "earlier",
     ]);
-    expect(MTIME_BUCKETS.every((b) => b.label.length > 0)).toBe(true);
+    expect(MTIME_BUCKETS.every((b) => b.labelKey.length > 0)).toBe(true);
   });
 });
