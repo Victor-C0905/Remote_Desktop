@@ -1,6 +1,7 @@
 import { useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { createLogger } from "../utils/logger";
+import { formatUnknownError } from "../types/errors";
 
 const log = createLogger('Preloader');
 
@@ -183,7 +184,7 @@ export function usePreloader(): PreloaderResult {
       setState('ready');
     } catch (err) {
       log.error("预加载失败:", err);
-      setError(err instanceof Error ? err.message : String(err));
+      setError(formatUnknownError(err));
       setState('error');
     }
   }, []);

@@ -66,12 +66,19 @@ describe('openRemoteFile 路由分发', () => {
     expect(created[0].appId).toBe('editor');
   });
 
-  it('传输故障（[transport] 前缀）→ 不降级，直接 error', async () => {
-    // Tauri Err(String) 的 rejection 是纯字符串（非 Error 对象），mock 对齐真实形态
-    vi.mocked(invoke).mockRejectedValue('[transport] 未找到连接');
+  it('传输链路故障（结构化错误码）→ 不降级，直接 error', async () => {
+    // Rust remote_file_info 已错误码化：链路错误以 AppError JSON 对象 reject，不再有 [transport] 前缀
+    vi.mocked(invoke).mockRejectedValue({ code: 'connection_not_found', params: {}, detail: undefined });
     const r = await openRemoteFile('s1', '/x/a.txt', manager);
-    expect(r).toEqual({ kind: 'error', message: '连接不可用：未找到连接' });
+    expect(r).toEqual({ kind: 'error', message: '未找到该服务器的连接' });
     expect(created).toHaveLength(0);   // 不弹注定失败的编辑器
+  });
+
+  it('Agent 端结构化错误（非链路码）→ 仍降级回退编辑器', async () => {
+    vi.mocked(invoke).mockRejectedValue({ code: 'file_not_found', params: {}, detail: undefined });
+    const r = await openRemoteFile('s1', '/x/a.txt', manager);
+    expect(r).toEqual({ kind: 'fallback-editor' });
+    expect(created[0].appId).toBe('editor');
   });
 
   it('探测失败 + 已知大文件（fallbackSize > 5MB）→ 确认拒绝 cancelled；同意则回退编辑器', async () => {

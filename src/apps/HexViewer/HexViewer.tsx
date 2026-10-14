@@ -10,6 +10,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { createLogger } from '../../utils/logger';
+import { formatUnknownError } from '../../types/errors';
 import './HexViewer.css';
 
 const log = createLogger('HexViewer');
@@ -107,7 +108,7 @@ export function HexViewer({ preloadData }: HexViewerProps) {
       } catch (err) {
         if (cancelled) return;
         log.error('读取文件失败:', err);
-        setError(t('hex.loadFailed', { message: String(err) }));
+        setError(t('hex.loadFailed', { message: formatUnknownError(err) }));
       } finally {
         if (!cancelled) setLoading(false);
       }

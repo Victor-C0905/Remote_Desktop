@@ -21,6 +21,7 @@ import { Dialog } from "../components/Dialog/Dialog";
 import { useTranslation } from "react-i18next";
 import { useNotificationStore } from "../stores/notificationStore";
 import { useSettingsStore } from '../stores/settingsStore';
+import { formatUnknownError, isPermissionDenied } from '../types/errors';
 import "./FileManager.css";
 
 const log = createLogger('FileManager');
@@ -337,12 +338,12 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       // 成功后才更新当前路径（确保路径确实存在）
       setCurrentPath(path);
       return true;
-    } catch (e: any) {
+    } catch (e: unknown) {
       log.error('加载目录失败:', e);
-      const errMsg = e?.toString() ?? '';
+      const errMsg = formatUnknownError(e);
       // 权限不足：当作空目录处理（进入目录但内容不可见）
       // 其他错误（路径不存在等）：显示错误提示，不更新路径
-      if (errMsg.includes('权限不足') || errMsg.includes('Permission denied')) {
+      if (isPermissionDenied(e)) {
         setEntries([]);
         setPermissionDenied(path);
         setCurrentPath(path);
@@ -1037,7 +1038,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       loadDir(currentPath);  // 成功：关闭对话框 + 刷新目录
     } catch (err) {
       log.error("应用属性失败:", err);
-      setPermError(String(err));
+      setPermError(formatUnknownError(err));
     } finally {
       setPermSaving(false);
     }
@@ -1084,7 +1085,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       loadDir(currentPath);
     } catch (err) {
       log.error("mkdir 失败:", err);
-      pushNotification({ title: t("common.error"), body: t("fileManager.createFolderFailed", { message: String(err) }), source: t("fileManager.source"), urgency: "normal" });
+      pushNotification({ title: t("common.error"), body: t("fileManager.createFolderFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
     }
   }, [currentPath, activeServerId, loadDir]);
 
@@ -1137,7 +1138,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       loadDir(currentPath);
     } catch (err) {
       log.error("rename 失败:", err);
-      pushNotification({ title: t("common.error"), body: t("fileManager.renameFailed", { message: String(err) }), source: t("fileManager.source"), urgency: "normal" });
+      pushNotification({ title: t("common.error"), body: t("fileManager.renameFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
     }
 
     // 清除编辑状态
@@ -1191,7 +1192,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       loadDir(currentPath);
     } catch (err) {
       log.error("delete 失败:", err);
-      pushNotification({ title: t("common.error"), body: t("fileManager.deleteFailed", { message: String(err) }), source: t("fileManager.source"), urgency: "normal" });
+      pushNotification({ title: t("common.error"), body: t("fileManager.deleteFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
     }
   }, [currentPath, activeServerId, loadDir]);
 
@@ -1221,7 +1222,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       }
     } catch (err) {
       log.error("mkdir 失败:", err);
-      pushNotification({ title: t("common.error"), body: t("fileManager.createFolderFailed", { message: String(err) }), source: t("fileManager.source"), urgency: "normal" });
+      pushNotification({ title: t("common.error"), body: t("fileManager.createFolderFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
     }
   }, [currentPath, activeServerId, loadDir]);
 
@@ -1250,7 +1251,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       }
     } catch (err) {
       log.error("new file 失败:", err);
-      pushNotification({ title: t("common.error"), body: t("fileManager.createFileFailed", { message: String(err) }), source: t("fileManager.source"), urgency: "normal" });
+      pushNotification({ title: t("common.error"), body: t("fileManager.createFileFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
     }
   }, [currentPath, activeServerId, loadDir]);
 
@@ -1400,7 +1401,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       setContextMenu(null);
     } catch (err) {
       log.error('上传失败:', err);
-      pushNotification({ title: t("common.error"), body: t("fileManager.uploadFailed", { message: String(err) }), source: t("fileManager.source"), urgency: "normal" });
+      pushNotification({ title: t("common.error"), body: t("fileManager.uploadFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
     }
   }, [activeServerId, uploadSingleFile]);
 
@@ -1455,7 +1456,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       setContextMenu(null);
     } catch (err) {
       log.error('上传失败:', err);
-      pushNotification({ title: t("common.error"), body: t("fileManager.uploadFailed", { message: String(err) }), source: t("fileManager.source"), urgency: "normal" });
+      pushNotification({ title: t("common.error"), body: t("fileManager.uploadFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
     }
   }, [activeServerId, uploadFileWithName]);
 
@@ -1555,7 +1556,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       setContextMenu(null);
     } catch (err) {
       log.error('下载失败:', err);
-      pushNotification({ title: t("common.error"), body: t("fileManager.downloadFailed", { message: String(err) }), source: t("fileManager.source"), urgency: "normal" });
+      pushNotification({ title: t("common.error"), body: t("fileManager.downloadFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
     }
   }, [activeServerId, currentPath]);
 

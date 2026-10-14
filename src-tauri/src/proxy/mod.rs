@@ -24,6 +24,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
 use crate::connection::ConnectionManager;
+use crate::errors::{codes, AppError};
 use quirel_protocol::{Envelope, Payload};
 
 /// 返回给前端的会话信息
@@ -265,30 +266,40 @@ async fn handle_socks5_conn(
 async fn spawn_socks5_listener(
     quic_conn: Arc<quinn::Connection>,
     port: u16,
-) -> Result<(u16, tokio::task::JoinHandle<()>), String> {
+) -> Result<(u16, tokio::task::JoinHandle<()>), AppError> {
     let sock_addr: std::net::SocketAddr = (std::net::Ipv4Addr::LOCALHOST, port).into();
+    // 监听启动各环节失败统一报 proxy_listen_failed（用户视角：本地代理端口起不来），
+    // 技术差异进 detail 供日志排查
+    let listen_err = |detail: String| {
+        AppError::new(codes::PROXY_LISTEN_FAILED)
+            .with_param("port", port.to_string())
+            .with_detail(detail)
+    };
     let socket = socket2::Socket::new(
         socket2::Domain::IPV4,
         socket2::Type::STREAM,
         Some(socket2::Protocol::TCP),
     )
-    .map_err(|e| format!("创建 SOCKS5 socket 失败: {}", e))?;
+    .map_err(|e| listen_err(format!("create socket: {e}")))?;
     socket
         .set_reuse_address(true)
-        .map_err(|e| format!("设置 SO_REUSEADDR 失败: {}", e))?;
+        .map_err(|e| listen_err(format!("set SO_REUSEADDR: {e}")))?;
     socket
         .set_nonblocking(true)
-        .map_err(|e| format!("设置非阻塞模式失败: {}", e))?;
+        .map_err(|e| listen_err(format!("set nonblocking: {e}")))?;
     socket
         .bind(&sock_addr.into())
-        .map_err(|e| format!("SOCKS5 监听绑定端口 {} 失败: {}", port, e))?;
+        .map_err(|e| listen_err(format!("bind: {e}")))?;
     socket
         .listen(1024)
-        .map_err(|e| format!("SOCKS5 监听启动失败: {}", e))?;
+        .map_err(|e| listen_err(format!("listen: {e}")))?;
     // socket2 → std → tokio（非阻塞已设置，from_std 不会阻塞注册）
     let listener = tokio::net::TcpListener::from_std(std::net::TcpListener::from(socket))
-        .map_err(|e| format!("SOCKS5 监听注册失败: {}", e))?;
-    let actual_port = listener.local_addr().map_err(|e| e.to_string())?.port();
+        .map_err(|e| listen_err(format!("register listener: {e}")))?;
+    let actual_port = listener
+        .local_addr()
+        .map_err(|e| listen_err(format!("local addr: {e}")))?
+        .port();
 
     // 监听循环
     let quic_for_accept = quic_conn;
@@ -376,7 +387,7 @@ async fn spawn_primary_browser(
     browser_name: &str,
     port: u16,
     profile: &PathBuf,
-) -> Result<Child, String> {
+) -> Result<Child, AppError> {
     let mut child = browser::spawn_browser(browser_path, port, profile)?;
 
     if !exited_quickly(&mut child).await {
@@ -386,10 +397,9 @@ async fn spawn_primary_browser(
 
     // 快速退出 → profile 被其他实例占用
     if other_active_session_uses_browser(app, server_id, browser_name) {
-        return Err(format!(
-            "浏览器 {} 正被其他服务器的浏览会话使用，请先关闭其浏览窗口",
-            browser_name
-        ));
+        return Err(
+            AppError::new(codes::PROXY_BROWSER_IN_USE).with_param("browser", browser_name)
+        );
     }
 
     // 残留实例带着旧代理参数（指向已死端口），清理后重开
@@ -404,10 +414,10 @@ async fn spawn_primary_browser(
     let mut child = browser::spawn_browser(browser_path, port, profile)?;
     if exited_quickly(&mut child).await {
         // 二次验证仍快速退出：清理未生效或锁未释放，报错让用户手动处理
-        return Err(format!(
-            "浏览器启动后立即退出（profile 可能仍被占用: {}），请手动关闭相关浏览器进程后重试",
+        return Err(AppError::new(codes::PROXY_BROWSER_SPAWN_FAILED).with_detail(format!(
+            "browser exited immediately, profile may still be locked: {}",
             profile.display()
-        ));
+        )));
     }
     Ok(child)
 }
@@ -429,7 +439,7 @@ pub async fn proxy_start_session(
     browser_id: Option<String>,
     port: Option<u16>,
     app: AppHandle,
-) -> Result<ProxySessionInfo, String> {
+) -> Result<ProxySessionInfo, AppError> {
     // 串行化整个创建流程（跨 await 持锁）：并发调用排队执行，
     // 后到者会看到先到者刚注册的会话并走"已存在"路径，不再双重绑端口
     let sessions_state = app.state::<ProxySessionManager>();
@@ -441,7 +451,7 @@ pub async fn proxy_start_session(
         let conns = manager.connections.lock().unwrap();
         conns.get(&server_id)
             .and_then(|c| c.quic_conn.clone())
-            .ok_or_else(|| format!("服务器 {} 未连接或连接类型非 QUIC，无法启动代理", server_id))?
+            .ok_or_else(|| AppError::new(codes::CONNECTION_NOT_FOUND))?
     };
 
     // 解析浏览器选择（auto / 指定 id / 自定义路径）
@@ -473,10 +483,11 @@ pub async fn proxy_start_session(
             // 浏览器已关 → 无端口约束，优先用新设置的固定端口
             let rebuild_port = if browser_alive { sess_port } else { requested_port.unwrap_or(sess_port) };
             if let Some(holder) = port_conflict_with(&app, &server_id, rebuild_port) {
-                return Err(format!(
-                    "端口 {} 已被服务器 {} 的浏览会话占用，请先关闭其浏览窗口或在设置中更换端口",
-                    rebuild_port, holder
-                ));
+                return Err(
+                    AppError::new(codes::PROXY_PORT_CONFLICT)
+                        .with_param("port", rebuild_port.to_string())
+                        .with_param("holder", holder),
+                );
             }
 
             // 绑定失败（如端口被非本应用进程占用）时直接报错，不 spawn 浏览器
@@ -554,10 +565,11 @@ pub async fn proxy_start_session(
     // ── 全新会话 ─────────────────────────────────────────
     let bind_port = requested_port.unwrap_or(0);
     if let Some(holder) = port_conflict_with(&app, &server_id, bind_port) {
-        return Err(format!(
-            "端口 {} 已被服务器 {} 的浏览会话占用，请先关闭其浏览窗口或在设置中更换端口",
-            bind_port, holder
-        ));
+        return Err(
+            AppError::new(codes::PROXY_PORT_CONFLICT)
+                .with_param("port", bind_port.to_string())
+                .with_param("holder", holder),
+        );
     }
     let (port, listener_task) = spawn_socks5_listener(quic_conn.clone(), bind_port).await?;
 
@@ -649,17 +661,18 @@ pub fn proxy_session_status(server_id: String, app: AppHandle) -> Option<ProxySe
 /// Edge/Chrome/Firefox 的 profile 数据互不兼容，共用同一目录会导致
 /// 后切换的浏览器报"配置文件无法打开"并重建（登录态丢失）。
 /// 每个浏览器一个子目录，各自的登录态/书签/扩展独立保留。
-fn browser_profile_dir(app: &AppHandle, browser_name: &str) -> Result<PathBuf, String> {
+fn browser_profile_dir(app: &AppHandle, browser_name: &str) -> Result<PathBuf, AppError> {
     let dir = app
         .path()
         .app_cache_dir()
-        .map_err(|e| format!("获取缓存目录失败: {}", e))?;
+        .map_err(|e| AppError::new(codes::IO_FAILED).with_detail(format!("app cache dir: {e}")))?;
     // 目录名做基础净化（浏览器名来自固定候选表或自定义路径，通常安全，防御性处理）
     let safe_name = browser_name
         .chars()
         .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
         .collect::<String>();
     let profile = dir.join("browser-profile").join(safe_name);
-    std::fs::create_dir_all(&profile).map_err(|e| format!("创建 profile 目录失败: {}", e))?;
+    std::fs::create_dir_all(&profile)
+        .map_err(|e| AppError::new(codes::IO_FAILED).with_detail(format!("create profile dir: {e}")))?;
     Ok(profile)
 }

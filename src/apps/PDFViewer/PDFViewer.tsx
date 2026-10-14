@@ -11,6 +11,7 @@ import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import { createLogger } from '../../utils/logger';
+import { formatUnknownError } from '../../types/errors';
 import './PDFViewer.css';
 
 const log = createLogger('PDFViewer');
@@ -109,7 +110,7 @@ export function PDFViewer({ preloadData }: PDFViewerProps) {
       } catch (err) {
         if (cancelled) return;
         log.error('加载 PDF 失败:', err);
-        setError(t('pdf.loadFailed', { message: String(err) }));
+        setError(t('pdf.loadFailed', { message: formatUnknownError(err) }));
       } finally {
         if (!cancelled) setLoading(false);
       }

@@ -16,7 +16,7 @@ import { ToolbarMenu } from '../components/ToolbarMenu/ToolbarMenu';
 import { ChromeTabStrip } from '../components/ChromeTabStrip/ChromeTabStrip';
 // import { useWindowState } from '../window-system/hooks/useWindowState'; // 未来集成时使用
 import { useWindowEvent } from '../window-system/hooks/useWindowEvent';
-import { describeTerminalFailure } from '../types/errors';
+import { describeTerminalFailure, formatUnknownError } from '../types/errors';
 import { useTranslation } from 'react-i18next';
 import i18n from '../i18n';
 import { createLogger } from '../utils/logger';
@@ -339,7 +339,7 @@ function TerminalInstance({
           log.info('✅ 初始化完成');
         } catch (err) {
           log.error('❌ 初始化失败:', err);
-          setInitializationStatus(i18n.t('terminal.initFailedStatus', { error: String(err) }));
+          setInitializationStatus(i18n.t('terminal.initFailedStatus', { error: formatUnknownError(err) }));
           // 回退到演示模式
           terminal.write(`\x1b[31m${i18n.t('terminal.connectFailedPrefix')}\x1b[0m ${describeTerminalFailure(err)}\r\n`);
           terminal.write(i18n.t('terminal.demoHelpHint'));
@@ -435,12 +435,12 @@ function TerminalInstance({
       return scheduleTeardown;
     } catch (err) {
       log.error('❌ 初始化失败:', err);
-      setInitializationStatus(i18n.t('terminal.initFailedStatus', { error: String(err) }));
+      setInitializationStatus(i18n.t('terminal.initFailedStatus', { error: formatUnknownError(err) }));
       // 创建半途失败：清扫半初始化状态（terminalRef 可能已赋值），并把
       // depsKey 复位，避免下次 setup 把残缺终端误判为可保活
       depsKeyRef.current = null;
       teardownNow();
-      container.innerHTML = `<div style="color:#ff4444;padding:12px;font-family:monospace;">${i18n.t('terminal.initFailedHtml', { error: String(err) })}</div>`;
+      container.innerHTML = `<div style="color:#ff4444;padding:12px;font-family:monospace;">${i18n.t('terminal.initFailedHtml', { error: formatUnknownError(err) })}</div>`;
     }
   }, [activeServerId, activeServerName, activeServerHost, activeServerPort]);
 
