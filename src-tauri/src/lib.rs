@@ -6,6 +6,7 @@ use tauri::Manager;  // 导入 Manager trait
 use tokio::sync::Mutex;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
+pub mod errors;
 mod connection;
 mod proxy;
 mod terminal;
