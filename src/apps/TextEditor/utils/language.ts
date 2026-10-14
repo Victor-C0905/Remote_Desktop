@@ -7,8 +7,9 @@
 
 import { LanguageDescription } from '@codemirror/language';
 import { languages } from '@codemirror/language-data';
+import i18n from '../../../i18n';
 
-/** 扩展名 → 语言展示名（状态栏用） */
+/** 扩展名 → 语言展示名（状态栏用；仅少数类别词需要本地化，其余为专有名） */
 const LANG_MAP: Record<string, string> = {
   ts: 'TypeScript', tsx: 'TypeScript React',
   js: 'JavaScript', jsx: 'JavaScript React', mjs: 'JavaScript',
@@ -23,7 +24,7 @@ const LANG_MAP: Record<string, string> = {
   yml: 'YAML', yaml: 'YAML', toml: 'TOML', ini: 'INI', conf: 'Config',
   sql: 'SQL', lua: 'Lua', vim: 'Vim Script',
   dockerfile: 'Dockerfile', makefile: 'Makefile',
-  txt: '纯文本', log: '日志',
+  txt: 'textEditor.lang.plainText', log: 'textEditor.lang.log',
 };
 
 /**
@@ -36,7 +37,9 @@ export function detectLanguage(path: string): string {
   const base = path.split(/[\\/]/).pop() ?? '';
   const dot = base.lastIndexOf('.');
   const ext = dot >= 0 ? base.slice(dot + 1).toLowerCase() : '';
-  return LANG_MAP[ext] || (ext ? ext.toUpperCase() : '纯文本');
+  const mapped = LANG_MAP[ext];
+  if (mapped) return mapped.startsWith('textEditor.') ? i18n.t(mapped) : mapped;
+  return ext ? ext.toUpperCase() : i18n.t('textEditor.lang.plainText');
 }
 
 /**

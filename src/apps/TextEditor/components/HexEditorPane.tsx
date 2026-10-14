@@ -8,6 +8,7 @@
  */
 
 import { useState, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import '../TextEditor.css';
 
 interface HexEditorPaneProps {
@@ -83,6 +84,7 @@ function formatHexLine(offset: number, bytes: Uint8Array): string {
  * ```
  */
 export function HexEditorPane({ data, onChange: _onChange }: HexEditorPaneProps) {
+  const { t } = useTranslation();
   // 当前页偏移量（字节）
   const [offset, setOffset] = useState(0);
 
@@ -128,7 +130,7 @@ export function HexEditorPane({ data, onChange: _onChange }: HexEditorPaneProps)
     return (
       <div className="te-hex-pane">
         <div className="te-hex-empty">
-          <span className="te-hex-empty-text">无数据显示</span>
+          <span className="te-hex-empty-text">{t('textEditor.hexNoData')}</span>
         </div>
       </div>
     );
@@ -149,7 +151,7 @@ export function HexEditorPane({ data, onChange: _onChange }: HexEditorPaneProps)
           className="te-hex-pagination-btn"
           onClick={handlePrevPage}
           disabled={!canGoPrev}
-          title="上一页"
+          title={t('textEditor.hexPrevPage')}
         >
           ← 上一页
         </button>
@@ -162,7 +164,7 @@ export function HexEditorPane({ data, onChange: _onChange }: HexEditorPaneProps)
           className="te-hex-pagination-btn"
           onClick={handleNextPage}
           disabled={!canGoNext}
-          title="下一页"
+          title={t('textEditor.hexNextPage')}
         >
           下一页 →
         </button>
