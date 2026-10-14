@@ -2,6 +2,7 @@
 // 确认询问弹窗（基于 Dialog 底座）：图标头部 + 主问句 + 补充说明 + 取消/确认按钮
 // 头部与属性对话框 pd-header（icon+name）同构；
 // 确认按钮统一为主题 accent 实心（主操作视觉语言），危险语义由红色警示图标传达
+import { useTranslation } from "react-i18next";
 import { Dialog } from "./Dialog";
 
 interface ConfirmDialogProps {
@@ -31,9 +32,13 @@ function renderMessage(message: string, highlight?: string): React.ReactNode {
 
 export function ConfirmDialog({
   title, message, highlight, detail,
-  confirmLabel = "确定", cancelLabel = "取消", danger,
+  confirmLabel, cancelLabel, danger,
   onConfirm, onCancel,
 }: ConfirmDialogProps) {
+  const { t } = useTranslation();
+  // 内置默认值改走词典（调用方显式传入时优先）
+  const confirmText = confirmLabel ?? t("common.confirm");
+  const cancelText = cancelLabel ?? t("common.cancel");
   return (
     <Dialog onClose={onCancel}>
       {/* 图标头部：danger 红色警示 / 普通询问 accent 圆标 */}
@@ -49,10 +54,10 @@ export function ConfirmDialog({
       {detail && <div className="dg-detail">{detail}</div>}
       <div className="dg-actions">
         {/* 幽灵按钮：透明底细边框，hover 底色浮出（项目统一按钮视觉语言） */}
-        <button className="dg-btn" onClick={onCancel} autoFocus={danger}>{cancelLabel}</button>
+        <button className="dg-btn" onClick={onCancel} autoFocus={danger}>{cancelText}</button>
         {/* 主操作：accent 实心（主题强调色，随主题变换） */}
         <button className="dg-btn-primary" onClick={onConfirm} autoFocus={!danger}>
-          {confirmLabel}
+          {confirmText}
         </button>
       </div>
     </Dialog>

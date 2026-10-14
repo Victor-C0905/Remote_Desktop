@@ -5,6 +5,20 @@ const enUS: TranslationSchema = {
   common: {
     confirm: 'OK',
     cancel: 'Cancel',
+    retry: 'Retry',
+  },
+  connection: {
+    viewServers: 'View servers',
+    reconnecting: 'Reconnecting…',
+    reconnectingTo: 'Reconnecting to {{name}}…',
+  },
+  windowShell: {
+    minimize: 'Minimize',
+    minimizeWindow: 'Minimize window',
+    maximize: 'Maximize',
+    maximizeWindow: 'Maximize window',
+    close: 'Close',
+    closeWindow: 'Close window',
   },
   errors: {
     auth: {

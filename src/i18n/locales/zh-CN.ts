@@ -3,6 +3,20 @@ const zhCN = {
   common: {
     confirm: '确定',
     cancel: '取消',
+    retry: '重试',
+  },
+  connection: {
+    viewServers: '查看服务器',
+    reconnecting: '正在重新连接…',
+    reconnectingTo: '正在重新连接到 {{name}}…',
+  },
+  windowShell: {
+    minimize: '最小化',
+    minimizeWindow: '最小化窗口',
+    maximize: '最大化',
+    maximizeWindow: '最大化窗口',
+    close: '关闭',
+    closeWindow: '关闭窗口',
   },
   errors: {
     auth: {
