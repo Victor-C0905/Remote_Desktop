@@ -22,6 +22,7 @@ import { undo, redo } from '@codemirror/commands';
 import { openSearchPanel } from '@codemirror/search';
 import { tags as t } from '@lezer/highlight';
 import { basicSetup } from 'codemirror';
+import i18n from '../../../i18n';
 import { findLanguageForPath } from '../utils/language';
 import '../TextEditor.css';
 
@@ -83,26 +84,29 @@ export interface TextEditorPaneHandle {
 }
 
 /**
- * 查找面板/跳转行等内置 UI 的中文文案
+ * 查找面板/跳转行等内置 UI 的本地化文案
  * （CodeMirror phrases 机制：按英文原文映射，未命中的键回退英文）
+ * 构建函数：编辑器创建时取当前语言（已打开的编辑器保持创建时语言）
  */
-const chinesePhrases = EditorState.phrases.of({
-  Find: '查找',
-  Replace: '替换',
-  next: '下一个',
-  previous: '上一个',
-  all: '全部',
-  'match case': '区分大小写',
-  'by word': '整词匹配',
-  regexp: '正则表达式',
-  replace: '替换',
-  'replace all': '全部替换',
-  close: '关闭',
-  'current match': '当前匹配',
-  'replaced $ matches': '已替换 $ 个匹配',
-  'go to line': '跳转到行',
-  'Line:': '行号：',
-});
+function makePhrases() {
+  return EditorState.phrases.of({
+    Find: i18n.t('textEditor.phrases.find'),
+    Replace: i18n.t('textEditor.phrases.replace'),
+    next: i18n.t('textEditor.phrases.next'),
+    previous: i18n.t('textEditor.phrases.previous'),
+    all: i18n.t('textEditor.phrases.all'),
+    'match case': i18n.t('textEditor.phrases.matchCase'),
+    'by word': i18n.t('textEditor.phrases.byWord'),
+    regexp: i18n.t('textEditor.phrases.regexp'),
+    replace: i18n.t('textEditor.phrases.replace'),
+    'replace all': i18n.t('textEditor.phrases.replaceAll'),
+    close: i18n.t('textEditor.phrases.close'),
+    'current match': i18n.t('textEditor.phrases.currentMatch'),
+    'replaced $ matches': i18n.t('textEditor.phrases.replaced'),
+    'go to line': i18n.t('textEditor.phrases.goToLine'),
+    'Line:': i18n.t('textEditor.phrases.line'),
+  });
+}
 
 /**
  * 编辑器主题：结构样式通过 EditorView.theme 注入（保证优先级），
@@ -325,7 +329,7 @@ export const TextEditorPane = forwardRef<TextEditorPaneHandle, TextEditorPanePro
         doc: content,
         extensions: [
           basicSetup,
-          chinesePhrases,
+          makePhrases(),
           editorTheme,
           semanticHighlighting,
           langCompartment.current.of([]),

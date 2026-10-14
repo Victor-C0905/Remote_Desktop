@@ -11,6 +11,7 @@
  */
 
 import { forwardRef, memo, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import i18n from '../../../i18n';
 import { createLogger } from '../../../utils/logger';
 import { useFileManager } from '../hooks/useFileManager';
 import { TextEditorPane } from './TextEditorPane';
@@ -100,7 +101,7 @@ interface EditorDocumentProps {
 /** 根据路径取显示名 */
 function labelOf(path: string | null, initialPath?: string): string {
   const source = path ?? initialPath;
-  if (!source) return '未命名文件';
+  if (!source) return i18n.t('textEditor.untitledFile');
   return source.split('/').pop() || source;
 }
 
@@ -225,7 +226,7 @@ export const EditorDocument = memo(
         return (
           <div className="te-loading">
             <div className="te-spinner" aria-hidden="true" />
-            <span className="te-loading-text">正在加载{name ? ` ${name}` : '文件'}...</span>
+            <span className="te-loading-text">{i18n.t('textEditor.loading', { name: name ? ` ${name}` : '' })}</span>
           </div>
         );
       }
@@ -283,7 +284,7 @@ export const EditorDocument = memo(
           onCursorChange={setCursor}
           onStatsChange={setDocStats}
           wrapText={wrapText}
-          placeholder="开始输入…"
+          placeholder={i18n.t('textEditor.startTyping')}
         />
       );
     };

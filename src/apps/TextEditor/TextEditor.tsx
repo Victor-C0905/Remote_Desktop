@@ -19,6 +19,8 @@
  */
 
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import i18n from '../../i18n';
 import { createPortal } from 'react-dom';
 import { createLogger } from '../../utils/logger';
 import { AppLayout } from '../../components/app-shell/AppLayout';
@@ -88,6 +90,7 @@ interface TextEditorProps {
  * ```
  */
 export function TextEditor({ windowId, preloadData }: TextEditorProps) {
+  const { t } = useTranslation();
   const { activeServerId, activeServer } = useServerManager();
   const { manager } = useWindowManager();
 
@@ -200,7 +203,7 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
           const st = tabStatuses[t.id];
           return {
             id: t.id,
-            label: st?.label ?? (t.initialPath ? pathTail(t.initialPath) : '未命名文件'),
+            label: st?.label ?? (t.initialPath ? pathTail(t.initialPath) : i18n.t('textEditor.untitledFile')),
             dirty: st?.dirty ?? false,
           };
         })}
@@ -236,10 +239,10 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
           <MenuBar
             menus={[
               {
-                label: '文件',
+                label: t('textEditor.menuFile'),
                 items: [
                   {
-                    label: '保存',
+                    label: t('textEditor.menuSave'),
                     shortcut: 'Ctrl+S',
                     disabled: !canSave,
                     onClick: () => {
@@ -252,34 +255,34 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
                     },
                   },
                   {
-                    label: '另存为…',
+                    label: t('textEditor.menuSaveAs'),
                     disabled: !activeStatus?.path || activeStatus.isSaving,
                     onClick: () => setShowSaveDialog(true),
                   },
                   { separator: true },
-                  { label: '关闭窗口', onClick: () => manager.close(windowId) },
+                  { label: t('textEditor.menuCloseWindow'), onClick: () => manager.close(windowId) },
                 ],
               },
               {
-                label: '编辑',
+                label: t('textEditor.menuEdit'),
                 items: [
-                  { label: '撤销', shortcut: 'Ctrl+Z', onClick: () => docRefs.current.get(activeTab.id)?.undo() },
-                  { label: '重做', shortcut: 'Ctrl+Y', onClick: () => docRefs.current.get(activeTab.id)?.redo() },
+                  { label: t('textEditor.menuUndo'), shortcut: 'Ctrl+Z', onClick: () => docRefs.current.get(activeTab.id)?.undo() },
+                  { label: t('textEditor.menuRedo'), shortcut: 'Ctrl+Y', onClick: () => docRefs.current.get(activeTab.id)?.redo() },
                   { separator: true },
-                  { label: '查找 / 替换', shortcut: 'Ctrl+F', onClick: () => docRefs.current.get(activeTab.id)?.openSearch() },
+                  { label: t('textEditor.menuFindReplace'), shortcut: 'Ctrl+F', onClick: () => docRefs.current.get(activeTab.id)?.openSearch() },
                 ],
               },
               {
-                label: '视图',
+                label: t('textEditor.menuView'),
                 items: [
                   {
-                    label: '十六进制模式',
+                    label: t('textEditor.menuHexMode'),
                     checked: activeStatus?.hexMode ?? false,
                     keepOpen: true,
                     onClick: () => docRefs.current.get(activeTab.id)?.toggleHexMode(),
                   },
                   {
-                    label: '自动换行',
+                    label: t('textEditor.menuWrap'),
                     checked: wrapText,
                     keepOpen: true,
                     onClick: () => setWrapText((w) => !w),
@@ -329,7 +332,7 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
         <button
           className="te-error-banner-close"
           onClick={() => docRefs.current.get(activeTab.id)?.clearError()}
-          title="关闭"
+          title={t('textEditor.close')}
         >
           ✕
         </button>
@@ -344,11 +347,11 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
     const st = tabStatuses[confirmCloseTabId];
     return (
       <ConfirmDialog
-        title="关闭页签"
-        message="确定关闭该页签？"
+        title={t('textEditor.closeTabTitle')}
+        message={t('textEditor.closeTabConfirm')}
         highlight={st?.label}
-        detail="该文档有未保存的更改，关闭后将丢失。"
-        confirmLabel="放弃更改并关闭"
+        detail={t('textEditor.closeTabDetail')}
+        confirmLabel={t('textEditor.discardAndClose')}
         danger
         onConfirm={() => {
           const id = confirmCloseTabId;
