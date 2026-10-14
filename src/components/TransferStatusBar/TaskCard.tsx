@@ -7,6 +7,8 @@
 
 import { useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { useTranslation } from 'react-i18next';
+import i18n from '../../i18n';
 import { TransferTask } from '../../hooks/useTransferProgress';
 import { useServerManager } from '../../context/ServerManager';
 import { useServersStore } from '../../stores/serversStore';
@@ -68,15 +70,15 @@ function formatTime(timestamp: number): string {
  */
 function formatEta(seconds: number): string {
   if (seconds <= 0) return '';
-  if (seconds < 60) return `${Math.ceil(seconds)}秒`;
+  if (seconds < 60) return i18n.t('transfer.eta.seconds', { n: Math.ceil(seconds) });
   if (seconds < 3600) {
     const m = Math.floor(seconds / 60);
     const s = Math.ceil(seconds % 60);
-    return s > 0 ? `${m}分${s}秒` : `${m}分`;
+    return s > 0 ? i18n.t('transfer.eta.minutes', { m, s }) : i18n.t('transfer.eta.minutesOnly', { m });
   }
   const h = Math.floor(seconds / 3600);
   const m = Math.ceil((seconds % 3600) / 60);
-  return m > 0 ? `${h}小时${m}分` : `${h}小时`;
+  return m > 0 ? i18n.t('transfer.eta.hours', { h, m }) : i18n.t('transfer.eta.hoursOnly', { h });
 }
 
 // ── 内联 SVG 图标组件（Adwaita 风格）────────────────────────────
@@ -174,6 +176,7 @@ interface TaskCardProps {
 }
 
 export function TaskCard({ task, onRemove }: TaskCardProps) {
+  const { t } = useTranslation();
   const startTimeText = formatTime(task.start_time);
   const { activeServerId, connectServer } = useServerManager();
   // 重试进行中标志：防止连点导致重复发起传输（跨服务器切换耗时数秒）
@@ -235,11 +238,11 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
       log.error('重新发起传输失败:', error);
       // 兜底路径失败是用户主动操作的直接结果，必须可见（不暴露底层错误细节）
       useNotificationStore.getState().pushNotification({
-        title: '重新发起传输失败',
-        body: `「${task.file_name}」重新发起失败，请切回对应服务器后手动重试。`,
-        action: '可重新下载该文件',
+        title: t('transfer.notify.retryFailedTitle'),
+        body: t('transfer.notify.retryFailedBody', { name: task.file_name }),
+        action: t('transfer.notify.retryFailedAction'),
         urgency: 'normal',
-        source: '文件传输',
+        source: t('transfer.source'),
         serverId: task.session_id,
       });
     }
@@ -343,7 +346,7 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
     <div
       className={`task-card ${task.status}`}
       role="listitem"
-      aria-label={`${task.direction === 'upload' ? '上传' : '下载'} ${task.file_name}`}
+      aria-label={`${task.direction === 'upload' ? t('transfer.direction.upload') : t('transfer.direction.download')} ${task.file_name}`}
     >
       {/* 区域 1：方向图标（垂直居中，跨两行） */}
       <span className="tc-icon">
@@ -352,8 +355,8 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
 
       {/* 区域 2a：文件信息（第一行：文件名 + 大小） */}
       <div className="tc-file-info">
-        <span className="tc-filename" title={task.file_name || '未知文件'}>
-          {task.file_name || '未知文件'}
+        <span className="tc-filename" title={task.file_name || t('transfer.unknownFile')}>
+          {task.file_name || t('transfer.unknownFile')}
         </span>
         <span className="tc-file-size">
           {formatFileSize(task.file_size)}
@@ -368,7 +371,7 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
           aria-valuenow={Math.round(task.progress)}
           aria-valuemin={0}
           aria-valuemax={100}
-          aria-label={`${task.file_name} 进度`}
+          aria-label={t('transfer.bar.progressAria', { name: task.file_name })}
         >
           <div
             className={getProgressClass()}
@@ -380,13 +383,13 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
           <span className="tc-speed">{formatSpeed(task.speed)}</span>
         )}
         {task.status === 'active' && task.eta > 0 && (
-          <span className="tc-eta">剩余 {formatEta(task.eta)}</span>
+          <span className="tc-eta">{t('transfer.etaRemaining', { time: formatEta(task.eta) })}</span>
         )}
         {task.status === 'error' && task.error && (
           <span className="tc-error-msg" title={task.error}>{task.error}</span>
         )}
         {task.status === 'interrupted' && (
-          <span className="tc-error-msg" title={task.error || '连接已断开，传输已中断'}>已中断</span>
+          <span className="tc-error-msg" title={task.error || t('transfer.interruptedError')}>{t('transfer.status.interrupted')}</span>
         )}
         {startTimeText && task.status !== 'active' && (
           <span className="tc-elapsed">{startTimeText}</span>
@@ -401,16 +404,16 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
             <button
               className="tc-action-btn"
               onClick={handlePause}
-              aria-label="暂停传输"
-              title="暂停"
+              aria-label={t('transfer.btn.pauseAria')}
+              title={t('transfer.btn.pause')}
             >
               <PauseIcon />
             </button>
             <button
               className="tc-action-btn"
               onClick={handleClose}
-              aria-label="关闭任务"
-              title="关闭"
+              aria-label={t('transfer.btn.closeTaskAria')}
+              title={t('transfer.btn.close')}
             >
               <CloseIcon />
             </button>
@@ -423,16 +426,16 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
             <button
               className="tc-action-btn"
               onClick={handleResume}
-              aria-label="继续传输"
-              title="继续"
+              aria-label={t('transfer.btn.resumeAria')}
+              title={t('transfer.btn.resume')}
             >
               <PlayIcon />
             </button>
             <button
               className="tc-action-btn"
               onClick={handleClose}
-              aria-label="关闭任务"
-              title="关闭"
+              aria-label={t('transfer.btn.closeTaskAria')}
+              title={t('transfer.btn.close')}
             >
               <CloseIcon />
             </button>
@@ -445,16 +448,16 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
             <button
               className="tc-action-btn"
               onClick={handleOpenFile}
-              aria-label="打开文件"
-              title="打开文件"
+              aria-label={t('transfer.btn.openFile')}
+              title={t('transfer.btn.openFile')}
             >
               <FolderOpenIcon />
             </button>
             <button
               className="tc-action-btn"
               onClick={handleClose}
-              aria-label="关闭任务"
-              title="关闭"
+              aria-label={t('transfer.btn.closeTaskAria')}
+              title={t('transfer.btn.close')}
             >
               <CloseIcon />
             </button>
@@ -467,16 +470,16 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
             <button
               className="tc-action-btn"
               onClick={handleRetry}
-              aria-label="重试传输"
-              title="重试"
+              aria-label={t('transfer.btn.retryAria')}
+              title={t('transfer.btn.retry')}
             >
               <RefreshIcon />
             </button>
             <button
               className="tc-action-btn"
               onClick={handleClose}
-              aria-label="关闭任务"
-              title="关闭"
+              aria-label={t('transfer.btn.closeTaskAria')}
+              title={t('transfer.btn.close')}
             >
               <CloseIcon />
             </button>
@@ -489,16 +492,16 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
             <button
               className="tc-action-btn"
               onClick={handleRetry}
-              aria-label="重新开始"
-              title="重新开始"
+              aria-label={t('transfer.btn.restart')}
+              title={t('transfer.btn.restart')}
             >
               <RefreshIcon />
             </button>
             <button
               className="tc-action-btn"
               onClick={handleClose}
-              aria-label="关闭任务"
-              title="关闭"
+              aria-label={t('transfer.btn.closeTaskAria')}
+              title={t('transfer.btn.close')}
             >
               <CloseIcon />
             </button>
@@ -511,16 +514,16 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
             <button
               className="tc-action-btn"
               onClick={handleSwitchAndRetry}
-              aria-label="切回服务器并重试"
-              title="切回服务器并重试"
+              aria-label={t('transfer.btn.switchRetry')}
+              title={t('transfer.btn.switchRetry')}
             >
               <RefreshIcon />
             </button>
             <button
               className="tc-action-btn"
               onClick={handleClose}
-              aria-label="关闭任务"
-              title="关闭"
+              aria-label={t('transfer.btn.closeTaskAria')}
+              title={t('transfer.btn.close')}
             >
               <CloseIcon />
             </button>
@@ -532,8 +535,8 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
           <button
             className="tc-action-btn"
             onClick={handleClose}
-            aria-label="关闭任务"
-            title="关闭"
+            aria-label={t('transfer.btn.closeTaskAria')}
+            title={t('transfer.btn.close')}
           >
             <CloseIcon />
           </button>
