@@ -1057,3 +1057,11 @@
 .st-hint-warn {
   color: var(--quirel-warning-fg);
 }
+
+/* 表单内联错误提示（替代系统 alert 的非阻塞反馈） */
+.st-form-error {
+  color: #c0392b;
+  font-size: 12px;
+  margin-top: 4px;
+  white-space: pre-line; /* 私钥校验消息为多行文本，需保留换行 */
+}
