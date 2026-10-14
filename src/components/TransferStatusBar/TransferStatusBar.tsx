@@ -7,6 +7,7 @@
  */
 
 import { useState, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useTransferProgress } from '../../hooks/useTransferProgress';
 import { TransferPanel } from './TransferPanel';
 import './TransferStatusBar.css';
@@ -50,6 +51,7 @@ function CollapseIcon({ className }: { className?: string }) {
 }
 
 export function TransferStatusBar() {
+  const { t } = useTranslation();
   const { transfers, removeTask } = useTransferProgress();
   const [isExpanded, setIsExpanded] = useState(false);
   const statusbarRef = useRef<HTMLDivElement>(null);
@@ -85,13 +87,13 @@ export function TransferStatusBar() {
             toggleExpand();
           }
         }}
-        aria-label="传输任务"
+        aria-label={t('transfer.bar.taskAria')}
         aria-expanded={isExpanded}
       >
         {/* 图标 + 文本（保持与有任务时相同的布局） */}
         <div className="tsb-icon-count">
           <DownloadIcon className="tsb-icon" />
-          <span className="tsb-count" aria-live="polite">无传输</span>
+          <span className="tsb-count" aria-live="polite">{t('transfer.bar.none')}</span>
         </div>
 
         {/* 空进度条（保持视觉一致性） */}
@@ -144,7 +146,7 @@ export function TransferStatusBar() {
       className="transfer-status-bar"
       onClick={handleStatusbarClick}
       role="button"
-      aria-label={isExpanded ? '收起传输列表' : '展开传输列表'}
+      aria-label={isExpanded ? t('transfer.bar.collapse') : t('transfer.bar.expand')}
       tabIndex={0}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
@@ -156,7 +158,7 @@ export function TransferStatusBar() {
       {/* 图标 + 数量 */}
       <div className="tsb-icon-count">
         <DownloadIcon className="tsb-icon" />
-        <span className="tsb-count" aria-label={`${transfers.length}个传输任务`} aria-live="polite">
+        <span className="tsb-count" aria-label={t('transfer.bar.countAria', { count: transfers.length })} aria-live="polite">
           {transfers.length}
         </span>
       </div>
@@ -168,7 +170,7 @@ export function TransferStatusBar() {
         aria-valuenow={Math.round(totalProgress)}
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-label="传输总进度"
+        aria-label={t('transfer.bar.totalProgressAria')}
       >
         <div
           className="tsb-progress-fill"
