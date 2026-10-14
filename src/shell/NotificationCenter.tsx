@@ -3,6 +3,7 @@
 // 数据源 notificationStore；交互（过滤/已读/清除）与数据层不变
 
 import { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import "./NotificationCenter.css";
 import { useNotificationStore } from "../stores/notificationStore";
 import type { NotificationUrgency } from "../stores/notificationStore";
@@ -10,24 +11,25 @@ import { SymbolicIcon } from "../components/symbolic";
 
 /* ── Utility Functions ───────────────────────────────── */
 
-function formatTime(timestamp: number): string {
+/** 时间格式化（t 由调用方传入，避免模块级缓存旧语言） */
+function formatTime(t: (k: string, o?: Record<string, unknown>) => string, timestamp: number): string {
   const now = new Date();
   const date = new Date(timestamp);
   const diff = now.getTime() - timestamp;
 
-  if (diff < 1000 * 60) return "刚刚";
-  if (diff < 1000 * 60 * 60) return `${Math.floor(diff / 60000)} 分钟前`;
+  if (diff < 1000 * 60) return t("notifications.time.justNow");
+  if (diff < 1000 * 60 * 60) return t("notifications.time.minutesAgo", { n: Math.floor(diff / 60000) });
 
   // 非今天：显示具体日期（跨年带年份）
   if (date.toDateString() !== now.toDateString()) {
     const sameYear = date.getFullYear() === now.getFullYear();
     return sameYear
-      ? `${date.getMonth() + 1}月${date.getDate()}日`
-      : `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
+      ? t("notifications.time.monthDay", { m: date.getMonth() + 1, d: date.getDate() })
+      : t("notifications.time.yearMonthDay", { y: date.getFullYear(), m: date.getMonth() + 1, d: date.getDate() });
   }
 
   // 今天且超过 1 小时
-  return `${Math.floor(diff / 3600000)} 小时前`;
+  return t("notifications.time.hoursAgo", { n: Math.floor(diff / 3600000) });
 }
 
 /** urgency → Symbolic 图标名 */
@@ -52,6 +54,7 @@ interface NotificationCenterProps {
 }
 
 export function NotificationCenter({ isOpen, onClose }: NotificationCenterProps) {
+  const { t } = useTranslation();
   // 真实数据源：zustand 内存 store（连接失败/断连/恢复通知）
   const { notifications, markAsRead, dismiss, clearAll, markAllRead } = useNotificationStore();
   const [filter, setFilter] = useState<NotificationUrgency | "all">("all");
@@ -87,21 +90,21 @@ export function NotificationCenter({ isOpen, onClose }: NotificationCenterProps)
         {/* Header */}
         <div className="nc-header">
           <div className="nc-header-title">
-            <span className="nc-title">通知</span>
+            <span className="nc-title">{t('notifications.title')}</span>
             {unreadCount > 0 && (
               <span className="nc-badge">{unreadCount}</span>
             )}
           </div>
           <div className="nc-header-actions">
-            <button className="nc-action-btn" onClick={markAllRead} title="全部标记已读">
+            <button className="nc-action-btn" onClick={markAllRead} title={t('notifications.markAllReadTitle')}>
               <SymbolicIcon name="emblem-ok" size={14} />
-              全部已读
+              {t('notifications.markAllRead')}
             </button>
-            <button className="nc-action-btn nc-action-danger" onClick={clearAll} title="清除全部">
+            <button className="nc-action-btn nc-action-danger" onClick={clearAll} title={t('notifications.clearAllTitle')}>
               <SymbolicIcon name="user-trash" size={14} />
-              清除
+              {t('notifications.clearAll')}
             </button>
-            <button className="nc-close-btn" onClick={onClose} aria-label="关闭通知中心">
+            <button className="nc-close-btn" onClick={onClose} aria-label={t('notifications.closeAria')}>
               <SymbolicIcon name="window-close" size={14} />
             </button>
           </div>
@@ -113,28 +116,28 @@ export function NotificationCenter({ isOpen, onClose }: NotificationCenterProps)
             className={`nc-filter-btn ${filter === "all" ? "active" : ""}`}
             onClick={() => setFilter("all")}
           >
-            全部 ({notifications.length})
+            {t('notifications.filterAll', { count: notifications.length })}
           </button>
           <button
             className={`nc-filter-btn ${filter === "critical" ? "active" : ""}`}
             onClick={() => setFilter("critical")}
           >
             <span className="nc-dot nc-dot-critical" />
-            紧急 ({notifications.filter((n) => n.urgency === "critical").length})
+            {t('notifications.filterCritical', { count: notifications.filter((n) => n.urgency === "critical").length })}
           </button>
           <button
             className={`nc-filter-btn ${filter === "normal" ? "active" : ""}`}
             onClick={() => setFilter("normal")}
           >
             <span className="nc-dot nc-dot-normal" />
-            普通 ({notifications.filter((n) => n.urgency === "normal").length})
+            {t('notifications.filterNormal', { count: notifications.filter((n) => n.urgency === "normal").length })}
           </button>
           <button
             className={`nc-filter-btn ${filter === "low" ? "active" : ""}`}
             onClick={() => setFilter("low")}
           >
             <span className="nc-dot nc-dot-low" />
-            低 ({notifications.filter((n) => n.urgency === "low").length})
+            {t('notifications.filterLow', { count: notifications.filter((n) => n.urgency === "low").length })}
           </button>
         </div>
 
@@ -143,7 +146,7 @@ export function NotificationCenter({ isOpen, onClose }: NotificationCenterProps)
           {filteredNotifications.length === 0 ? (
             <div className="nc-empty">
               <SymbolicIcon name="mailbox" size={32} className="nc-empty-icon" />
-              <div className="nc-empty-text">没有通知</div>
+              <div className="nc-empty-text">{t('notifications.empty')}</div>
             </div>
           ) : (
             filteredNotifications.map((notif) => (
@@ -154,15 +157,15 @@ export function NotificationCenter({ isOpen, onClose }: NotificationCenterProps)
               >
                 {/* 卡片头部行：时间（左上）+ 关闭按钮（右上） */}
                 <div className="nc-notif-top">
-                  <span className="nc-notif-time">{formatTime(notif.timestamp)}</span>
+                  <span className="nc-notif-time">{formatTime(t, notif.timestamp)}</span>
                   <button
                     className="nc-notif-dismiss"
                     onClick={(e) => {
                       e.stopPropagation();
                       dismiss(notif.id);
                     }}
-                    aria-label="删除通知"
-                    title="删除"
+                    aria-label={t('notifications.deleteAria')}
+                    title={t('notifications.delete')}
                   >
                     <SymbolicIcon name="window-close" size={12} />
                   </button>
@@ -192,13 +195,13 @@ export function NotificationCenter({ isOpen, onClose }: NotificationCenterProps)
         <div className="nc-footer">
           <span className="nc-footer-text">
             {criticalCount > 0 && (
-              <span className="nc-footer-warning">⚠️ {criticalCount} 个紧急通知未处理</span>
+              <span className="nc-footer-warning">{t('notifications.criticalUnread', { count: criticalCount })}</span>
             )}
             {criticalCount === 0 && unreadCount > 0 && (
-              <span>{unreadCount} 个未读通知</span>
+              <span>{t('notifications.unreadCount', { count: unreadCount })}</span>
             )}
             {criticalCount === 0 && unreadCount === 0 && (
-              <span>所有通知已处理</span>
+              <span>{t('notifications.allHandled')}</span>
             )}
           </span>
         </div>

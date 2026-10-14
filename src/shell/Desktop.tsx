@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, memo, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { NotificationCenter } from "./NotificationCenter";
 import { ArrivalToast } from "./ArrivalToast";
 import { TopBar } from "./TopBar/TopBar";
@@ -66,6 +67,7 @@ const DesktopWindow = memo(function DesktopWindow({
   const { manager } = useWindowManager();
   const win = manager.getById(windowId);
   const app = manager.getApp(appId);
+  const { t } = useTranslation();
 
   // 用 useWindowState 独立订阅此窗口的状态
   const windowState = useWindowState(windowId);
@@ -92,7 +94,7 @@ const DesktopWindow = memo(function DesktopWindow({
     <WindowShell
       key={windowId}
       windowId={windowId}
-      title={app.title}
+      title={t(app.titleKey)}
       isActive={windowState.isActive}
       isMinimized={windowState.minimized}
       isMaximized={windowState.maximized}
@@ -152,6 +154,7 @@ export function Desktop() {
 
 // ─── DesktopContent ──────────────────────────────────
 function DesktopContent() {
+  const { t } = useTranslation();
   const [overviewVisible, setOverviewVisible] = useState(false);
   const [notificationOpen, setNotificationOpen] = useState(false);
   const notifications = useNotificationStore((s) => s.notifications);
@@ -306,7 +309,7 @@ function DesktopContent() {
       {/* 浏览器模式提示：无 Tauri 运行时时连接/存储功能不可用 */}
       {!isTauri() && (
         <div className="browser-mode-banner" role="status">
-          浏览器模式：连接服务器与数据持久化不可用，仅用于界面调试，请使用桌面客户端获得完整功能
+          {t('desktop.browserModeBanner')}
         </div>
       )}
 
@@ -330,7 +333,7 @@ function DesktopContent() {
               onDoubleClick={() => createApp(app.id)}
             >
               <div className="icon">{app.icon}</div>
-              <div className="label">{app.desktopLabel ?? app.title}</div>
+              <div className="label">{t(app.desktopLabelKey ?? app.titleKey)}</div>
             </div>
           ))}
         </div>
@@ -365,7 +368,7 @@ function DesktopContent() {
                   onClick={() => openApp(app.id)}
                 >
                   <div className="icon">{app.icon}</div>
-                  <div className="label">{app.dockLabel ?? app.title}</div>
+                  <div className="label">{t(app.dockLabelKey ?? app.titleKey)}</div>
                   {isOpen && <div className="dock-indicator" />}
                 </div>
               );
@@ -382,7 +385,7 @@ function DesktopContent() {
           <input
             className="overview-search"
             type="text"
-            placeholder="搜索应用..."
+            placeholder={t('desktop.searchApps')}
             autoFocus
           />
           <div className="overview-apps">
@@ -393,7 +396,7 @@ function DesktopContent() {
                 onClick={() => createApp(app.id)}
               >
                 <div className="icon">{app.icon}</div>
-                <div className="label">{app.desktopLabel ?? app.title}</div>
+                <div className="label">{t(app.desktopLabelKey ?? app.titleKey)}</div>
               </div>
             ))}
           </div>

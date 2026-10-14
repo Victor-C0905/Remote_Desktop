@@ -21,6 +21,7 @@
 
 import type { CSSProperties, ReactNode } from 'react';
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import '@sinm/react-chrome-tabs/css/chrome-tabs.css';
 import './ChromeTabStrip.css';
 import { useChromeTabsHost } from './useChromeTabsHost';
@@ -82,6 +83,7 @@ export function ChromeTabStrip({
   onReorder,
   children,
 }: ChromeTabStripProps) {
+  const { t } = useTranslation();
   const rowRef = useRef<HTMLDivElement>(null);
   const tailRef = useRef<HTMLDivElement>(null);
   const [newTabLeft, setNewTabLeft] = useState<number | null>(null);
@@ -189,8 +191,8 @@ export function ChromeTabStrip({
         className="te-tab-new"
         style={newTabLeft !== null ? { left: newTabLeft } : undefined}
         onClick={onAdd}
-        title="新建页签"
-        aria-label="新建页签"
+        title={t('tabs.newTab')}
+        aria-label={t('tabs.newTab')}
       />
       <div ref={tailRef} className="chrome-tabstrip-tail">
         {children}

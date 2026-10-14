@@ -10,7 +10,7 @@ function makeRegistry() {
   const registry = new WindowRegistry();
   registry.register({
     id: 'test-app',
-    title: 'Test',
+    titleKey: 'apps.terminal.title',
     icon: '',
     defaultSize: { width: 800, height: 600 },
     minSize: { width: 400, height: 300 },

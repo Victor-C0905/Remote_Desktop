@@ -6,6 +6,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { createLogger } from '../../../utils/logger';
 import { buildListCommand, type ArchiveKind } from '../commands';
@@ -34,10 +35,11 @@ export function useArchiveListing(
   const [tree, setTree] = useState<ArchiveTreeNode[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<{ msg: string; detail?: string } | null>(null);
+  const { t } = useTranslation();
 
   const refresh = useCallback(async () => {
     if (!path || !serverId || !kind) {
-      setError({ msg: kind ? '未指定压缩包或未连接服务器' : `不支持的压缩格式` });
+      setError({ msg: t(kind ? 'archive.errNoTarget' : 'archive.errUnsupported') });
       setLoading(false);
       return;
     }
@@ -50,17 +52,17 @@ export function useArchiveListing(
         workingDirectory: '/', timeoutSecs: 30,
       });
       if (r.exitCode !== 0) {
-        setError({ msg: `列表命令失败（exit ${r.exitCode}）`, detail: r.stderr || r.stdout });
+        setError({ msg: t('archive.errListCommandFailed', { code: r.exitCode }), detail: r.stderr || r.stdout });
         return;
       }
       setTree(buildTree(parseListing(kind, r.stdout)));
     } catch (err) {
       log.error('加载压缩包列表失败:', err);
-      setError({ msg: '无法解析列表输出', detail: String(err) });
+      setError({ msg: t('archive.errParse'), detail: String(err) });
     } finally {
       setLoading(false);
     }
-  }, [path, serverId, kind]);
+  }, [path, serverId, kind, t]);
 
   useEffect(() => { refresh(); }, [refresh]);
 

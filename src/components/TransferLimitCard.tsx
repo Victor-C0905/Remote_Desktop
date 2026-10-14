@@ -1,5 +1,6 @@
 // src/components/TransferLimitCard.tsx
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { createLogger } from "../utils/logger";
 
@@ -31,6 +32,7 @@ interface Feedback {
 }
 
 export function TransferLimitCard({ serverId }: { serverId: string | null }) {
+  const { t } = useTranslation();
   const [inputValue, setInputValue] = useState("");
   const [state, setState] = useState<LimitState>({ kind: "disconnected" });
   const [feedback, setFeedback] = useState<Feedback | null>(null);
@@ -94,8 +96,8 @@ export function TransferLimitCard({ serverId }: { serverId: string | null }) {
       setInputValue(String(info.max_file_transfer_mb));
       setFeedback(
         info.persisted
-          ? { text: "已生效", warn: false }
-          : { text: "已生效，但配置文件写入失败，重启后恢复原值", warn: true }
+          ? { text: t("transfer.limit.applied"), warn: false }
+          : { text: t("transfer.limit.appliedNotPersisted"), warn: true }
       );
     } catch (e) {
       // Agent 的 403/400 已是用户视角文案；其余为网络/连接类
@@ -110,17 +112,17 @@ export function TransferLimitCard({ serverId }: { serverId: string | null }) {
   const hint = (() => {
     switch (state.kind) {
       case "disconnected":
-        return "连接服务器后可查看";
+        return t("transfer.limit.disconnected");
       case "unsupported":
-        return "当前 Agent 版本不支持此设置，请升级 Agent";
+        return t("transfer.limit.unsupported");
       case "loading":
-        return "正在查询…";
+        return t("transfer.limit.loading");
       case "error":
         return state.message;
       case "ready":
         return state.editable
-          ? "仅对当前连接的服务器生效，修改后该服务器所有用户适用"
-          : "需要以 root 用户连接才能修改";
+          ? t("transfer.limit.editableHint")
+          : t("transfer.limit.rootRequired");
     }
   })();
 
@@ -128,14 +130,14 @@ export function TransferLimitCard({ serverId }: { serverId: string | null }) {
   const invalidLocal =
     state.kind === "ready" && state.editable && inputValue !== "" && !isValidLocal;
   const hintText = invalidLocal
-    ? `请输入 ${MIN_LIMIT_MB} – ${MAX_LIMIT_MB} 之间的整数`
+    ? t("transfer.limit.invalidRange", { min: MIN_LIMIT_MB, max: MAX_LIMIT_MB })
     : hint;
 
   return (
     <div className="st-card">
-      <div className="st-card-header text-title">传输设置</div>
+      <div className="st-card-header text-title">{t("transfer.limit.title")}</div>
       <div className="st-option-row">
-        <span className="st-option-label text-body">上传大小限制</span>
+        <span className="st-option-label text-body">{t("transfer.limit.uploadLimitLabel")}</span>
         <input
           type="number"
           className="st-input"
@@ -152,7 +154,7 @@ export function TransferLimitCard({ serverId }: { serverId: string | null }) {
           disabled={applyDisabled || applying}
           onClick={handleApply}
         >
-          应用
+          {t("transfer.limit.apply")}
         </button>
       </div>
       <div className="st-hint">{hintText}</div>

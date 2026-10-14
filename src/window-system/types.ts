@@ -44,7 +44,8 @@ export interface WindowLifecycle {
 // Application definition for registry
 export interface AppDefinition {
   id: string;
-  title: string;
+  /** 窗口标题的词典 key（文案在 i18n apps 域；渲染处 t()） */
+  titleKey: string;
   icon: string;
   defaultSize: { width: number; height: number };
   minSize: { width: number; height: number };
@@ -55,8 +56,8 @@ export interface AppDefinition {
   // 桌面/Dock 显示配置（单一数据源，Desktop/Dock/Overview 从此派生）
   showOnDesktop?: boolean;    // 是否显示在桌面图标区，默认 true
   showOnDock?: boolean;       // 是否显示在 Dock，默认 true
-  desktopLabel?: string;      // 桌面图标标签（默认用 title）
-  dockLabel?: string;         // Dock 标签（默认用 title）
+  desktopLabelKey?: string;   // 桌面图标标签的词典 key（默认用 titleKey）
+  dockLabelKey?: string;      // Dock 标签的词典 key（默认用 titleKey）
 }
 
 // Layout types

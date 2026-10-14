@@ -153,11 +153,17 @@ export function HexEditorPane({ data, onChange: _onChange }: HexEditorPaneProps)
           disabled={!canGoPrev}
           title={t('textEditor.hexPrevPage')}
         >
-          ← 上一页
+          ← {t('textEditor.hexPrevPage')}
         </button>
 
         <span className="te-hex-pagination-info">
-          第 {currentPage} / {totalPages} 页 ({offset + 1}-{Math.min(offset + PAGE_SIZE, data.length)} / {data.length} 字节)
+          {t('textEditor.hexPageInfo', {
+            page: currentPage,
+            totalPages,
+            from: offset + 1,
+            to: Math.min(offset + PAGE_SIZE, data.length),
+            total: data.length,
+          })}
         </span>
 
         <button
@@ -166,7 +172,7 @@ export function HexEditorPane({ data, onChange: _onChange }: HexEditorPaneProps)
           disabled={!canGoNext}
           title={t('textEditor.hexNextPage')}
         >
-          下一页 →
+          {t('textEditor.hexNextPage')} →
         </button>
       </div>
 

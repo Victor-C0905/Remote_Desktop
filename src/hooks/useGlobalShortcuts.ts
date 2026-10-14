@@ -9,7 +9,8 @@ interface ShortcutConfig {
   shift?: boolean;
   meta?: boolean;
   action: () => void;
-  description?: string;
+  /** 描述的词典 key（渲染处 t()，P7） */
+  descriptionKey?: string;
 }
 
 interface UseGlobalShortcutsOptions {
@@ -64,37 +65,37 @@ export function createAppShortcuts(
       key: "Meta",
       meta: true,
       action: toggleOverview,
-      description: "打开活动概览",
+      descriptionKey: "shortcuts.overview",
     },
     {
       key: "OS",
       meta: true,
       action: toggleOverview,
-      description: "打开活动概览",
+      descriptionKey: "shortcuts.overview",
     },
     {
       key: "1",
       meta: true,
       action: () => openApp("files"),
-      description: "打开文件管理器",
+      descriptionKey: "shortcuts.files",
     },
     {
       key: "2",
       meta: true,
       action: () => openApp("terminal"),
-      description: "打开终端",
+      descriptionKey: "shortcuts.terminal",
     },
     {
       key: "3",
       meta: true,
       action: () => openApp("monitor"),
-      description: "打开系统监控",
+      descriptionKey: "shortcuts.monitor",
     },
     {
       key: "4",
       meta: true,
       action: () => openApp("settings"),
-      description: "打开设置",
+      descriptionKey: "shortcuts.settings",
     },
     {
       key: "Escape",
@@ -102,12 +103,12 @@ export function createAppShortcuts(
         closeOverview();
         closeNotifications();
       },
-      description: "关闭概览/通知中心",
+      descriptionKey: "shortcuts.closeOverlays",
     },
     {
       key: "F1",
       action: () => openApp("settings"),
-      description: "打开设置",
+      descriptionKey: "shortcuts.settings",
     },
   ];
 }
