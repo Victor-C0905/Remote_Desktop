@@ -17,6 +17,8 @@ import { ChromeTabStrip } from '../components/ChromeTabStrip/ChromeTabStrip';
 // import { useWindowState } from '../window-system/hooks/useWindowState'; // 未来集成时使用
 import { useWindowEvent } from '../window-system/hooks/useWindowEvent';
 import { describeTerminalFailure } from '../types/errors';
+import { useTranslation } from 'react-i18next';
+import i18n from '../i18n';
 import { createLogger } from '../utils/logger';
 import './Terminal.css';
 
@@ -84,7 +86,7 @@ function TerminalInstance({
   // IME 合成状态跟踪：防止合成期间焦点切换导致 compositionEnd 丢失，进而卡死输入
   const isComposingRef = useRef(false);
   const composingTimerRef = useRef<number | null>(null);
-  const [initializationStatus, setInitializationStatus] = useState<string>('等待容器挂载...');
+  const [initializationStatus, setInitializationStatus] = useState<string>(i18n.t('terminal.waitingMount'));
 
   // ── 会话保活：防「拖拽重排触发 effect 假重跑」丢内容 ──────────
   // 实测（内存级事件流取证）：页签拖拽重排后约 5ms，被移动页签的同一
@@ -157,7 +159,7 @@ function TerminalInstance({
   useEffect(() => {
     const container = containerRef.current;
     if (!container) {
-      setInitializationStatus('❌ 容器 ref 为空');
+      setInitializationStatus(i18n.t('terminal.containerRefEmpty'));
       return;
     }
 
@@ -306,7 +308,7 @@ function TerminalInstance({
 
           // 6. 尝试连接远程 PTY 或启动演示模式
           if (activeServerId) {
-            setInitializationStatus('连接远程终端...');
+            setInitializationStatus(i18n.t('terminal.connectingRemote'));
             await connectRemotePty(terminal, activeServerId, activeServerName, activeServerHost, activeServerPort, sessionIdRef, unlistenRefs, workingDirectory, initialCommand);
             // await 期间 teardown 已执行：刚建立的会话无人使用，立即关闭防泄漏
             if (disposedRef.current) {
@@ -322,8 +324,8 @@ function TerminalInstance({
               return;
             }
           } else {
-            setInitializationStatus('演示模式');
-            terminal.write('[演示模式] 未连接远程服务器\r\n');
+            setInitializationStatus(i18n.t('terminal.demoMode'));
+            terminal.write(i18n.t('terminal.demoNotConnected'));
             runDemoShell(terminal);
           }
 
@@ -337,10 +339,10 @@ function TerminalInstance({
           log.info('✅ 初始化完成');
         } catch (err) {
           log.error('❌ 初始化失败:', err);
-          setInitializationStatus('❌ 初始化失败: ' + err);
+          setInitializationStatus(i18n.t('terminal.initFailedStatus', { error: String(err) }));
           // 回退到演示模式
-          terminal.write(`\x1b[31m[连接失败]\x1b[0m ${describeTerminalFailure(err)}\r\n`);
-          terminal.write('[演示模式] 输入 help 查看可用命令\r\n');
+          terminal.write(`\x1b[31m${i18n.t('terminal.connectFailedPrefix')}\x1b[0m ${describeTerminalFailure(err)}\r\n`);
+          terminal.write(i18n.t('terminal.demoHelpHint'));
           runDemoShell(terminal);
           // 即使失败也通知父组件（演示模式可用）
           if (onTerminalReady) {
@@ -433,12 +435,12 @@ function TerminalInstance({
       return scheduleTeardown;
     } catch (err) {
       log.error('❌ 初始化失败:', err);
-      setInitializationStatus('❌ 初始化失败: ' + err);
+      setInitializationStatus(i18n.t('terminal.initFailedStatus', { error: String(err) }));
       // 创建半途失败：清扫半初始化状态（terminalRef 可能已赋值），并把
       // depsKey 复位，避免下次 setup 把残缺终端误判为可保活
       depsKeyRef.current = null;
       teardownNow();
-      container.innerHTML = `<div style="color:#ff4444;padding:12px;font-family:monospace;">终端初始化失败: ${err}</div>`;
+      container.innerHTML = `<div style="color:#ff4444;padding:12px;font-family:monospace;">${i18n.t('terminal.initFailedHtml', { error: String(err) })}</div>`;
     }
   }, [activeServerId, activeServerName, activeServerHost, activeServerPort]);
 
@@ -492,8 +494,10 @@ async function connectRemotePty(
   log.info('✅ 远程终端创建成功:', sessionId);
 
   // 2. 显示连接信息
-  terminal.write(`\x1b[1;32m✅ 远程终端已连接\x1b[0m\r\n`);
-  terminal.write(`服务器: \x1b[1;34m${serverName || serverHost}:${serverPort || 8443}\x1b[0m\r\n`);
+  terminal.write(`\x1b[1;32m${i18n.t('terminal.connectedBanner')}\x1b[0m\r\n`);
+  terminal.write(i18n.t('terminal.connectedServer', {
+    name: `\x1b[1;34m${serverName || serverHost}:${serverPort || 8443}\x1b[0m`,
+  }) + '\r\n');
   terminal.write(`Session: ${sessionId}\r\n\r\n`);
 
   // 3. 监听终端输出事件
@@ -513,7 +517,7 @@ async function connectRemotePty(
     'terminal-disconnected',
     (event) => {
       if (event.payload.session_id === sessionId) {
-        terminal.write('\r\n\x1b[31m[远程终端断开]\x1b[0m\r\n');
+        terminal.write(`\r\n\x1b[31m${i18n.t('terminal.disconnectedBanner')}\x1b[0m\r\n`);
         // 移除所有监听器
         unlistenRefs.current.forEach(fn => fn());
         unlistenRefs.current = [];
@@ -571,16 +575,16 @@ function runDemoShell(terminal: Terminal): void {
   const writePrompt = () => terminal.write(`\r\n\x1b[32m${username}@${hostname}\x1b[0m:\x1b[34m${cwd}\x1b[0m$ `);
 
   const commands: Record<string, () => void> = {
-    help: () => terminal.write('\r\n可用命令：help, echo, ls, pwd, cd, clear, date, whoami, exit\r\n'),
+    help: () => terminal.write(`\r\n${i18n.t('terminal.demoCommands')}\r\n`),
     ls: () => terminal.write('\r\nDesktop  Documents  Downloads  Music  Pictures  Videos  Projects\r\n'),
     pwd: () => terminal.write(`\r\n/home/${username}${cwd === '~' ? '' : '/' + cwd}\r\n`),
     whoami: () => terminal.write(`\r\n${username}\r\n`),
     date: () => terminal.write(`\r\n${new Date().toString()}\r\n`),
     clear: () => terminal.clear(),
-    exit: () => terminal.write('\r\n[演示模式已结束，关闭此标签或新建标签继续]\r\n'),
+    exit: () => terminal.write(`\r\n${i18n.t('terminal.demoExit')}\r\n`),
   };
 
-  terminal.write('[演示模式] 输入 help 查看可用命令\r\n');
+  terminal.write(i18n.t('terminal.demoHelpHint'));
   writePrompt();
 
   terminal.onData((data) => {
@@ -645,6 +649,7 @@ interface TerminalAppProps {
 }
 
 export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
+  const { t } = useTranslation();
   // ── 窗口系统集成 ────────────────────────────────────────────────────
   // 获取窗口状态（title、position、size、focused 等）
   // 用于窗口系统集成，确保每个窗口实例正确连接到窗口管理器
@@ -699,7 +704,7 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
     if (tabs.length === 0) {
       const id = newTabId();
       initialTabIdRef.current = id;
-      setTabs([{ id, label: '终端 1' }]);
+      setTabs([{ id, label: t('terminal.tabLabel', { n: 1 }) }]);
       setActiveTabId(id);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -708,7 +713,7 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
   // ── 新建 tab ─────────────────────────────────────────────────
   const handleNewTab = () => {
     const id = newTabId();
-    setTabs((prev) => [...prev, { id, label: `终端 ${nextTabNumber(prev)}` }]);
+    setTabs((prev) => [...prev, { id, label: t('terminal.tabLabel', { n: nextTabNumber(prev) }) }]);
     setActiveTabId(id);
   };
 
@@ -939,17 +944,17 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
           统一在底部状态栏显示；名称与 host:port 保留在圆点悬停提示中 */}
       <span
         className={`terminal-status ${activeServer ? 'is-remote' : 'is-local'}`}
-        title={activeServer ? `${activeServer.name} · ${activeServer.host}:${activeServer.port}` : '未连接远程服务器'}
+        title={activeServer ? `${activeServer.name} · ${activeServer.host}:${activeServer.port}` : t('terminal.notConnectedTitle')}
       >
         <span className="terminal-status-dot" />
       </span>
       {/* 低频操作收纳进 ⌄ 菜单：搜索/设置面板的开关，开启时菜单项打勾 */}
       <ToolbarMenu
         icon="⌄"
-        title="更多操作"
+        title={t('terminal.moreActions')}
         items={[
-          { label: '搜索', checked: showSearch, onClick: () => setShowSearch((v) => !v) },
-          { label: '设置', checked: showSettings, onClick: () => setShowSettings((v) => !v) },
+          { label: t('terminal.menuSearch'), checked: showSearch, onClick: () => setShowSearch((v) => !v) },
+          { label: t('terminal.menuSettings'), checked: showSettings, onClick: () => setShowSettings((v) => !v) },
         ]}
       />
     </ChromeTabStrip>
@@ -963,7 +968,7 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
       {/* Search Bar */}
       {showSearch && (
         <div className="terminal-search-bar">
-          <span className="terminal-search-label">搜索:</span>
+          <span className="terminal-search-label">{t('terminal.searchLabel')}</span>
           <input
             className="terminal-search-input"
             value={searchText}
@@ -972,12 +977,12 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
               if (e.key === 'Enter') handleSearch();
             }}
             autoFocus
-            placeholder="在终端中搜索..."
+            placeholder={t('terminal.searchPlaceholder')}
           />
-          <button className="terminal-search-button" onClick={handleSearchPrev} title="上一个">↑</button>
-          <button className="terminal-search-button" onClick={handleSearchNext} title="下一个">↓</button>
-          <button className="terminal-search-button" onClick={handleSearch}>查找</button>
-          <button className="terminal-search-button" onClick={() => setShowSearch(false)}>关闭</button>
+          <button className="terminal-search-button" onClick={handleSearchPrev} title={t('terminal.searchPrev')}>↑</button>
+          <button className="terminal-search-button" onClick={handleSearchNext} title={t('terminal.searchNext')}>↓</button>
+          <button className="terminal-search-button" onClick={handleSearch}>{t('terminal.searchFind')}</button>
+          <button className="terminal-search-button" onClick={() => setShowSearch(false)}>{t('terminal.close')}</button>
         </div>
       )}
 
@@ -1015,8 +1020,8 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
         {tabs.length === 0 && (
           <div className="terminal-empty">
             <div className="empty-icon">🖥️</div>
-            <div className="empty-text">没有打开的终端</div>
-            <div className="empty-hint">点击"+ 新建"启动一个新的终端</div>
+            <div className="empty-text">{t('terminal.emptyText')}</div>
+            <div className="empty-hint">{t('terminal.emptyHint')}</div>
           </div>
         )}
       </div>
@@ -1034,12 +1039,12 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
               <span className="terminal-status-item terminal-status-mono">
                 {activeServer.host}:{activeServer.port}
               </span>
-              <span className="terminal-status-item">{tabs.length} 个会话</span>
+              <span className="terminal-status-item">{t('terminal.sessionCount', { count: tabs.length })}</span>
             </>
           ) : (
             <span className="terminal-status-item">
               <span className="terminal-status-dot off" />
-              本地演示模式（未连接远程服务器）
+              {t('terminal.demoLocalStatus')}
             </span>
           )}
         </div>
@@ -1052,7 +1057,7 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
       {showSettings && (
         <div className="terminal-settings-panel" onClick={(e) => e.stopPropagation()}>
           <label className="terminal-settings-label">
-            字号:
+            {t('terminal.fontSizeLabel')}
             <input
               type="range"
               className="terminal-settings-slider"
@@ -1064,7 +1069,7 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
             <span className="terminal-settings-value">{fontSize}</span>
           </label>
           <label className="terminal-settings-label">
-            光标闪烁:
+            {t('terminal.cursorBlinkLabel')}
             <input
               type="checkbox"
               className="terminal-settings-checkbox"
@@ -1072,17 +1077,17 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
               onChange={(e) => setCursorBlink(e.target.checked)}
             />
           </label>
-          <button className="terminal-settings-close-button" onClick={() => setShowSettings(false)}>关闭</button>
+          <button className="terminal-settings-close-button" onClick={() => setShowSettings(false)}>{t('terminal.close')}</button>
         </div>
       )}
 
       {/* Context Menu（只在未选中时显示，提供粘贴选项）*/}
       {contextMenu && (
         <div className="terminal-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(e) => e.stopPropagation()}>
-          <button className="terminal-menu-item" onClick={handlePaste}>粘贴</button>
+          <button className="terminal-menu-item" onClick={handlePaste}>{t('terminal.paste')}</button>
           <hr className="terminal-menu-divider" />
-          <button className="terminal-menu-item" onClick={() => { setShowSearch(true); setContextMenu(null); }}>搜索</button>
-          <button className="terminal-menu-item" onClick={() => { setShowSettings(true); setContextMenu(null); }}>设置</button>
+          <button className="terminal-menu-item" onClick={() => { setShowSearch(true); setContextMenu(null); }}>{t('terminal.menuSearch')}</button>
+          <button className="terminal-menu-item" onClick={() => { setShowSettings(true); setContextMenu(null); }}>{t('terminal.menuSettings')}</button>
         </div>
       )}
     </div>
