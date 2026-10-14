@@ -14,7 +14,8 @@ import { SymbolicIcon } from '../components/symbolic';
 import { getServerErrorInfo } from '../stores/serversStore';
 import { getSettingsStorage } from '../utils/storage';
 import { RESOURCES, type Locale } from "../i18n";
-// import { useWindowState } from "../window-system/hooks/useWindowState"; // 未来集成时使用
+import { useTranslation } from "react-i18next";
+// import { useWindowState } from "../window-system/hooks/useWindowState";
 import "./Settings.css";
 
 const log = createLogger('Settings');
@@ -35,19 +36,19 @@ interface BrowserInfo {
 interface SidebarItem {
   id: SettingsSection;
   icon: string;
-  label: string;
+  labelKey: string;
 }
 
 const SIDEBAR_ITEMS: SidebarItem[] = [
-  { id: "connection", icon: "🔗", label: "连接" },
-  { id: "appearance", icon: "🎨", label: "外观" },
-  { id: "keyboard", icon: "⌨️", label: "快捷键" },
-  { id: "files", icon: "📁", label: "文件" },
-  { id: "terminal", icon: "🖥️", label: "终端" },
-  { id: "browser", icon: "🌐", label: "浏览器" },
-  { id: "notifications", icon: "🔔", label: "通知" },
-  { id: "stats", icon: "📊", label: "系统监控" },
-  { id: "about", icon: "ℹ️", label: "关于" },
+  { id: "connection", icon: "🔗", labelKey: "settings.section.connection" },
+  { id: "appearance", icon: "🎨", labelKey: "settings.section.appearance" },
+  { id: "keyboard", icon: "⌨️", labelKey: "settings.section.keyboard" },
+  { id: "files", icon: "📁", labelKey: "settings.section.files" },
+  { id: "terminal", icon: "🖥️", labelKey: "settings.section.terminal" },
+  { id: "browser", icon: "🌐", labelKey: "settings.section.browser" },
+  { id: "notifications", icon: "🔔", labelKey: "settings.section.notifications" },
+  { id: "stats", icon: "📊", labelKey: "settings.section.stats" },
+  { id: "about", icon: "ℹ️", labelKey: "settings.section.about" },
 ];
 
 /* ── Add Server Modal ───────────────────────────────── */
@@ -59,6 +60,7 @@ interface AddServerModalProps {
 }
 
 function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
+  const { t } = useTranslation();
   const [name, setName] = useState("");
   const [host, setHost] = useState("");
   const [port, setPort] = useState(8443);
@@ -69,6 +71,8 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
   const [password, setPassword] = useState("");
   const [privateKeyFile, setPrivateKeyFile] = useState("");
   const [passphrase, setPassphrase] = useState("");
+  // 表单内联错误（替代系统 alert）
+  const [formError, setFormError] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
@@ -87,6 +91,7 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
       };
 
       onAdd(name, host, port, auth);
+      setFormError(null);
       setName("");
       setHost("");
       setPort(8443);
@@ -104,19 +109,20 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
   const handlePrivateKeySelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      setFormError(null);
       try {
         // 读取文件内容
         const content = await file.text();
 
         // 基本格式验证
         if (!content.includes('-----BEGIN')) {
-          alert('选择的文件不是有效的私钥文件。\n\n私钥文件应以 -----BEGIN 开头。\n\n支持的格式：\n• OpenSSH 格式（如 ~/.ssh/id_ed25519）\n• PEM 格式（云服务商提供的密钥）\n\n不支持：PuTTY 格式（.ppk）');
+          setFormError(t('settings.errors.invalidKeyFile'));
           return;
         }
 
         // 检查是否是 PuTTY 格式
         if (content.includes('PuTTY')) {
-          alert('检测到 PuTTY 格式私钥（.ppk）。\n\n请使用 PuTTYgen 转换为 OpenSSH 格式：\n1. 打开 PuTTYgen\n2. 加载您的 .ppk 文件\n3. 点击 "Conversions" -> "Export OpenSSH key"\n4. 保存新的文件');
+          setFormError(t('settings.errors.puttyKeyFile'));
           return;
         }
 
@@ -126,10 +132,10 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
         }
 
         setPrivateKeyFile(content);
-        log.info('已加载私钥文件:', file.name);
+        log.info('Private key file loaded:', file.name);
       } catch (error) {
         console.error("读取私钥文件失败:", error);
-        alert("读取私钥文件失败，请检查文件格式和权限");
+        setFormError(t('settings.errors.readKeyFailed'));
       }
     }
   };
@@ -138,33 +144,33 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
     <div className="st-modal-overlay">
       <div className="st-modal">
         <div className="st-modal-header">
-          <span className="st-modal-title">添加服务器</span>
+          <span className="st-modal-title">{t("settings.addServerTitle")}</span>
           <button className="st-modal-close" onClick={onClose}>×</button>
         </div>
         <form className="st-modal-body" onSubmit={handleSubmit}>
           <div className="st-form-row">
-            <label className="st-form-label text-label">服务器名称</label>
+            <label className="st-form-label text-label">{t("settings.serverName")}</label>
             <input
               type="text"
               className="st-form-input"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="例如: prod-server"
+              placeholder={t("settings.serverNamePlaceholder")}
               autoFocus
             />
           </div>
           <div className="st-form-row">
-            <label className="st-form-label text-label">主机地址</label>
+            <label className="st-form-label text-label">{t("settings.host")}</label>
             <input
               type="text"
               className="st-form-input"
               value={host}
               onChange={(e) => setHost(e.target.value)}
-              placeholder="例如: server.example.com 或 172.20.10.3"
+              placeholder={t("settings.hostPlaceholder")}
             />
           </div>
           <div className="st-form-row">
-            <label className="st-form-label">端口</label>
+            <label className="st-form-label">{t("settings.port")}</label>
             <input
               type="number"
               className="st-form-input"
@@ -176,38 +182,38 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
 
           {/* 认证配置 */}
           <div className="st-form-row">
-            <label className="st-form-label">认证方式</label>
+            <label className="st-form-label">{t("settings.authMethod")}</label>
             <select
               className="st-form-input"
               value={authMethod}
               onChange={(e) => setAuthMethod(e.target.value as AuthMethod)}
             >
-              <option value={AuthMethod.PASSWORD}>密码认证</option>
-              <option value={AuthMethod.PUBKEY}>公钥认证</option>
+              <option value={AuthMethod.PASSWORD}>{t("settings.authPassword")}</option>
+              <option value={AuthMethod.PUBKEY}>{t("settings.authPubkey")}</option>
             </select>
           </div>
 
           <div className="st-form-row">
-            <label className="st-form-label">用户名</label>
+            <label className="st-form-label">{t("settings.username")}</label>
             <input
               type="text"
               className="st-form-input"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder="SSH 登录用户名"
+              placeholder={t("settings.usernamePlaceholder")}
             />
           </div>
 
           {/* 密码认证字段 */}
           {authMethod === AuthMethod.PASSWORD && (
             <div className="st-form-row">
-              <label className="st-form-label">密码</label>
+              <label className="st-form-label">{t("settings.password")}</label>
               <input
                 type="password"
                 className="st-form-input"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="SSH 登录密码"
+                placeholder={t("settings.passwordPlaceholder")}
               />
             </div>
           )}
@@ -216,7 +222,7 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
           {authMethod === AuthMethod.PUBKEY && (
             <>
               <div className="st-form-row">
-                <label className="st-form-label">私钥文件</label>
+                <label className="st-form-label">{t("settings.privateKeyFile")}</label>
                 <input
                   type="file"
                   className="st-form-input"
@@ -224,32 +230,33 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
                   accept=".pem,.key,id_rsa,id_ed25519,id_ecdsa,id_dsa"
                 />
                 <span className="st-form-hint">
-                  选择 SSH 私钥文件（OpenSSH 或 PEM 格式）<br/>
-                  支持：id_ed25519、id_rsa、云服务商提供的密钥<br/>
-                  不支持：PuTTY 格式（.ppk）- 请先转换
+                  {t("settings.privateKeyHint1")}<br/>
+                  {t("settings.privateKeyHint2")}<br/>
+                  {t("settings.privateKeyHint3")}
                 </span>
               </div>
               {privateKeyFile && (
                 <div className="st-form-row">
-                  <span className="st-form-hint">已选择: {privateKeyFile.split('\n')[0].substring(0, 50)}...</span>
+                  <span className="st-form-hint">{t("settings.keyPreview", { key: privateKeyFile.split('\n')[0].substring(0, 50) })}</span>
                 </div>
               )}
               <div className="st-form-row">
-                <label className="st-form-label">私钥密码 (可选)</label>
+                <label className="st-form-label">{t("settings.passphrase")}</label>
                 <input
                   type="password"
                   className="st-form-input"
                   value={passphrase}
                   onChange={(e) => setPassphrase(e.target.value)}
-                  placeholder="如果私钥有密码保护,请输入"
+                  placeholder={t("settings.passphrasePlaceholder")}
                 />
               </div>
             </>
           )}
+          {formError && <div className="st-form-error">{formError}</div>}
         </form>
         <div className="st-modal-footer">
-          <button className="st-btn" onClick={onClose}>取消</button>
-          <button className="st-btn st-btn-primary" onClick={handleSubmit}>添加</button>
+          <button className="st-btn" onClick={onClose}>{t("common.cancel")}</button>
+          <button className="st-btn st-btn-primary" onClick={handleSubmit}>{t("settings.addBtn")}</button>
         </div>
       </div>
     </div>
@@ -266,6 +273,7 @@ interface EditServerModalProps {
 }
 
 function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalProps) {
+  const { t } = useTranslation();
   const [name, setName] = useState("");
   const [host, setHost] = useState("");
   const [port, setPort] = useState(8443);
@@ -276,6 +284,8 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
   const [password, setPassword] = useState("");
   const [privateKeyFile, setPrivateKeyFile] = useState("");
   const [passphrase, setPassphrase] = useState("");
+  // 表单内联错误（替代系统 alert）
+  const [formError, setFormError] = useState<string | null>(null);
 
   // 当 server 变化时，更新表单数据
   useEffect(() => {
@@ -319,19 +329,20 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
   const handlePrivateKeySelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      setFormError(null);
       try {
         // 读取文件内容
         const content = await file.text();
 
         // 基本格式验证
         if (!content.includes('-----BEGIN')) {
-          alert('选择的文件不是有效的私钥文件。\n\n私钥文件应以 -----BEGIN 开头。\n\n支持的格式：\n• OpenSSH 格式（如 ~/.ssh/id_ed25519）\n• PEM 格式（云服务商提供的密钥）\n\n不支持：PuTTY 格式（.ppk）');
+          setFormError(t('settings.errors.invalidKeyFile'));
           return;
         }
 
         // 检查是否是 PuTTY 格式
         if (content.includes('PuTTY')) {
-          alert('检测到 PuTTY 格式私钥（.ppk）。\n\n请使用 PuTTYgen 转换为 OpenSSH 格式：\n1. 打开 PuTTYgen\n2. 加载您的 .ppk 文件\n3. 点击 "Conversions" -> "Export OpenSSH key"\n4. 保存新的文件');
+          setFormError(t('settings.errors.puttyKeyFile'));
           return;
         }
 
@@ -341,10 +352,10 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
         }
 
         setPrivateKeyFile(content);
-        log.info('已加载私钥文件:', file.name);
+        log.info('Private key file loaded:', file.name);
       } catch (error) {
         console.error("读取私钥文件失败:", error);
-        alert("读取私钥文件失败，请检查文件格式和权限");
+        setFormError(t('settings.errors.readKeyFailed'));
       }
     }
   };
@@ -353,33 +364,33 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
     <div className="st-modal-overlay">
       <div className="st-modal">
         <div className="st-modal-header">
-          <span className="st-modal-title">编辑服务器</span>
+          <span className="st-modal-title">{t("settings.editServerTitle")}</span>
           <button className="st-modal-close" onClick={onClose}>×</button>
         </div>
         <form className="st-modal-body" onSubmit={handleSubmit}>
           <div className="st-form-row">
-            <label className="st-form-label text-label">服务器名称</label>
+            <label className="st-form-label text-label">{t("settings.serverName")}</label>
             <input
               type="text"
               className="st-form-input"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="例如: prod-server"
+              placeholder={t("settings.serverNamePlaceholder")}
               autoFocus
             />
           </div>
           <div className="st-form-row">
-            <label className="st-form-label text-label">主机地址</label>
+            <label className="st-form-label text-label">{t("settings.host")}</label>
             <input
               type="text"
               className="st-form-input"
               value={host}
               onChange={(e) => setHost(e.target.value)}
-              placeholder="例如: server.example.com 或 172.20.10.3"
+              placeholder={t("settings.hostPlaceholder")}
             />
           </div>
           <div className="st-form-row">
-            <label className="st-form-label">端口</label>
+            <label className="st-form-label">{t("settings.port")}</label>
             <input
               type="number"
               className="st-form-input"
@@ -391,38 +402,38 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
 
           {/* 认证配置 */}
           <div className="st-form-row">
-            <label className="st-form-label">认证方式</label>
+            <label className="st-form-label">{t("settings.authMethod")}</label>
             <select
               className="st-form-input"
               value={authMethod}
               onChange={(e) => setAuthMethod(e.target.value as AuthMethod)}
             >
-              <option value={AuthMethod.PASSWORD}>密码认证</option>
-              <option value={AuthMethod.PUBKEY}>公钥认证</option>
+              <option value={AuthMethod.PASSWORD}>{t("settings.authPassword")}</option>
+              <option value={AuthMethod.PUBKEY}>{t("settings.authPubkey")}</option>
             </select>
           </div>
 
           <div className="st-form-row">
-            <label className="st-form-label">用户名</label>
+            <label className="st-form-label">{t("settings.username")}</label>
             <input
               type="text"
               className="st-form-input"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder="SSH 登录用户名"
+              placeholder={t("settings.usernamePlaceholder")}
             />
           </div>
 
           {/* 密码认证字段 */}
           {authMethod === AuthMethod.PASSWORD && (
             <div className="st-form-row">
-              <label className="st-form-label">密码</label>
+              <label className="st-form-label">{t("settings.password")}</label>
               <input
                 type="password"
                 className="st-form-input"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="SSH 登录密码"
+                placeholder={t("settings.passwordPlaceholder")}
               />
             </div>
           )}
@@ -431,7 +442,7 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
           {authMethod === AuthMethod.PUBKEY && (
             <>
               <div className="st-form-row">
-                <label className="st-form-label">私钥文件</label>
+                <label className="st-form-label">{t("settings.privateKeyFile")}</label>
                 <input
                   type="file"
                   className="st-form-input"
@@ -439,32 +450,33 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
                   accept=".pem,.key,id_rsa,id_ed25519,id_ecdsa,id_dsa"
                 />
                 <span className="st-form-hint">
-                  选择 SSH 私钥文件（OpenSSH 或 PEM 格式）<br/>
-                  支持：id_ed25519、id_rsa、云服务商提供的密钥<br/>
-                  不支持：PuTTY 格式（.ppk）- 请先转换
+                  {t("settings.privateKeyHint1")}<br/>
+                  {t("settings.privateKeyHint2")}<br/>
+                  {t("settings.privateKeyHint3")}
                 </span>
               </div>
               {privateKeyFile && (
                 <div className="st-form-row">
-                  <span className="st-form-hint">已选择: {privateKeyFile.split('\n')[0].substring(0, 50)}...</span>
+                  <span className="st-form-hint">{t("settings.keyPreview", { key: privateKeyFile.split('\n')[0].substring(0, 50) })}</span>
                 </div>
               )}
               <div className="st-form-row">
-                <label className="st-form-label">私钥密码 (可选)</label>
+                <label className="st-form-label">{t("settings.passphrase")}</label>
                 <input
                   type="password"
                   className="st-form-input"
                   value={passphrase}
                   onChange={(e) => setPassphrase(e.target.value)}
-                  placeholder="如果私钥有密码保护,请输入"
+                  placeholder={t("settings.passphrasePlaceholder")}
                 />
               </div>
             </>
           )}
+          {formError && <div className="st-form-error">{formError}</div>}
         </form>
         <div className="st-modal-footer">
-          <button className="st-btn" onClick={onClose}>取消</button>
-          <button className="st-btn st-btn-primary" onClick={handleSubmit}>保存</button>
+          <button className="st-btn" onClick={onClose}>{t("common.cancel")}</button>
+          <button className="st-btn st-btn-primary" onClick={handleSubmit}>{t("settings.saveBtn")}</button>
         </div>
       </div>
     </div>
@@ -474,6 +486,7 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
 /* ── Main Component ─────────────────────────────────── */
 
 export function Settings({ windowId: _windowId }: { windowId: string }) {
+  const { t } = useTranslation();
   // 窗口系统集成（未来可能需要使用 windowState）
   // const windowState = useWindowState(windowId);
   const [activeSection, setActiveSection] = useState<SettingsSection>("connection");
@@ -601,7 +614,7 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
   const cardServer = activeServer || servers.find((s) => s.id === selectedServerId) || null;
 
   const handleRemove = (id: string) => {
-    if (confirm("确定要删除此服务器配置吗？")) {
+    if (confirm(t("settings.confirmRemove"))) {
       removeServer(id);
     }
   };
@@ -611,42 +624,42 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
       case "connection":
         return (
           <div className="st-section">
-            <div className="st-section-title text-heading">连接服务器配置</div>
+            <div className="st-section-title text-heading">{t("settings.connTitle")}</div>
 
             {/* Current Connection */}
             <div className="st-card">
-              <div className="st-card-header text-title">当前连接</div>
+              <div className="st-card-header text-title">{t("settings.currentConnection")}</div>
               <div className="st-current-connection">
                 <div className="st-conn-row">
-                  <span className="st-conn-label text-label">主机</span>
+                  <span className="st-conn-label text-label">{t("settings.connHost")}</span>
                   <span className="st-conn-value st-conn-value-host">
-                    {cardServer?.host || <span className="st-conn-placeholder">未连接</span>}
+                    {cardServer?.host || <span className="st-conn-placeholder">{t("settings.notConnected")}</span>}
                   </span>
                 </div>
                 <div className="st-conn-row">
-                  <span className="st-conn-label text-label">端口</span>
+                  <span className="st-conn-label text-label">{t("settings.port")}</span>
                   <span className="st-conn-value st-conn-value-port">
                     {cardServer?.port || <span className="st-conn-placeholder">—</span>}
                     <span className="st-conn-protocol">(QUIC)</span>
                   </span>
                 </div>
                 <div className="st-conn-row">
-                  <span className="st-conn-label text-label">状态</span>
+                  <span className="st-conn-label text-label">{t("settings.connStatus")}</span>
                   <span className="st-conn-value st-conn-value-status">
-                    <span 
-                      className="st-status-dot" 
+                    <span
+                      className="st-status-dot"
                       style={{ background: cardServer ? getStatusColor(cardServer.status) : "#9a9996" }}
                     />
-                    {cardServer?.status === "connected" ? "已连接" : 
-                     cardServer?.status === "connecting" ? "连接中..." :
-                     cardServer?.status === "reconnecting" ? "自动重连中..." :
-                     cardServer?.status === "error" ? "错误" : 
-                     <span className="st-conn-placeholder">未连接</span>}
+                    {cardServer?.status === "connected" ? t("settings.statusConnected") :
+                     cardServer?.status === "connecting" ? t("settings.statusConnecting") :
+                     cardServer?.status === "reconnecting" ? t("settings.statusReconnecting") :
+                     cardServer?.status === "error" ? t("settings.statusError") :
+                     <span className="st-conn-placeholder">{t("settings.notConnected")}</span>}
                   </span>
                 </div>
                 {cardServer?.status === "connected" && (
                   <div className="st-conn-row">
-                    <span className="st-conn-label text-label">延迟</span>
+                    <span className="st-conn-label text-label">{t("settings.connLatency")}</span>
                     <span className="st-conn-value st-conn-value-latency">
                       {/* 心跳 RTT 回传（每 5s 刷新）；连接瞬间显示握手 RTT，首个 5s 内由心跳接管 */}
                       {cardServer.rttMs != null ? `${Math.round(cardServer.rttMs)} ms` : "—"}
@@ -676,7 +689,7 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                     className="st-btn st-btn-danger"
                     onClick={() => handleDisconnect(cardServer.id)}
                   >
-                    断开连接
+                    {t("settings.disconnectBtn")}
                   </button>
                 )}
                 {cardServer && (cardServer.status === "error" || cardServer.status === "disconnected") && (
@@ -684,7 +697,7 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                     className="st-btn st-btn-primary"
                     onClick={() => handleConnect(cardServer.id)}
                   >
-                    重试连接
+                    {t("settings.retryConnectBtn")}
                   </button>
                 )}
               </div>
@@ -692,12 +705,12 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
 
             {/* Saved Servers */}
             <div className="st-card">
-              <div className="st-card-header text-title">已保存的服务器</div>
+              <div className="st-card-header text-title">{t("settings.savedServers")}</div>
               <div className="st-server-list">
                 {servers.length === 0 ? (
                   <div className="st-server-empty">
-                    <span className="text-body">暂无保存的服务器</span>
-                    <span className="st-server-empty-hint text-caption">点击下方按钮添加</span>
+                    <span className="text-body">{t("settings.noServers")}</span>
+                    <span className="st-server-empty-hint text-caption">{t("settings.noServersHint")}</span>
                   </div>
                 ) : (
                   servers.map(server => (
@@ -718,7 +731,7 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                           <button 
                             className="st-server-action-btn st-server-action-connected"
                             onClick={(e) => { e.stopPropagation(); handleDisconnect(server.id); }}
-                            title="已连接 - 点击断开"
+                            title={t("settings.connectedTip")}
                           >
                             ✓
                           </button>
@@ -726,7 +739,7 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                           <button 
                             className="st-server-action-btn st-server-action-connecting"
                             disabled
-                            title="连接中..."
+                            title={t("settings.statusConnecting")}
                           >
                             ◷
                           </button>
@@ -734,7 +747,7 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                           <button 
                             className="st-server-action-btn st-server-action-connecting"
                             disabled
-                            title="自动重连中（最多 3 次、5 秒间隔）..."
+                            title={t("settings.reconnectingTip")}
                           >
                             ◷
                           </button>
@@ -742,7 +755,7 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                           <button 
                             className="st-server-action-btn"
                             onClick={(e) => { e.stopPropagation(); handleConnect(server.id); }}
-                            title="连接"
+                            title={t("settings.connectTip")}
                           >
                             🔗
                           </button>
@@ -750,7 +763,7 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                         <button 
                           className="st-server-action-btn st-server-action-danger"
                           onClick={(e) => { e.stopPropagation(); handleRemove(server.id); }}
-                          title="删除"
+                          title={t("settings.deleteTip")}
                         >
                           🗑️
                         </button>
@@ -764,7 +777,7 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                   className="st-btn st-btn-primary"
                   onClick={() => setAddModalOpen(true)}
                 >
-                  + 添加服务器
+                  {t("settings.addServerBtn")}
                 </button>
               </div>
             </div>
@@ -788,7 +801,7 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
         const currentTheme = themes[themeId];
         return (
           <div className="st-section">
-            <div className="st-section-title text-heading">外观设置</div>
+            <div className="st-section-title text-heading">{t("settings.appearanceTitle")}</div>
 
             {/* 语言（label 双语：语言切换前无法依赖词典自身） */}
             <div className="st-card">
@@ -808,7 +821,7 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
 
             {/* 主题选择 */}
             <div className="st-card">
-              <div className="st-card-header text-title">主题</div>
+              <div className="st-card-header text-title">{t("settings.themeTitle")}</div>
               <div className="st-theme-options">
                 {Object.entries(themes).map(([id, theme]) => (
                   <div
@@ -839,7 +852,7 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
             {/* 强调色选择（仅当主题支持可选强调色时显示） */}
             {currentTheme.accentColorOptions && (
               <div className="st-card">
-                <div className="st-card-header text-title">强调色</div>
+                <div className="st-card-header text-title">{t("settings.accentColorTitle")}</div>
                 <div className="st-accent-options">
                   {currentTheme.accentColorOptions.map((option) => (
                     <div
@@ -852,7 +865,7 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                         style={{ background: accentColors[option].light }}
                       />
                       <div className="st-accent-name">
-                        {option === "warmBlue" ? "暖蓝色" : "绿色"}
+                        {option === "warmBlue" ? t("settings.accentWarmBlue") : t("settings.accentGreen")}
                       </div>
                     </div>
                   ))}
@@ -862,9 +875,9 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
 
             {/* 字体大小 */}
             <div className="st-card">
-              <div className="st-card-header text-title">字体大小</div>
+              <div className="st-card-header text-title">{t("settings.fontSizeTitle")}</div>
               <div className="st-slider-row">
-                <span className="st-slider-label text-body">界面字体</span>
+                <span className="st-slider-label text-body">{t("settings.uiFont")}</span>
                 <input
                   type="range"
                   min="8"
@@ -876,7 +889,7 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                 <span className="st-slider-value">{fontSize}pt</span>
               </div>
               <div className="st-slider-row">
-                <span className="st-slider-label text-body">终端字体</span>
+                <span className="st-slider-label text-body">{t("settings.terminalFont")}</span>
                 <input
                   type="range"
                   min="10"
@@ -891,7 +904,7 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
 
             {/* 壁纸 */}
             <div className="st-card">
-              <div className="st-card-header text-title">壁纸</div>
+              <div className="st-card-header text-title">{t("settings.wallpaperTitle")}</div>
               <div className="st-wallpaper-grid">
                 {Object.keys(PRESET_WALLPAPERS).map(presetId => (
                   <button
@@ -907,11 +920,11 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
               </div>
               <div className="st-wallpaper-actions">
                 <button className="st-btn st-btn-primary" onClick={importWallpaper}>
-                  📁 导入本地壁纸
+                  {t("settings.importWallpaperBtn")}
                 </button>
                 {wallpaper.type === "custom" && (
                   <button className="st-btn" onClick={clearWallpaper}>
-                    重置为默认
+                    {t("settings.resetWallpaperBtn")}
                   </button>
                 )}
               </div>
@@ -921,15 +934,15 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                     className="st-wallpaper-preview-img"
                     style={getWallpaperStyle(wallpaper)}
                   />
-                  <span className="st-wallpaper-preview-label">当前自定义壁纸</span>
+                  <span className="st-wallpaper-preview-label">{t("settings.customWallpaperLabel")}</span>
                 </div>
               )}
             </div>
             {/* 启动行为：桌面会话恢复开关（关闭后每次启动为干净桌面） */}
             <div className="st-card">
-              <div className="st-card-header text-title">启动行为</div>
+              <div className="st-card-header text-title">{t("settings.startupTitle")}</div>
               <div className="st-option-row">
-                <span className="st-option-label text-body">启动时恢复上次打开的窗口</span>
+                <span className="st-option-label text-body">{t("settings.restoreWindows")}</span>
                 <input
                   type="checkbox"
                   className="st-checkbox"
@@ -946,32 +959,32 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
       case "keyboard":
         return (
           <div className="st-section">
-            <div className="st-section-title">快捷键</div>
+            <div className="st-section-title">{t("settings.section.keyboard")}</div>
             <div className="st-card">
-              <div className="st-card-header text-title">全局快捷键</div>
+              <div className="st-card-header text-title">{t("settings.globalShortcutsTitle")}</div>
               <div className="st-shortcut-list">
                 <div className="st-shortcut-row">
-                  <span className="st-shortcut-action text-body">打开活动概览</span>
+                  <span className="st-shortcut-action text-body">{t("settings.shortcutOverview")}</span>
                   <span className="st-shortcut-key">Super</span>
                 </div>
                 <div className="st-shortcut-row">
-                  <span className="st-shortcut-action">打开文件管理器</span>
+                  <span className="st-shortcut-action">{t("settings.shortcutFiles")}</span>
                   <span className="st-shortcut-key text-mono">Super + 1</span>
                 </div>
                 <div className="st-shortcut-row">
-                  <span className="st-shortcut-action">打开终端</span>
+                  <span className="st-shortcut-action">{t("settings.shortcutTerminal")}</span>
                   <span className="st-shortcut-key">Super + 2</span>
                 </div>
                 <div className="st-shortcut-row">
-                  <span className="st-shortcut-action">打开系统监控</span>
+                  <span className="st-shortcut-action">{t("settings.shortcutMonitor")}</span>
                   <span className="st-shortcut-key">Super + 3</span>
                 </div>
                 <div className="st-shortcut-row">
-                  <span className="st-shortcut-action text-body">打开设置</span>
+                  <span className="st-shortcut-action text-body">{t("settings.shortcutSettings")}</span>
                   <span className="st-shortcut-key">Super + 4</span>
                 </div>
                 <div className="st-shortcut-row">
-                  <span className="st-shortcut-action text-body">切换终端标签</span>
+                  <span className="st-shortcut-action text-body">{t("settings.shortcutSwitchTerminalTab")}</span>
                   <span className="st-shortcut-key">Ctrl + Tab</span>
                 </div>
               </div>
@@ -982,26 +995,26 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
       case "files":
         return (
           <div className="st-section">
-            <div className="st-section-title text-heading">文件管理设置</div>
+            <div className="st-section-title text-heading">{t("settings.filesTitle")}</div>
             <div className="st-card">
-              <div className="st-card-header text-title">默认视图</div>
+              <div className="st-card-header text-title">{t("settings.defaultViewTitle")}</div>
               <div className="st-option-row">
-                <span className="st-option-label text-body">默认视图模式</span>
+                <span className="st-option-label text-body">{t("settings.viewMode")}</span>
                 <select className="st-select">
-                  <option>列表视图</option>
-                  <option>网格视图</option>
+                  <option>{t("settings.viewList")}</option>
+                  <option>{t("settings.viewGrid")}</option>
                 </select>
               </div>
               <div className="st-option-row">
-                <span className="st-option-label text-body">显示隐藏文件</span>
+                <span className="st-option-label text-body">{t("settings.showHiddenFiles")}</span>
                 <input type="checkbox" className="st-checkbox" />
               </div>
               <div className="st-option-row">
-                <span className="st-option-label text-body">排序方式</span>
+                <span className="st-option-label text-body">{t("settings.sortBy")}</span>
                 <select className="st-select">
-                  <option>名称</option>
-                  <option>大小</option>
-                  <option>修改时间</option>
+                  <option>{t("settings.sortName")}</option>
+                  <option>{t("settings.sortSize")}</option>
+                  <option>{t("settings.sortModified")}</option>
                 </select>
               </div>
             </div>
@@ -1013,62 +1026,62 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
       case "terminal":
         return (
           <div className="st-section">
-            <div className="st-section-title">终端设置</div>
+            <div className="st-section-title">{t("settings.terminalTitle")}</div>
 
             {/* 默认工作目录 */}
             <div className="st-card">
-              <div className="st-card-header text-title">默认工作目录</div>
+              <div className="st-card-header text-title">{t("settings.workingDirTitle")}</div>
               <div className="st-option-row">
                 <input
                   type="text"
                   className="st-input"
                   value={terminalDefaultPath}
                   onChange={handleTerminalPathChange}
-                  placeholder="留空使用用户主目录 (~)"
+                  placeholder={t("settings.workingDirPlaceholder")}
                   spellCheck={false}
                   style={{ width: '100%' }}
                 />
               </div>
               <div className="st-hint">
-                💡 在文件管理器地址栏输入 <code>shell</code> 可在当前目录打开终端
+                {t("settings.terminalHintPre")} <code>shell</code> {t("settings.terminalHintPost")}
               </div>
             </div>
 
             <div className="st-card">
-              <div className="st-card-header text-title">配色方案</div>
+              <div className="st-card-header text-title">{t("settings.colorSchemeTitle")}</div>
               <div className="st-theme-toggle">
                 <button className="st-theme-btn active">
                   <span className="st-theme-icon">⬛</span>
-                  <span className="st-theme-label">暗色</span>
+                  <span className="st-theme-label">{t("settings.schemeDark")}</span>
                 </button>
                 <button className="st-theme-btn">
                   <span className="st-theme-icon">⬜</span>
-                  <span className="st-theme-label">亮色</span>
+                  <span className="st-theme-label">{t("settings.schemeLight")}</span>
                 </button>
                 <button className="st-theme-btn">
                   <span className="st-theme-icon">🔲</span>
-                  <span className="st-theme-label">白底</span>
+                  <span className="st-theme-label">{t("settings.schemeWhite")}</span>
                 </button>
               </div>
             </div>
             <div className="st-card">
-              <div className="st-card-header text-title">终端选项</div>
+              <div className="st-card-header text-title">{t("settings.terminalOptionsTitle")}</div>
               <div className="st-option-row">
-                <span className="st-option-label text-body">光标样式</span>
+                <span className="st-option-label text-body">{t("settings.cursorStyle")}</span>
                 <select className="st-select">
-                  <option>方块</option>
-                  <option>竖线</option>
-                  <option>下划线</option>
+                  <option>{t("settings.cursorBlock")}</option>
+                  <option>{t("settings.cursorBar")}</option>
+                  <option>{t("settings.cursorUnderline")}</option>
                 </select>
               </div>
               <div className="st-option-row">
-                <span className="st-option-label text-body">光标闪烁</span>
+                <span className="st-option-label text-body">{t("settings.cursorBlink")}</span>
                 <input type="checkbox" className="st-checkbox" defaultChecked />
               </div>
               <div className="st-option-row">
-                <span className="st-option-label text-body">滚动缓冲区</span>
+                <span className="st-option-label text-body">{t("settings.scrollBuffer")}</span>
                 <input type="number" className="st-input" defaultValue="5000" />
-                <span className="st-input-unit text-caption">行</span>
+                <span className="st-input-unit text-caption">{t("settings.linesUnit")}</span>
               </div>
             </div>
           </div>
@@ -1078,28 +1091,28 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
         const setBrowserId = useSettingsStore.getState().setBrowserId;
         return (
           <div className="st-section">
-            <div className="st-section-title text-heading">浏览器设置</div>
+            <div className="st-section-title text-heading">{t("settings.browserTitle")}</div>
 
             <div className="st-card">
-              <div className="st-card-header text-title">默认浏览器</div>
+              <div className="st-card-header text-title">{t("settings.defaultBrowserTitle")}</div>
               <div className="st-option-row">
-                <span className="st-option-label text-body">远程浏览使用</span>
+                <span className="st-option-label text-body">{t("settings.remoteBrowserUse")}</span>
                 <select
                   className="st-select"
                   value={browserList.some((b) => b.id === browserIdPref) || browserIdPref === "auto" ? browserIdPref : "auto"}
                   onChange={(e) => setBrowserId(e.target.value)}
                 >
-                  <option value="auto">自动（推荐）</option>
+                  <option value="auto">{t("settings.browserAuto")}</option>
                   {browserList.map((b) => (
                     <option key={b.id} value={b.id}>{b.name}</option>
                   ))}
                 </select>
               </div>
               {browserList.length === 0 && (
-                <div className="st-hint">未检测到已安装的浏览器</div>
+                <div className="st-hint">{t("settings.noBrowsersHint")}</div>
               )}
               <div className="st-option-row">
-                <span className="st-option-label text-body">SOCKS5 端口</span>
+                <span className="st-option-label text-body">{t("settings.socks5Port")}</span>
                 <input
                   type="number"
                   className="st-input"
@@ -1116,8 +1129,7 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                 />
               </div>
               <div className="st-hint">
-                💡 远程浏览应用将以该浏览器打开，各浏览器登录状态独立保留。
-                固定端口使断线重连后浏览器自动恢复网络，无需重开（对已开始的会话在下一次启动时生效）
+                {t("settings.browserPortHint")}
               </div>
             </div>
           </div>
@@ -1127,31 +1139,31 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
       case "notifications":
         return (
           <div className="st-section">
-            <div className="st-section-title text-heading">通知设置</div>
+            <div className="st-section-title text-heading">{t("settings.notificationsTitle")}</div>
             <div className="st-card">
-              <div className="st-card-header text-title">通知类型</div>
+              <div className="st-card-header text-title">{t("settings.notificationTypesTitle")}</div>
               <div className="st-option-row">
-                <span className="st-option-label text-body">系统监控警报</span>
+                <span className="st-option-label text-body">{t("settings.notifyMonitorAlerts")}</span>
                 <input type="checkbox" className="st-checkbox" defaultChecked />
               </div>
               <div className="st-option-row">
-                <span className="st-option-label text-body">文件操作完成</span>
+                <span className="st-option-label text-body">{t("settings.notifyFileOps")}</span>
                 <input type="checkbox" className="st-checkbox" defaultChecked />
               </div>
               <div className="st-option-row">
-                <span className="st-option-label text-body">连接状态变化</span>
+                <span className="st-option-label text-body">{t("settings.notifyConnChange")}</span>
                 <input type="checkbox" className="st-checkbox" defaultChecked />
               </div>
             </div>
             <div className="st-card">
-              <div className="st-card-header text-title">警报阈值</div>
+              <div className="st-card-header text-title">{t("settings.alertThresholdsTitle")}</div>
               <div className="st-slider-row">
-                <span className="st-slider-label text-body">CPU 使用率警报</span>
+                <span className="st-slider-label text-body">{t("settings.cpuAlert")}</span>
                 <input type="range" min="50" max="100" defaultValue="80" className="st-slider" />
                 <span className="st-slider-value">80%</span>
               </div>
               <div className="st-slider-row">
-                <span className="st-slider-label text-body">磁盘使用率警报</span>
+                <span className="st-slider-label text-body">{t("settings.diskAlert")}</span>
                 <input type="range" min="50" max="100" defaultValue="90" className="st-slider" />
                 <span className="st-slider-value">90%</span>
               </div>
@@ -1165,14 +1177,14 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
         const serverId = activeServer?.id || '';
         return (
           <div className="st-section">
-            <div className="st-section-title text-heading">系统监控</div>
+            <div className="st-section-title text-heading">{t("settings.section.stats")}</div>
             {serverId ? (
               <StatsPanel serverId={serverId} isRoot={isRoot} />
             ) : (
               <div className="st-card">
-                <div className="st-card-header text-title">未连接服务器</div>
+                <div className="st-card-header text-title">{t("settings.statsNotConnectedTitle")}</div>
                 <div className="text-body" style={{ padding: '12px 0' }}>
-                  请先在"连接"页面连接到服务器，然后才能查看统计数据。
+                  {t("settings.statsConnectFirst")}
                 </div>
               </div>
             )}
@@ -1183,39 +1195,39 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
       case "about":
         return (
           <div className="st-section">
-            <div className="st-section-title text-heading">关于</div>
+            <div className="st-section-title text-heading">{t("settings.section.about")}</div>
             <div className="st-card st-about-card">
               <div className="st-about-logo">
                 <img src="/favicon.svg" alt="Quirel logo" draggable={false} />
               </div>
               <div className="st-about-name">Quirel</div>
-              <div className="st-about-version">版本 {appVersion || "…"}</div>
+              <div className="st-about-version">{t("settings.aboutVersion", { version: appVersion || "…" })}</div>
               <div className="st-about-desc">
-                基于 Adwaita 设计系统的远程 Linux 服务器控制客户端
+                {t("settings.aboutDesc")}
               </div>
               <div className="st-about-tech">
                 <span>Tauri 2.x + React 18</span>
-                <span>QUIC 传输</span>
-                <span>Adwaita 设计</span>
+                <span>{t("settings.aboutTechQuic")}</span>
+                <span>{t("settings.aboutTechDesign")}</span>
               </div>
             </div>
             <div className="st-card">
-              <div className="st-card-header text-title">技术栈</div>
+              <div className="st-card-header text-title">{t("settings.techStackTitle")}</div>
               <div className="st-tech-list">
                 <div className="st-tech-item">
-                  <span className="st-tech-name">前端框架</span>
+                  <span className="st-tech-name">{t("settings.techFrontend")}</span>
                   <span className="st-tech-value">React 19 + TypeScript</span>
                 </div>
                 <div className="st-tech-item">
-                  <span className="st-tech-name">桌面框架</span>
+                  <span className="st-tech-name">{t("settings.techDesktop")}</span>
                   <span className="st-tech-value">Tauri 2.x (Rust)</span>
                 </div>
                 <div className="st-tech-item">
-                  <span className="st-tech-name text-label">终端模拟</span>
+                  <span className="st-tech-name text-label">{t("settings.techTerminal")}</span>
                   <span className="st-tech-value text-caption">xterm.js 5.5</span>
                 </div>
                 <div className="st-tech-item">
-                  <span className="st-tech-name text-label">设计系统</span>
+                  <span className="st-tech-name text-label">{t("settings.techDesignSystem")}</span>
                   <span className="st-tech-value">Adwaita</span>
                 </div>
               </div>
@@ -1241,7 +1253,7 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
               onClick={() => setActiveSection(item.id)}
             >
               <span className="st-sb-icon">{item.icon}</span>
-              <span className="st-sb-label text-label">{item.label}</span>
+              <span className="st-sb-label text-label">{t(item.labelKey)}</span>
             </div>
           ))}
         </div>
