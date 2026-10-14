@@ -10,6 +10,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { createLogger } from '../../utils/logger';
+import { formatUnknownError } from '../../types/errors';
 import './ImageViewer.css';
 
 const log = createLogger('ImageViewer');
@@ -69,7 +70,7 @@ export function ImageViewer({ preloadData }: ImageViewerProps) {
       } catch (err) {
         if (cancelled) return;
         log.error('读取图片失败:', err);
-        setError(t('image.loadFailed', { message: String(err) }));
+        setError(t('image.loadFailed', { message: formatUnknownError(err) }));
       } finally {
         if (!cancelled) setLoading(false);
       }

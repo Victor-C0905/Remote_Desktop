@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { createLogger } from '../../../utils/logger';
+import { formatUnknownError } from '../../../types/errors';
 import { buildListCommand, type ArchiveKind } from '../commands';
 import { parseListing } from '../utils/format';
 import { buildTree, type ArchiveTreeNode } from '../tree';
@@ -58,7 +59,7 @@ export function useArchiveListing(
       setTree(buildTree(parseListing(kind, r.stdout)));
     } catch (err) {
       log.error('加载压缩包列表失败:', err);
-      setError({ msg: t('archive.errParse'), detail: String(err) });
+      setError({ msg: t('archive.errParse'), detail: formatUnknownError(err) });
     } finally {
       setLoading(false);
     }

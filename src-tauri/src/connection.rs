@@ -7,6 +7,13 @@ use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 use tokio::sync::mpsc;
 
+use crate::errors::{codes, AppError};
+
+/// Agent 返回错误：远端语义文案经 params.message 透传，前端词典插值渲染
+pub fn agent_error(message: String) -> AppError {
+    AppError::new(codes::AGENT_REJECTED).with_param("message", message)
+}
+
 // ── 连接状态 ───────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,7 +175,7 @@ fn classify_legacy_error(msg: &str) -> AuthErrorCode {
 enum ClientRequest {
     Send {
         envelope: Envelope,
-        response_tx: tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>,
+        response_tx: tokio::sync::oneshot::Sender<Result<Vec<u8>, AppError>>,
     },
     Disconnect,
     /// 被动检测到连接丢失（由心跳/status/发送失败触发）
@@ -320,8 +327,10 @@ pub async fn remote_connect(
                 let resp = send_and_receive_quic(&conn, manager.next_request_id(), auth_payload).await
                     .map_err(|e| {
                         tracing::warn!("[Connection] 认证请求失败: {:?}", e);
-                        // 传输层错误：超时类与断连类区分
-                        if e.contains("超时") || e.contains("timeout") {
+                        // 传输层错误：超时类与断连类区分（结构化错误码 + detail 技术串）
+                        let is_timeout = e.code == codes::RESPONSE_TIMEOUT
+                            || e.detail.as_deref().is_some_and(|d| d.contains("timeout"));
+                        if is_timeout {
                             ConnectError::new(AuthErrorCode::StreamTimeout)
                         } else {
                             ConnectError::new(AuthErrorCode::ConnectionLost)
@@ -554,12 +563,12 @@ pub async fn remote_connect(
                     ClientRequest::Send { envelope, response_tx } => {
                         // 检查连接状态
                         if conn_clone.close_reason().is_some() {
-                            let _ = response_tx.send(Err("连接已关闭".into()));
+                            let _ = response_tx.send(Err(AppError::new(codes::CONNECTION_LOST)));
                             break;
                         }
                         let result = send_and_receive_quic(&conn_clone, envelope.request_id, envelope.payload).await;
                         if result.is_err() {
-                            let _ = response_tx.send(Err("连接已断开".into()));
+                            let _ = response_tx.send(Err(AppError::new(codes::CONNECTION_LOST)));
                             // 通过 ConnectionLost 通知自己退出，清理逻辑只有一个入口
                             let _ = main_tx.send(ClientRequest::ConnectionLost {
                                 source: ConnectionLostSource::SendFailed,
@@ -658,7 +667,7 @@ pub async fn remote_connect(
 
 #[tauri::command]
 #[tracing::instrument(skip(app), fields(server_id = %server_id))]
-pub async fn remote_disconnect(server_id: String, app: tauri::AppHandle) -> Result<(), String> {
+pub async fn remote_disconnect(server_id: String, app: tauri::AppHandle) -> Result<(), AppError> {
     tracing::info!("[Connection] 主动断开: {}", server_id);
 
     // 1. 获取连接句柄（quic_conn + tx + user_initiated 标志）
@@ -670,7 +679,7 @@ pub async fn remote_disconnect(server_id: String, app: tauri::AppHandle) -> Resu
 
     let (quic_conn, tx, user_initiated) = match conn_info {
         Some(v) => v,
-        None => return Err("未找到该服务器的连接".into()),
+        None => return Err(AppError::new(codes::CONNECTION_NOT_FOUND)),
     };
 
     // 2. 标记用户主动断开（先于 close 置位，避免主循环 Send 分支
@@ -701,13 +710,15 @@ pub async fn remote_disconnect(server_id: String, app: tauri::AppHandle) -> Resu
 
 #[tauri::command]
 #[tracing::instrument(skip(app), fields(server_id = %server_id))]
-pub async fn remote_ping(server_id: String, app: tauri::AppHandle) -> Result<PingResult, String> {
+pub async fn remote_ping(server_id: String, app: tauri::AppHandle) -> Result<PingResult, AppError> {
     tracing::debug!("[Ping] server_id={}", server_id);
     let manager = app.state::<ConnectionManager>();
-    
+
     let (tx, request_id) = {
         let conns = manager.connections.lock().unwrap();
-        let conn = conns.get(&server_id).ok_or("未找到连接")?;
+        let conn = conns
+            .get(&server_id)
+            .ok_or_else(|| AppError::new(codes::CONNECTION_NOT_FOUND))?;
         (conn.tx.clone(), manager.next_request_id())
     };
 
@@ -718,11 +729,16 @@ pub async fn remote_ping(server_id: String, app: tauri::AppHandle) -> Result<Pin
 
     let envelope = Envelope::new(request_id, Payload::Ping { timestamp: now });
     let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-    
-    tx.send(ClientRequest::Send { envelope, response_tx }).await.map_err(|_| "发送请求失败")?;
-    let data = response_rx.await.map_err(|_| "等待响应超时")??;
 
-    let resp = Envelope::decode(&data)?;
+    tx.send(ClientRequest::Send { envelope, response_tx })
+        .await
+        .map_err(|_| AppError::new(codes::NETWORK_FAILED))?;
+    let data = response_rx
+        .await
+        .map_err(|_| AppError::new(codes::CONNECTION_LOST))??;
+
+    let resp = Envelope::decode(&data)
+        .map_err(|e| AppError::new(codes::UNEXPECTED_RESPONSE).with_detail(format!("decode ping response: {e}")))?;
     if let Payload::Pong { timestamp, server_time } = resp.payload {
         let latency = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -730,7 +746,8 @@ pub async fn remote_ping(server_id: String, app: tauri::AppHandle) -> Result<Pin
             .as_millis() as u64 - timestamp;
         Ok(PingResult { ok: true, latency_ms: latency as f64, server_time })
     } else {
-        Err("收到意外的响应类型".into())
+        Err(AppError::new(codes::UNEXPECTED_RESPONSE)
+            .with_detail("unexpected response type in ping"))
     }
 }
 
@@ -743,24 +760,24 @@ pub struct PingResult {
 
 #[tauri::command]
 #[tracing::instrument(skip(payload, app), fields(server_id = %server_id))]
-pub async fn remote_send(server_id: String, payload: Payload, app: tauri::AppHandle) -> Result<Envelope, String> {
+pub async fn remote_send(server_id: String, payload: Payload, app: tauri::AppHandle) -> Result<Envelope, AppError> {
     let manager = app.state::<ConnectionManager>();
-    
+
     let (tx, request_id) = {
         let conns = manager.connections.lock().unwrap();
         let conn = conns.get(&server_id).ok_or_else(|| {
             tracing::warn!("[RemoteSend] 未找到连接: server_id={}", server_id);
-            "未找到连接".to_string()
+            AppError::new(codes::CONNECTION_NOT_FOUND)
         })?;
         (conn.tx.clone(), manager.next_request_id())
     };
 
     let envelope = Envelope::new(request_id, payload);
     let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-    
+
     tx.send(ClientRequest::Send { envelope, response_tx }).await.map_err(|e| {
         tracing::warn!("[RemoteSend] 发送请求失败: server_id={}, error={}", server_id, e);
-        "发送请求失败".to_string()
+        AppError::new(codes::NETWORK_FAILED)
     })?;
     // 外层超时保护：如果内部 send_and_receive_quic 的超时未能触发，此层兜底
     let data = tokio::time::timeout(
@@ -770,24 +787,25 @@ pub async fn remote_send(server_id: String, payload: Payload, app: tauri::AppHan
     .await
     .map_err(|_| {
         tracing::warn!("[RemoteSend] 等待响应超时: server_id={}", server_id);
-        "等待响应超时".to_string()
+        AppError::new(codes::RESPONSE_TIMEOUT)
     })?
     .map_err(|_| {
         tracing::warn!("[RemoteSend] 等待响应通道关闭: server_id={}", server_id);
-        "等待响应超时".to_string()
+        AppError::new(codes::CONNECTION_LOST)
     })??;
     Envelope::decode(&data)
+        .map_err(|e| AppError::new(codes::UNEXPECTED_RESPONSE).with_detail(format!("decode response: {e}")))
 }
 
 #[tauri::command]
 #[tracing::instrument(skip(app), fields(server_id = %server_id, path = %path))]
-pub async fn remote_read_dir(server_id: String, path: String, app: tauri::AppHandle) -> Result<RemoteReadDirResponse, String> {
+pub async fn remote_read_dir(server_id: String, path: String, app: tauri::AppHandle) -> Result<RemoteReadDirResponse, AppError> {
     tracing::debug!("[ReadDir] server_id={}, path={}", server_id, path);
     let resp = remote_send(server_id, Payload::ReadDirRequest { path }, app).await?;
     match resp.payload {
         Payload::ReadDirResponse { path, entries } => Ok(RemoteReadDirResponse { path, entries }),
-        Payload::Error { message, .. } => Err(message),
-        _ => Err("意外响应".into()),
+        Payload::Error { message, .. } => Err(agent_error(message)),
+        _ => Err(AppError::new(codes::UNEXPECTED_RESPONSE)),
     }
 }
 
@@ -799,7 +817,7 @@ pub struct RemoteReadDirResponse {
 
 #[tauri::command]
 #[tracing::instrument(skip(app), fields(server_id = %server_id))]
-pub async fn remote_get_current_user(server_id: String, app: tauri::AppHandle) -> Result<CurrentUser, String> {
+pub async fn remote_get_current_user(server_id: String, app: tauri::AppHandle) -> Result<CurrentUser, AppError> {
     tracing::debug!("[GetCurrentUser] server_id={}", server_id);
     // 诊断：此命令失败会静默导致前端 homeDir 为 null（文件管理器初始目录停留在 /），
     // 必须在 Rust 侧记录具体原因（解码失败/变体不符/Agent 错误）
@@ -817,11 +835,11 @@ pub async fn remote_get_current_user(server_id: String, app: tauri::AppHandle) -
         }
         Payload::Error { message, .. } => {
             tracing::warn!("[GetCurrentUser] Agent 返回错误: message={}", message);
-            Err(message)
+            Err(agent_error(message))
         }
         other => {
             tracing::warn!("[GetCurrentUser] 意外响应类型: 实际类型={}", other.type_name());
-            Err("意外响应".into())
+            Err(AppError::new(codes::UNEXPECTED_RESPONSE))
         }
     }
 }
@@ -835,43 +853,43 @@ pub struct CurrentUser {
 
 #[tauri::command]
 #[tracing::instrument(skip(app), fields(server_id = %server_id))]
-pub async fn remote_get_mounts(server_id: String, app: tauri::AppHandle) -> Result<Vec<MountInfo>, String> {
+pub async fn remote_get_mounts(server_id: String, app: tauri::AppHandle) -> Result<Vec<MountInfo>, AppError> {
     tracing::debug!("[GetMounts] server_id={}", server_id);
     let resp = remote_send(server_id, Payload::GetMounts, app).await?;
     match resp.payload {
         Payload::MountsResponse { mounts } => Ok(mounts),
-        Payload::Error { message, .. } => Err(message),
-        _ => Err("意外响应".into()),
+        Payload::Error { message, .. } => Err(agent_error(message)),
+        _ => Err(AppError::new(codes::UNEXPECTED_RESPONSE)),
     }
 }
 
 #[tauri::command]
 #[tracing::instrument(skip(app), fields(server_id = %server_id, path = %path))]
-pub async fn remote_get_path_suggestions(server_id: String, path: String, app: tauri::AppHandle) -> Result<Vec<String>, String> {
+pub async fn remote_get_path_suggestions(server_id: String, path: String, app: tauri::AppHandle) -> Result<Vec<String>, AppError> {
     tracing::debug!("[GetPathSuggestions] server_id={}, path={}", server_id, path);
     let resp = remote_send(server_id, Payload::GetPathSuggestionsRequest { path }, app).await?;
     match resp.payload {
         Payload::PathSuggestionsResponse { suggestions } => Ok(suggestions),
-        Payload::Error { message, .. } => Err(message),
-        _ => Err("意外响应".into()),
+        Payload::Error { message, .. } => Err(agent_error(message)),
+        _ => Err(AppError::new(codes::UNEXPECTED_RESPONSE)),
     }
 }
 
 #[tauri::command]
 #[tracing::instrument(skip(app), fields(server_id = %server_id))]
-pub async fn remote_get_metrics(server_id: String, app: tauri::AppHandle) -> Result<MetricsSnapshot, String> {
+pub async fn remote_get_metrics(server_id: String, app: tauri::AppHandle) -> Result<MetricsSnapshot, AppError> {
     tracing::debug!("[GetMetrics] server_id={}", server_id);
     let resp = remote_send(server_id, Payload::MetricsSubscribeRequest {}, app).await?;
     match resp.payload {
         Payload::MetricsData(metrics) => Ok(metrics),
-        Payload::Error { message, .. } => Err(message),
-        _ => Err("意外响应".into()),
+        Payload::Error { message, .. } => Err(agent_error(message)),
+        _ => Err(AppError::new(codes::UNEXPECTED_RESPONSE)),
     }
 }
 
 #[tauri::command]
 #[tracing::instrument(skip(app), fields(server_id = %server_id, path = %path))]
-pub async fn remote_read_file(server_id: String, path: String, app: tauri::AppHandle) -> Result<RemoteReadFileResponse, String> {
+pub async fn remote_read_file(server_id: String, path: String, app: tauri::AppHandle) -> Result<RemoteReadFileResponse, AppError> {
     tracing::debug!("[ReadFile] server_id={}, path={}", server_id, path);
     let resp = remote_send(server_id, Payload::ReadFileRequest { path }, app).await?;
     match resp.payload {
@@ -881,7 +899,9 @@ pub async fn remote_read_file(server_id: String, path: String, app: tauri::AppHa
             use base64::Engine;
             let content_bytes = base64::engine::general_purpose::STANDARD
                 .decode(content.as_bytes())
-                .map_err(|e| format!("base64 解码失败: {}", e))?;
+                .map_err(|e| {
+                    AppError::new(codes::UNEXPECTED_RESPONSE).with_detail(format!("base64 decode: {e}"))
+                })?;
             // UTF-8 优先；失败时回退 GB18030（GBK 超集，覆盖中文服务器常见编码）
             // 注：二进制文件不会走到这里——FileOpener 先经 file_info 路由，is_text=false 不进编辑器
             let content_text = match String::from_utf8(content_bytes) {
@@ -889,7 +909,7 @@ pub async fn remote_read_file(server_id: String, path: String, app: tauri::AppHa
                 Err(e) => {
                     let (decoded, _, had_errors) = encoding_rs::GB18030.decode(e.as_bytes());
                     if had_errors {
-                        return Err(format!("文件不是有效的 UTF-8 文本（可能为二进制文件）: {}", e));
+                        return Err(AppError::new(codes::FILE_NOT_UTF8).with_detail(e.to_string()));
                     }
                     tracing::info!("[ReadFile] UTF-8 解码失败，已按 GB18030 回退解码");
                     decoded.into_owned()
@@ -897,8 +917,8 @@ pub async fn remote_read_file(server_id: String, path: String, app: tauri::AppHa
             };
             Ok(RemoteReadFileResponse { path, content: content_text, mtime, size })
         }
-        Payload::Error { message, .. } => Err(message),
-        _ => Err("意外响应".into()),
+        Payload::Error { message, .. } => Err(agent_error(message)),
+        _ => Err(AppError::new(codes::UNEXPECTED_RESPONSE)),
     }
 }
 
@@ -926,21 +946,19 @@ pub struct RemoteFileInfo {
 /// 文件格式探测（双击文件时的格式路由依据）
 #[tauri::command]
 #[tracing::instrument(skip(app), fields(server_id = %server_id, path = %path))]
-pub async fn remote_file_info(server_id: String, path: String, app: tauri::AppHandle) -> Result<RemoteFileInfo, String> {
+pub async fn remote_file_info(server_id: String, path: String, app: tauri::AppHandle) -> Result<RemoteFileInfo, AppError> {
     tracing::debug!("[FileInfo] server_id={}, path={}", server_id, path);
-    // 传输失败加 [transport] 前缀：前端据此区分「连接故障」（不降级，直接报错）
-    // 与「Agent 端错误」（旧 Agent 无此命令/文件级失败 → 降级回退编辑器）。
-    // 前缀为机器可识别标记，语义一旦发布不可变更。
-    let resp = match remote_send(server_id, Payload::FileInfoRequest { path }, app).await {
-        Ok(resp) => resp,
-        Err(e) => return Err(format!("[transport] {e}")),
-    };
+    // 传输链路故障（connection_not_found / network_failed / response_timeout / connection_lost）
+    // 与 Agent 端错误（旧 Agent 无此命令 / 文件级失败）通过错误码天然区分：
+    // 前端检查链路错误码集合决定「不降级直接报错」，其余错误降级回退编辑器。
+    // （旧版 [transport] 字符串前缀标记已由结构化错误码取代）
+    let resp = remote_send(server_id, Payload::FileInfoRequest { path }, app).await?;
     match resp.payload {
         Payload::FileInfoResponse { path, size, is_dir, is_text, extension, magic_bytes } => {
             Ok(RemoteFileInfo { path, size, is_dir, is_text, extension, magic_bytes })
         }
-        Payload::Error { message, .. } => Err(message),
-        _ => Err("意外响应".into()),
+        Payload::Error { message, .. } => Err(agent_error(message)),
+        _ => Err(AppError::new(codes::UNEXPECTED_RESPONSE)),
     }
 }
 
@@ -960,15 +978,15 @@ pub struct RemoteBinaryFile {
 /// 前端按用途解码（data URI / pdfjs Uint8Array / hex dump）。
 #[tauri::command]
 #[tracing::instrument(skip(app), fields(server_id = %server_id, path = %path))]
-pub async fn remote_read_file_binary(server_id: String, path: String, app: tauri::AppHandle) -> Result<RemoteBinaryFile, String> {
+pub async fn remote_read_file_binary(server_id: String, path: String, app: tauri::AppHandle) -> Result<RemoteBinaryFile, AppError> {
     tracing::debug!("[ReadFileBinary] server_id={}, path={}", server_id, path);
     let resp = remote_send(server_id, Payload::ReadFileRequest { path }, app).await?;
     match resp.payload {
         Payload::ReadFileResponse { path, content, mtime, size } => {
             Ok(RemoteBinaryFile { path, base64: content, mtime, size })
         }
-        Payload::Error { message, .. } => Err(message),
-        _ => Err("意外响应".into()),
+        Payload::Error { message, .. } => Err(agent_error(message)),
+        _ => Err(AppError::new(codes::UNEXPECTED_RESPONSE)),
     }
 }
 
@@ -997,7 +1015,7 @@ pub async fn remote_execute_command(
     working_directory: Option<String>,
     timeout_secs: Option<u32>,
     app: tauri::AppHandle,
-) -> Result<RemoteCommandOutput, String> {
+) -> Result<RemoteCommandOutput, AppError> {
     use base64::Engine;
     tracing::info!("[ExecuteCommand] server_id={}, command={}, args={:?}", server_id, command, args);
 
@@ -1008,7 +1026,7 @@ pub async fn remote_execute_command(
     let manager = app.state::<ConnectionManager>();
     let (tx, request_id) = {
         let conns = manager.connections.lock().unwrap();
-        let conn = conns.get(&server_id).ok_or("未找到连接")?;
+        let conn = conns.get(&server_id).ok_or_else(|| AppError::new(codes::CONNECTION_NOT_FOUND))?;
         (conn.tx.clone(), manager.next_request_id())
     };
 
@@ -1021,17 +1039,18 @@ pub async fn remote_execute_command(
     let (response_tx, response_rx) = tokio::sync::oneshot::channel();
 
     tx.send(ClientRequest::Send { envelope, response_tx }).await
-        .map_err(|_| "发送请求失败".to_string())?;
+        .map_err(|_| AppError::new(codes::NETWORK_FAILED))?;
 
     let data = tokio::time::timeout(outer_timeout, response_rx)
         .await
         .map_err(|_| {
             tracing::warn!("[ExecuteCommand] 命令执行超时: server_id={}", server_id);
-            "命令执行超时".to_string()
+            AppError::new(codes::RESPONSE_TIMEOUT)
         })?
-        .map_err(|_| "等待响应通道关闭".to_string())??;
+        .map_err(|_| AppError::new(codes::CONNECTION_LOST))??;
 
-    let resp = Envelope::decode(&data)?;
+    let resp = Envelope::decode(&data)
+        .map_err(|e| AppError::new(codes::UNEXPECTED_RESPONSE).with_detail(format!("decode command output: {e}")))?;
     match resp.payload {
         Payload::CommandOutputResponse { stdout, stderr, exit_code } => {
             // base64 → 字节 → UTF-8 优先，GB18030 回退（服务器命令输出可能是中文 GBK）
@@ -1053,8 +1072,8 @@ pub async fn remote_execute_command(
                 exit_code,
             })
         }
-        Payload::Error { message, .. } => Err(message),
-        _ => Err("意外响应".into()),
+        Payload::Error { message, .. } => Err(agent_error(message)),
+        _ => Err(AppError::new(codes::UNEXPECTED_RESPONSE)),
     }
 }
 
@@ -1068,7 +1087,7 @@ pub async fn remote_open_locally(
     server_id: String,
     remote_path: String,
     app: tauri::AppHandle,
-) -> Result<String, String> {
+) -> Result<String, AppError> {
     use base64::Engine;
     use tauri_plugin_opener::OpenerExt;
     tracing::info!("[OpenLocally] server_id={}, path={}", server_id, remote_path);
@@ -1077,31 +1096,33 @@ pub async fn remote_open_locally(
     let resp = remote_send(server_id, Payload::ReadFileRequest { path: remote_path.clone() }, app.clone()).await?;
     let base64_content = match resp.payload {
         Payload::ReadFileResponse { content, .. } => content,
-        Payload::Error { message, .. } => return Err(message),
-        _ => return Err("意外响应".into()),
+        Payload::Error { message, .. } => return Err(agent_error(message)),
+        _ => return Err(AppError::new(codes::UNEXPECTED_RESPONSE)),
     };
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(base64_content.as_bytes())
-        .map_err(|e| format!("base64 解码失败: {}", e))?;
+        .map_err(|e| AppError::new(codes::UNEXPECTED_RESPONSE).with_detail(format!("base64 decode: {e}")))?;
 
     // 2. 写入本地临时目录（%TEMP%/quirel-view/，不存在则创建，同名覆盖）
     let file_name = remote_path.rsplit('/').next().filter(|s| !s.is_empty()).unwrap_or("download.html");
     let dir = std::env::temp_dir().join("quirel-view");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("创建临时目录失败: {}", e))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| AppError::new(codes::IO_FAILED).with_detail(format!("create temp dir: {e}")))?;
     let local_path = dir.join(file_name);
-    std::fs::write(&local_path, &bytes).map_err(|e| format!("写入临时文件失败: {}", e))?;
+    std::fs::write(&local_path, &bytes)
+        .map_err(|e| AppError::new(codes::IO_FAILED).with_detail(format!("write temp file: {e}")))?;
 
     // 3. 系统默认应用打开（HTML 的默认应用即浏览器）
     app.opener()
         .open_path(local_path.to_string_lossy().to_string(), None::<&str>)
-        .map_err(|e| format!("调用本地应用失败: {}", e))?;
+        .map_err(|e| AppError::new(codes::OPERATION_FAILED).with_detail(format!("open with local app: {e}")))?;
 
     Ok(local_path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
 #[tracing::instrument(skip(content, app), fields(server_id = %server_id, path = %path))]
-pub async fn remote_write_file(server_id: String, path: String, content: String, app: tauri::AppHandle) -> Result<RemoteWriteFileResponse, String> {
+pub async fn remote_write_file(server_id: String, path: String, content: String, app: tauri::AppHandle) -> Result<RemoteWriteFileResponse, AppError> {
     tracing::info!("[WriteFile] server_id={}, path={}", server_id, path);
     // Agent 协议要求 content 为 base64 编码（支持二进制文件）
     // 前端传入的是 UTF-8 文本，这里编码为 base64
@@ -1110,8 +1131,8 @@ pub async fn remote_write_file(server_id: String, path: String, content: String,
     let resp = remote_send(server_id, Payload::WriteFileRequest { path, content: content_b64 }, app).await?;
     match resp.payload {
         Payload::WriteFileResponse { path, mtime, size } => Ok(RemoteWriteFileResponse { path, mtime, size }),
-        Payload::Error { message, .. } => Err(message),
-        _ => Err("意外响应".into()),
+        Payload::Error { message, .. } => Err(agent_error(message)),
+        _ => Err(AppError::new(codes::UNEXPECTED_RESPONSE)),
     }
 }
 
@@ -1124,26 +1145,26 @@ pub struct RemoteWriteFileResponse {
 
 #[tauri::command]
 #[tracing::instrument(skip(app), fields(server_id = %server_id, path = %path))]
-pub async fn remote_delete(server_id: String, path: String, app: tauri::AppHandle) -> Result<bool, String> {
+pub async fn remote_delete(server_id: String, path: String, app: tauri::AppHandle) -> Result<bool, AppError> {
     tracing::info!("[DeleteFile] server_id={}, path={}", server_id, path);
     let resp = remote_send(server_id, Payload::DeleteRequest { path }, app).await?;
     match resp.payload {
         Payload::DeleteResponse { success } => Ok(success),
-        Payload::Error { message, .. } => Err(message),
-        _ => Err("意外响应".into()),
+        Payload::Error { message, .. } => Err(agent_error(message)),
+        _ => Err(AppError::new(codes::UNEXPECTED_RESPONSE)),
     }
 }
 
 #[tauri::command]
-pub async fn remote_mkdir(server_id: String, path: String, app: tauri::AppHandle) -> Result<bool, String> {
+pub async fn remote_mkdir(server_id: String, path: String, app: tauri::AppHandle) -> Result<bool, AppError> {
     tracing::debug!("[Connection] remote_mkdir: server_id={}, path={}", server_id, path);
 
     let resp = remote_send(server_id, Payload::MkdirRequest { path }, app).await?;
 
     match resp.payload {
         Payload::MkdirResponse { success, .. } => Ok(success),
-        Payload::Error { message, .. } => Err(message),
-        _ => Err("意外响应".into()),
+        Payload::Error { message, .. } => Err(agent_error(message)),
+        _ => Err(AppError::new(codes::UNEXPECTED_RESPONSE)),
     }
 }
 
@@ -1153,15 +1174,15 @@ pub async fn remote_rename(
     old_path: String,
     new_path: String,
     app: tauri::AppHandle
-) -> Result<bool, String> {
+) -> Result<bool, AppError> {
     tracing::debug!("[Connection] remote_rename: old={}, new={}", old_path, new_path);
 
     let resp = remote_send(server_id, Payload::RenameRequest { old_path, new_path }, app).await?;
 
     match resp.payload {
         Payload::RenameResponse { success, .. } => Ok(success),
-        Payload::Error { message, .. } => Err(message),
-        _ => Err("意外响应".into()),
+        Payload::Error { message, .. } => Err(agent_error(message)),
+        _ => Err(AppError::new(codes::UNEXPECTED_RESPONSE)),
     }
 }
 
@@ -1171,15 +1192,15 @@ pub async fn remote_copy(
     src: String,
     dst: String,
     app: tauri::AppHandle
-) -> Result<bool, String> {
+) -> Result<bool, AppError> {
     tracing::debug!("[Connection] remote_copy: src={}, dst={}", src, dst);
 
     let resp = remote_send(server_id, Payload::CopyRequest { src, dst }, app).await?;
 
     match resp.payload {
         Payload::CopyResponse { success, .. } => Ok(success),
-        Payload::Error { message, .. } => Err(message),
-        _ => Err("意外响应".into()),
+        Payload::Error { message, .. } => Err(agent_error(message)),
+        _ => Err(AppError::new(codes::UNEXPECTED_RESPONSE)),
     }
 }
 
@@ -1193,15 +1214,15 @@ pub async fn remote_chmod(
     mode: u32,
     recursive: bool,
     app: tauri::AppHandle
-) -> Result<bool, String> {
+) -> Result<bool, AppError> {
     tracing::debug!("[Connection] remote_chmod: server_id={}, path={}, mode={:o}, recursive={}", server_id, path, mode, recursive);
 
     let resp = remote_send(server_id, Payload::ChmodRequest { path, mode, recursive }, app).await?;
 
     match resp.payload {
         Payload::ChmodResponse { success, .. } => Ok(success),
-        Payload::Error { message, .. } => Err(message),
-        _ => Err("意外响应".into()),
+        Payload::Error { message, .. } => Err(agent_error(message)),
+        _ => Err(AppError::new(codes::UNEXPECTED_RESPONSE)),
     }
 }
 
@@ -1216,15 +1237,15 @@ pub async fn remote_chown(
     group: String,
     recursive: bool,
     app: tauri::AppHandle
-) -> Result<bool, String> {
+) -> Result<bool, AppError> {
     tracing::debug!("[Connection] remote_chown: server_id={}, path={}, owner={}, group={}, recursive={}", server_id, path, owner, group, recursive);
 
     let resp = remote_send(server_id, Payload::ChownRequest { path, owner, group, recursive }, app).await?;
 
     match resp.payload {
         Payload::ChownResponse { success, .. } => Ok(success),
-        Payload::Error { message, .. } => Err(message),
-        _ => Err("意外响应".into()),
+        Payload::Error { message, .. } => Err(agent_error(message)),
+        _ => Err(AppError::new(codes::UNEXPECTED_RESPONSE)),
     }
 }
 
@@ -1245,8 +1266,8 @@ pub async fn remote_apply_diff(
     base_mtime: u64,
     diffs: Vec<FileDiff>, // 使用本地定义的 FileDiff
     app: tauri::AppHandle
-) -> Result<RemoteApplyDiffResponse, String> {
-    tracing::debug!("[Connection] remote_apply_diff: server_id={}, path={}, base_mtime={}, diffs={}", 
+) -> Result<RemoteApplyDiffResponse, AppError> {
+    tracing::debug!("[Connection] remote_apply_diff: server_id={}, path={}, base_mtime={}, diffs={}",
         server_id, path, base_mtime, diffs.len());
 
     // 发送差异到 Agent
@@ -1270,8 +1291,8 @@ pub async fn remote_apply_diff(
                 error,
             })
         }
-        Payload::Error { message, .. } => Err(message),
-        _ => Err("意外响应".into()),
+        Payload::Error { message, .. } => Err(agent_error(message)),
+        _ => Err(AppError::new(codes::UNEXPECTED_RESPONSE)),
     }
 }
 
@@ -1290,20 +1311,20 @@ pub async fn remote_move(
     src: String,
     dst: String,
     app: tauri::AppHandle
-) -> Result<bool, String> {
+) -> Result<bool, AppError> {
     tracing::debug!("[Connection] remote_move: src={}, dst={}", src, dst);
 
     let resp = remote_send(server_id, Payload::MoveRequest { src, dst }, app).await?;
 
     match resp.payload {
         Payload::MoveResponse { success, .. } => Ok(success),
-        Payload::Error { message, .. } => Err(message),
-        _ => Err("意外响应".into()),
+        Payload::Error { message, .. } => Err(agent_error(message)),
+        _ => Err(AppError::new(codes::UNEXPECTED_RESPONSE)),
     }
 }
 
 #[tauri::command]
-pub async fn get_stats(server_id: String, stats_type: String, app: tauri::AppHandle) -> Result<StatsResponse, String> {
+pub async fn get_stats(server_id: String, stats_type: String, app: tauri::AppHandle) -> Result<StatsResponse, AppError> {
     tracing::debug!("[Connection] get_stats: server_id={}, stats_type={}", server_id, stats_type);
 
     let resp = remote_send(server_id, Payload::GetStats { stats_type }, app).await?;
@@ -1312,8 +1333,8 @@ pub async fn get_stats(server_id: String, stats_type: String, app: tauri::AppHan
         // 共享 crate 的 Payload::StatsResponse 为 newtype 变体（内含 StatsResponse），
         // 序列化字节与旧内联字段变体完全一致，直接透传
         Payload::StatsResponse(stats) => Ok(stats),
-        Payload::Error { message, .. } => Err(message),
-        _ => Err("意外响应".into()),
+        Payload::Error { message, .. } => Err(agent_error(message)),
+        _ => Err(AppError::new(codes::UNEXPECTED_RESPONSE)),
     }
 }
 
@@ -1327,13 +1348,13 @@ pub async fn get_stats(server_id: String, stats_type: String, app: tauri::AppHan
 ///
 /// 空列表 = 旧 Agent（不支持新协议命令）；未连接返回 Err
 #[tauri::command]
-pub fn get_agent_capabilities(server_id: String, app: tauri::AppHandle) -> Result<Vec<String>, String> {
+pub fn get_agent_capabilities(server_id: String, app: tauri::AppHandle) -> Result<Vec<String>, AppError> {
     let manager = app.state::<ConnectionManager>();
     let conns = manager.connections.lock().unwrap();
     conns
         .get(&server_id)
         .map(|c| c.capabilities.clone())
-        .ok_or_else(|| "未连接服务器".to_string())
+        .ok_or_else(|| AppError::new(codes::CONNECTION_NOT_FOUND))
 }
 
 /// 上传大小限制信息（透传 Agent 响应；字段命名与 StatsResponse 一致为 snake_case）
@@ -1346,28 +1367,28 @@ pub struct TransferLimitInfo {
 
 /// Tauri Command: 查询 Agent 上传大小限制（任何已认证用户）
 #[tauri::command]
-pub async fn get_transfer_limit(server_id: String, app: tauri::AppHandle) -> Result<TransferLimitInfo, String> {
+pub async fn get_transfer_limit(server_id: String, app: tauri::AppHandle) -> Result<TransferLimitInfo, AppError> {
     let resp = remote_send(server_id, Payload::GetTransferLimit {}, app).await?;
     match resp.payload {
         Payload::TransferLimitResponse { max_file_transfer_mb, editable, persisted } =>
             Ok(TransferLimitInfo { max_file_transfer_mb, editable, persisted }),
-        // Agent 的 403/400 响应已是用户视角文案（映射在 Agent 端有单测锁定），原样透传
-        Payload::Error { message, .. } => Err(message),
-        _ => Err("意外响应".into()),
+        // Agent 的 403/400 响应已是用户视角文案（映射在 Agent 端有单测锁定），经 agent_error 透传
+        Payload::Error { message, .. } => Err(agent_error(message)),
+        _ => Err(AppError::new(codes::UNEXPECTED_RESPONSE)),
     }
 }
 
 /// Tauri Command: 修改 Agent 上传大小限制（仅 root；立即对该服务器所有会话生效）
 #[tauri::command]
-pub async fn set_transfer_limit(server_id: String, max_file_transfer_mb: u64, app: tauri::AppHandle) -> Result<TransferLimitInfo, String> {
+pub async fn set_transfer_limit(server_id: String, max_file_transfer_mb: u64, app: tauri::AppHandle) -> Result<TransferLimitInfo, AppError> {
     tracing::debug!("[Connection] set_transfer_limit: server_id={}, max_file_transfer_mb={}", server_id, max_file_transfer_mb);
 
     let resp = remote_send(server_id, Payload::SetTransferLimit { max_file_transfer_mb }, app).await?;
     match resp.payload {
         Payload::TransferLimitResponse { max_file_transfer_mb, editable, persisted } =>
             Ok(TransferLimitInfo { max_file_transfer_mb, editable, persisted }),
-        Payload::Error { message, .. } => Err(message),
-        _ => Err("意外响应".into()),
+        Payload::Error { message, .. } => Err(agent_error(message)),
+        _ => Err(AppError::new(codes::UNEXPECTED_RESPONSE)),
     }
 }
 
@@ -1378,7 +1399,7 @@ pub async fn subscribe(
     server_id: String,
     types: Vec<SubscriptionType>,
     app: tauri::AppHandle,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     let manager = app.state::<ConnectionManager>();
 
     // 使用锁保护整个订阅流程，避免竞态条件
@@ -1394,7 +1415,7 @@ pub async fn subscribe(
             // 获取 QUIC Connection
             active_conn.quic_conn.clone()
         } else {
-            return Err("未找到连接".into());
+            return Err(AppError::new(codes::CONNECTION_NOT_FOUND));
         }
     };
 
@@ -1410,8 +1431,8 @@ pub async fn subscribe(
             conn.open_bi(),
         )
         .await
-        .map_err(|_| "创建 Stream 超时".to_string())?
-        .map_err(|e| format!("创建 Stream 失败: {}", e))?;
+        .map_err(|_| AppError::new(codes::NETWORK_FAILED).with_detail("open stream timeout"))?
+        .map_err(|e| AppError::new(codes::NETWORK_FAILED).with_detail(format!("open stream: {e}")))?;
 
         let (mut send, mut recv) = stream;
 
@@ -1430,16 +1451,17 @@ pub async fn subscribe(
             let send_result = tokio::time::timeout(
                 std::time::Duration::from_secs(STREAM_TIMEOUT_SECS),
                 async {
-                    send.write_all(&len).await.map_err(|e| format!("发送订阅请求长度失败: {}", e))?;
-                    send.write_all(&data).await.map_err(|e| format!("发送订阅请求数据失败: {}", e))?;
+                    send.write_all(&len).await.map_err(|e| AppError::new(codes::NETWORK_FAILED).with_detail(format!("write subscribe length: {e}")))?;
+                    send.write_all(&data).await.map_err(|e| AppError::new(codes::NETWORK_FAILED).with_detail(format!("write subscribe data: {e}")))?;
                     send.flush().await.ok();
-                    Ok::<(), String>(())
+                    Ok::<(), AppError>(())
                 },
             )
             .await;
             match send_result {
                 Ok(Ok(())) => {}
-                _ => return Err("发送订阅请求超时".into()),
+                Ok(Err(e)) => return Err(e),
+                Err(_) => return Err(AppError::new(codes::NETWORK_FAILED).with_detail("send subscribe timeout")),
             }
         }
 
@@ -1448,29 +1470,32 @@ pub async fn subscribe(
             std::time::Duration::from_secs(STREAM_TIMEOUT_SECS),
             async {
                 let mut len_buf = [0u8; 4];
-                recv.read_exact(&mut len_buf).await.map_err(|_| "读取响应长度失败".to_string())?;
+                recv.read_exact(&mut len_buf).await
+                    .map_err(|e| AppError::new(codes::RESPONSE_TIMEOUT).with_detail(format!("read ack length: {e}")))?;
                 let len = u32::from_le_bytes(len_buf) as usize;
                 let mut data_buf = vec![0u8; len];
-                recv.read_exact(&mut data_buf).await.map_err(|_| "读取响应数据失败".to_string())?;
-                Ok::<Vec<u8>, String>(data_buf)
+                recv.read_exact(&mut data_buf).await
+                    .map_err(|e| AppError::new(codes::RESPONSE_TIMEOUT).with_detail(format!("read ack data: {e}")))?;
+                Ok::<Vec<u8>, AppError>(data_buf)
             },
         )
         .await;
         let data_buf = match ack_result {
             Ok(Ok(buf)) => buf,
-            _ => return Err("等待订阅响应超时".into()),
+            Ok(Err(e)) => return Err(e),
+            Err(_) => return Err(AppError::new(codes::RESPONSE_TIMEOUT).with_detail("subscribe ack timeout")),
         };
 
         if let Ok(resp_envelope) = Envelope::decode(&data_buf) {
             if let Payload::SubscribeAck { success, .. } = resp_envelope.payload {
                 if !success {
-                    return Err("订阅失败".into());
+                    return Err(AppError::new(codes::OPERATION_FAILED).with_detail("subscribe rejected"));
                 }
             } else {
-                return Err("意外响应".into());
+                return Err(AppError::new(codes::UNEXPECTED_RESPONSE));
             }
         } else {
-            return Err("解析响应失败".into());
+            return Err(AppError::new(codes::UNEXPECTED_RESPONSE).with_detail("decode subscribe ack"));
         }
 
         // 启动监听任务
@@ -1540,7 +1565,7 @@ pub async fn subscribe(
         tracing::info!("订阅请求已发送并确认: server_id={}, types={}", server_id, types.len());
         Ok(())
     } else {
-        Err("未找到 QUIC Connection".into())
+        Err(AppError::new(codes::CONNECTION_NOT_FOUND))
     }
 }
 
@@ -1549,7 +1574,7 @@ pub async fn unsubscribe(
     server_id: String,
     types: Vec<SubscriptionType>,
     app: tauri::AppHandle,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     let manager = app.state::<ConnectionManager>();
 
     // 停止持久 Stream 监听任务
@@ -1590,11 +1615,11 @@ pub async fn unsubscribe(
                 tracing::info!("取消订阅成功: server_id={}", server_id);
                 Ok(())
             } else {
-                Err("取消订阅失败".into())
+                Err(AppError::new(codes::OPERATION_FAILED).with_detail("unsubscribe rejected"))
             }
         }
-        Payload::Error { message, .. } => Err(message),
-        _ => Err("意外响应".into()),
+        Payload::Error { message, .. } => Err(agent_error(message)),
+        _ => Err(AppError::new(codes::UNEXPECTED_RESPONSE)),
     }
 }
 
@@ -2188,7 +2213,7 @@ async fn perform_pubkey_auth(
     }
 }
 
-async fn send_and_receive_quic(conn: &quinn::Connection, request_id: u32, payload: Payload) -> Result<Vec<u8>, String> {
+async fn send_and_receive_quic(conn: &quinn::Connection, request_id: u32, payload: Payload) -> Result<Vec<u8>, AppError> {
     let timeout_duration = std::time::Duration::from_secs(STREAM_TIMEOUT_SECS);
 
     // Stream 打开也需要超时保护，避免在连接异常时无限等待
@@ -2196,43 +2221,45 @@ async fn send_and_receive_quic(conn: &quinn::Connection, request_id: u32, payloa
         .await
         .map_err(|_| {
             tracing::warn!("[QUIC] 打开 Stream 超时: request_id={}", request_id);
-            "打开 Stream 超时".to_string()
+            AppError::new(codes::NETWORK_FAILED).with_detail("open stream timeout")
         })?
         .map_err(|e| {
             tracing::warn!("[QUIC] 打开 Stream 失败: request_id={}, error={}", request_id, e);
-            format!("打开 Stream 失败: {}", e)
+            AppError::new(codes::NETWORK_FAILED).with_detail(format!("open stream: {e}"))
         })?;
 
-    let bytes = Envelope::new(request_id, payload).encode()?;
+    let bytes = Envelope::new(request_id, payload)
+        .encode()
+        .map_err(|e| AppError::new(codes::FRAME_WRITE_FAILED).with_detail(format!("encode envelope: {e}")))?;
     let len = (bytes.len() as u32).to_le_bytes();
 
     // 发送操作也需要超时
     tokio::time::timeout(timeout_duration, async {
-        send.write_all(&len).await.map_err(|e| format!("发送长度失败: {}", e))?;
-        send.write_all(&bytes).await.map_err(|e| format!("发送数据失败: {}", e))?;
-        send.finish().map_err(|e| format!("关闭写入流失败: {}", e))?;
-        Ok::<(), String>(())
+        send.write_all(&len).await.map_err(|e| AppError::new(codes::NETWORK_FAILED).with_detail(format!("write length: {e}")))?;
+        send.write_all(&bytes).await.map_err(|e| AppError::new(codes::NETWORK_FAILED).with_detail(format!("write data: {e}")))?;
+        send.finish().map_err(|e| AppError::new(codes::NETWORK_FAILED).with_detail(format!("finish stream: {e}")))?;
+        Ok::<(), AppError>(())
     })
     .await
     .map_err(|_| {
         tracing::warn!("[QUIC] 发送数据超时: request_id={}", request_id);
-        "发送数据超时".to_string()
+        AppError::new(codes::NETWORK_FAILED).with_detail("send data timeout")
     })??;
 
     // 接收操作也需要超时
     let data = tokio::time::timeout(timeout_duration, async {
         let mut len_buf = [0u8; 4];
-        recv.read_exact(&mut len_buf).await.map_err(|e| format!("读取响应长度失败: {}", e))?;
+        recv.read_exact(&mut len_buf).await.map_err(|e| AppError::new(codes::NETWORK_FAILED).with_detail(format!("read response length: {e}")))?;
         let resp_len = u32::from_le_bytes(len_buf) as usize;
 
         let mut data = vec![0u8; resp_len];
-        recv.read_exact(&mut data).await.map_err(|e| format!("读取响应数据失败: {}", e))?;
-        Ok::<Vec<u8>, String>(data)
+        recv.read_exact(&mut data).await.map_err(|e| AppError::new(codes::NETWORK_FAILED).with_detail(format!("read response data: {e}")))?;
+        Ok::<Vec<u8>, AppError>(data)
     })
     .await
     .map_err(|_| {
         tracing::warn!("[QUIC] 接收响应超时: request_id={}", request_id);
-        "接收响应超时".to_string()
+        AppError::new(codes::RESPONSE_TIMEOUT)
     })??;
 
     Ok(data)

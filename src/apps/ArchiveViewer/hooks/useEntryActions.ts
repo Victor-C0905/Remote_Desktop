@@ -13,6 +13,7 @@ import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { createLogger } from '../../../utils/logger';
+import { formatUnknownError } from '../../../types/errors';
 import { useWindowManager } from '../../../window-system/WindowManagerContext';
 import { buildExtractCommand } from '../../../file-formats/plugins/archive';
 import { openRemoteFile } from '../../openRemoteFile';
@@ -72,7 +73,7 @@ export function useEntryActions(
       }
     } catch (err) {
       log.error('提取/打开失败:', err);
-      setNotice(t('archive.openFailed', { message: String(err) }));
+      setNotice(t('archive.openFailed', { message: formatUnknownError(err) }));
     } finally {
       setExtractingPath(null);
     }
@@ -101,7 +102,7 @@ export function useEntryActions(
       }
     } catch (err) {
       log.error('解压失败:', err);
-      setNotice(t('archive.extractAllFailed', { message: String(err) }));
+      setNotice(t('archive.extractAllFailed', { message: formatUnknownError(err) }));
     } finally {
       setExtractDialog(null);
     }

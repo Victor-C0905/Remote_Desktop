@@ -9,6 +9,7 @@ import { useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useTranslation } from 'react-i18next';
 import i18n from '../../i18n';
+import { formatTaskError } from '../../types/errors';
 import { TransferTask } from '../../hooks/useTransferProgress';
 import { useServerManager } from '../../context/ServerManager';
 import { useServersStore } from '../../stores/serversStore';
@@ -386,10 +387,11 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
           <span className="tc-eta">{t('transfer.etaRemaining', { time: formatEta(task.eta) })}</span>
         )}
         {task.status === 'error' && task.error && (
-          <span className="tc-error-msg" title={task.error}>{task.error}</span>
+          // task.error 可能是 AppError JSON（新版）或纯文本（旧记录），统一经词典渲染
+          <span className="tc-error-msg" title={formatTaskError(task.error)}>{formatTaskError(task.error)}</span>
         )}
         {task.status === 'interrupted' && (
-          <span className="tc-error-msg" title={task.error || t('transfer.interruptedError')}>{t('transfer.status.interrupted')}</span>
+          <span className="tc-error-msg" title={formatTaskError(task.error) || t('transfer.interruptedError')}>{t('transfer.status.interrupted')}</span>
         )}
         {startTimeText && task.status !== 'active' && (
           <span className="tc-elapsed">{startTimeText}</span>

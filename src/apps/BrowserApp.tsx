@@ -9,6 +9,7 @@ import { createLogger } from "../utils/logger";
 import { SymbolicIcon } from "../components/symbolic";
 import { ConnectionErrorState, ReconnectingState } from "../components/ConnectionState";
 import { getServerErrorInfo } from "../stores/serversStore";
+import { formatUnknownError } from "../types/errors";
 import { useOpenApp } from "../window-system/hooks/useOpenApp";
 import "./BrowserApp.css";
 
@@ -73,7 +74,8 @@ export function BrowserApp() {
         setSession(info);
         log.info(`浏览会话已启动: ${info.browser}, SOCKS5 端口 ${info.port}`);
       } catch (e) {
-        setError(String(e));
+        // AppError 结构化错误经词典渲染（formatUnknownError），裸字符串原样透传
+        setError(formatUnknownError(e));
         log.error("浏览会话启动失败:", e);
       } finally {
         startingRef.current = false;

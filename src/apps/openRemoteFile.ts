@@ -12,6 +12,19 @@
 import { invoke } from '@tauri-apps/api/core';
 import i18n from '../i18n';
 import { detectFileFormat, decideOpenTarget, createDefaultRegistry, SIZE_LIMITS } from '../file-formats/FileOpener';
+import { isAppError, formatOpError, formatUnknownError } from '../types/errors';
+
+/**
+ * 传输链路错误码集合：出现即表示「通信链路故障」（连接断开/未找到/超时），
+ * 编辑器同样读不到文件，降级回退无意义 → 直接报错。
+ * （旧版 Rust 端 [transport] 字符串前缀标记已由结构化错误码取代，语义等价迁移）
+ */
+const TRANSPORT_ERROR_CODES = new Set([
+  'connection_not_found',
+  'network_failed',
+  'response_timeout',
+  'connection_lost',
+]);
 
 /** 最小窗口创建接口（结构化类型，避免依赖 window-system 内部类型） */
 interface WindowCreator {
@@ -52,10 +65,9 @@ export async function openRemoteFile(
   try {
     info = await detectFileFormat(serverId, fullPath);
   } catch (err) {
-    const msg = String(err);
-    // 传输故障（连接断开/超时）：编辑器同样读不到文件，降级无意义 → 直接报错
-    if (msg.startsWith('[transport]')) {
-      return { kind: 'error', message: i18n.t('openRemoteFile.connectionUnavailable', { message: msg.replace('[transport] ', '') }) };
+    // 传输链路故障（连接断开/未找到/超时）：编辑器同样读不到文件，降级无意义 → 直接报错
+    if (isAppError(err) && TRANSPORT_ERROR_CODES.has(err.code)) {
+      return { kind: 'error', message: formatOpError(err) };
     }
     // Agent 端错误（旧 Agent 无 file_info / 文件级失败）→ 回退编辑器，保证可用性；
     // 回退前用调用方已知大小做大文件确认（跳过探测路径的 confirm）
@@ -104,7 +116,7 @@ export async function openRemoteFile(
         await invoke('remote_open_locally', { serverId, remotePath: fullPath });
         return { kind: 'opened' };
       } catch (err) {
-        return { kind: 'error', message: String(err) };
+        return { kind: 'error', message: formatUnknownError(err) };
       }
   }
 }

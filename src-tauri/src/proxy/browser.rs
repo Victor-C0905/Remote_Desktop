@@ -11,6 +11,8 @@
 use std::path::PathBuf;
 use std::process::{Child, Command};
 
+use crate::errors::{codes, AppError};
+
 /// 已知浏览器候选表：(路径, id, 显示名)
 /// id 稳定持久化用；显示名供 UI 展示
 const BROWSER_CANDIDATES: &[( &str, &str, &str )] = &[
@@ -56,11 +58,11 @@ pub fn list_browsers() -> Vec<(&'static str, &'static str, String)> {
 /// - 匹配候选 id（edge/chrome/firefox）：返回该浏览器实际路径（未安装则 Err）
 /// - 其他值视为自定义浏览器可执行文件路径（如便携版 Chrome/Chromium 系浏览器），
 ///   存在即可用——参数体系为 Chromium 通用
-pub fn resolve_browser(browser_id: &str) -> Result<(PathBuf, String), String> {
+pub fn resolve_browser(browser_id: &str) -> Result<(PathBuf, String), AppError> {
     if browser_id.is_empty() || browser_id == "auto" {
         return detect_browser()
             .map(|(p, id)| (p, id.to_string()))
-            .ok_or_else(|| "未找到 Edge/Chrome/Firefox，可在远程浏览应用中选择自定义浏览器路径".into());
+            .ok_or_else(|| AppError::new(codes::PROXY_BROWSER_NOT_FOUND));
     }
 
     // 按候选 id 匹配
@@ -70,7 +72,9 @@ pub fn resolve_browser(browser_id: &str) -> Result<(PathBuf, String), String> {
             if p.exists() {
                 return Ok((p, id.to_string()));
             }
-            return Err(format!("所选浏览器（{}）未安装", browser_id));
+            return Err(
+                AppError::new(codes::PROXY_BROWSER_NOT_INSTALLED).with_param("browser", browser_id)
+            );
         }
     }
 
@@ -79,7 +83,10 @@ pub fn resolve_browser(browser_id: &str) -> Result<(PathBuf, String), String> {
     if p.is_file() {
         Ok((p, "custom".into()))
     } else {
-        Err(format!("浏览器路径无效或不是文件: {}", browser_id))
+        Err(
+            AppError::new(codes::PROXY_BROWSER_PATH_INVALID)
+                .with_param("path", browser_id.to_string()),
+        )
     }
 }
 
@@ -88,7 +95,7 @@ pub fn spawn_browser(
     browser_path: &PathBuf,
     socks_port: u16,
     profile_dir: &PathBuf,
-) -> Result<Child, String> {
+) -> Result<Child, AppError> {
     Command::new(browser_path)
         .arg(format!("--proxy-server=socks5://127.0.0.1:{}", socks_port))
         .arg(format!("--user-data-dir={}", profile_dir.display()))
@@ -99,7 +106,9 @@ pub fn spawn_browser(
         .arg("--new-window")
         .arg("about:blank")
         .spawn()
-        .map_err(|e| format!("启动浏览器失败: {}", e))
+        .map_err(|e| {
+            AppError::new(codes::PROXY_BROWSER_SPAWN_FAILED).with_detail(e.to_string())
+        })
 }
 
 /// 终止占用指定 profile 的所有浏览器进程（残留实例清理）
@@ -113,11 +122,15 @@ pub fn spawn_browser(
 pub fn terminate_profile_processes(
     browser_path: &PathBuf,
     profile_dir: &PathBuf,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     let exe_name = browser_path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
-        .ok_or_else(|| "浏览器路径缺少可执行文件名".to_string())?;
+        .ok_or_else(|| {
+            AppError::new(codes::PROXY_BROWSER_PATH_INVALID)
+                .with_param("path", browser_path.to_string_lossy().to_string())
+                .with_detail("browser path has no file name")
+        })?;
     // PowerShell 单引号字符串转义：' → ''（profile 路径来自 app_cache_dir，正常无引号，防御性处理）
     let exe_pat = exe_name.replace('\'', "''");
     let profile_pat = profile_dir.to_string_lossy().replace('\'', "''");
@@ -130,12 +143,14 @@ pub fn terminate_profile_processes(
     let status = Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .status()
-        .map_err(|e| format!("调用 PowerShell 清理残留浏览器失败: {}", e))?;
+        .map_err(|e| {
+            AppError::new(codes::PROXY_CLEANUP_FAILED).with_detail(format!("powershell spawn: {e}"))
+        })?;
     if !status.success() {
-        return Err(format!(
-            "清理残留浏览器进程失败（exit={}）",
+        return Err(AppError::new(codes::PROXY_CLEANUP_FAILED).with_detail(format!(
+            "powershell exit={}",
             status.code().unwrap_or(-1)
-        ));
+        )));
     }
     Ok(())
 }
@@ -145,7 +160,7 @@ pub fn terminate_profile_processes(
 pub fn terminate_profile_processes(
     browser_path: &PathBuf,
     profile_dir: &PathBuf,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     let _ = browser_path; // pkill -f 直接按命令行匹配，无需进程名
     // pkill -f 的模式为扩展正则，路径特殊字符（. 等）需转义为字面量
     let pattern = profile_dir
@@ -163,13 +178,15 @@ pub fn terminate_profile_processes(
         .arg("-f")
         .arg(&pattern)
         .status()
-        .map_err(|e| format!("调用 pkill 清理残留浏览器失败: {}", e))?;
+        .map_err(|e| {
+            AppError::new(codes::PROXY_CLEANUP_FAILED).with_detail(format!("pkill spawn: {e}"))
+        })?;
     // pkill 退出码 1 = 无匹配进程（本就是干净状态），不算错误
     if !status.success() && status.code() != Some(1) {
-        return Err(format!(
-            "清理残留浏览器进程失败（exit={}）",
+        return Err(AppError::new(codes::PROXY_CLEANUP_FAILED).with_detail(format!(
+            "pkill exit={}",
             status.code().unwrap_or(-1)
-        ));
+        )));
     }
     Ok(())
 }

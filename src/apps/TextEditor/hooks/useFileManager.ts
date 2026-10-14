@@ -15,6 +15,7 @@ import i18n from '../../../i18n';
 import type { FileState, ApplyDiffResponse } from '../types/editor';
 import { calculateDiff, convertToTauriFormat } from '../utils/diff';
 import { createLogger } from '../../../utils/logger';
+import { formatUnknownError } from '../../../types/errors';
 
 const log = createLogger('useFileManager');
 
@@ -224,7 +225,7 @@ export function useFileManager(): UseFileManagerReturn {
       setOriginalChecksum(checksum);
     } catch (err) {
       // 处理错误
-      const errorMessage = err instanceof Error ? err.message : String(err);
+      const errorMessage = formatUnknownError(err);
       setError(i18n.t('textEditor.err.openFile', { path, message: errorMessage }));
       setFileState(null);
       setOriginalChecksum('');
@@ -374,7 +375,7 @@ export function useFileManager(): UseFileManagerReturn {
         }
       }
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
+      const errorMessage = formatUnknownError(err);
       log.error('保存失败:', err);
       setError(i18n.t('textEditor.err.cannotSavePath', { path: fileState.path, message: errorMessage }));
     } finally {
@@ -424,7 +425,7 @@ export function useFileManager(): UseFileManagerReturn {
 
       setOriginalChecksum(newChecksum);
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
+      const errorMessage = formatUnknownError(err);
       log.error('保存失败:', err);
       setError(i18n.t('textEditor.err.cannotSavePath', { path: fileState.path, message: errorMessage }));
     } finally {
@@ -493,7 +494,7 @@ export function useFileManager(): UseFileManagerReturn {
       setLocalContent(''); // 清空本地缓存（因为现在是已打开文件）
     } catch (err) {
       // 处理错误
-      const errorMessage = err instanceof Error ? err.message : String(err);
+      const errorMessage = formatUnknownError(err);
       log.error('saveAsNewFile 失败:', err);
       setError(i18n.t('textEditor.err.cannotSavePath', { path, message: errorMessage }));
     } finally {

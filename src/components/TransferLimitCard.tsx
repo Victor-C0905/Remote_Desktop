@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { createLogger } from "../utils/logger";
+import { formatUnknownError } from "../types/errors";
 
 const log = createLogger("TransferLimitCard");
 
@@ -66,7 +67,7 @@ export function TransferLimitCard({ serverId }: { serverId: string | null }) {
         setInputValue(String(info.max_file_transfer_mb));
         setState({ kind: "ready", editable: info.editable });
       } catch (e) {
-        if (!cancelled) setState({ kind: "error", message: String(e) });
+        if (!cancelled) setState({ kind: "error", message: formatUnknownError(e) });
       }
     })();
     return () => {
@@ -101,7 +102,7 @@ export function TransferLimitCard({ serverId }: { serverId: string | null }) {
       );
     } catch (e) {
       // Agent 的 403/400 已是用户视角文案；其余为网络/连接类
-      setFeedback({ text: String(e), warn: true });
+      setFeedback({ text: formatUnknownError(e), warn: true });
       log.warn("修改上传大小限制失败:", e);
     } finally {
       setApplying(false);
