@@ -10,6 +10,7 @@
  */
 
 import { useCallback, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { createLogger } from '../../../utils/logger';
 import { useWindowManager } from '../../../window-system/WindowManagerContext';
@@ -41,6 +42,7 @@ export function useEntryActions(
   kind: ArchiveKind | null,
 ): EntryActionsState {
   const { manager } = useWindowManager();
+  const { t } = useTranslation();
   const [extractingPath, setExtractingPath] = useState<string | null>(null);
   const [extractDialog, setExtractDialog] = useState<'ask' | 'running' | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -58,7 +60,7 @@ export function useEntryActions(
         workingDirectory: '/', timeoutSecs: 60,
       });
       if (r.exitCode !== 0) {
-        setNotice(`提取失败: ${r.stderr || r.stdout || `exit ${r.exitCode}`}`);
+        setNotice(t('archive.extractFailed', { message: r.stderr || r.stdout || `exit ${r.exitCode}` }));
         return;
       }
       const localPath = `${tmpDir}${tmpDir.endsWith('/') ? '' : '/'}${entry.path}`;
@@ -66,15 +68,15 @@ export function useEntryActions(
       // entry.size 供探测失败回退编辑器前的大文件确认
       const outcome = await openRemoteFile(serverId, localPath, manager, entry.size);
       if (outcome.kind === 'error') {
-        setNotice(`打开失败: ${outcome.message}`);
+        setNotice(t('archive.openFailed', { message: outcome.message }));
       }
     } catch (err) {
       log.error('提取/打开失败:', err);
-      setNotice(`打开失败: ${err}`);
+      setNotice(t('archive.openFailed', { message: String(err) }));
     } finally {
       setExtractingPath(null);
     }
-  }, [path, serverId, kind, extractingPath, manager]);
+  }, [path, serverId, kind, extractingPath, manager, t]);
 
   /** 全部解压（对齐 FileManager runExtract 语义：先 mkdir 再白名单命令） */
   const extractAll = useCallback(async (mode: 'folder' | 'here') => {
@@ -93,17 +95,17 @@ export function useEntryActions(
         workingDirectory: parent, timeoutSecs: 600,
       });
       if (r.exitCode === 0) {
-        setNotice(`已解压到 ${targetDir}`);
+        setNotice(t('archive.extractedTo', { dir: targetDir }));
       } else {
-        setNotice(`解压失败: ${r.stderr || r.stdout || `exit ${r.exitCode}`}`);
+        setNotice(t('archive.extractAllFailed', { message: r.stderr || r.stdout || `exit ${r.exitCode}` }));
       }
     } catch (err) {
       log.error('解压失败:', err);
-      setNotice(`解压失败: ${err}`);
+      setNotice(t('archive.extractAllFailed', { message: String(err) }));
     } finally {
       setExtractDialog(null);
     }
-  }, [path, serverId, fileName, extractDialog]);
+  }, [path, serverId, fileName, extractDialog, t]);
 
   return { extractingPath, extractDialog, notice, openEntry, extractAll, setExtractDialog };
 }

@@ -10,6 +10,8 @@
  */
 
 /** 统一条目（与 tree.ts 解耦的最小契约） */
+import i18n from '../../i18n';
+
 export interface ArchiveEntry {
   /** 包内路径（zip 目录条目带尾斜杠；tar 亦可由权限位判目录） */
   path: string;
@@ -26,7 +28,7 @@ function normalizePath(p: string): string {
 /** 命中行为 0 时抛错（对空输入/格式不识别统一处理） */
 function failIfEmpty(parsed: ArchiveEntry[], raw: string): ArchiveEntry[] {
   if (parsed.length === 0) {
-    throw new Error(`无法解析列表输出（格式不识别或压缩包为空）: ${raw.slice(0, 80)}`);
+    throw new Error(i18n.t('archive.parseFailed', { raw: raw.slice(0, 80) }));
   }
   return parsed;
 }
@@ -39,7 +41,7 @@ function failIfEmpty(parsed: ArchiveEntry[], raw: string): ArchiveEntry[] {
  * 目录条目 Name 以 / 结尾，Length 为 0。
  */
 export function parseUnzipListing(out: string): ArchiveEntry[] {
-  if (!out.trim()) throw new Error('unzip -l 输出为空');
+  if (!out.trim()) throw new Error(i18n.t('archive.unzipEmpty'));
   const re = /^ *(\d+)\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s+(.+?)\s*$/;
   const entries: ArchiveEntry[] = [];
   for (const line of out.split('\n')) {
@@ -60,7 +62,7 @@ export function parseUnzipListing(out: string): ArchiveEntry[] {
  * - 符号链接行（首字符 l）size 取 0，链接目标丢弃
  */
 export function parseTarListing(out: string): ArchiveEntry[] {
-  if (!out.trim()) throw new Error('tar -tvf 输出为空');
+  if (!out.trim()) throw new Error(i18n.t('archive.tarEmpty'));
   const re = /^([bcdlps-][-rwxstT+]{9})\s+\S+\/\S+\s+(\d+)\s+\d{4}-\d{2}-\d{2}(?:\s+\d{2}:\d{2})?\s+(.+)$/;
   const entries: ArchiveEntry[] = [];
   for (const line of out.split('\n')) {
@@ -82,7 +84,7 @@ export function parseTarListing(out: string): ArchiveEntry[] {
  * 非条目块（如 "Listing archive:" header、统计块）无 Path key 自动跳过。
  */
 export function parse7zListing(out: string): ArchiveEntry[] {
-  if (!out.trim()) throw new Error('7z l -slt 输出为空');
+  if (!out.trim()) throw new Error(i18n.t('archive.sevenzEmpty'));
   const entries: ArchiveEntry[] = [];
   for (const block of out.split(/\n\s*\n/)) {
     const kv = new Map<string, string>();
@@ -105,7 +107,7 @@ export function parse7zListing(out: string): ArchiveEntry[] {
  * Attr 首字符 d 或 Name 尾斜杠 → 目录。
  */
 export function parseUnrarListing(out: string): ArchiveEntry[] {
-  if (!out.trim()) throw new Error('unrar l 输出为空');
+  if (!out.trim()) throw new Error(i18n.t('archive.unrarEmpty'));
   const re = /^ *(\d+)\s+\d+\s+\d+%\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s+([d-][-.rwxsStT]{9})\s+(.+?)\s*$/;
   const entries: ArchiveEntry[] = [];
   for (const line of out.split('\n')) {

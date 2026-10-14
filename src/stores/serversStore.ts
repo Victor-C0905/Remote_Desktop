@@ -4,6 +4,7 @@ import { serversStorage } from "../utils/storage";
 import { createLogger } from "../utils/logger";
 import { ServerConfig, AuthMethod, StructuredError } from "../types/server";
 import { getErrorInfo, parseConnectError } from "../types/errors";
+import i18n from "../i18n";
 
 const log = createLogger('ServersStore');
 
@@ -144,14 +145,14 @@ export const useServersStore = create<ServersState & ServersActions>()(
 /* ── Utility Functions ──────────────────────────────── */
 
 export function formatLastConnected(timestamp?: number): string {
-  if (!timestamp) return "从未";
+  if (!timestamp) return i18n.t("servers.never");
   const now = Date.now();
   const diff = now - timestamp;
 
-  if (diff < 1000 * 60) return "刚刚";
-  if (diff < 1000 * 60 * 60) return `${Math.floor(diff / 60000)} 分钟前`;
-  if (diff < 1000 * 60 * 60 * 24) return `${Math.floor(diff / 3600000)} 小时前`;
-  if (diff < 1000 * 60 * 60 * 24 * 7) return `${Math.floor(diff / 86400000)} 天前`;
+  if (diff < 1000 * 60) return i18n.t("servers.justNow");
+  if (diff < 1000 * 60 * 60) return i18n.t("servers.minutesAgo", { n: Math.floor(diff / 60000) });
+  if (diff < 1000 * 60 * 60 * 24) return i18n.t("servers.hoursAgo", { n: Math.floor(diff / 3600000) });
+  if (diff < 1000 * 60 * 60 * 24 * 7) return i18n.t("servers.daysAgo", { n: Math.floor(diff / 86400000) });
   return new Date(timestamp).toLocaleDateString("zh-CN");
 }
 
@@ -205,7 +206,7 @@ export function getServerErrorInfo(server: ServerConfig): ServerErrorDisplay {
     action: info.action,
     detail: parsed.detail,
     hint: others > 0
-      ? `ℹ️ 其他 ${others} 台服务器连接正常，仅此台无法连接\n可能是本机与该服务器之间的网络问题，建议更换网络环境后重试`
+      ? i18n.t("errors.othersConnected", { count: others })
       : undefined,
   };
 }

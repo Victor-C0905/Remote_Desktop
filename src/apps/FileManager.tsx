@@ -49,17 +49,19 @@ interface MountInfo {
   used_bytes: number;
 }
 
-// 侧边栏项
+// 侧边栏项（labelKey: 预置书签词典 key，渲染处 t()；label: 动态标签如挂载点）
 interface SidebarItem {
   icon: string;
-  label: string;
+  labelKey?: string;
+  label?: string;
   path: string;
   type: "bookmark" | "mount" | "network";
 }
 
-// 侧边栏部分
+// 侧边栏部分（titleKey: 词典 key，渲染处 t()）
 interface SidebarSection {
-  title: string;
+  titleKey?: string;
+  title?: string;
   items: SidebarItem[];
 }
 
@@ -1707,7 +1709,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
           <div className="fm-sidebar">
             {sidebarSections.map((section, sectionIdx) => (
               <div key={sectionIdx} className="fm-sidebar-section">
-                <div className="fm-sidebar-section-title">{section.title}</div>
+                <div className="fm-sidebar-section-title">{section.titleKey ? t(section.titleKey) : section.title}</div>
                 {section.items.map((item, itemIdx) => (
                   <div
                     key={`${sectionIdx}-${itemIdx}`}
@@ -1715,7 +1717,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                     onClick={() => navigateTo(item.path)}
                   >
                     <span className="fm-si-icon">{item.icon}</span>
-                    <span className="fm-si-label">{item.label}</span>
+                    <span className="fm-si-label">{item.labelKey ? t(item.labelKey) : item.label}</span>
                   </div>
                 ))}
               </div>

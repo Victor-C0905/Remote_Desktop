@@ -837,7 +837,7 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                         setAccentColorId(null);
                       }
                     }}
-                    title={theme.name}
+                    title={t(theme.nameKey)}
                   >
                     <div className="st-theme-preview" style={{ background: theme.lightColors.viewBg }}>
                       <div className="st-theme-preview-header" style={{ background: theme.lightColors.headerbarBg }} />

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import './StatsPanel.css';
 
@@ -46,6 +47,7 @@ interface StatsPanelProps {
 }
 
 export const StatsPanel: React.FC<StatsPanelProps> = ({ serverId, isRoot }) => {
+  const { t } = useTranslation();
   const [stats, setStats] = useState<StatsResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -60,7 +62,7 @@ export const StatsPanel: React.FC<StatsPanelProps> = ({ serverId, isRoot }) => {
       });
       setStats(response);
     } catch (err) {
-      setError(err instanceof Error ? err.message : '获取统计失败');
+      setError(err instanceof Error ? err.message : t('stats.loadFailed'));
     } finally {
       setLoading(false);
     }
@@ -73,14 +75,14 @@ export const StatsPanel: React.FC<StatsPanelProps> = ({ serverId, isRoot }) => {
   }, [serverId]);
 
   if (loading) {
-    return <div className="stats-panel">加载中...</div>;
+    return <div className="stats-panel">{t('stats.loading')}</div>;
   }
 
   if (error) {
     return (
       <div className="stats-panel">
         <div className="error">{error}</div>
-        <button onClick={fetchStats}>重试</button>
+        <button onClick={fetchStats}>{t('common.retry')}</button>
       </div>
     );
   }
@@ -91,35 +93,35 @@ export const StatsPanel: React.FC<StatsPanelProps> = ({ serverId, isRoot }) => {
 
   return (
     <div className="stats-panel">
-      <h2>📊 系统监控</h2>
+      <h2>{t('stats.title')}</h2>
 
       {/* 认证统计（仅root可见） */}
       {isRoot && stats.auth && (
         <div className="stats-section">
-          <h3>认证统计</h3>
+          <h3>{t('stats.authTitle')}</h3>
           <div className="stats-grid">
             <div className="stat-item">
-              <span className="label">总尝试次数</span>
+              <span className="label">{t('stats.totalAttempts')}</span>
               <span className="value">{stats.auth.total_attempts}</span>
             </div>
             <div className="stat-item">
-              <span className="label">成功次数</span>
+              <span className="label">{t('stats.successful')}</span>
               <span className="value success">{stats.auth.successful}</span>
             </div>
             <div className="stat-item">
-              <span className="label">失败次数</span>
+              <span className="label">{t('stats.failed')}</span>
               <span className="value error">{stats.auth.failed}</span>
             </div>
             <div className="stat-item">
-              <span className="label">锁定次数</span>
+              <span className="label">{t('stats.locked')}</span>
               <span className="value warning">{stats.auth.locked}</span>
             </div>
             <div className="stat-item">
-              <span className="label">速率限制</span>
+              <span className="label">{t('stats.rateLimited')}</span>
               <span className="value">{stats.auth.rate_limited}</span>
             </div>
             <div className="stat-item">
-              <span className="label">会话超时</span>
+              <span className="label">{t('stats.sessionTimeout')}</span>
               <span className="value">{stats.auth.session_timeout}</span>
             </div>
           </div>
@@ -128,26 +130,26 @@ export const StatsPanel: React.FC<StatsPanelProps> = ({ serverId, isRoot }) => {
 
       {/* 连接统计（所有用户可见） */}
       <div className="stats-section">
-        <h3>连接统计</h3>
+        <h3>{t('stats.connTitle')}</h3>
         <div className="stats-grid">
           <div className="stat-item">
-            <span className="label">活跃连接</span>
+            <span className="label">{t('stats.activeConnections')}</span>
             <span className="value">{stats.connection.active_connections}</span>
           </div>
           <div className="stat-item">
-            <span className="label">总连接数</span>
+            <span className="label">{t('stats.totalConnections')}</span>
             <span className="value">{stats.connection.total_connections}</span>
           </div>
           <div className="stat-item">
-            <span className="label">正常断开</span>
+            <span className="label">{t('stats.normalDisconnects')}</span>
             <span className="value success">{stats.connection.normal_disconnects}</span>
           </div>
           <div className="stat-item">
-            <span className="label">超时断开</span>
+            <span className="label">{t('stats.timeoutDisconnects')}</span>
             <span className="value warning">{stats.connection.timeout_disconnects}</span>
           </div>
           <div className="stat-item">
-            <span className="label">错误断开</span>
+            <span className="label">{t('stats.errorDisconnects')}</span>
             <span className="value error">{stats.connection.error_disconnects}</span>
           </div>
         </div>
@@ -156,26 +158,26 @@ export const StatsPanel: React.FC<StatsPanelProps> = ({ serverId, isRoot }) => {
       {/* 性能指标（仅root可见） */}
       {isRoot && stats.performance && (
         <div className="stats-section">
-          <h3>性能指标</h3>
+          <h3>{t('stats.perfTitle')}</h3>
           <div className="stats-grid">
             <div className="stat-item">
-              <span className="label">响应时间(p50)</span>
+              <span className="label">{t('stats.responseTimeP50')}</span>
               <span className="value">{stats.performance.response_times.p50}ms</span>
             </div>
             <div className="stat-item">
-              <span className="label">响应时间(p95)</span>
+              <span className="label">{t('stats.responseTimeP95')}</span>
               <span className="value">{stats.performance.response_times.p95}ms</span>
             </div>
             <div className="stat-item">
-              <span className="label">响应时间(p99)</span>
+              <span className="label">{t('stats.responseTimeP99')}</span>
               <span className="value">{stats.performance.response_times.p99}ms</span>
             </div>
             <div className="stat-item">
-              <span className="label">文件传输</span>
+              <span className="label">{t('stats.transfer')}</span>
               <span className="value">{formatBytes(stats.performance.total_bytes_transferred)}</span>
             </div>
             <div className="stat-item">
-              <span className="label">终端输出</span>
+              <span className="label">{t('stats.terminalOutput')}</span>
               <span className="value">{formatBytes(stats.performance.total_terminal_bytes)}</span>
             </div>
           </div>
@@ -183,7 +185,7 @@ export const StatsPanel: React.FC<StatsPanelProps> = ({ serverId, isRoot }) => {
       )}
 
       <button onClick={fetchStats} className="refresh-button">
-        刷新数据
+        {t('stats.refresh')}
       </button>
     </div>
   );

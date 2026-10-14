@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { useServerManager } from "../context/ServerManager";
 import { listen } from "@tauri-apps/api/event";
 import { SUBSCRIPTION_CONFIG } from "../config/subscription";
@@ -140,6 +141,7 @@ function MiniChart({ data, color, height, max }: MiniChartProps) {
 /* ── Main Component ───────────────────────────────────── */
 
 export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
+  const { t } = useTranslation();
   // 窗口系统集成（未来可能需要使用 windowState）
   // const windowState = useWindowState(windowId);
   const { activeServerId, activeServer, servers, connectServer } = useServerManager();
@@ -337,9 +339,9 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
             <div className="sm-offline-overlay">
               <div className="offline-badge">
                 <SymbolicIcon name="network-offline" size={16} className="offline-badge-icon" />
-                未连接
+                {t('monitor.notConnected')}
               </div>
-              <div className="offline-hint">连接到远程服务器以查看系统监控数据</div>
+              <div className="offline-hint">{t('monitor.offlineHint')}</div>
             </div>
           </div>
           )
@@ -356,28 +358,28 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
                   className={`sm-tab${activeTab === "processes" ? " active" : ""}`}
                   onClick={() => setActiveTab("processes")}
                 >
-                  进程
+                  {t('monitor.tabProcesses')}
                 </button>
                 <button
                   className={`sm-tab${activeTab === "resources" ? " active" : ""}`}
                   onClick={() => setActiveTab("resources")}
                 >
-                  资源
+                  {t('monitor.tabResources')}
                 </button>
                 <button
                   className={`sm-tab${activeTab === "filesystems" ? " active" : ""}`}
                   onClick={() => setActiveTab("filesystems")}
                 >
-                  文件系统
+                  {t('monitor.tabFilesystems')}
                 </button>
                 <button
                   className={`sm-tab${activeTab === "stats" ? " active" : ""}`}
                   onClick={() => setActiveTab("stats")}
                 >
-                  统计
+                  {t('monitor.tabStats')}
                 </button>
               </div>
-              <button className="sm-menu-btn" title="菜单">⋮</button>
+              <button className="sm-menu-btn" title={t('monitor.menu')}>⋮</button>
             </div>
 
             {activeTab === "processes" && (
@@ -386,15 +388,15 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
               <span className="sm-ph-pid" onClick={() => setProcessSort("pid")}>
                 PID {processSort === "pid" && "▼"}
               </span>
-              <span className="sm-ph-name">进程名称</span>
-              <span className="sm-ph-user">用户</span>
+              <span className="sm-ph-name">{t('monitor.colName')}</span>
+              <span className="sm-ph-user">{t('monitor.colUser')}</span>
               <span className="sm-ph-cpu" onClick={() => setProcessSort("cpu")}>
                 CPU {processSort === "cpu" && "▼"}
               </span>
               <span className="sm-ph-mem" onClick={() => setProcessSort("mem")}>
-                内存 {processSort === "mem" && "▼"}
+                {t('monitor.colMem')} {processSort === "mem" && "▼"}
               </span>
-              <span className="sm-ph-state">状态</span>
+              <span className="sm-ph-state">{t('monitor.colState')}</span>
             </div>
             <div className="sm-process-list">
               {sortedProcesses().map((proc) => (
@@ -413,7 +415,7 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
               ))}
             </div>
             <div className="sm-process-footer">
-              <span>共 {processes.length} 个进程</span>
+              <span>{t('monitor.processCount', { count: processes.length })}</span>
             </div>
           </div>
         )}
@@ -423,18 +425,18 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
             {/* CPU & Memory Section */}
             <div className="sm-res-section">
               <div className="sm-res-card">
-                <div className="sm-res-title">CPU 历史 (最近120秒)</div>
+                <div className="sm-res-title">{t('monitor.cpuHistory')}</div>
                 <div className="sm-res-chart">
                   <MiniChart data={cpuHistory} color="#3584e4" height={60} max={100} />
                 </div>
                 <div className="sm-res-stats">
                   <span className="sm-res-value">{formatPercentSafe(metrics.cpu_percent, isOffline)}</span>
-                  <span className="sm-res-label">当前使用率</span>
+                  <span className="sm-res-label">{t('monitor.currentUsage')}</span>
                 </div>
               </div>
 
               <div className="sm-res-card">
-                <div className="sm-res-title">内存历史 (最近120秒)</div>
+                <div className="sm-res-title">{t('monitor.memHistory')}</div>
                 <div className="sm-res-chart">
                   <MiniChart data={memHistory} color="#33d17a" height={60} max={100} />
                 </div>
@@ -448,7 +450,7 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
             <div className="sm-res-section">
               <div className="sm-res-bar-card">
                 <div className="sm-bar-header">
-                  <span className="sm-bar-title">内存</span>
+                  <span className="sm-bar-title">{t('monitor.mem')}</span>
                   <span className="sm-bar-value">{formatPercentSafe(
                     metrics.mem_total_bytes > 0 ? (metrics.mem_used_bytes / metrics.mem_total_bytes) * 100 : 0,
                     isOffline
@@ -471,7 +473,7 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
 
               <div className="sm-res-bar-card">
                 <div className="sm-bar-header">
-                  <span className="sm-bar-title">交换</span>
+                  <span className="sm-bar-title">{t('monitor.swap')}</span>
                   <span className="sm-bar-value">{formatPercentSafe(0, isOffline)}</span>
                 </div>
                 <div className="sm-bar-track">
@@ -485,23 +487,23 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
 
             <div className="sm-res-section">
               <div className="sm-res-card sm-res-card-wide">
-                <div className="sm-res-title">网络</div>
+                <div className="sm-res-title">{t('monitor.network')}</div>
                 <div className="sm-network-stats">
                   <div className="sm-net-item">
                     <span className="sm-net-icon">↓</span>
-                    <span className="sm-net-label">接收</span>
+                    <span className="sm-net-label">{t('monitor.rx')}</span>
                     <span className="sm-net-value">{formatSpeedSafe(networkRxSpeed, isOffline)}</span>
                   </div>
                   <div className="sm-net-item">
                     <span className="sm-net-icon">↑</span>
-                    <span className="sm-net-label">发送</span>
+                    <span className="sm-net-label">{t('monitor.tx')}</span>
                     <span className="sm-net-value">{formatSpeedSafe(networkTxSpeed, isOffline)}</span>
                   </div>
                 </div>
               </div>
 
               <div className="sm-res-card">
-                <div className="sm-res-title">运行时间</div>
+                <div className="sm-res-title">{t('monitor.uptime')}</div>
                 <div className="sm-res-stats sm-res-stats-center">
                   <span className="sm-res-value sm-res-value-large">{formatUptimeSafe(metrics.uptime_secs, isOffline)}</span>
                 </div>
@@ -509,14 +511,14 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
             </div>
 
             <div className="sm-res-section sm-res-disks">
-              <div className="sm-res-title-section">磁盘用量</div>
+              <div className="sm-res-title-section">{t('monitor.diskUsage')}</div>
               {isOffline ? (
                 <div style={{ padding: '16px 0', color: 'var(--quirel-text-disabled)', textAlign: 'center' }}>
-                  无数据（未连接）
+                  {t('monitor.noData')}
                 </div>
               ) : metrics.disks.length === 0 ? (
                 <div style={{ padding: '16px 0', color: 'var(--quirel-text-secondary)', textAlign: 'center' }}>
-                  暂无磁盘信息
+                  {t('monitor.noDisks')}
                 </div>
               ) : (
                 metrics.disks.map((disk) => {
@@ -550,17 +552,17 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
         {activeTab === "filesystems" && (
           <div className="sm-filesystems">
             <div className="sm-fs-header">
-              <span className="sm-fs-device">设备</span>
-              <span className="sm-fs-dir">目录</span>
-              <span className="sm-fs-type">类型</span>
-              <span className="sm-fs-total">总大小</span>
-              <span className="sm-fs-used">已用</span>
-              <span className="sm-fs-avail">可用</span>
+              <span className="sm-fs-device">{t('monitor.colDevice')}</span>
+              <span className="sm-fs-dir">{t('monitor.colDir')}</span>
+              <span className="sm-fs-type">{t('monitor.colType')}</span>
+              <span className="sm-fs-total">{t('monitor.colTotal')}</span>
+              <span className="sm-fs-used">{t('monitor.colUsed')}</span>
+              <span className="sm-fs-avail">{t('monitor.colAvail')}</span>
             </div>
             <div className="sm-fs-list">
               {isOffline ? (
                 <div className="sm-fs-row" style={{ justifyContent: 'center', color: 'var(--quirel-text-disabled)', padding: '20px 0' }}>
-                  无数据（未连接）
+                  {t('monitor.noData')}
                 </div>
               ) : (
               <>

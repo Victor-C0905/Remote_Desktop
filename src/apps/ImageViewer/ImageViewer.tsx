@@ -7,6 +7,7 @@
  */
 
 import { useState, useRef, useCallback, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { createLogger } from '../../utils/logger';
 import './ImageViewer.css';
@@ -32,6 +33,7 @@ interface RemoteBinaryFile {
 }
 
 export function ImageViewer({ preloadData }: ImageViewerProps) {
+  const { t } = useTranslation();
   const [dataUri, setDataUri] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -48,7 +50,7 @@ export function ImageViewer({ preloadData }: ImageViewerProps) {
   // 加载图片数据
   useEffect(() => {
     if (!path || !serverId) {
-      setError('未指定文件或未连接服务器');
+      setError(t('image.notSpecified'));
       setLoading(false);
       return;
     }
@@ -67,14 +69,14 @@ export function ImageViewer({ preloadData }: ImageViewerProps) {
       } catch (err) {
         if (cancelled) return;
         log.error('读取图片失败:', err);
-        setError(`无法加载图片: ${err}`);
+        setError(t('image.loadFailed', { message: String(err) }));
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
 
     return () => { cancelled = true; };
-  }, [path, serverId, mimeType]);
+  }, [path, serverId, mimeType, t]);
 
   // 滚轮缩放（0.05x - 20x）
   const handleWheel = useCallback((e: React.WheelEvent) => {
@@ -113,7 +115,7 @@ export function ImageViewer({ preloadData }: ImageViewerProps) {
 
   return (
     <div className="iv-root">
-      {loading && <div className="iv-status">加载中…</div>}
+      {loading && <div className="iv-status">{t('common.loading')}</div>}
       {error && (
         <div className="iv-error">
           <p>{error}</p>
@@ -125,8 +127,8 @@ export function ImageViewer({ preloadData }: ImageViewerProps) {
           <div className="iv-toolbar">
             <span className="iv-filename" title={path}>{path?.split('/').pop()}</span>
             <span className="iv-zoom-label">{Math.round(scale * 100)}%</span>
-            <button className="iv-btn" onClick={resetView} title="重置视图">适应</button>
-            <button className="iv-btn" onClick={() => setScale(1)} title="原始尺寸">1:1</button>
+            <button className="iv-btn" onClick={resetView} title={t('image.resetViewTitle')}>{t('image.fit')}</button>
+            <button className="iv-btn" onClick={() => setScale(1)} title={t('image.originalSizeTitle')}>1:1</button>
           </div>
           <div className="iv-canvas" onWheel={handleWheel} onMouseDown={handleMouseDown}>
             <img

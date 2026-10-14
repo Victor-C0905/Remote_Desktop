@@ -5,6 +5,7 @@
  * 底座使用共享 Dialog 组件（dg-*）：与全项目弹窗统一视觉
  */
 
+import { useTranslation } from 'react-i18next';
 import { Dialog } from '../../../components/Dialog/Dialog';
 
 interface ExtractDialogProps {
@@ -17,26 +18,27 @@ interface ExtractDialogProps {
 }
 
 export function ExtractDialog({ fileName, path, status, onExtract, onClose }: ExtractDialogProps) {
+  const { t } = useTranslation();
   const parent = path.slice(0, path.lastIndexOf('/')) || '/';
   const stem = fileName.replace(/\.(zip|tar|tar\.gz|tgz|tar\.bz2|tar\.xz|7z|rar)$/i, '');
   const targetDir = parent === '/' ? `/${stem}` : `${parent}/${stem}`;
 
   return (
     <Dialog onClose={onClose} disableDismiss={status === 'running'} width={360}>
-      <div className="dg-title">解压 {fileName}</div>
+      <div className="dg-title">{t('archive.dialogTitle', { name: fileName })}</div>
       {status === 'ask' ? (
         <>
-          <div className="dg-message">选择解压目标位置：</div>
+          <div className="dg-message">{t('archive.chooseTarget')}</div>
           <button className="dg-btn dg-btn-block" onClick={() => onExtract('folder')}>
-            解压到独立文件夹（{targetDir}/）
+            {t('archive.extractToFolder', { dir: targetDir })}
           </button>
-          <button className="dg-btn dg-btn-block" onClick={() => onExtract('here')}>解压到当前位置</button>
+          <button className="dg-btn dg-btn-block" onClick={() => onExtract('here')}>{t('archive.extractHere')}</button>
           <div className="dg-actions">
-            <button className="dg-btn" onClick={onClose}>取消</button>
+            <button className="dg-btn" onClick={onClose}>{t('common.cancel')}</button>
           </div>
         </>
       ) : (
-        <div className="dg-message">解压中…</div>
+        <div className="dg-message">{t('archive.extracting')}</div>
       )}
     </Dialog>
   );

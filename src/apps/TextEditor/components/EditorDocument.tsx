@@ -262,7 +262,7 @@ export const EditorDocument = memo(
           return (
             <div className="te-binary-warning">
               <span className="te-binary-warning-text">
-                此文件是二进制文件，请在十六进制模式下查看
+                {i18n.t('textEditor.binaryNotice')}
               </span>
             </div>
           );

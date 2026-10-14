@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import { settingsStorage } from "../utils/storage";
 import { createLogger } from "../utils/logger";
+import i18n from "../i18n";
 
 const log = createLogger('WallpaperStore');
 
@@ -103,13 +104,15 @@ export function getWallpaperStyle(wallpaper: WallpaperConfig): React.CSSProperti
 }
 
 export function getPresetWallpaperName(presetId: string): string {
-  const names: Record<string, string> = {
-    "adwaita-blue": "Adwaita 蓝",
-    "adwaita-dark": "Adwaita 暗色",
-    "adwaita-green": "Adwaita 绿",
-    "adwaita-orange": "Adwaita 橙",
-    "adwaita-purple": "Adwaita 紫",
-    "quirel-default": "Quirel 默认",
+  // 词典 key 映射（预设 id → wallpaper.preset.<key>）；调用时取值，随当前语言生效
+  const nameKeys: Record<string, string> = {
+    "adwaita-blue": "wallpaper.preset.adwaitaBlue",
+    "adwaita-dark": "wallpaper.preset.adwaitaDark",
+    "adwaita-green": "wallpaper.preset.adwaitaGreen",
+    "adwaita-orange": "wallpaper.preset.adwaitaOrange",
+    "adwaita-purple": "wallpaper.preset.adwaitaPurple",
+    "quirel-default": "wallpaper.preset.quirelDefault",
   };
-  return names[presetId] || presetId;
+  const key = nameKeys[presetId];
+  return key ? i18n.t(key) : presetId;
 }
