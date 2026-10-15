@@ -1,10 +1,20 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useServerManager } from "../context/ServerManager";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { formatBytes, swapDisplay, toFsRow } from "./systemMonitor/display";
-import type { MountInfo } from "./systemMonitor/display";
+import {
+  formatBytes,
+  swapDisplay,
+  toFsRow,
+  sortProcesses,
+  toggleProcessSort,
+  DEFAULT_PROCESS_SORT,
+  type ProcessInfo,
+  type ProcessSortKey,
+  type ProcessSortState,
+  type MountInfo,
+} from "./systemMonitor/display";
 import { formatUnknownError } from "../types/errors";
 import { SUBSCRIPTION_CONFIG } from "../config/subscription";
 import {
@@ -46,22 +56,23 @@ interface DiskInfo {
   used_bytes: number;
 }
 
-interface ProcessInfo {
-  pid: number;
-  name: string;
-  user: string;
-  cpu_percent: number;
-  mem_percent: number;
-  mem_bytes: number;
-  state: string;
-}
-
 interface HistoryPoint {
   time: number;
   value: number;
 }
 
 type TabId = "processes" | "resources" | "filesystems" | "stats";
+
+/** 进程表头列定义（key 同时用作排序键，对齐 FileManager FILE_COLUMNS 模式；
+ *  PID/CPU 为通用缩写不进词典，其余走 labelKey） */
+const PROCESS_COLUMNS: { key: ProcessSortKey; label: string; labelKey?: string; cellClass: string }[] = [
+  { key: "pid", label: "PID", cellClass: "sm-ph-pid" },
+  { key: "name", label: "", labelKey: "monitor.colName", cellClass: "sm-ph-name" },
+  { key: "user", label: "", labelKey: "monitor.colUser", cellClass: "sm-ph-user" },
+  { key: "cpu", label: "CPU", cellClass: "sm-ph-cpu" },
+  { key: "mem", label: "", labelKey: "monitor.colMem", cellClass: "sm-ph-mem" },
+  { key: "state", label: "", labelKey: "monitor.colState", cellClass: "sm-ph-state" },
+];
 
 function formatPercent(value: number): string {
   return value.toFixed(1) + "%";
@@ -150,7 +161,8 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
   // 文件系统页签：remote_get_mounts 真实挂载点（设备名/文件系统类型来自 sysinfo，
   // 是 2026-06 就存在的老命令，早于能力系统，所有存量 Agent 均支持，无需门控）
   const [mounts, setMounts] = useState<MountInfo[]>([]);
-  const [processSort, setProcessSort] = useState<"cpu" | "mem" | "pid">("cpu");
+  // 进程排序：列头点击切换（对齐 FileManager，状态机见 display.ts）
+  const [processSort, setProcessSort] = useState<ProcessSortState>(DEFAULT_PROCESS_SORT);
   // 是否已收到过真实在线数据（用于区分「从未连接」和「断连后」）
   const [hasReceivedData, setHasReceivedData] = useState(false);
 
@@ -337,15 +349,11 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
     };
   }, [activeTab, activeServerId]);
 
-  const sortedProcesses = useCallback(() => {
-    const sorted = [...processes];
-    switch (processSort) {
-      case "cpu": return sorted.sort((a, b) => b.cpu_percent - a.cpu_percent);
-      case "mem": return sorted.sort((a, b) => b.mem_percent - a.mem_percent);
-      case "pid": return sorted.sort((a, b) => a.pid - b.pid);
-    }
-    return sorted;
-  }, [processes, processSort]);
+  // 排序纯函数在 display.ts（单测覆盖）；渲染层只做数据编排
+  const sortedProcesses = useMemo(
+    () => sortProcesses(processes, processSort),
+    [processes, processSort]
+  );
 
   // ── 离线判断 ──
   const isOffline = '_offline' in metrics && (metrics as typeof OFFLINE_METRICS)._offline === true;
@@ -363,31 +371,12 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
 
   return (
     <div className="sm">
-      {/* 应用内顶栏 — 对齐 TextEditor（共享 AppTopbar）：左侧菜单栏收纳低频
-          操作（视图切换/进程排序），右侧视图页签快速切换；固定在内容区上方，
-          不随内容滚动 */}
-      <AppTopbar
-        menus={[
-          {
-            label: t('monitor.menuView'),
-            items: [
-              { label: t('monitor.tabProcesses'), checked: activeTab === "processes", keepOpen: true, onClick: () => setActiveTab("processes") },
-              { label: t('monitor.tabResources'), checked: activeTab === "resources", keepOpen: true, onClick: () => setActiveTab("resources") },
-              { label: t('monitor.tabFilesystems'), checked: activeTab === "filesystems", keepOpen: true, onClick: () => setActiveTab("filesystems") },
-              { label: t('monitor.tabStats'), checked: activeTab === "stats", keepOpen: true, onClick: () => setActiveTab("stats") },
-            ],
-          },
-          {
-            label: t('monitor.menuSort'),
-            items: [
-              { label: t('monitor.sortCpu'), checked: processSort === "cpu", keepOpen: true, onClick: () => setProcessSort("cpu") },
-              { label: t('monitor.sortMem'), checked: processSort === "mem", keepOpen: true, onClick: () => setProcessSort("mem") },
-              { label: t('monitor.sortPid'), checked: processSort === "pid", keepOpen: true, onClick: () => setProcessSort("pid") },
-            ],
-          },
-        ]}
-      >
-        {/* 视图页签（AppTopbar 上下文槽位，自动带分隔竖线） */}
+      {/* 应用内顶栏 — 对齐 TextEditor（共享 AppTopbar）：页签直接置左
+          （原「视图/排序」菜单已移除——视图与右侧页签重复，排序改为
+          进程列表列头点击排序，对齐 FileManager 交互）；固定在内容区
+          上方，不随内容滚动 */}
+      <AppTopbar>
+        {/* 视图页签 */}
         <div className="sm-tabs">
           <button
             className={`sm-tab${activeTab === "processes" ? " active" : ""}`}
@@ -456,19 +445,24 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
           <>
             {activeTab === "processes" && (
           <div className="sm-processes">
+            {/* 列头点击排序（对齐 FileManager）：同列翻转方向，异列取默认方向 */}
             <div className="sm-process-header">
-              <span className="sm-ph-pid" onClick={() => setProcessSort("pid")}>
-                PID {processSort === "pid" && "▼"}
-              </span>
-              <span className="sm-ph-name">{t('monitor.colName')}</span>
-              <span className="sm-ph-user">{t('monitor.colUser')}</span>
-              <span className="sm-ph-cpu" onClick={() => setProcessSort("cpu")}>
-                CPU {processSort === "cpu" && "▼"}
-              </span>
-              <span className="sm-ph-mem" onClick={() => setProcessSort("mem")}>
-                {t('monitor.colMem')} {processSort === "mem" && "▼"}
-              </span>
-              <span className="sm-ph-state">{t('monitor.colState')}</span>
+              {PROCESS_COLUMNS.map((col) => (
+                <span
+                  key={col.key}
+                  className={`${col.cellClass}${processSort.key === col.key ? " sorted" : ""}`}
+                  onClick={() => setProcessSort((prev) => toggleProcessSort(prev, col.key))}
+                >
+                  {col.labelKey ? t(col.labelKey) : col.label}
+                  {processSort.key === col.key && (
+                    <SymbolicIcon
+                      name={processSort.dir === "asc" ? "chevron-up" : "chevron-down"}
+                      size={12}
+                      className="sm-sort-indicator"
+                    />
+                  )}
+                </span>
+              ))}
             </div>
             <div className="sm-process-list">
               {procSupported === false ? (
@@ -480,7 +474,7 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
                   {procError}
                 </div>
               ) : (
-                sortedProcesses().map((proc) => (
+                sortedProcesses.map((proc) => (
                   <div key={proc.pid} className="sm-process-row">
                     <span className="sm-pr-pid">{proc.pid}</span>
                     <span className="sm-pr-name">{proc.name}</span>

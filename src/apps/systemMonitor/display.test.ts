@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { formatBytes, swapDisplay, toFsRow } from "./display";
+import {
+  formatBytes,
+  swapDisplay,
+  toFsRow,
+  toggleProcessSort,
+  sortProcesses,
+  DEFAULT_PROCESS_SORT,
+  type ProcessInfo,
+} from "./display";
 
 describe("formatBytes", () => {
   it("0 → 0 B", () => expect(formatBytes(0)).toBe("0 B"));
@@ -54,5 +62,77 @@ describe("swapDisplay", () => {
     expect(d.value).toBe("25.0%");
     expect(d.widthPercent).toBe(25);
     expect(d.detail).toBe("512.0 MB / 2.0 GB");
+  });
+});
+
+/* ── 进程列表排序（对齐 FileManager 列头排序交互）────────── */
+
+/** 进程测试样本构造器（未给出的字段取安全默认值） */
+function proc(partial: Partial<ProcessInfo> & { pid: number }): ProcessInfo {
+  return {
+    name: `p${partial.pid}`,
+    user: "root",
+    cpu_percent: 0,
+    mem_percent: 0,
+    mem_bytes: 0,
+    state: "S",
+    ...partial,
+  };
+}
+
+describe("toggleProcessSort", () => {
+  it("同列点击 → 翻转方向", () => {
+    expect(toggleProcessSort({ key: "cpu", dir: "desc" }, "cpu")).toEqual({ key: "cpu", dir: "asc" });
+    expect(toggleProcessSort({ key: "cpu", dir: "asc" }, "cpu")).toEqual({ key: "cpu", dir: "desc" });
+  });
+
+  it("异列点击 → 该列默认方向（cpu/mem 降序，其余升序）", () => {
+    expect(toggleProcessSort(DEFAULT_PROCESS_SORT, "mem")).toEqual({ key: "mem", dir: "desc" });
+    expect(toggleProcessSort(DEFAULT_PROCESS_SORT, "pid")).toEqual({ key: "pid", dir: "asc" });
+    expect(toggleProcessSort(DEFAULT_PROCESS_SORT, "name")).toEqual({ key: "name", dir: "asc" });
+    expect(toggleProcessSort(DEFAULT_PROCESS_SORT, "state")).toEqual({ key: "state", dir: "asc" });
+  });
+});
+
+describe("sortProcesses", () => {
+  const sample: ProcessInfo[] = [
+    proc({ pid: 30, name: "nginx", cpu_percent: 5.5, mem_percent: 10 }),
+    proc({ pid: 10, name: "systemd", cpu_percent: 20, mem_percent: 2 }),
+    proc({ pid: 20, name: "chrome", cpu_percent: 20, mem_percent: 30 }),
+  ];
+
+  it("默认 CPU 降序：最活跃进程置顶", () => {
+    expect(sortProcesses(sample, DEFAULT_PROCESS_SORT).map((p) => p.pid)).toEqual([10, 20, 30]);
+  });
+
+  it("CPU 升序翻转", () => {
+    expect(sortProcesses(sample, { key: "cpu", dir: "asc" }).map((p) => p.pid)).toEqual([30, 10, 20]);
+  });
+
+  it("主值相同 → 回退 pid 升序（不随方向翻转）", () => {
+    // pid 10 与 20 的 cpu 同为 20：desc 时 [10, 20]（pid 升序聚拢），asc 时同样 [10, 20]
+    const desc = sortProcesses(sample, { key: "cpu", dir: "desc" });
+    const asc = sortProcesses(sample, { key: "cpu", dir: "asc" });
+    expect(desc.slice(0, 2).map((p) => p.pid)).toEqual([10, 20]);
+    expect(asc.slice(-2).map((p) => p.pid)).toEqual([10, 20]);
+  });
+
+  it("名称列：文本 localeCompare 排序", () => {
+    expect(sortProcesses(sample, { key: "name", dir: "asc" }).map((p) => p.name)).toEqual([
+      "chrome", "nginx", "systemd",
+    ]);
+    expect(sortProcesses(sample, { key: "name", dir: "desc" }).map((p) => p.name)).toEqual([
+      "systemd", "nginx", "chrome",
+    ]);
+  });
+
+  it("内存列：按 mem_percent 降序", () => {
+    expect(sortProcesses(sample, { key: "mem", dir: "desc" }).map((p) => p.pid)).toEqual([20, 30, 10]);
+  });
+
+  it("不修改入参数组", () => {
+    const before = [...sample];
+    sortProcesses(sample, { key: "pid", dir: "asc" });
+    expect(sample).toEqual(before);
   });
 });
