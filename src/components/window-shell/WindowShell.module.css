@@ -135,6 +135,39 @@
   background: var(--quirel-terminal-bg);
 }
 
+/* ── 左玻璃列应用的桥接变体（Settings 侧栏毛玻璃）──
+   侧栏改玻璃后，默认桥接的不透明 headerbar-bg 条贴在半透明玻璃上
+   暴露成一条粗横线。glass-left 变体改为「遮罩 + 刻意细线」双层：
+   - 遮罩层（整宽 2px）：左段（--sidebar-width）玻璃同色 frosted-bg
+     半透明 tint——底缝暗带透出仅 ~20%（30-40 RGB × 0.2 ≈ 6-8），不可辨；
+     右段 window-bg，与 .st-main 不透明底色同色融合；
+   - 细线层（仅侧栏列 1px，叠在遮罩之上、贴 header 最底行）：用户选择
+     保留一条分隔线，颜色用右侧主区背景色 window-bg——浅色细缝贴近玻璃
+     复合色，比深色边框线（sidebar-border）更融入背景，仅余一丝明暗差；
+   - 不下探（bottom:0）：半透明叠加会让侧栏顶部变得更浑浊。
+   注意锚点必须是 .windowShell（.st 根在 contentFrame 内，是 headerBar
+   的兄弟子树，.windowHeaderBar:has() 够不到）。 */
+.windowShell:has([data-headerbar-bridge='glass-left']) .windowHeaderBar::after {
+  bottom: 0;
+  height: 2px;
+  background:
+    /* 细线层：侧栏列宽 1px，右段渐变为透明（主区交界保持无缝） */
+    linear-gradient(
+      90deg,
+      var(--quirel-window-bg) 0,
+      var(--quirel-window-bg) var(--sidebar-width),
+      transparent var(--sidebar-width)
+    )
+    left bottom / 100% 1px no-repeat,
+    /* 遮罩层：盖住标题栏 blur 底缘暗带 */
+    linear-gradient(
+      90deg,
+      var(--quirel-frosted-bg) 0,
+      var(--quirel-frosted-bg) var(--sidebar-width),
+      var(--quirel-window-bg) var(--sidebar-width)
+    );
+}
+
 /* ✅ 最大化时标题栏不显示拖拽光标 */
 .windowShellMaximized .windowHeaderBar {
   cursor: default;
