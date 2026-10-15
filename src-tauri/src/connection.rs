@@ -69,7 +69,7 @@ pub struct Credentials {
 #[allow(unused_imports)]
 pub use quirel_protocol::{
     Envelope, Payload, SubscriptionType,
-    FileDiff, DiffType, FileEntry, MetricsSnapshot, DiskInfo, MountInfo,
+    FileDiff, DiffType, FileEntry, MetricsSnapshot, DiskInfo, MountInfo, ProcessEntry,
     AuthStatsSnapshot, ConnectionStatsSnapshot, PerformanceStatsSnapshot,
     ResponseTimePercentiles, StatsResponse,
     AuthErrorCode,
@@ -1333,6 +1333,20 @@ pub async fn get_stats(server_id: String, stats_type: String, app: tauri::AppHan
         // 共享 crate 的 Payload::StatsResponse 为 newtype 变体（内含 StatsResponse），
         // 序列化字节与旧内联字段变体完全一致，直接透传
         Payload::StatsResponse(stats) => Ok(stats),
+        Payload::Error { message, .. } => Err(agent_error(message)),
+        _ => Err(AppError::new(codes::UNEXPECTED_RESPONSE)),
+    }
+}
+
+/// Tauri Command: 查询远程进程列表（任何已认证用户）
+/// 前端必须先经 get_agent_capabilities 确认支持 "processes" 再调用本命令：
+/// 旧 Agent 无法解码新 payload，直接发送会断流，主循环会把整条连接误判为断开
+#[tauri::command]
+pub async fn get_processes(server_id: String, app: tauri::AppHandle) -> Result<Vec<ProcessEntry>, AppError> {
+    tracing::debug!("[Connection] get_processes: server_id={}", server_id);
+    let resp = remote_send(server_id, Payload::GetProcesses {}, app).await?;
+    match resp.payload {
+        Payload::ProcessListResponse { processes } => Ok(processes),
         Payload::Error { message, .. } => Err(agent_error(message)),
         _ => Err(AppError::new(codes::UNEXPECTED_RESPONSE)),
     }

@@ -2,6 +2,10 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useServerManager } from "../context/ServerManager";
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
+import { formatBytes, swapDisplay, toFsRow } from "./systemMonitor/display";
+import type { MountInfo } from "./systemMonitor/display";
+import { formatUnknownError } from "../types/errors";
 import { SUBSCRIPTION_CONFIG } from "../config/subscription";
 import {
   OFFLINE_METRICS,
@@ -28,6 +32,8 @@ interface MetricsSnapshot {
   mem_used_bytes: number;
   mem_total_bytes: number;
   swap_used_bytes: number;
+  // 交换分区总量（协议 #[serde(default)] 扩展字段；0 = 旧 Agent 或未配置 swap）
+  swap_total_bytes: number;
   disks: DiskInfo[];
   network_rx_bytes: number;
   network_tx_bytes: number;
@@ -57,32 +63,12 @@ interface HistoryPoint {
 
 type TabId = "processes" | "resources" | "filesystems" | "stats";
 
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
-  return (bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1) + " " + units[i];
-}
-
 function formatPercent(value: number): string {
   return value.toFixed(1) + "%";
 }
 
-function generateDemoProcesses(): ProcessInfo[] {
-  const processes: ProcessInfo[] = [
-    { pid: 1, name: "systemd", user: "root", cpu_percent: 0.1, mem_percent: 0.5, mem_bytes: 4096000, state: "S" },
-    { pid: 1234, name: "gnome-shell", user: "user", cpu_percent: 3.2, mem_percent: 4.5, mem_bytes: 368640000, state: "S" },
-    { pid: 2345, name: "firefox", user: "user", cpu_percent: 8.5, mem_percent: 12.3, mem_bytes: 1000000000, state: "S" },
-    { pid: 3456, name: "code", user: "user", cpu_percent: 5.1, mem_percent: 8.2, mem_bytes: 670000000, state: "S" },
-    { pid: 4567, name: "node", user: "user", cpu_percent: 2.3, mem_percent: 3.1, mem_bytes: 250000000, state: "S" },
-    { pid: 5678, name: "rustc", user: "user", cpu_percent: 15.2, mem_percent: 6.5, mem_bytes: 520000000, state: "R" },
-    { pid: 6789, name: "docker", user: "root", cpu_percent: 1.2, mem_percent: 2.1, mem_bytes: 170000000, state: "S" },
-    { pid: 7890, name: "nginx", user: "root", cpu_percent: 0.3, mem_percent: 0.8, mem_bytes: 65000000, state: "S" },
-    { pid: 8901, name: "postgres", user: "postgres", cpu_percent: 0.5, mem_percent: 1.5, mem_bytes: 120000000, state: "S" },
-    { pid: 9012, name: "redis-server", user: "redis", cpu_percent: 0.2, mem_percent: 0.3, mem_bytes: 24000000, state: "S" },
-  ];
-  return processes.sort((a, b) => b.cpu_percent - a.cpu_percent);
-}
+// 进程列表轮询间隔：页签可见 + 能力支持时按需拉取，离开页签即停
+const PROCESSES_REFRESH_MS = 3000;
 
 /* ── Mini Chart Component (Canvas-based) ─────────────── */
 
@@ -158,8 +144,13 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
   // 永远不为 null：离线时 = OFFLINE_METRICS，在线时 = 真实数据
   const [metrics, setMetrics] = useState<MetricsSnapshot | typeof OFFLINE_METRICS>(OFFLINE_METRICS);
   const [processes, setProcesses] = useState<ProcessInfo[]>([]);
+  // 能力门控：null=查询中，false=旧 Agent（绝不盲发——盲发会断流）
+  const [procSupported, setProcSupported] = useState<boolean | null>(null);
+  const [procError, setProcError] = useState<string | null>(null);
+  // 文件系统页签：remote_get_mounts 真实挂载点（设备名/文件系统类型来自 sysinfo，
+  // 是 2026-06 就存在的老命令，早于能力系统，所有存量 Agent 均支持，无需门控）
+  const [mounts, setMounts] = useState<MountInfo[]>([]);
   const [processSort, setProcessSort] = useState<"cpu" | "mem" | "pid">("cpu");
-  const [selectedPid, setSelectedPid] = useState<number | null>(null);
   // 是否已收到过真实在线数据（用于区分「从未连接」和「断连后」）
   const [hasReceivedData, setHasReceivedData] = useState(false);
 
@@ -187,6 +178,9 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
       // 断连/无连接 → 立即切换为离线占位符（同步，UI 即时响应）
       setMetrics(OFFLINE_METRICS);
       setProcesses([]);
+      setProcSupported(null);
+      setProcError(null);
+      setMounts([]);
       setHasReceivedData(false);
       // 清空历史数据（重连后重新积累）
       cpuHistoryRef.current = [];
@@ -284,12 +278,64 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
 
   // 移除原有的轮询逻辑（fetchMetrics 和 setInterval）
 
+  // 能力查询：决定进程页签是真实数据还是「不支持」空态
   useEffect(() => {
-    if (activeTab === "processes") {
-      // 进程列表暂时使用 demo 数据（Agent 未实现进程列表）
-      setProcesses(generateDemoProcesses());
+    if (!activeServerId) {
+      setProcSupported(null);
+      return;
     }
-  }, [activeTab]);
+    let cancelled = false;
+    setProcSupported(null);
+    invoke<string[]>("get_agent_capabilities", { serverId: activeServerId })
+      .then((caps) => {
+        if (!cancelled) setProcSupported(caps.includes("processes"));
+      })
+      .catch(() => {
+        // 查询失败按不支持处理（空态），绝不发送 GetProcesses
+        if (!cancelled) setProcSupported(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeServerId]);
+
+  // 进程拉取：页签可见 + 能力支持时 3s 轮询；切页签/断连/卸载即停
+  useEffect(() => {
+    if (activeTab !== "processes" || !activeServerId || procSupported !== true) return;
+    let cancelled = false;
+    const fetchOnce = () => {
+      invoke<ProcessInfo[]>("get_processes", { serverId: activeServerId })
+        .then((list) => {
+          if (!cancelled) {
+            setProcesses(list);
+            setProcError(null);
+          }
+        })
+        .catch((e) => {
+          if (!cancelled) setProcError(formatUnknownError(e));
+        });
+    };
+    fetchOnce();
+    const timer = setInterval(fetchOnce, PROCESSES_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [activeTab, activeServerId, procSupported]);
+
+  // 文件系统页签：切到时拉取一次真实挂载点（挂载信息变化低频，无需定时刷新）
+  useEffect(() => {
+    if (activeTab !== "filesystems" || !activeServerId) return;
+    let cancelled = false;
+    invoke<MountInfo[]>("remote_get_mounts", { serverId: activeServerId })
+      .then((m) => {
+        if (!cancelled) setMounts(m);
+      })
+      .catch((e) => log.error("获取挂载点失败:", e));
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, activeServerId]);
 
   const sortedProcesses = useCallback(() => {
     const sorted = [...processes];
@@ -311,6 +357,9 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
   //   - 有 activeServerId 且已收到数据 → 真实内容
   const showSkeleton = !!activeServerId && !hasReceivedData;
   const showOffline = !activeServerId;
+
+  // 资源页签 Swap 卡片展示三元组（渲染前统一计算，避免渲染处三次重复调用）
+  const swap = swapDisplay(metrics.swap_used_bytes, metrics.swap_total_bytes, isOffline);
 
   return (
     <div className="sm">
@@ -422,20 +471,26 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
               <span className="sm-ph-state">{t('monitor.colState')}</span>
             </div>
             <div className="sm-process-list">
-              {sortedProcesses().map((proc) => (
-                <div
-                  key={proc.pid}
-                  className={`sm-process-row${selectedPid === proc.pid ? " selected" : ""}`}
-                  onClick={() => setSelectedPid(proc.pid)}
-                >
-                  <span className="sm-pr-pid">{proc.pid}</span>
-                  <span className="sm-pr-name">{proc.name}</span>
-                  <span className="sm-pr-user">{proc.user}</span>
-                  <span className="sm-pr-cpu">{formatPercentSafe(proc.cpu_percent, isOffline)}</span>
-                  <span className="sm-pr-mem">{formatPercentSafe(proc.mem_percent, isOffline)}</span>
-                  <span className="sm-pr-state">{proc.state}</span>
+              {procSupported === false ? (
+                <div style={{ padding: '20px 0', color: 'var(--quirel-text-disabled)', textAlign: 'center' }}>
+                  {t('monitor.processUnsupported')}
                 </div>
-              ))}
+              ) : procError ? (
+                <div style={{ padding: '20px 0', color: 'var(--quirel-text-error, var(--quirel-text-secondary))', textAlign: 'center' }}>
+                  {procError}
+                </div>
+              ) : (
+                sortedProcesses().map((proc) => (
+                  <div key={proc.pid} className="sm-process-row">
+                    <span className="sm-pr-pid">{proc.pid}</span>
+                    <span className="sm-pr-name">{proc.name}</span>
+                    <span className="sm-pr-user">{proc.user}</span>
+                    <span className="sm-pr-cpu">{formatPercentSafe(proc.cpu_percent, isOffline)}</span>
+                    <span className="sm-pr-mem">{formatPercentSafe(proc.mem_percent, isOffline)}</span>
+                    <span className="sm-pr-state">{proc.state}</span>
+                  </div>
+                ))
+              )}
             </div>
             <div className="sm-process-footer">
               <span>{t('monitor.processCount', { count: processes.length })}</span>
@@ -497,13 +552,17 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
               <div className="sm-res-bar-card">
                 <div className="sm-bar-header">
                   <span className="sm-bar-title">{t('monitor.swap')}</span>
-                  <span className="sm-bar-value">{formatPercentSafe(0, isOffline)}</span>
+                  <span className="sm-bar-value">{swap.value}</span>
                 </div>
                 <div className="sm-bar-track">
-                  <div className="sm-bar-fill" style={{ width: '0%', background: "#e8a416", opacity: isOffline ? 0.3 : 1 }} />
+                  <div className="sm-bar-fill" style={{
+                    width: `${swap.widthPercent}%`,
+                    background: "#e8a416",
+                    opacity: isOffline ? 0.3 : 1,
+                  }} />
                 </div>
                 <div className="sm-bar-detail">
-                  {formatBytesSafe(metrics.swap_used_bytes, isOffline)} / —
+                  {swap.detail}
                 </div>
               </div>
             </div>
@@ -583,31 +642,24 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
               <span className="sm-fs-avail">{t('monitor.colAvail')}</span>
             </div>
             <div className="sm-fs-list">
-              {isOffline ? (
+              {mounts.length === 0 ? (
                 <div className="sm-fs-row" style={{ justifyContent: 'center', color: 'var(--quirel-text-disabled)', padding: '20px 0' }}>
-                  {t('monitor.noData')}
+                  {t('monitor.noDisks')}
                 </div>
               ) : (
-              <>
-              {metrics.disks.map((disk) => (
-                <div key={disk.mount_point} className="sm-fs-row">
-                  <span className="sm-fs-device">/dev/sda{metrics.disks.indexOf(disk) + 1}</span>
-                  <span className="sm-fs-dir">{disk.mount_point}</span>
-                  <span className="sm-fs-type">ext4</span>
-                  <span className="sm-fs-total">{formatBytes(disk.total_bytes)}</span>
-                  <span className="sm-fs-used">{formatBytes(disk.used_bytes)}</span>
-                  <span className="sm-fs-avail">{formatBytes(disk.total_bytes - disk.used_bytes)}</span>
-                </div>
-              ))}
-              <div className="sm-fs-row">
-                <span className="sm-fs-device">tmpfs</span>
-                <span className="sm-fs-dir">/tmp</span>
-                <span className="sm-fs-type">tmpfs</span>
-                <span className="sm-fs-total">4 GB</span>
-                <span className="sm-fs-used">128 MB</span>
-                <span className="sm-fs-avail">3.9 GB</span>
-              </div>
-              </>
+                mounts.map((m) => {
+                  const row = toFsRow(m);
+                  return (
+                    <div key={`${row.device}-${row.dir}`} className="sm-fs-row">
+                      <span className="sm-fs-device">{row.device}</span>
+                      <span className="sm-fs-dir">{row.dir}</span>
+                      <span className="sm-fs-type">{row.type}</span>
+                      <span className="sm-fs-total">{row.total}</span>
+                      <span className="sm-fs-used">{row.used}</span>
+                      <span className="sm-fs-avail">{row.avail}</span>
+                    </div>
+                  );
+                })
               )}
             </div>
           </div>

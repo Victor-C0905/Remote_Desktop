@@ -14,7 +14,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::stats::StatsResponse;
 use crate::subscription::SubscriptionType;
-use crate::types::{default_frame_mode, one, FileDiff, FileEntry, MetricsSnapshot, MountInfo};
+use crate::types::{
+    default_frame_mode, one, FileDiff, FileEntry, MetricsSnapshot, MountInfo, ProcessEntry,
+};
 
 /// 认证/连接错误码（客户端↔Agent 线上协议的组成部分）
 ///
@@ -582,6 +584,15 @@ pub enum Payload {
     #[serde(rename = "set_transfer_limit")]
     SetTransferLimit { max_file_transfer_mb: u64 },
 
+    /// 进程列表查询（任何已认证用户可查；按需拉取，非订阅）
+    /// 能力串 "processes" 门控：旧 Agent 无法解码新 payload，盲发会断流
+    #[serde(rename = "get_processes")]
+    GetProcesses {},
+
+    /// 进程列表响应
+    #[serde(rename = "process_list_response")]
+    ProcessListResponse { processes: Vec<ProcessEntry> },
+
     #[serde(rename = "error")]
     Error { code: i32, message: String },
 }
@@ -661,6 +672,8 @@ impl Payload {
             Payload::GetTransferLimit {} => "GetTransferLimit",
             Payload::TransferLimitResponse { .. } => "TransferLimitResponse",
             Payload::SetTransferLimit { .. } => "SetTransferLimit",
+            Payload::GetProcesses {} => "GetProcesses",
+            Payload::ProcessListResponse { .. } => "ProcessListResponse",
             Payload::Error { .. } => "Error",
         }
     }

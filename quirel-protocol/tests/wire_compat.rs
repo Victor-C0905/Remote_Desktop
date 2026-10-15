@@ -3,7 +3,7 @@
 //! 这些断言的字节序列是当前线上真实格式（取自 agent 端 serde.rs 的序列化行为）。
 //! 任何导致这些断言失败的改动都是线上破坏性变更，禁止合入。
 
-use quirel_protocol::{ConnectionStatsSnapshot, Envelope, Payload, StatsResponse};
+use quirel_protocol::{ConnectionStatsSnapshot, Envelope, MetricsSnapshot, Payload, ProcessEntry, StatsResponse};
 
 fn roundtrip(env: &Envelope) -> Envelope {
     let bytes = env.encode().expect("编码失败");
@@ -631,6 +631,83 @@ fn auth_response_without_capabilities_compat() {
         Payload::AuthResponse { success, capabilities, .. } => {
             assert!(success);
             assert_eq!(capabilities, None);
+        }
+        _ => panic!("变体不匹配"),
+    }
+}
+
+#[test]
+fn metrics_data_wire_format() {
+    let env = Envelope::new(
+        1,
+        Payload::MetricsData(MetricsSnapshot {
+            cpu_percent: 1.0,
+            mem_used_bytes: 1,
+            mem_total_bytes: 2,
+            swap_used_bytes: 3,
+            swap_total_bytes: 4,
+            disks: vec![],
+            network_rx_bytes: 0,
+            network_tx_bytes: 0,
+            uptime_secs: 5,
+        }),
+    );
+    let json = serde_json::to_string(&env).unwrap();
+    assert_eq!(
+        json,
+        r#"{"request_id":1,"payload":{"type":"metrics_data","data":{"cpu_percent":1.0,"mem_used_bytes":1,"mem_total_bytes":2,"swap_used_bytes":3,"swap_total_bytes":4,"disks":[],"network_rx_bytes":0,"network_tx_bytes":0,"uptime_secs":5}}}"#
+    );
+}
+
+#[test]
+fn metrics_data_without_swap_total_compat() {
+    // 旧版 Agent 推送的 metrics_data 不含 swap_total_bytes → 必须可解码并回退 0
+    // （前端据此显示占位符，与「系统未配置 swap」同一呈现，无需区分）
+    let raw = r#"{"request_id":1,"payload":{"type":"metrics_data","data":{"cpu_percent":12.5,"mem_used_bytes":1,"mem_total_bytes":2,"swap_used_bytes":0,"disks":[],"network_rx_bytes":0,"network_tx_bytes":0,"uptime_secs":10}}}"#;
+    let env: Envelope = serde_json::from_str(raw).expect("旧格式必须可解码");
+    match env.payload {
+        Payload::MetricsData(m) => {
+            assert_eq!(m.swap_total_bytes, 0);
+            assert_eq!(m.cpu_percent, 12.5);
+        }
+        _ => panic!("变体不匹配"),
+    }
+}
+
+#[test]
+fn get_processes_wire_format() {
+    let env = Envelope::new(9, Payload::GetProcesses {});
+    let json = serde_json::to_string(&env).unwrap();
+    assert_eq!(
+        json,
+        r#"{"request_id":9,"payload":{"type":"get_processes","data":{}}}"#
+    );
+}
+
+#[test]
+fn process_list_response_roundtrip() {
+    let env = Envelope::new(
+        11,
+        Payload::ProcessListResponse {
+            processes: vec![ProcessEntry {
+                pid: 1,
+                name: "systemd".to_string(),
+                user: "root".to_string(),
+                cpu_percent: 0.1,
+                mem_percent: 0.5,
+                mem_bytes: 4096,
+                state: "S".to_string(),
+            }],
+        },
+    );
+    let out = roundtrip(&env);
+    match out.payload {
+        Payload::ProcessListResponse { processes } => {
+            assert_eq!(processes.len(), 1);
+            assert_eq!(processes[0].pid, 1);
+            assert_eq!(processes[0].name, "systemd");
+            assert_eq!(processes[0].user, "root");
+            assert_eq!(processes[0].state, "S");
         }
         _ => panic!("变体不匹配"),
     }

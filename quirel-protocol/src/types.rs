@@ -26,6 +26,10 @@ pub struct MetricsSnapshot {
     pub mem_used_bytes: u64,
     pub mem_total_bytes: u64,
     pub swap_used_bytes: u64,
+    /// 交换分区总量。旧版 Agent 不携带此字段（#[serde(default)] 回退 0）；
+    /// 0 = 旧 Agent 或未配置 swap，前端统一显示占位符
+    #[serde(default)]
+    pub swap_total_bytes: u64,
     pub disks: Vec<DiskInfo>,
     pub network_rx_bytes: u64,
     pub network_tx_bytes: u64,
@@ -91,4 +95,19 @@ pub enum DiffType {
     Delete,
     /// 替换行
     Replace,
+}
+
+/// 单个进程条目（GetProcesses 响应）
+/// 字段与前端 SystemMonitor 的 ProcessInfo 接口对齐（snake_case）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProcessEntry {
+    pub pid: u32,
+    pub name: String,
+    /// 用户名（sysinfo Users 缓存查得；跨用户不可见时为空串）
+    pub user: String,
+    pub cpu_percent: f32,
+    pub mem_percent: f32,
+    pub mem_bytes: u64,
+    /// 单字符状态（R/S/I/Z/T/D/?），ps 风格
+    pub state: String,
 }
