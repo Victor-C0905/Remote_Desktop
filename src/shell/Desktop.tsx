@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, memo, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { NotificationCenter } from "./NotificationCenter";
 import { ArrivalToast } from "./ArrivalToast";
 import { TopBar } from "./TopBar/TopBar";
@@ -15,6 +16,7 @@ import { WindowManagerProvider, useWindowManager, useWindowGlobalState, useWindo
 import { AppDefinition } from "../window-system/types";
 import { listen } from "@tauri-apps/api/event";
 import { createLogger } from "../utils/logger";
+import { isTauri } from "../utils/environment";
 import "./Desktop.css";
 
 const log = createLogger('Desktop');
@@ -68,6 +70,7 @@ const DesktopWindow = memo(function DesktopWindow({
   const { manager } = useWindowManager();
   const win = manager.getById(windowId);
   const app = manager.getApp(appId);
+  const { t } = useTranslation();
 
   // 用 useWindowState 独立订阅此窗口的状态
   const windowState = useWindowState(windowId);
@@ -83,6 +86,15 @@ const DesktopWindow = memo(function DesktopWindow({
 
   if (!win || !app || !windowState) return null;
 
+  // ── MRU 层叠：非激活窗口按激活栈排名计算 z-index ──
+  // DOM 顺序保持创建顺序（React reconcile 稳定，避免 children 重排），
+  // 层叠改由内联 zIndex 表达：zRank = 激活栈中的排名（末尾=最近激活）。
+  // 激活窗口传 undefined（走 .windowShellActive 的 30）；
+  // 非激活 rank 挤压到 ≤9（z ≤ 29），保证任何情况下低于激活窗口。
+  const mruZIndex = windowState.isActive
+    ? undefined
+    : 20 + Math.min(windowState.zRank, 9);
+
   // 最大化尺寸（工作区占满屏幕）
   const maxWindowSize = {
     width: window.innerWidth,
@@ -94,10 +106,11 @@ const DesktopWindow = memo(function DesktopWindow({
     <WindowShell
       key={windowId}
       windowId={windowId}
-      title={app.title}
+      title={t(app.titleKey)}
       isActive={windowState.isActive}
       isMinimized={windowState.minimized}
       isMaximized={windowState.maximized}
+      zIndex={mruZIndex}
       mode="standard"
       position={windowState.position}
       size={windowState.size}
@@ -153,6 +166,7 @@ export function Desktop() {
 
 // ─── DesktopContent ──────────────────────────────────
 function DesktopContent() {
+  const { t } = useTranslation();
   const [overviewVisible, setOverviewVisible] = useState(false);
   const [notificationOpen, setNotificationOpen] = useState(false);
   const notifications = useNotificationStore((s) => s.notifications);
@@ -304,6 +318,13 @@ function DesktopContent() {
 
   return (
     <div className="shell" style={getWallpaperStyle(wallpaper)}>
+      {/* 浏览器模式提示：无 Tauri 运行时时连接/存储功能不可用 */}
+      {!isTauri() && (
+        <div className="browser-mode-banner" role="status">
+          {t('desktop.browserModeBanner')}
+        </div>
+      )}
+
       {/* Top Bar */}
       <TopBar
         metrics={metrics}
@@ -324,7 +345,7 @@ function DesktopContent() {
               onDoubleClick={() => createApp(app.id)}
             >
               <div className="icon">{app.icon}</div>
-              <div className="label">{app.desktopLabel ?? app.title}</div>
+              <div className="label">{t(app.desktopLabelKey ?? app.titleKey)}</div>
             </div>
           ))}
         </div>
@@ -359,7 +380,7 @@ function DesktopContent() {
                   onClick={() => openApp(app.id)}
                 >
                   <div className="icon">{app.icon}</div>
-                  <div className="label">{app.dockLabel ?? app.title}</div>
+                  <div className="label">{t(app.dockLabelKey ?? app.titleKey)}</div>
                   {isOpen && <div className="dock-indicator" />}
                 </div>
               );
@@ -376,7 +397,7 @@ function DesktopContent() {
           <input
             className="overview-search"
             type="text"
-            placeholder="搜索应用..."
+            placeholder={t('desktop.searchApps')}
             autoFocus
           />
           <div className="overview-apps">
@@ -387,7 +408,7 @@ function DesktopContent() {
                 onClick={() => createApp(app.id)}
               >
                 <div className="icon">{app.icon}</div>
-                <div className="label">{app.desktopLabel ?? app.title}</div>
+                <div className="label">{t(app.desktopLabelKey ?? app.titleKey)}</div>
               </div>
             ))}
           </div>

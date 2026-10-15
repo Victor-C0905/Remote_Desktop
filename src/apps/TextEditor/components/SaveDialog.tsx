@@ -8,6 +8,7 @@
  */
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../../utils/logger';
 import { Dialog } from '../../../components/Dialog/Dialog';
 
@@ -46,6 +47,7 @@ interface SaveDialogProps {
  * ```
  */
 export function SaveDialog({ isOpen, defaultPath, onSave, onCancel }: SaveDialogProps) {
+  const { t } = useTranslation();
   // 使用 useState 管理路径输入
   const [path, setPath] = useState(defaultPath || '/home/user/untitled.txt');
 
@@ -79,11 +81,11 @@ export function SaveDialog({ isOpen, defaultPath, onSave, onCancel }: SaveDialog
 
   return (
     <Dialog onClose={onCancel}>
-      <div className="dg-title">保存文件</div>
+      <div className="dg-title">{t('textEditor.saveTitle')}</div>
 
       {/* 内容区 */}
       <div>
-        <label className="dg-field-label" htmlFor="save-dialog-path">远程路径：</label>
+        <label className="dg-field-label" htmlFor="save-dialog-path">{t('textEditor.remotePath')}</label>
         <input
           id="save-dialog-path"
           type="text"
@@ -98,9 +100,9 @@ export function SaveDialog({ isOpen, defaultPath, onSave, onCancel }: SaveDialog
 
       {/* 操作按钮区 */}
       <div className="dg-actions">
-        <button className="dg-btn" onClick={onCancel}>取消</button>
+        <button className="dg-btn" onClick={onCancel}>{t('common.cancel')}</button>
         <button className="dg-btn-primary" onClick={handleSave} disabled={!path.trim()}>
-          保存
+          {t('textEditor.menuSave')}
         </button>
       </div>
     </Dialog>

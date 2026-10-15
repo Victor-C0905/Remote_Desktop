@@ -7,7 +7,10 @@
   flex-direction: column;
   height: 100%;
   min-height: 0; /* ✅ 建立 flex 约束链（关键修复） */
-  background: var(--quirel-window-bg);
+  /* 透明根：让侧边栏毛玻璃（backdrop-filter）能采样到窗口背后的壁纸，
+     与标题栏（WindowShell.windowHeaderBar）同一链路；
+     主内容区的不透明底色由 .st-main 自行提供 */
+  background: transparent;
   position: relative; /* 作为模态框的定位容器 */
   /* 移除 overflow: hidden，让内部滚动容器正常工作 */
 }
@@ -84,7 +87,12 @@
 /* ── Sidebar ─────────────────────────────────────────── */
 .st-sidebar {
   width: var(--sidebar-width);
-  background: var(--quirel-sidebar-bg);
+  /* 毛玻璃：与窗口标题栏同配方（frosted-bg 0.78~0.80 透明 + blur(24px) saturate(160%)），
+     透过侧边栏可见壁纸模糊背景（Windows 11 Mica 侧栏观感）；
+   前提链路：windowShell(transparent) → contentFrame(transparent) → .st(transparent) */
+  background: var(--quirel-frosted-bg);
+  backdrop-filter: var(--quirel-frosted-blur);
+  -webkit-backdrop-filter: var(--quirel-frosted-blur);
   border-right: 1px solid var(--quirel-sidebar-border);
   overflow-y: auto;
   flex-shrink: 0;
@@ -129,6 +137,8 @@
 .st-main {
   flex: 1;
   min-height: 0; /* ✅ 建立 flex 约束链（关键修复） */
+  /* 不透明主区底色（.st 根已透明化以支持侧栏毛玻璃，此处防止内容区透出壁纸） */
+  background: var(--quirel-window-bg);
   overflow-y: auto;
   overflow-x: hidden;
   padding: 16px 24px;
@@ -1056,4 +1066,12 @@
 /* 警告态 hint：应用成功但配置未持久化等需用户注意的提示（与 st-hint 叠用） */
 .st-hint-warn {
   color: var(--quirel-warning-fg);
+}
+
+/* 表单内联错误提示（替代系统 alert 的非阻塞反馈） */
+.st-form-error {
+  color: #c0392b;
+  font-size: 12px;
+  margin-top: 4px;
+  white-space: pre-line; /* 私钥校验消息为多行文本，需保留换行 */
 }

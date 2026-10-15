@@ -7,8 +7,9 @@
 export { AppLayout } from "./AppLayout";
 export type { AppLayoutProps } from "./AppLayout";
 
+export { AppTopbar } from "./AppTopbar";
+export type { AppTopbarProps } from "./AppTopbar";
+
 // 未来将添加更多抽象组件：
-// export { TabToolbar } from "./TabToolbar";
-// export type { TabToolbarProps } from "./TabToolbar";
 // export { SidebarItem } from "./SidebarItem";
 // export { SidebarSection } from "./SidebarSection";

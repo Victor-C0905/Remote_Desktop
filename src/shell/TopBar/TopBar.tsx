@@ -1,4 +1,5 @@
 import { memo } from "react";
+import { useTranslation } from "react-i18next";
 import { useServerManager, getStatusColor } from "../../context/ServerManager";
 import { formatBytesSafe, formatPercentSafe } from "../../utils/offlineDefaults";
 import { NotificationBadge } from "../NotificationCenter";
@@ -38,6 +39,7 @@ export const TopBar = memo(function TopBar({
   onActivitiesClick,
   onNotificationClick,
 }: TopBarProps) {
+  const { t } = useTranslation();
   const { activeServer, servers } = useServerManager();
   // 网络断开自动重连期间 activeServerId 已清空（activeServer 为 null），
   // 回退到 reconnecting 状态的服务器，保持状态指示可见
@@ -49,7 +51,7 @@ export const TopBar = memo(function TopBar({
         className={styles.activitiesBtn}
         onClick={onActivitiesClick}
       >
-        活动
+        {t('topbar.activities')}
       </button>
       <div className={styles.separator} />
       <div className={styles.connectionIndicator}>
@@ -58,10 +60,10 @@ export const TopBar = memo(function TopBar({
           style={{ background: statusServer ? getStatusColor(statusServer.status) : "#9a9996" }}
         />
         <span>
-          {statusServer?.status === "connected" ? "已连接" :
-           statusServer?.status === "connecting" ? "连接中..." :
-           statusServer?.status === "reconnecting" ? "重连中..." :
-           statusServer?.status === "error" ? "连接失败" : "未连接"}
+          {statusServer?.status === "connected" ? t('connection.status.connected') :
+           statusServer?.status === "connecting" ? t('connection.status.connecting') :
+           statusServer?.status === "reconnecting" ? t('connection.status.reconnecting') :
+           statusServer?.status === "error" ? t('connection.status.error') : t('connection.status.disconnected')}
         </span>
         {statusServer && (
           <span className={styles.serverName}>
@@ -83,7 +85,7 @@ export const TopBar = memo(function TopBar({
       <div className={styles.clock}>{clock}</div>
       
       {/* Notification */}
-      <button className={styles.notificationBtn} onClick={onNotificationClick} aria-label="通知">
+      <button className={styles.notificationBtn} onClick={onNotificationClick} aria-label={t('topbar.notifications')}>
         <SymbolicIcon name={unreadNotifications > 0 ? "bell" : "bell-outline"} size={14} />
         <NotificationBadge
           count={unreadNotifications}

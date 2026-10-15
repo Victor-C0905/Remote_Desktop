@@ -1,6 +1,7 @@
 // src/apps/BrowserApp.tsx
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { useServerManager } from "../context/ServerManager";
 import { useSettingsStore } from "../stores/settingsStore";
@@ -8,6 +9,7 @@ import { createLogger } from "../utils/logger";
 import { SymbolicIcon } from "../components/symbolic";
 import { ConnectionErrorState, ReconnectingState } from "../components/ConnectionState";
 import { getServerErrorInfo } from "../stores/serversStore";
+import { formatUnknownError } from "../types/errors";
 import { useOpenApp } from "../window-system/hooks/useOpenApp";
 import "./BrowserApp.css";
 
@@ -39,6 +41,7 @@ interface ProxySessionStatus {
  * - 可选择用哪个浏览器打开（自动 / Edge / Chrome / Firefox / 自定义路径）
  */
 export function BrowserApp() {
+  const { t } = useTranslation();
   const { activeServer, servers, connectServer } = useServerManager();
   const openApp = useOpenApp();
   // 默认浏览器取全局设置（设置 → 浏览器 中配置，此处只读）
@@ -71,7 +74,8 @@ export function BrowserApp() {
         setSession(info);
         log.info(`浏览会话已启动: ${info.browser}, SOCKS5 端口 ${info.port}`);
       } catch (e) {
-        setError(String(e));
+        // AppError 结构化错误经词典渲染（formatUnknownError），裸字符串原样透传
+        setError(formatUnknownError(e));
         log.error("浏览会话启动失败:", e);
       } finally {
         startingRef.current = false;
@@ -172,8 +176,8 @@ export function BrowserApp() {
           <div className="ba-empty-icon">
             <SymbolicIcon name="network-offline" size={32} />
           </div>
-          <div className="ba-empty-title">未连接服务器</div>
-          <div className="ba-empty-desc">连接服务器后，可通过服务器网络浏览网页</div>
+          <div className="ba-empty-title">{t('browser.notConnectedTitle')}</div>
+          <div className="ba-empty-desc">{t('browser.notConnectedDesc')}</div>
         </div>
       </div>
     );
@@ -183,14 +187,14 @@ export function BrowserApp() {
   return (
     <div className="ba">
       <div className="ba-headerbar">
-        <span className="ba-title">远程浏览</span>
-        <span className="ba-badge">{session ? "运行中" : busy ? "启动中…" : "未运行"}</span>
+        <span className="ba-title">{t('browser.title')}</span>
+        <span className="ba-badge">{session ? t('browser.statusRunning') : busy ? t('browser.statusStarting') : t('browser.statusStopped')}</span>
       </div>
 
       <div className="ba-body">
         {error && (
           <div className="ba-error">
-            <div className="ba-error-title">会话启动失败</div>
+            <div className="ba-error-title">{t('browser.errorTitle')}</div>
             <div className="ba-error-desc">{error}</div>
             <button
               type="button"
@@ -198,7 +202,7 @@ export function BrowserApp() {
               onClick={() => startSession(pref)}
               disabled={busy}
             >
-              重试
+              {t('common.retry')}
             </button>
           </div>
         )}
@@ -206,8 +210,7 @@ export function BrowserApp() {
         {!error && !session && (
           <>
             <div className="ba-hint">
-              点击下方按钮，将使用系统浏览器经服务器网络打开独立浏览窗口
-              （目标网站看到的是服务器 IP）。默认浏览器与端口可在 设置 → 浏览器 中修改。
+              {t('browser.hintIdle')}
             </div>
 
             <button
@@ -216,7 +219,7 @@ export function BrowserApp() {
               onClick={() => startSession(pref)}
               disabled={busy}
             >
-              {busy ? "启动中…" : "打开浏览器"}
+              {busy ? t('browser.statusStarting') : t('browser.openBrowser')}
             </button>
           </>
         )}
@@ -225,24 +228,23 @@ export function BrowserApp() {
           <>
             <div className="ba-status">
               <div className="ba-status-row">
-                <span className="ba-status-label">服务器</span>
+                <span className="ba-status-label">{t('browser.labelServer')}</span>
                 <span className="ba-status-value">{activeServer?.name || activeServer?.host}</span>
               </div>
               <div className="ba-status-row">
-                <span className="ba-status-label">浏览器</span>
+                <span className="ba-status-label">{t('browser.labelBrowser')}</span>
                 <span className="ba-status-value">
-                  {session.browser === "existing" ? "已打开" : session.browser}
+                  {session.browser === "existing" ? t('browser.browserOpened') : session.browser}
                 </span>
               </div>
               <div className="ba-status-row">
-                <span className="ba-status-label">SOCKS5 端口</span>
+                <span className="ba-status-label">{t('browser.labelPort')}</span>
                 <span className="ba-status-value">{session.port}</span>
               </div>
             </div>
 
             <div className="ba-hint">
-              浏览器以独立窗口打开，流量经服务器网络转发。断线重连后浏览器自动恢复网络，
-              无需重开；关闭本窗口将同时关闭浏览器与代理。
+              {t('browser.hintSession')}
             </div>
 
             <button
@@ -251,7 +253,7 @@ export function BrowserApp() {
               onClick={() => startSession(pref)}
               disabled={busy}
             >
-              再开一个浏览器窗口
+              {t('browser.openAnother')}
             </button>
           </>
         )}
