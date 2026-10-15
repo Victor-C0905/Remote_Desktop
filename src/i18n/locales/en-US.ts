@@ -640,6 +640,7 @@ const enUS: TranslationSchema = {
     colTotal: 'Total',
     colUsed: 'Used',
     colAvail: 'Available',
+    processUnsupported: 'Agent version is too old and does not support the process list',
   },
   stats: {
     loadFailed: 'Failed to fetch statistics',

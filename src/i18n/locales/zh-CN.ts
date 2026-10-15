@@ -650,6 +650,7 @@ const zhCN = {
     colTotal: '总大小',
     colUsed: '已用',
     colAvail: '可用',
+    processUnsupported: 'Agent 版本过旧，不支持进程列表',
   },
   stats: {
     loadFailed: '获取统计失败',

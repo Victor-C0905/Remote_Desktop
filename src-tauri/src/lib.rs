@@ -610,6 +610,7 @@ pub fn run() {
             connection::remote_chmod, // 修改文件权限（属性对话框）
             connection::remote_chown, // 修改文件所有者（属性对话框）
             connection::get_stats,
+            connection::get_processes,          // 进程列表查询（SystemMonitor 进程页签）
             connection::get_agent_capabilities, // Agent 能力查询（前端门控新协议命令）
             connection::get_transfer_limit,     // 查询上传大小限制（设置页）
             connection::set_transfer_limit,     // 修改上传大小限制（仅 root）
