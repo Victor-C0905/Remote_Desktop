@@ -15,6 +15,7 @@ import { createLogger } from '../utils/logger';
 import { StatsPanel } from "../components/StatsPanel";
 import { SymbolicIcon } from "../components/symbolic";
 import { ConnectionErrorState, ReconnectingState } from "../components/ConnectionState";
+import { AppTopbar } from "../components/app-shell/AppTopbar";
 import { getServerErrorInfo } from "../stores/serversStore";
 import { useOpenApp } from "../window-system/hooks/useOpenApp";
 // import { useWindowState } from "../window-system/hooks/useWindowState"; // 未来集成时使用
@@ -313,6 +314,59 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
 
   return (
     <div className="sm">
+      {/* 应用内顶栏 — 对齐 TextEditor（共享 AppTopbar）：左侧菜单栏收纳低频
+          操作（视图切换/进程排序），右侧视图页签快速切换；固定在内容区上方，
+          不随内容滚动 */}
+      <AppTopbar
+        menus={[
+          {
+            label: t('monitor.menuView'),
+            items: [
+              { label: t('monitor.tabProcesses'), checked: activeTab === "processes", keepOpen: true, onClick: () => setActiveTab("processes") },
+              { label: t('monitor.tabResources'), checked: activeTab === "resources", keepOpen: true, onClick: () => setActiveTab("resources") },
+              { label: t('monitor.tabFilesystems'), checked: activeTab === "filesystems", keepOpen: true, onClick: () => setActiveTab("filesystems") },
+              { label: t('monitor.tabStats'), checked: activeTab === "stats", keepOpen: true, onClick: () => setActiveTab("stats") },
+            ],
+          },
+          {
+            label: t('monitor.menuSort'),
+            items: [
+              { label: t('monitor.sortCpu'), checked: processSort === "cpu", keepOpen: true, onClick: () => setProcessSort("cpu") },
+              { label: t('monitor.sortMem'), checked: processSort === "mem", keepOpen: true, onClick: () => setProcessSort("mem") },
+              { label: t('monitor.sortPid'), checked: processSort === "pid", keepOpen: true, onClick: () => setProcessSort("pid") },
+            ],
+          },
+        ]}
+      >
+        {/* 视图页签（AppTopbar 上下文槽位，自动带分隔竖线） */}
+        <div className="sm-tabs">
+          <button
+            className={`sm-tab${activeTab === "processes" ? " active" : ""}`}
+            onClick={() => setActiveTab("processes")}
+          >
+            {t('monitor.tabProcesses')}
+          </button>
+          <button
+            className={`sm-tab${activeTab === "resources" ? " active" : ""}`}
+            onClick={() => setActiveTab("resources")}
+          >
+            {t('monitor.tabResources')}
+          </button>
+          <button
+            className={`sm-tab${activeTab === "filesystems" ? " active" : ""}`}
+            onClick={() => setActiveTab("filesystems")}
+          >
+            {t('monitor.tabFilesystems')}
+          </button>
+          <button
+            className={`sm-tab${activeTab === "stats" ? " active" : ""}`}
+            onClick={() => setActiveTab("stats")}
+          >
+            {t('monitor.tabStats')}
+          </button>
+        </div>
+      </AppTopbar>
+
       {/* Content — 三层状态门控 */}
       <div className="sm-content">
         {showOffline ? (
@@ -351,37 +405,6 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
         ) : (
           /* 层 2: 真实数据内容（已收到在线数据） */
           <>
-            {/* Tab Toolbar - 原HeaderBar的Tab功能 */}
-            <div className="sm-toolbar">
-              <div className="sm-tabs">
-                <button
-                  className={`sm-tab${activeTab === "processes" ? " active" : ""}`}
-                  onClick={() => setActiveTab("processes")}
-                >
-                  {t('monitor.tabProcesses')}
-                </button>
-                <button
-                  className={`sm-tab${activeTab === "resources" ? " active" : ""}`}
-                  onClick={() => setActiveTab("resources")}
-                >
-                  {t('monitor.tabResources')}
-                </button>
-                <button
-                  className={`sm-tab${activeTab === "filesystems" ? " active" : ""}`}
-                  onClick={() => setActiveTab("filesystems")}
-                >
-                  {t('monitor.tabFilesystems')}
-                </button>
-                <button
-                  className={`sm-tab${activeTab === "stats" ? " active" : ""}`}
-                  onClick={() => setActiveTab("stats")}
-                >
-                  {t('monitor.tabStats')}
-                </button>
-              </div>
-              <button className="sm-menu-btn" title={t('monitor.menu')}>⋮</button>
-            </div>
-
             {activeTab === "processes" && (
           <div className="sm-processes">
             <div className="sm-process-header">

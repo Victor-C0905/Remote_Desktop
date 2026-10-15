@@ -1,0 +1,28 @@
+/* ============================================================
+   AppTopbar - 应用内顶栏（菜单栏 + 上下文槽位）
+   外观对齐 TextEditor 顶栏：30px 单行、底缝分隔，固定在内容区
+   上方不随滚动。用内容区浅色而非 headerbar：活动页签
+   （ChromeTabStrip variant="light"，同色）伸入后与顶栏、内容区
+   连成一整块浅色表面，和毛玻璃标题栏拉开明暗（Chrome 光模式：
+   框深、活动页签+工具栏浅）；底缝桥接在 WindowShell 中随动同色
+   ============================================================ */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 8px;
+  background: var(--quirel-window-bg);
+  border-bottom: 1px solid var(--quirel-border-color);
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+/* 菜单栏与上下文内容的分隔竖线 */
+.divider {
+  width: 1px;
+  height: 16px;
+  background: var(--quirel-border-color);
+  margin: 0 8px;
+  flex-shrink: 0;
+}
