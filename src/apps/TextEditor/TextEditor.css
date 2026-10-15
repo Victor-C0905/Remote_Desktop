@@ -240,53 +240,10 @@
    页签条本体是共享组件（src/components/ChromeTabStrip/），
    行 wrapper 已内建；空白区域可拖拽窗口，交互元素已阻止双击最大化 */
 
-/* 行内菜单栏（垂直居中；标签样式由共享组件 .tmb-* 提供） */
-.te-menubar {
-  display: flex;
-  align-items: center;
-  align-self: stretch;
-  padding-right: 2px;
-}
-
-/* 菜单栏与页签的分隔竖线 */
-.te-strip-divider {
-  width: 1px;
-  height: 20px;
-  background: var(--quirel-border-color);
-  margin: 0 8px 8px 2px;
-  flex-shrink: 0;
-}
-
-/* ── 应用内顶栏（菜单栏 + 路径面包屑，单行）───────────────── */
-/* 面用内容区浅色而非 headerbar：活动页签（variant="light"，同色）伸入
+/* 顶栏与面包屑样式已上收至共享组件 AppTopbar（src/components/app-shell/），
+   顶栏用内容区浅色而非 headerbar：活动页签（variant="light"，同色）伸入
    后与顶栏、内容区连成一整块浅色表面，和毛玻璃标题栏拉开明暗（Chrome 光
    模式：框深、活动页签+工具栏浅）；底缝桥接在 WindowShell 中随动同色 */
-.te-topbar {
-  display: flex;
-  align-items: center;
-  height: 30px;
-  padding: 0 8px;
-  background: var(--quirel-window-bg);
-  border-bottom: 1px solid var(--quirel-border-color);
-  flex-shrink: 0;
-  min-width: 0;
-}
-
-/* 行内菜单栏（标签样式由共享组件 .tmb-* 提供） */
-.te-menubar {
-  display: flex;
-  align-items: center;
-  flex-shrink: 0;
-}
-
-/* 菜单栏与路径的分隔竖线 */
-.te-strip-divider {
-  width: 1px;
-  height: 16px;
-  background: var(--quirel-border-color);
-  margin: 0 8px;
-  flex-shrink: 0;
-}
 
 /* 路径面包屑（Chrome 式胶囊分段），空间不足时左侧裁剪保留文件名 */
 .te-breadcrumb {

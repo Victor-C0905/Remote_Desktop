@@ -114,7 +114,7 @@
    桥接若与页签/下方表面不同色，交界行就是一条异色细带，切断页签
    底部凹弧（flare）与下方表面的连续。有 ChromeTabStrip 的应用按行
    wrapper 的 data-tabstrip-variant 随动：
-   - light（TextEditor）：下方是 te-topbar/内容区 --quirel-window-bg
+   - light（TextEditor）：下方是 AppTopbar 顶栏/内容区 --quirel-window-bg
    - dark（Terminal）：下方是黑色终端区 --quirel-terminal-bg */
 .windowHeaderBar::after {
   content: '';

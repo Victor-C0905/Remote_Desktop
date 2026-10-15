@@ -74,7 +74,7 @@
 }
 
 /* ── variant：活动页签改为融合下方表面 ──
-   light（TextEditor）：页签与 te-topbar/内容区连成一块浅色表面，
+   light（TextEditor）：页签与 AppTopbar 顶栏/内容区连成一块浅色表面，
    与毛玻璃标题栏拉开明暗（Chrome 光模式：框深、活动页签+工具栏浅）；
    dark（Terminal）：页签伸入黑色终端区，标题/关闭钮反白 */
 .chrome-tabstrip-row[data-tabstrip-variant='light'] .chrome-tab[active] .chrome-tab-background > svg .chrome-tab-geometry {

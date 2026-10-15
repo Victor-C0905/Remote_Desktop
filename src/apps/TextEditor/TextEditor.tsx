@@ -24,7 +24,7 @@ import i18n from '../../i18n';
 import { createPortal } from 'react-dom';
 import { createLogger } from '../../utils/logger';
 import { AppLayout } from '../../components/app-shell/AppLayout';
-import { MenuBar } from '../../components/ToolbarMenu/ToolbarMenu';
+import { AppTopbar } from '../../components/app-shell/AppTopbar';
 import { ChromeTabStrip } from '../../components/ChromeTabStrip/ChromeTabStrip';
 import { ConfirmDialog } from '../../components/Dialog/ConfirmDialog';
 import { useServerManager } from '../../context/ServerManager';
@@ -234,68 +234,61 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
       && (activeStatus.path ? activeStatus.fileType === 'text' : true);
 
     return (
-      <div className="te-topbar">
-        <div className="te-menubar">
-          <MenuBar
-            menus={[
+      <AppTopbar
+        menus={[
+          {
+            label: t('textEditor.menuFile'),
+            items: [
               {
-                label: t('textEditor.menuFile'),
-                items: [
-                  {
-                    label: t('textEditor.menuSave'),
-                    shortcut: 'Ctrl+S',
-                    disabled: !canSave,
-                    onClick: () => {
-                      if (activeServerId && activeStatus?.path) {
-                        docRefs.current.get(activeTab.id)?.save(activeServerId);
-                      } else {
-                        // 未命名文件：走另存为流程
-                        setShowSaveDialog(true);
-                      }
-                    },
-                  },
-                  {
-                    label: t('textEditor.menuSaveAs'),
-                    disabled: !activeStatus?.path || activeStatus.isSaving,
-                    onClick: () => setShowSaveDialog(true),
-                  },
-                  { separator: true },
-                  { label: t('textEditor.menuCloseWindow'), onClick: () => manager.close(windowId) },
-                ],
+                label: t('textEditor.menuSave'),
+                shortcut: 'Ctrl+S',
+                disabled: !canSave,
+                onClick: () => {
+                  if (activeServerId && activeStatus?.path) {
+                    docRefs.current.get(activeTab.id)?.save(activeServerId);
+                  } else {
+                    // 未命名文件：走另存为流程
+                    setShowSaveDialog(true);
+                  }
+                },
               },
               {
-                label: t('textEditor.menuEdit'),
-                items: [
-                  { label: t('textEditor.menuUndo'), shortcut: 'Ctrl+Z', onClick: () => docRefs.current.get(activeTab.id)?.undo() },
-                  { label: t('textEditor.menuRedo'), shortcut: 'Ctrl+Y', onClick: () => docRefs.current.get(activeTab.id)?.redo() },
-                  { separator: true },
-                  { label: t('textEditor.menuFindReplace'), shortcut: 'Ctrl+F', onClick: () => docRefs.current.get(activeTab.id)?.openSearch() },
-                ],
+                label: t('textEditor.menuSaveAs'),
+                disabled: !activeStatus?.path || activeStatus.isSaving,
+                onClick: () => setShowSaveDialog(true),
+              },
+              { separator: true },
+              { label: t('textEditor.menuCloseWindow'), onClick: () => manager.close(windowId) },
+            ],
+          },
+          {
+            label: t('textEditor.menuEdit'),
+            items: [
+              { label: t('textEditor.menuUndo'), shortcut: 'Ctrl+Z', onClick: () => docRefs.current.get(activeTab.id)?.undo() },
+              { label: t('textEditor.menuRedo'), shortcut: 'Ctrl+Y', onClick: () => docRefs.current.get(activeTab.id)?.redo() },
+              { separator: true },
+              { label: t('textEditor.menuFindReplace'), shortcut: 'Ctrl+F', onClick: () => docRefs.current.get(activeTab.id)?.openSearch() },
+            ],
+          },
+          {
+            label: t('textEditor.menuView'),
+            items: [
+              {
+                label: t('textEditor.menuHexMode'),
+                checked: activeStatus?.hexMode ?? false,
+                keepOpen: true,
+                onClick: () => docRefs.current.get(activeTab.id)?.toggleHexMode(),
               },
               {
-                label: t('textEditor.menuView'),
-                items: [
-                  {
-                    label: t('textEditor.menuHexMode'),
-                    checked: activeStatus?.hexMode ?? false,
-                    keepOpen: true,
-                    onClick: () => docRefs.current.get(activeTab.id)?.toggleHexMode(),
-                  },
-                  {
-                    label: t('textEditor.menuWrap'),
-                    checked: wrapText,
-                    keepOpen: true,
-                    onClick: () => setWrapText((w) => !w),
-                  },
-                ],
+                label: t('textEditor.menuWrap'),
+                checked: wrapText,
+                keepOpen: true,
+                onClick: () => setWrapText((w) => !w),
               },
-            ]}
-          />
-        </div>
-
-        {/* 菜单栏与路径的分隔竖线 */}
-        <div className="te-strip-divider" />
-
+            ],
+          },
+        ]}
+      >
         {/* 路径面包屑（仅已打开文件时显示分段） */}
         {activeStatus?.path && (
           <div className="te-breadcrumb" title={activeStatus.path}>
@@ -317,7 +310,7 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
             ))}
           </div>
         )}
-      </div>
+      </AppTopbar>
     );
   };
 
