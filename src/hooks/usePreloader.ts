@@ -1,6 +1,7 @@
 import { useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { createLogger } from "../utils/logger";
+import { formatUnknownError } from "../types/errors";
 
 const log = createLogger('Preloader');
 
@@ -24,13 +25,17 @@ export interface MountInfo {
 
 export interface SidebarItem {
   icon: string;
-  label: string;
+  /** 预置书签用词典 key（渲染处 t()，P7）；动态标签（挂载点）用 label */
+  labelKey?: string;
+  label?: string;
   path: string;
   type: "bookmark" | "mount" | "network";
 }
 
 export interface SidebarSection {
-  title: string;
+  /** 分区标题词典 key（渲染处 t()，P7） */
+  titleKey?: string;
+  title?: string;
   items: SidebarItem[];
 }
 
@@ -66,21 +71,21 @@ function buildSidebarSections(
   activeServerId: string | null,
 ): SidebarSection[] {
   if (activeServerId && username && homeDir) {
-    // 远程模式侧边栏：使用服务端返回的真实家目录
+    // 远程模式侧边栏：使用服务端返回的真实家目录（标签只存词典 key，渲染处 t()）
     return [
       {
-        title: "位置",
+        titleKey: "fileManager.location",
         items: [
-          { icon: "🏠", label: "主目录", path: homeDir, type: "bookmark" },
-          { icon: "📄", label: "文档", path: `${homeDir}/Documents`, type: "bookmark" },
-          { icon: "⬇️", label: "下载", path: `${homeDir}/Downloads`, type: "bookmark" },
-          { icon: "🖼️", label: "图片", path: `${homeDir}/Pictures`, type: "bookmark" },
-          { icon: "🎵", label: "音乐", path: `${homeDir}/Music`, type: "bookmark" },
-          { icon: "🎬", label: "视频", path: `${homeDir}/Videos`, type: "bookmark" },
+          { icon: "🏠", labelKey: "fileManager.home", path: homeDir, type: "bookmark" },
+          { icon: "📄", labelKey: "fileManager.documents", path: `${homeDir}/Documents`, type: "bookmark" },
+          { icon: "⬇️", labelKey: "fileManager.downloads", path: `${homeDir}/Downloads`, type: "bookmark" },
+          { icon: "🖼️", labelKey: "fileManager.pictures", path: `${homeDir}/Pictures`, type: "bookmark" },
+          { icon: "🎵", labelKey: "fileManager.music", path: `${homeDir}/Music`, type: "bookmark" },
+          { icon: "🎬", labelKey: "fileManager.videos", path: `${homeDir}/Videos`, type: "bookmark" },
         ],
       },
       {
-        title: "设备",
+        titleKey: "fileManager.devices",
         items: mounts.map((m) => ({
           icon: "💾",
           label: m.mount_point,
@@ -89,8 +94,8 @@ function buildSidebarSections(
         })),
       },
       {
-        title: "其他位置",
-        items: [{ icon: "🌐", label: "网络", path: "/network", type: "network" as const }],
+        titleKey: "fileManager.otherLocations",
+        items: [{ icon: "🌐", labelKey: "fileManager.network", path: "/network", type: "network" as const }],
       },
     ];
   }
@@ -98,19 +103,19 @@ function buildSidebarSections(
   // 离线模式：使用默认 Linux 侧边栏（保持 UI 结构一致）
   return [
     {
-      title: "位置",
+      titleKey: "fileManager.location",
       items: [
-        { icon: "🏠", label: "主目录", path: "/home", type: "bookmark" as const },
-        { icon: "📄", label: "文档", path: "/home/Documents", type: "bookmark" as const },
-        { icon: "⬇️", label: "下载", path: "/home/Downloads", type: "bookmark" as const },
-        { icon: "🖼️", label: "图片", path: "/home/Pictures", type: "bookmark" as const },
-        { icon: "🎵", label: "音乐", path: "/home/Music", type: "bookmark" as const },
-        { icon: "🎬", label: "视频", path: "/home/Videos", type: "bookmark" as const },
+        { icon: "🏠", labelKey: "fileManager.home", path: "/home", type: "bookmark" as const },
+        { icon: "📄", labelKey: "fileManager.documents", path: "/home/Documents", type: "bookmark" as const },
+        { icon: "⬇️", labelKey: "fileManager.downloads", path: "/home/Downloads", type: "bookmark" as const },
+        { icon: "🖼️", labelKey: "fileManager.pictures", path: "/home/Pictures", type: "bookmark" as const },
+        { icon: "🎵", labelKey: "fileManager.music", path: "/home/Music", type: "bookmark" as const },
+        { icon: "🎬", labelKey: "fileManager.videos", path: "/home/Videos", type: "bookmark" as const },
       ],
     },
     {
-      title: "其他位置",
-      items: [{ icon: "🌐", label: "网络", path: "/network", type: "network" as const }],
+      titleKey: "fileManager.otherLocations",
+      items: [{ icon: "🌐", labelKey: "fileManager.network", path: "/network", type: "network" as const }],
     },
   ];
 }
@@ -179,7 +184,7 @@ export function usePreloader(): PreloaderResult {
       setState('ready');
     } catch (err) {
       log.error("预加载失败:", err);
-      setError(err instanceof Error ? err.message : String(err));
+      setError(formatUnknownError(err));
       setState('error');
     }
   }, []);

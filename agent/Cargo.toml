@@ -58,8 +58,8 @@ dashmap = "6"
 # 配置热重载（禁用 macOS 特性）
 notify = { version = "6", default-features = false, features = ["crossbeam-channel"] }
 
-# 系统信息（仅启用实际使用的采集器）
-sysinfo = { version = "0.32", default-features = false, features = ["system", "disk", "network"] }
+# 系统信息（仅启用实际使用的采集器；user feature 供进程属主名解析）
+sysinfo = { version = "0.32", default-features = false, features = ["system", "disk", "network", "user"] }
 
 # 用户信息
 whoami = "1.4"

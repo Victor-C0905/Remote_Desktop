@@ -10,8 +10,10 @@ import {
 } from "../stores/serversStore";
 import type { ServerConfig } from "../stores/serversStore";
 import { useNotificationStore } from "../stores/notificationStore";
-import { parseConnectError, getErrorInfo, buildConnectFailureText, isRetryableConnectError } from "../types/errors";
+import { parseConnectError, getErrorInfo, buildConnectFailureText, isRetryableConnectError, AuthErrorCode } from "../types/errors";
 import { createLogger } from "../utils/logger";
+import { isTauri } from "../utils/environment";
+import i18n from "../i18n";
 
 /* ── Types ─────────────────────────────────────────────── */
 
@@ -135,12 +137,13 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
         // 断连通知（code 携带分类：如认证超时/会话超时等明确原因）
         const lostServer = useServersStore.getState().servers.find((s) => s.id === lostServerId);
         const lostInfo = code != null ? getErrorInfo(code) : null;
+        // 事件监听器只注册一次（空依赖），文案经 i18n 取当前语言而非 hook 缓存
         useNotificationStore.getState().pushNotification({
-          title: lostInfo?.title ?? "网络连接中断",
-          body: lostInfo?.message ?? "与服务器的连接已中断，正在自动重连",
-          action: "自动重连中（最多 3 次）",
+          title: lostInfo?.title ?? i18n.t("serverManager.lostTitle"),
+          body: lostInfo?.message ?? i18n.t("serverManager.lostBody"),
+          action: i18n.t("serverManager.lostAction"),
           urgency: "normal",
-          source: lostServer ? lostServer.name || lostServer.host : "连接",
+          source: lostServer ? lostServer.name || lostServer.host : i18n.t("serverManager.source"),
           serverId: lostServerId,
         });
 
@@ -236,7 +239,7 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
     const body =
       `${info.message}${detail && detail !== info.title ? `\n${detail}` : ""}` +
       (others > 0
-        ? `\n\nℹ️ 其他 ${others} 台服务器连接正常，仅此台无法连接\n可能是本机与该服务器之间的网络问题，建议更换网络环境后重试`
+        ? `\n\n${i18n.t("errors.othersConnected", { count: others })}`
         : "");
     pushNotification({
       title: info.title,
@@ -251,6 +254,15 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
   // 连接核心逻辑：认证凭据 → remote_connect → 状态更新 → 订阅指标
   // 手动连接（connectServer）与自动重连（attemptReconnect）共用
   const performConnect = useCallback(async (server: ServerConfig) => {
+    // 浏览器模式（无 Tauri 运行时）：连接能力由 Rust 后端提供，直接短路。
+    // 抛结构化错误 → 复用 connectServer 现有失败通知链，避免暴露 invoke 实现细节
+    if (!isTauri()) {
+      throw {
+        code: AuthErrorCode.Unknown,
+        detail: i18n.t("serverManager.browserModeDetail"),
+      };
+    }
+
     // 准备认证凭据（使用 snake_case 命名以匹配 Rust 后端）
     // 兼容旧配置：如果 server.auth 不存在，使用默认值
     const defaultAuth = {
@@ -324,12 +336,12 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
         const activeCount = await invoke<number>("get_active_transfer_count");
         if (activeCount > 0) {
           const confirmed = await ask(
-            `当前有 ${activeCount} 个传输任务正在进行，切换到「${server.name || server.host}」将中断它们。`,
+            i18n.t("serverManager.switchConfirmMessage", { count: activeCount, name: server.name || server.host }),
             {
-              title: "切换服务器",
+              title: i18n.t("serverManager.switchConfirmTitle"),
               kind: "warning",
-              okLabel: "切换",
-              cancelLabel: "取消",
+              okLabel: i18n.t("serverManager.switchConfirmOk"),
+              cancelLabel: i18n.t("serverManager.switchConfirmCancel"),
             }
           );
           if (!confirmed) {
@@ -399,8 +411,8 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
       log.info("自动重连成功:", serverId);
       // 重连成功通知（连接恢复）
       useNotificationStore.getState().pushNotification({
-        title: "连接已恢复",
-        body: `服务器 ${server.name || server.host} 已重新连接`,
+        title: i18n.t("serverManager.reconnectRestoredTitle"),
+        body: i18n.t("serverManager.reconnectRestoredBody", { name: server.name || server.host }),
         urgency: "low",
         source: server.name || server.host,
         serverId,
@@ -415,11 +427,11 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
         const others = useServersStore
           .getState()
           .servers.filter((s) => s.id !== serverId && s.status === "connected").length;
-        const display = `自动重连失败: ${buildConnectFailureText(err, others)}`;
+        const display = `${i18n.t("serverManager.reconnectFailedTitle")}: ${buildConnectFailureText(err, others)}`;
         log.warn(display);
         setServerStatus(serverId, "error", parseConnectError(err));
         useNotificationStore.getState().pushNotification({
-          title: "自动重连失败",
+          title: i18n.t("serverManager.reconnectFailedTitle"),
           body: buildConnectFailureText(err, others),
           action: getErrorInfo(parseConnectError(err).code).action,
           urgency: "critical",

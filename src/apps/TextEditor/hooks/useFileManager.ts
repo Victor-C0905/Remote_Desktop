@@ -11,9 +11,11 @@
 
 import { useState, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import i18n from '../../../i18n';
 import type { FileState, ApplyDiffResponse } from '../types/editor';
 import { calculateDiff, convertToTauriFormat } from '../utils/diff';
 import { createLogger } from '../../../utils/logger';
+import { formatUnknownError } from '../../../types/errors';
 
 const log = createLogger('useFileManager');
 
@@ -180,7 +182,7 @@ export function useFileManager(): UseFileManagerReturn {
   const openFile = useCallback(async (serverId: string, path: string): Promise<void> => {
     // 检查 serverId 是否为空
     if (!serverId) {
-      setError('未连接到服务器');
+      setError(i18n.t('textEditor.err.notConnected'));
       return;
     }
 
@@ -223,8 +225,8 @@ export function useFileManager(): UseFileManagerReturn {
       setOriginalChecksum(checksum);
     } catch (err) {
       // 处理错误
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      setError(`无法打开文件 "${path}": ${errorMessage}`);
+      const errorMessage = formatUnknownError(err);
+      setError(i18n.t('textEditor.err.openFile', { path, message: errorMessage }));
       setFileState(null);
       setOriginalChecksum('');
     } finally {
@@ -246,19 +248,19 @@ export function useFileManager(): UseFileManagerReturn {
   const saveFile = useCallback(async (serverId: string, useDiffSync?: boolean): Promise<void> => {
     // 检查 serverId 是否为空
     if (!serverId) {
-      setError('未连接到服务器');
+      setError(i18n.t('textEditor.err.notConnected'));
       return;
     }
 
     // 检查是否有打开的文件
     if (!fileState) {
-      setError('没有打开的文件');
+      setError(i18n.t('textEditor.err.noFile'));
       return;
     }
 
     // 检查文件类型
     if (fileState.fileType !== 'text') {
-      setError('只支持保存文本文件');
+      setError(i18n.t('textEditor.err.onlyText'));
       return;
     }
 
@@ -286,7 +288,7 @@ export function useFileManager(): UseFileManagerReturn {
    */
   const saveWithDiffInternal = useCallback(async (serverId: string): Promise<void> => {
     if (!fileState || fileState.fileType !== 'text') {
-      setError('无法保存：文件未打开或不是文本文件');
+      setError(i18n.t('textEditor.err.cannotSave'));
       return;
     }
 
@@ -303,7 +305,7 @@ export function useFileManager(): UseFileManagerReturn {
 
         // 尝试修复：使用当前内容作为"原始内容"（但不应该发生）
         setOriginalContent(fileState.content);
-        setError('内部错误：原始内容丢失，已自动修复，请重新保存。');
+        setError(i18n.t('textEditor.err.originalLost'));
         setIsSaving(false);
         return;
       }
@@ -361,19 +363,21 @@ export function useFileManager(): UseFileManagerReturn {
         setOriginalChecksum(newChecksum);
       } else {
         // 版本冲突或其他错误
-        const errorMsg = response.error || '未知错误';
+        // 注意：errorMsg.includes('版本冲突') 是对后端中文错误的运行时判断（非文案），
+        // Task 17 错误码化时一并迁移，此处保持行为不变
+        const errorMsg = response.error || i18n.t('textEditor.err.unknown');
         log.error('保存失败:', errorMsg);
 
         if (errorMsg.includes('版本冲突')) {
-          setError('文件已被其他程序修改，请重新打开文件后再编辑。');
+          setError(i18n.t('textEditor.err.versionConflict'));
         } else {
-          setError(`保存失败：${errorMsg}`);
+          setError(i18n.t('textEditor.err.saveFailed', { message: errorMsg }));
         }
       }
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
+      const errorMessage = formatUnknownError(err);
       log.error('保存失败:', err);
-      setError(`无法保存文件 "${fileState.path}": ${errorMessage}`);
+      setError(i18n.t('textEditor.err.cannotSavePath', { path: fileState.path, message: errorMessage }));
     } finally {
       setIsSaving(false);
     }
@@ -386,7 +390,7 @@ export function useFileManager(): UseFileManagerReturn {
    */
   const saveFileFull = useCallback(async (serverId: string): Promise<void> => {
     if (!fileState || fileState.fileType !== 'text') {
-      setError('无法保存：文件未打开或不是文本文件');
+      setError(i18n.t('textEditor.err.cannotSave'));
       return;
     }
 
@@ -421,9 +425,9 @@ export function useFileManager(): UseFileManagerReturn {
 
       setOriginalChecksum(newChecksum);
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
+      const errorMessage = formatUnknownError(err);
       log.error('保存失败:', err);
-      setError(`无法保存文件 "${fileState.path}": ${errorMessage}`);
+      setError(i18n.t('textEditor.err.cannotSavePath', { path: fileState.path, message: errorMessage }));
     } finally {
       setIsSaving(false);
     }
@@ -449,13 +453,13 @@ export function useFileManager(): UseFileManagerReturn {
   const saveAs = useCallback(async (serverId: string, path: string): Promise<void> => {
     // 检查 serverId 是否为空
     if (!serverId) {
-      setError('未连接到服务器');
+      setError(i18n.t('textEditor.err.notConnected'));
       return;
     }
 
     // 检查路径是否为空
     if (!path) {
-      setError('请输入有效的文件路径');
+      setError(i18n.t('textEditor.err.invalidPath'));
       return;
     }
 
@@ -490,9 +494,9 @@ export function useFileManager(): UseFileManagerReturn {
       setLocalContent(''); // 清空本地缓存（因为现在是已打开文件）
     } catch (err) {
       // 处理错误
-      const errorMessage = err instanceof Error ? err.message : String(err);
+      const errorMessage = formatUnknownError(err);
       log.error('saveAsNewFile 失败:', err);
-      setError(`无法保存文件 "${path}": ${errorMessage}`);
+      setError(i18n.t('textEditor.err.cannotSavePath', { path, message: errorMessage }));
     } finally {
       setIsSaving(false);
     }

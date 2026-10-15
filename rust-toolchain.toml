@@ -1,0 +1,4 @@
+# 统一工具链版本：Windows（src-tauri 客户端）与 WSL（agent）共用
+# rustup 会自动按此文件解析工具链；升级时改此处即可
+[toolchain]
+channel = "1.99.0"

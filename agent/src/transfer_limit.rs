@@ -28,7 +28,7 @@ pub const MAX_LIMIT_MB: u64 = 102400;
 /// 客户端凭此决定是否可用新协议命令——避免向旧 Agent 发送其无法解码的 payload
 /// （旧 Agent 解码失败会断流，客户端主循环会把整条连接误判为断开并拆除）。
 /// 新增协议功能时在此追加。
-pub const AGENT_CAPABILITIES: &[&str] = &["transfer_limit"];
+pub const AGENT_CAPABILITIES: &[&str] = &["transfer_limit", "processes"];
 
 /// 修改结果：新值 + 是否已持久化到配置文件
 #[derive(Debug, PartialEq)]

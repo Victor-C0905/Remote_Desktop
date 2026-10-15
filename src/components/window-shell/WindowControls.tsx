@@ -2,6 +2,7 @@
 // 窗口控制按钮 - Adwaita 风格：黄绿红圆点
 
 import { memo } from "react";
+import { useTranslation } from "react-i18next";
 import styles from "./WindowControls.module.css";
 
 export interface WindowControlsProps {
@@ -21,6 +22,7 @@ export const WindowControls = memo(function WindowControls({
   onMinimize,
   onMaximize,
 }: WindowControlsProps) {
+  const { t } = useTranslation();
   return (
     // ✅ 阻止 mousedown 冒泡到 HeaderBar:避免点控制按钮时误触发标题栏拖拽(tear-off)。
     //    根因:HeaderBar 绑了 onMouseDown={handleDragStart},snap/最大化状态下 mousedown 会触发 tear-off,
@@ -33,22 +35,22 @@ export const WindowControls = memo(function WindowControls({
       <button
         className={`${styles.windowControlBtn} ${styles.windowControlBtnMinimize}`}
         onClick={onMinimize}
-        title="最小化"
-        aria-label="最小化窗口"
+        title={t("windowShell.minimize")}
+        aria-label={t("windowShell.minimizeWindow")}
       />
       {/* 最大化按钮 - 绿色 */}
       <button
         className={`${styles.windowControlBtn} ${styles.windowControlBtnMaximize}`}
         onClick={onMaximize}
-        title="最大化"
-        aria-label="最大化窗口"
+        title={t("windowShell.maximize")}
+        aria-label={t("windowShell.maximizeWindow")}
       />
       {/* 关闭按钮 - 红色 */}
       <button
         className={`${styles.windowControlBtn} ${styles.windowControlBtnClose}`}
         onClick={onClose}
-        title="关闭"
-        aria-label="关闭窗口"
+        title={t("windowShell.close")}
+        aria-label={t("windowShell.closeWindow")}
       />
     </div>
   );

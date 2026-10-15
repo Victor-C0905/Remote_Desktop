@@ -4,6 +4,7 @@
 //       连发替换内容并重置计时，期间错过的条目累计为「+N」
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { useNotificationStore } from "../stores/notificationStore";
 import type { AppNotification, NotificationUrgency } from "../stores/notificationStore";
 import { SymbolicIcon } from "../components/symbolic";
@@ -22,6 +23,7 @@ function urgencyIcon(urgency: NotificationUrgency) {
 }
 
 export function ArrivalToast({ onOpen }: { onOpen: () => void }) {
+  const { t } = useTranslation();
   const notifications = useNotificationStore((s) => s.notifications);
   const [current, setCurrent] = useState<AppNotification | null>(null);
   const [missed, setMissed] = useState(0);
@@ -107,7 +109,7 @@ export function ArrivalToast({ onOpen }: { onOpen: () => void }) {
       {missed > 0 && <span className="at-missed">+{missed}</span>}
       <button
         className="at-close"
-        aria-label="关闭预览"
+        aria-label={t('preview.closeAria')}
         onClick={(e) => {
           e.stopPropagation();
           dismiss();
