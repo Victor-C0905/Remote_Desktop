@@ -50,10 +50,16 @@
   transition: all var(--duration-fast) var(--ease-out);
 }
 
-.tmb-label:hover,
-.tmb-label.open {
+.tmb-label:hover {
   background: var(--quirel-view-bg);
   color: var(--quirel-text-primary);
+}
+
+/* 打开（选中）态：强调色底 + 反白文字，与页签选中（sm-tab.active 等）
+   同一视觉语言；置于 :hover 之后，悬停已打开标签不回落灰色 */
+.tmb-label.open {
+  background: var(--quirel-accent-bg);
+  color: var(--quirel-accent-fg);
 }
 
 /* ── 菜单面板（portal 到 body，fixed 定位）───────────────── */

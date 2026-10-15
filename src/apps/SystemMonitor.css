@@ -97,12 +97,28 @@
 }
 
 .sm-process-header span {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   cursor: pointer;
   user-select: none;
+  border-radius: var(--radius-xs);
+  transition: color var(--duration-fast) var(--ease-out);
 }
 
 .sm-process-header span:hover {
   color: var(--quirel-text-primary);
+}
+
+/* 当前排序列：文字转主色 + 方向 chevron（与 FileManager 列头排序同款处理） */
+.sm-process-header span.sorted {
+  color: var(--quirel-text-primary);
+}
+
+/* 排序方向指示（升序向上 / 降序向下，同 FileManager fm-sort-indicator） */
+.sm-process-header .sm-sort-indicator {
+  flex-shrink: 0;
+  opacity: 0.9;
 }
 
 .sm-process-list {

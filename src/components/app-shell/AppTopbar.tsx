@@ -32,23 +32,27 @@ import styles from "./AppTopbar.module.css";
  * 置于自身 flex column 容器顶部（见 SystemMonitor）。
  */
 export interface AppTopbarProps {
-  /** 菜单栏内容（文件/编辑/视图…），交给共享 MenuBar 渲染 */
-  menus: MenuBarMenu[];
+  /**
+   * 菜单栏内容（文件/编辑/视图…），交给共享 MenuBar 渲染
+   * 可选：不传或空数组时不渲染菜单栏与分隔竖线（顶栏仅剩上下文内容）
+   */
+  menus?: MenuBarMenu[];
 
   /**
    * 菜单栏右侧的上下文内容（可选）
-   * 面包屑、视图页签等应用专属内容；提供时自动插入分隔竖线
+   * 面包屑、视图页签等应用专属内容；提供且菜单栏存在时自动插入分隔竖线
    */
   children?: React.ReactNode;
 }
 
 export function AppTopbar({ menus, children }: AppTopbarProps) {
   const hasChildren = children !== undefined && children !== null && children !== false;
+  const hasMenus = !!menus && menus.length > 0;
 
   return (
     <div className={styles.topbar}>
-      <MenuBar menus={menus} />
-      {hasChildren && <div className={styles.divider} aria-hidden="true" />}
+      {hasMenus && <MenuBar menus={menus} />}
+      {hasMenus && hasChildren && <div className={styles.divider} aria-hidden="true" />}
       {hasChildren && children}
     </div>
   );
