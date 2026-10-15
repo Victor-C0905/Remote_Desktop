@@ -1241,7 +1241,7 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
   };
 
   return (
-    <div className="st">
+    <div className="st" data-headerbar-bridge="glass-left">
       {/* Content */}
       <div className="st-content">
         {/* Sidebar */}
