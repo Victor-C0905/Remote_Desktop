@@ -28,6 +28,20 @@
   color: var(--quirel-text-primary);
 }
 
+/* ── ⌄ chevron 图标：SVG mask 渲染（10×10、1.5 线宽方头端点，与页签
+   +/× 按钮同规格语言）──
+   字符 U+2304 的字形墨迹位置随字体度量漂移（视觉偏上/偏下不稳定），
+   mask 盒由 flex 居中，与标题栏窗口控制圆点几何同线；颜色走 currentColor，
+   hover/open 浮起跟随 .tbm-trigger 的文字色 */
+.tbm-icon-chevron {
+  display: block;
+  width: 10px;
+  height: 10px;
+  background-color: currentColor;
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'><path stroke='black' stroke-linecap='square' stroke-width='1.5' d='M2 3.5 L5 6.5 L8 3.5'/></svg>") center / 10px 10px no-repeat;
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'><path stroke='black' stroke-linecap='square' stroke-width='1.5' d='M2 3.5 L5 6.5 L8 3.5'/></svg>") center / 10px 10px no-repeat;
+}
+
 /* ── 菜单栏（MenuBar）：传统桌面应用菜单栏 ───────────────── */
 .tmb-root {
   display: flex;

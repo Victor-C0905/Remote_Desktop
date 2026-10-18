@@ -195,19 +195,8 @@
 /* 低频操作（搜索/设置开关）收纳在 ToolbarMenu（⌄ 菜单）中，
    触发按钮复用共享组件 .tbm-trigger 的 28×28 尺度 */
 
-/* ── 连接状态指示（tab 栏右侧）：仅 CSS 圆点，服务器名移至底部状态栏 ── */
-.terminal-status {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
-  font-size: 12px;
-  color: var(--quirel-text-secondary);
-  font-family: var(--font-ui);
-  white-space: nowrap;
-}
-
-/* 状态圆点：6px 圆形（替代原 ●/○ 文本字符） */
+/* ── 连接状态圆点（底部状态栏 .terminal-status-item 内嵌使用）──
+   （标题栏 tab 栏右侧的同款圆点已移除：底部状态栏已有完整连接信息） */
 .terminal-status-dot {
   display: inline-block;
   width: 6px;
@@ -218,13 +207,11 @@
 }
 
 /* 已连接远程：绿色圆点 */
-.terminal-status.is-remote .terminal-status-dot,
 .terminal-status-dot.on {
   background: #2ec27e; /* Adwaita success 绿 */
 }
 
 /* 本地/未连接：灰色圆点 */
-.terminal-status.is-local .terminal-status-dot,
 .terminal-status-dot.off {
   background: var(--quirel-text-secondary);
 }
