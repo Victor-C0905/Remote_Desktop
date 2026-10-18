@@ -940,15 +940,9 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
         });
       }}
     >
-      {/* 连接状态：仅 CSS 圆点（绿=已连接，灰=本地）。服务器名不在标题栏展示，
-          统一在底部状态栏显示；名称与 host:port 保留在圆点悬停提示中 */}
-      <span
-        className={`terminal-status ${activeServer ? 'is-remote' : 'is-local'}`}
-        title={activeServer ? `${activeServer.name} · ${activeServer.host}:${activeServer.port}` : t('terminal.notConnectedTitle')}
-      >
-        <span className="terminal-status-dot" />
-      </span>
-      {/* 低频操作收纳进 ⌄ 菜单：搜索/设置面板的开关，开启时菜单项打勾 */}
+      {/* 低频操作收纳进 ⌄ 菜单：搜索/设置面板的开关，开启时菜单项打勾。
+          （标题栏连接状态小点已移除：底部状态栏已有完整连接信息，
+          标题栏圆点是遗留重复） */}
       <ToolbarMenu
         icon="⌄"
         title={t('terminal.moreActions')}

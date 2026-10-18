@@ -175,7 +175,11 @@ export function ToolbarMenu({ icon = '⋮', title, items }: ToolbarMenuProps) {
           setOpen((v) => !v);
         }}
       >
-        {icon}
+        {/* 字符图标（U+2304 ⌄）的字形墨迹位置随字体度量漂移，视觉上与旁边
+            的窗口控制圆点无法稳定处于同一水平线；预定义图标改用 SVG mask
+            渲染（与页签 +/× 按钮同款做法），几何绝对居中。其他字符保持
+            文本渲染（向后兼容） */}
+        {icon === '⌄' ? <span className="tbm-icon-chevron" aria-hidden="true" /> : icon}
       </button>
 
       {open && (
