@@ -218,6 +218,8 @@ const zhCN = {
     customWallpaperLabel: '当前自定义壁纸',
     startupTitle: '启动行为',
     restoreWindows: '启动时恢复上次打开的窗口',
+    frostedGlassTitle: '毛玻璃效果',
+    frostedGlassLabel: '启用毛玻璃（窗口边框/侧栏采样壁纸模糊，有常驻 GPU 开销）',
     // 快捷键分区
     globalShortcutsTitle: '全局快捷键',
     shortcutOverview: '打开活动概览',
@@ -525,6 +527,7 @@ const zhCN = {
     connectedBanner: '✅ 远程终端已连接',
     connectedServer: '服务器: {{name}}',
     disconnectedBanner: '[远程终端断开]',
+    outputBufferOverflow: '[最小化期间部分较早的输出已被丢弃]',
     demoCommands: '可用命令：help, echo, ls, pwd, cd, clear, date, whoami, exit',
     demoExit: '[演示模式已结束，关闭此标签或新建标签继续]',
     tabLabel: '终端 {{n}}',

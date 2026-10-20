@@ -9,6 +9,7 @@ import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
+import { WebglAddon } from '@xterm/addon-webgl';
 // xterm.js 基础样式（必须导入，否则 canvas/text-layer 无法正确定位）
 import '@xterm/xterm/css/xterm.css';
 import { useServerManager } from '../context/ServerManager';
@@ -39,6 +40,19 @@ interface TerminalTabMeta {
   label: string;
 }
 
+// ── 最小化期间的终端输出缓冲（Tier1 最小化闸门）──────────────────
+// 透明窗口使 WebView2 遮挡检测失效：最小化后页面仍被判定"可见"，PTY 输出
+// 持续触发 xterm 渲染吃 GPU/CPU。闸门策略：最小化期间不 write（不触发渲染），
+// 只入缓冲，恢复可见时按序冲刷。
+interface PendingOutput {
+  chunks: Uint8Array[];
+  bytes: number;
+  /** 缓冲超限丢弃过最旧数据，冲刷前需插入省略提示行 */
+  overflowed: boolean;
+}
+/** 缓冲上限 16MB：防长时间最小化 + 高频输出（如 cat 大文件）把内存打爆 */
+const MAX_PENDING_OUTPUT_BYTES = 16 * 1024 * 1024;
+
 let tabIdCounter = 0;
 const newTabId = () => `tab-${++tabIdCounter}`;
 
@@ -62,6 +76,10 @@ interface TerminalInstanceProps {
   workingDirectory?: string | null;
   /** 窗口创建后自动执行的命令（脚本运行：双击 .sh 由 FileManager 注入） */
   initialCommand?: string | null;
+  /** 本页签是否处于激活状态（WebGL 渲染器仅挂载在活动页签上，失活回落 DOM） */
+  isActive?: boolean;
+  /** OS 级窗口最小化（Tier1 闸门：最小化期间输出只缓冲不渲染） */
+  osMinimized?: boolean;
   // callback: terminal 实例创建后通知父组件（用于复制/粘贴）
   onTerminalReady?: (terminal: Terminal, sessionId: string | null, searchAddon: SearchAddon) => void;
 }
@@ -75,12 +93,26 @@ function TerminalInstance({
   cursorBlink,
   workingDirectory,
   initialCommand,
+  isActive,
+  osMinimized,
   onTerminalReady,
 }: TerminalInstanceProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const searchAddonRef = useRef<SearchAddon | null>(null);
+  /** WebGL 渲染器 addon（仅活动页签挂载；随 terminal.dispose 自动释放） */
+  const webglAddonRef = useRef<WebglAddon | null>(null);
+  /** 终端实例纪元：每次重建（服务器切换/重新初始化）+1，驱动 WebGL 挂载 effect 重跑 */
+  const [terminalEpoch, setTerminalEpoch] = useState(0);
+  /** 最小化期间的输出缓冲（null=无会话）；恢复可见时按序冲刷 */
+  const pendingOutputRef = useRef<PendingOutput | null>(null);
+  /** connectRemotePty 注册的冲刷函数（恢复可见时调用；会话销毁时置空） */
+  const flushOutputRef = useRef<(() => void) | null>(null);
+  // 渲染期直写 ref：connectRemotePty 的输出监听闭包经 ref 读取最新最小化状态
+  // （项目教训：useCallback/闭包内禁止直读 props，激活/状态对齐会被首帧旧值跳过）
+  const osMinimizedRef = useRef<boolean>(osMinimized ?? false);
+  osMinimizedRef.current = osMinimized ?? false;
   const sessionIdRef = useRef<string | null>(null);
   const unlistenRefs = useRef<UnlistenFn[]>([]);
   // IME 合成状态跟踪：防止合成期间焦点切换导致 compositionEnd 丢失，进而卡死输入
@@ -134,6 +166,11 @@ function TerminalInstance({
     try { terminalRef.current?.dispose(); } catch (e) { log.debug('terminal.dispose 失败:', e); }
     terminalRef.current = null;
     fitAddonRef.current = null;
+    // WebGL addon 已随 terminal.dispose 释放，清引用避免残留指向旧实例；
+    // 同步释放输出缓冲与冲刷句柄（会话已销毁，缓冲数据作废）
+    webglAddonRef.current = null;
+    pendingOutputRef.current = null;
+    flushOutputRef.current = null;
 
     // 清理 DOM
     const container = containerRef.current;
@@ -201,6 +238,9 @@ function TerminalInstance({
         allowProposedApi: true,
       });
       terminalRef.current = terminal;
+      // 终端纪元 +1：通知 WebGL 挂载 effect（deps 含 terminalEpoch）在
+      // 新实例上重新执行——服务器切换时 isActive 不变，仅靠该信号触发重挂
+      setTerminalEpoch((e) => e + 1);
 
       // 2. 加载 FitAddon（响应式布局）
       const fitAddon = new FitAddon();
@@ -309,7 +349,7 @@ function TerminalInstance({
           // 6. 尝试连接远程 PTY 或启动演示模式
           if (activeServerId) {
             setInitializationStatus(i18n.t('terminal.connectingRemote'));
-            await connectRemotePty(terminal, activeServerId, activeServerName, activeServerHost, activeServerPort, sessionIdRef, unlistenRefs, workingDirectory, initialCommand);
+            await connectRemotePty(terminal, activeServerId, activeServerName, activeServerHost, activeServerPort, sessionIdRef, unlistenRefs, workingDirectory, initialCommand, osMinimizedRef, pendingOutputRef, flushOutputRef);
             // await 期间 teardown 已执行：刚建立的会话无人使用，立即关闭防泄漏
             if (disposedRef.current) {
               log.warn('初始化完成前组件已清理，关闭幽灵远程会话');
@@ -444,14 +484,60 @@ function TerminalInstance({
     }
   }, [activeServerId, activeServerName, activeServerHost, activeServerPort]);
 
+  // ── WebGL 渲染器：仅活动页签挂载，失活即卸载 ─────────────────────
+  // GPU 占用归因：全部页签常驻 DOM 渲染是主要来源之一。WebGL 渲染器由 GPU
+  // 合成、CPU 开销大幅降低；但 WebGL 上下文全浏览器上限约 16 个，多窗口×
+  // 多页签常驻挂载必撞线，且失活页签（display:none）挂载 WebGL 会以 0 尺寸
+  // 绘制图集纯浪费。策略：激活时挂载，失活时 dispose（xterm 自动回落 DOM
+  // 渲染器，终端实例与缓冲区不受影响）；创建失败/上下文丢失时静默回落 DOM。
+  // deps 含 terminalEpoch：会话重建（服务器切换）时 isActive 不变，靠纪元触发重挂。
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (!terminal) return;
+    if (!isActive) {
+      if (webglAddonRef.current) {
+        try { webglAddonRef.current.dispose(); } catch { /* 已随终端释放 */ }
+        webglAddonRef.current = null;
+        log.debug('WebGL 渲染器已卸载（页签失活，回落 DOM 渲染）');
+      }
+      return;
+    }
+    if (webglAddonRef.current) return; // 已挂载
+    try {
+      const addon = new WebglAddon();
+      // GPU 上下文丢失（驱动重置/显存回收）：卸载回落 DOM，避免持续异常
+      addon.onContextLoss(() => {
+        log.warn('WebGL 上下文丢失，回落 DOM 渲染');
+        try { addon.dispose(); } catch { /* 已释放 */ }
+        if (webglAddonRef.current === addon) webglAddonRef.current = null;
+      });
+      terminal.loadAddon(addon);
+      webglAddonRef.current = addon;
+      log.debug('WebGL 渲染器已挂载');
+    } catch (e) {
+      // WebGL 不可用（上下文耗尽/驱动问题/无头环境）：静默回落 DOM 渲染器
+      log.warn('WebGL 渲染器挂载失败，回落 DOM:', e);
+      webglAddonRef.current = null;
+    }
+  }, [isActive, terminalEpoch]);
+
+  // ── 最小化闸门：恢复可见时冲刷缓冲输出 ──────────────────────────
+  // 冲刷函数幂等（空缓冲 no-op），会话存续期间始终注册；会话销毁时被置空
+  useEffect(() => {
+    if (!osMinimized) {
+      try { flushOutputRef.current?.(); } catch (e) { log.debug('冲刷缓冲输出失败:', e); }
+    }
+  }, [osMinimized]);
+
   // ── fontSize / cursorBlink 变更 ───────────────────────
   useEffect(() => {
     const t = terminalRef.current;
     if (!t) return;
     t.options.fontSize = fontSize;
-    t.options.cursorBlink = cursorBlink;
+    // 最小化期间强制关闭光标闪烁（Tier1 闸门：停止无意义渲染）
+    t.options.cursorBlink = cursorBlink && !osMinimized;
     try { fitAddonRef.current?.fit(); } catch (e) { log.debug('fit 调整失败:', e); }
-  }, [fontSize, cursorBlink]);
+  }, [fontSize, cursorBlink, osMinimized]);
 
   // 渲染容器 div
   return (
@@ -476,6 +562,10 @@ async function connectRemotePty(
   unlistenRefs: React.MutableRefObject<UnlistenFn[]>,
   workingDirectory?: string | null,
   initialCommand?: string | null,
+  // Tier1 最小化闸门：最小化状态 ref + 缓冲/冲刷 ref（会话级缓冲挂在组件上）
+  minimizedRef?: React.MutableRefObject<boolean>,
+  pendingRef?: React.MutableRefObject<PendingOutput | null>,
+  flushRef?: React.MutableRefObject<(() => void) | null>,
 ): Promise<string> {
   // 1. 创建远程终端会话
   const result = await invoke<{ session_id: string }>('remote_spawn_terminal', {
@@ -501,13 +591,52 @@ async function connectRemotePty(
   terminal.write(`Session: ${sessionId}\r\n\r\n`);
 
   // 3. 监听终端输出事件
+  // Tier1 最小化闸门：最小化期间不 write（不触发渲染），只入缓冲；恢复可见时
+  // 由恢复 effect 或新数据到达路径按序冲刷。超 16MB 丢最旧并插入省略提示行。
+  if (pendingRef) {
+    pendingRef.current = { chunks: [], bytes: 0, overflowed: false };
+  }
+  // 幂等冲刷（空缓冲 no-op）：会话存续期间始终注册在 flushRef 上，
+  // 恢复 effect 与监听器路径共用；teardownNow 销毁会话时置空
+  const flushPendingOutput = () => {
+    const pending = pendingRef?.current;
+    if (!pending || pending.chunks.length === 0) return;
+    if (pending.overflowed) {
+      terminal.write(`\r\n\x1b[33m${i18n.t('terminal.outputBufferOverflow')}\x1b[0m\r\n`);
+    }
+    for (const chunk of pending.chunks) {
+      terminal.write(chunk);
+    }
+    if (pendingRef) {
+      pendingRef.current = { chunks: [], bytes: 0, overflowed: false };
+    }
+  };
+  if (flushRef) {
+    flushRef.current = flushPendingOutput;
+  }
+
   const unlistenOutput = await listen<{ session_id: string; data: number[] }>(
     'terminal-output',
     (event) => {
-      if (event.payload.session_id === sessionId) {
-        const bytes = new Uint8Array(event.payload.data);
-        terminal.write(bytes);
+      if (event.payload.session_id !== sessionId) return;
+      const bytes = new Uint8Array(event.payload.data);
+      if (minimizedRef?.current && pendingRef?.current) {
+        // 最小化闸门：只缓冲不渲染，恢复时按序冲刷
+        const pending = pendingRef.current;
+        pending.chunks.push(bytes);
+        pending.bytes += bytes.length;
+        if (pending.bytes > MAX_PENDING_OUTPUT_BYTES) {
+          // 丢最旧直到回到限内（至少保留最新一块）
+          while (pending.bytes > MAX_PENDING_OUTPUT_BYTES && pending.chunks.length > 1) {
+            pending.bytes -= pending.chunks.shift()!.length;
+          }
+          pending.overflowed = true;
+        }
+        return;
       }
+      // 常规路径：先冲刷残留缓冲（恢复瞬间到数据的竞态兜底），保证输出顺序
+      flushPendingOutput();
+      terminal.write(bytes);
     }
   );
   unlistenRefs.current.push(unlistenOutput);
@@ -691,6 +820,28 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
   const [fontSize, setFontSize] = useState(14);
   const [cursorBlink, setCursorBlink] = useState(true);
   const [searchText, setSearchText] = useState('');
+
+  // ── OS 最小化闸门（Tier1）────────────────────────────────────
+  // 透明窗口破坏 WebView2 遮挡检测：最小化后页面仍被判定"可见"，PTY 输出
+  // 持续触发渲染吃 GPU/CPU。Rust 侧监听窗口 Resized + is_minimized，仅在
+  // 状态翻转时发出 app-minimize-changed；本组件将状态传给各终端实例
+  // （最小化期间输出只缓冲不渲染，恢复时冲刷）。全局 class 切换在 App.tsx。
+  const [osMinimized, setOsMinimized] = useState(false);
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    let cancelled = false;
+    listen<boolean>('app-minimize-changed', (event) => {
+      if (!cancelled) setOsMinimized(event.payload === true);
+    }).then((fn) => {
+      // 竞态防护：监听建立前组件已卸载，立即注销
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   // ── 活动终端的 refs（用于复制/粘贴/搜索）────────────────────────
   const activeTerminalRef = useRef<Terminal | null>(null);
@@ -1001,6 +1152,8 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
               fontSize={fontSize}
               cursorBlink={cursorBlink}
               workingDirectory={workingDirectory}
+              isActive={tab.id === activeTabId}
+              osMinimized={osMinimized}
               initialCommand={tab.id === initialTabIdRef.current ? (preloadData?.initialCommand ?? null) : null}
               onTerminalReady={(terminal, sessionId, searchAddon) => {
                 // 更新 refs（所有 tab 都更新，但只有活动 tab 的 terminal 可见）

@@ -320,7 +320,8 @@
   font-variant-ligatures: none !important;
   font-variant-numeric: normal !important;
   font-variant: normal !important;
-  text-rendering: optimizeLegibility !important;
+  /* text-rendering: optimizeLegibility 已移除——对等宽终端字形零收益，
+     且在长文本重排时显著增加 CPU 开销（GPU 占用归因分析结论） */
   -webkit-font-smoothing: antialiased !important;
   -moz-osx-font-smoothing: grayscale !important;
   transform: none !important;
