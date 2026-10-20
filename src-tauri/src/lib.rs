@@ -2,7 +2,7 @@ use serde::Serialize;
 use std::fs;
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
-use tauri::Manager;  // 导入 Manager trait
+use tauri::{Emitter, Manager};  // 导入 Emitter/Manager trait
 use tokio::sync::Mutex;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
@@ -551,6 +551,23 @@ pub fn run() {
         .manage(connection::ConnectionManager::new())
         .manage(proxy::ProxySessionManager::new())
         .manage(Arc::new(terminal::TerminalStreamManager::new()))
+        .on_window_event(|window, event| {
+            // Tier1 最小化闸门：透明窗口破坏 WebView2 遮挡检测，最小化后页面
+            // 仍被判定"可见"而持续渲染（终端 GPU 31% 归因结论之一）。在
+            // Resized 事件时探测真实最小化状态，仅状态翻转时通知前端，前端
+            // 据此缓冲终端输出/暂停动画/关闭毛玻璃滤镜。
+            if matches!(event, tauri::WindowEvent::Resized(_)) {
+                // 进程级去重：Resized 在拖拽尺寸时高频触发，只在最小化状态
+                // 翻转的边界各发一次（恢复时同样经 Resized 事件探测到）
+                static LAST_MINIMIZED: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                use std::sync::atomic::Ordering;
+                let minimized = window.is_minimized().unwrap_or(false);
+                if LAST_MINIMIZED.swap(minimized, Ordering::Relaxed) != minimized {
+                    let _ = window.emit("app-minimize-changed", minimized);
+                }
+            }
+        })
         .setup(|app| {
             // 初始化日志系统（必须在所有其他操作之前）
             init_logging(app);

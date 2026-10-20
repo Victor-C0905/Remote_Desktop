@@ -535,6 +535,8 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
   const browserProxyPort = useSettingsStore((s) => s.browserProxyPort);
   // 启动时恢复上次窗口（响应式读取，勾选即时生效）
   const restoreWindowsOnStartup = useSettingsStore((s) => s.restoreWindowsOnStartup);
+  // 毛玻璃效果开关（响应式读取，勾选即时生效）
+  const frostedGlassEnabled = useSettingsStore((s) => s.frostedGlassEnabled);
   // 界面语言
   const locale = useSettingsStore((s) => s.locale);
   const setLocale = useSettingsStore((s) => s.setLocale);
@@ -949,6 +951,22 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                   checked={restoreWindowsOnStartup}
                   onChange={(e) =>
                     useSettingsStore.getState().setRestoreWindowsOnStartup(e.target.checked)
+                  }
+                />
+              </div>
+            </div>
+
+            {/* 毛玻璃效果：backdrop-filter 采样壁纸模糊，GPU 常驻开销大，默认关闭 */}
+            <div className="st-card">
+              <div className="st-card-header text-title">{t("settings.frostedGlassTitle")}</div>
+              <div className="st-option-row">
+                <span className="st-option-label text-body">{t("settings.frostedGlassLabel")}</span>
+                <input
+                  type="checkbox"
+                  className="st-checkbox"
+                  checked={frostedGlassEnabled}
+                  onChange={(e) =>
+                    useSettingsStore.getState().setFrostedGlassEnabled(e.target.checked)
                   }
                 />
               </div>

@@ -152,3 +152,14 @@
   /* 4. 全局弹窗不得超过 Layer 80-90                         */
   /* 5. Dock 低于窗口，窗口可以遮挡 Dock（Adwaita 行为）       */
 }
+
+/* ── 毛玻璃关闭态覆盖（默认关闭）────────────────────────────
+   放在 :root 之外：important 声明压过 applyThemeColors 按主题 inline
+   写入的 --quirel-frosted-bg（非重要 inline 样式），实现整站开关。
+   消费方（TopBar/WindowShell/Settings 侧栏/Dock）统一引用这些变量，
+   开关切换无需改动任何组件样式 */
+html:not([data-frosted="on"]) {
+  --quirel-frosted-bg:     var(--quirel-headerbar-bg) !important;
+  --quirel-frosted-blur:   none !important;
+  --quirel-frosted-border: var(--quirel-border-color) !important;
+}

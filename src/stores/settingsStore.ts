@@ -28,6 +28,9 @@ export interface SettingsState {
   // 启动时恢复上次窗口（桌面会话恢复）
   restoreWindowsOnStartup: boolean;
 
+  // 毛玻璃效果（backdrop-filter 采样壁纸模糊，GPU 常驻开销大，默认关闭）
+  frostedGlassEnabled: boolean;
+
   // 文件管理器列表列宽（用户拖拽调节后持久化；name 为 null 表示名称列弹性默认态）
   fileManagerColumns: ColumnWidths;
 
@@ -54,6 +57,9 @@ export interface SettingsActions {
 
   // 启动时恢复上次窗口
   setRestoreWindowsOnStartup: (enabled: boolean) => void;
+
+  // 毛玻璃效果开关
+  setFrostedGlassEnabled: (enabled: boolean) => void;
 
   // 文件管理器列宽（拖拽结束时提交一次，避免拖动过程频繁写盘）
   setFileManagerColumns: (widths: ColumnWidths) => void;
@@ -82,6 +88,9 @@ const DEFAULT_SETTINGS: SettingsState = {
 
   // 启动时恢复上次窗口（默认开，保留桌面会话恢复行为）
   restoreWindowsOnStartup: true,
+
+  // 毛玻璃效果默认关闭（GPU 常驻开销大；开启后窗口 chrome 采样壁纸模糊）
+  frostedGlassEnabled: false,
 
   // 文件管理器列宽默认值（与 CSS 历史列宽一致，名称列弹性）
   fileManagerColumns: DEFAULT_COLUMN_WIDTHS,
@@ -143,6 +152,13 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
         set({ restoreWindowsOnStartup: enabled });
       },
 
+      setFrostedGlassEnabled: (enabled) => {
+        set({ frostedGlassEnabled: enabled });
+        // 开关即时生效：根元素 data-frosted 驱动 variables.css 的变量覆盖
+        //（毛玻璃消费方统一引用 --quirel-frosted-* 变量，无需逐处修改）
+        document.documentElement.setAttribute("data-frosted", enabled ? "on" : "off");
+      },
+
       setFileManagerColumns: (widths) => {
         set({ fileManagerColumns: widths });
       },
@@ -172,6 +188,10 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
           root.style.setProperty("--font-body", `${state.fontSize}pt`);
           root.style.setProperty("--font-title", `${state.fontSize + 1}pt`);
           root.style.setProperty("--font-small", `${state.fontSize - 1}pt`);
+
+          // 毛玻璃效果开关（在 applyThemeColors 之后设置：关闭态用
+          // !important 覆盖主题 inline 写入的透明玻璃变量；属性缺失按关闭处理）
+          root.setAttribute("data-frosted", state.frostedGlassEnabled ? "on" : "off");
 
           // 界面语言（持久化值可能来自上次会话；首次启动用默认 zh-CN）
           applyLocale(state.locale);
