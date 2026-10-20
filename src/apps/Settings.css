@@ -306,7 +306,7 @@
 /* ── Server List ────────────────────────────────────── */
 .st-server-list {
   display: grid; /* ✅ 核心修改：grid布局，所有列表项共享同一套列宽度标准 */
-  grid-template-columns: 15px minmax(120px, 1fr) minmax(180px, 1fr) minmax(80px, 1fr) auto; /* ✅ 修改：状态点固定15px，其他列弹性变换 */
+  grid-template-columns: 15px minmax(100px, 1.2fr) minmax(120px, 0.8fr) minmax(60px, 1fr) auto; /* ✅ 修改：状态点固定15px，名称/地址/时间列最小宽度收紧 */
   gap: 4px 12px; /* ✅ 行间距4px，列间距12px */
   width: 100%; /* ✅ 新增：确保列表宽度完全填充父容器 */
   box-sizing: border-box; /* ✅ 新增：确保宽度计算正确 */
