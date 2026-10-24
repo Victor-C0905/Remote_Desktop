@@ -1,6 +1,6 @@
 [package]
 name = "quirel-protocol"
-version = "0.1.0"
+version = "0.3.0-beta.1"
 edition = "2021"
 description = "Quirel 客户端↔Agent 线上协议的单一真相源（JSON over QUIC stream）"
 
