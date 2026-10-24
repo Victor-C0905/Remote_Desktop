@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import React, { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -10,12 +10,18 @@ import { AppLayout } from "../components/app-shell";
 import { TransferStatusBar } from "../components/TransferStatusBar";
 import { createLogger } from '../utils/logger';
 import { openRemoteFile } from './openRemoteFile';
+import { FOLDER_ICON, getFileIconForName } from './fileIcons';
 import { parsePermissions, matrixToOctal, octalToPermString } from './permissions';
 import type { PermMatrix } from './permissions';
-import { sortFileEntries, DEFAULT_SORT, DEFAULT_COLUMN_WIDTHS, COLUMN_MIN_WIDTHS, clampColumnWidth, buildGridTemplate, filterFileEntries, DEFAULT_FILTER } from './fileTable';
-import type { SortKey, SortState, ColumnWidths, FilterMode } from './fileTable';
+import { sortFileEntries, DEFAULT_SORT, DEFAULT_COLUMN_WIDTHS, clampColumnWidth, buildGridTemplate, filterByColumnFilters, toggleBucket, DEFAULT_COLUMN_FILTERS, SIZE_BUCKETS, MTIME_BUCKETS, NAME_BUCKETS, typeKeyOf, typeKeyLabel, listFileTypeBuckets } from './fileTable';
+import type { SortKey, SortState, ColumnWidths, ColumnFilterState, SizeBucket, MtimeBucket, NameBucket } from './fileTable';
 import { SymbolicIcon } from "../components/symbolic";
+import { ConfirmDialog } from "../components/Dialog/ConfirmDialog";
+import { Dialog } from "../components/Dialog/Dialog";
+import { useTranslation } from "react-i18next";
+import { useNotificationStore } from "../stores/notificationStore";
 import { useSettingsStore } from '../stores/settingsStore';
+import { formatUnknownError, isPermissionDenied } from '../types/errors';
 import "./FileManager.css";
 
 const log = createLogger('FileManager');
@@ -44,43 +50,27 @@ interface MountInfo {
   used_bytes: number;
 }
 
-// 侧边栏项
+// 侧边栏项（labelKey: 预置书签词典 key，渲染处 t()；label: 动态标签如挂载点）
 interface SidebarItem {
   icon: string;
-  label: string;
+  labelKey?: string;
+  label?: string;
   path: string;
   type: "bookmark" | "mount" | "network";
 }
 
-// 侧边栏部分
+// 侧边栏部分（titleKey: 词典 key，渲染处 t()）
 interface SidebarSection {
-  title: string;
+  titleKey?: string;
+  title?: string;
   items: SidebarItem[];
 }
 
-/* ── Icon Map ──────────────────────────────────────────── */
-
-const FOLDER_ICON = "📁";
-const FILE_ICONS: Record<string, string> = {
-  ".txt": "📄", ".md": "📝", ".json": "📋", ".toml": "⚙️",
-  ".yaml": "⚙️", ".yml": "⚙️", ".rs": "🦀", ".ts": "📘",
-  ".tsx": "📘", ".js": "📙", ".py": "🐍", ".css": "🎨",
-  ".html": "🌐", ".sh": "🔧", ".conf": "⚙️", ".log": "📜",
-  ".png": "🖼️", ".jpg": "🖼️", ".jpeg": "🖼️", ".svg": "🖼️",
-  ".mp4": "🎬", ".mp3": "🎵", ".zip": "📦", ".tar": "📦",
-  ".gz": "📦", ".db": "🗃️", ".sql": "🗃️",
-};
+/* ── Icon Map（已提取至 ./fileIcons，与 TextEditor 共用） ── */
 
 function getFileIcon(entry: FileEntry): string {
   if (entry.is_dir) return FOLDER_ICON;
-  const ext = entry.name.lastIndexOf(".");
-  if (ext >= 0) {
-    const icon = FILE_ICONS[entry.name.slice(ext).toLowerCase()];
-    if (icon) return icon;
-  }
-  // Hidden files
-  if (entry.name.startsWith(".")) return "🔒";
-  return "📄";
+  return getFileIconForName(entry.name);
 }
 
 function formatSize(bytes: number): string {
@@ -106,11 +96,12 @@ function formatDate(iso: string): string {
 type ViewMode = "list" | "grid";
 
 /** 列表视图表头列定义（key 同时用作排序键与列宽键；perm 为最后一列不提供拖拽手柄） */
-const FILE_COLUMNS: { key: SortKey; label: string }[] = [
-  { key: "name", label: "名称" },
-  { key: "size", label: "大小" },
-  { key: "mtime", label: "修改时间" },
-  { key: "perm", label: "权限" },
+const FILE_COLUMNS: { key: SortKey; labelKey: string }[] = [
+  { key: "name", labelKey: "fileManager.colName" },
+  { key: "size", labelKey: "fileManager.colSize" },
+  { key: "mtime", labelKey: "fileManager.colMtime" },
+  { key: "type", labelKey: "fileManager.colType" },
+  { key: "perm", labelKey: "fileManager.colPerm" },
 ];
 
 /** FileManager 应用组件
@@ -125,6 +116,8 @@ interface FileManagerProps {
 }
 
 export function FileManager({ windowId, preloadData }: FileManagerProps) {
+  const { t } = useTranslation();
+  const pushNotification = useNotificationStore((s) => s.pushNotification);
   // ── 窗口系统集成 ─────────────────────────────────────
   // 获取窗口管理器
   const { manager } = useWindowManager();
@@ -158,14 +151,19 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   const [homeDir, setHomeDir] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("list");
 
-  // ── 目录/文件过滤（工具栏分段控件）────────────────────────
-  // 会话内状态，刻意不持久化：每次打开默认"全部"（用户约定）
-  const [filterMode, setFilterMode] = useState<FilterMode>(DEFAULT_FILTER);
-  // 显示列表 = 已排序的 entries 按当前过滤模式筛选；渲染与键盘导航均以此为准
-  // （entries 保持全量，切换过滤/排序不会丢失数据或需要重新加载目录）
+  // ── 列筛选（表头下拉菜单，Win11 Explorer 风格）────────────
+  // 会话内状态不持久化：每次打开默认无筛选；名称/大小/时间/类型列可勾选组，
+  // 勾选为并集（OR），多列 AND 叠加（目录/文件粗过滤由类型列 __dir 组承担，
+  // 原工具栏「全部/文件夹/文件」分段控件已移除）
+  const [columnFilters, setColumnFilters] = useState<ColumnFilterState>(DEFAULT_COLUMN_FILTERS);
+  // 打开中的表头下拉菜单：锚点列 + 视口坐标（fixed 定位，portal 渲染）
+  const [headerMenu, setHeaderMenu] = useState<{ key: SortKey; x: number; y: number } | null>(null);
+
+  // 显示列表 = 已排序的 entries 过「列筛选」；
+  // 渲染与键盘导航均以此为准（entries 保持全量，切换过滤/排序不重新加载目录）
   const visibleEntries = useMemo(
-    () => filterFileEntries(entries, filterMode),
-    [entries, filterMode]
+    () => filterByColumnFilters(entries, columnFilters),
+    [entries, columnFilters]
   );
 
   // ── 表头排序（点击翻转）────────────────────────────────
@@ -179,7 +177,9 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   // ── 列宽（拖拽调节 + 持久化）────────────────────────────
   // 持久值来自设置存储（zustand persist → Tauri Store，Rust 侧写盘）；
   // 拖拽会话中用本地临时值即时预览，mouseup 才提交持久层（避免拖动过程频繁写盘）
-  const persistedColumns = useSettingsStore(s => s.fileManagerColumns) ?? DEFAULT_COLUMN_WIDTHS;
+  const storedColumns = useSettingsStore(s => s.fileManagerColumns);
+  // 旧持久化数据缺 type 字段（类型列为后加列）：合并默认值兜底，避免类型列宽 undefined
+  const persistedColumns: ColumnWidths = { ...DEFAULT_COLUMN_WIDTHS, ...(storedColumns ?? {}) };
   const setFileManagerColumns = useSettingsStore(s => s.setFileManagerColumns);
   const [resizing, setResizing] = useState<{ key: SortKey; startX: number; startWidth: number } | null>(null);
   // 悬停的表头列：整列（表头+数据行）淡聚焦染色，让列宽可视化（col-hover-* 容器类 + CSS 选择器）
@@ -201,6 +201,8 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     type: 'file' | 'empty';  // 菜单类型：文件菜单或空白区域菜单
     entry?: FileEntry;       // 文件信息（仅文件菜单）
   } | null>(null);
+  // 右键菜单 DOM 引用：挂载后按实测尺寸做视口边界校正（x/y 仅是鼠标锚点）
+  const ctxMenuRef = useRef<HTMLDivElement>(null);
   const [propertiesEntry, setPropertiesEntry] = useState<FileEntry | null>(null);
   // 属性对话框可编辑状态（打开时从 entry 初始化；应用时与初始值比对决定是否发请求）
   const [permMatrix, setPermMatrix] = useState<PermMatrix>(parsePermissions(undefined));
@@ -336,12 +338,12 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       // 成功后才更新当前路径（确保路径确实存在）
       setCurrentPath(path);
       return true;
-    } catch (e: any) {
+    } catch (e: unknown) {
       log.error('加载目录失败:', e);
-      const errMsg = e?.toString() ?? '';
+      const errMsg = formatUnknownError(e);
       // 权限不足：当作空目录处理（进入目录但内容不可见）
       // 其他错误（路径不存在等）：显示错误提示，不更新路径
-      if (errMsg.includes('权限不足') || errMsg.includes('Permission denied')) {
+      if (isPermissionDenied(e)) {
         setEntries([]);
         setPermissionDenied(path);
         setCurrentPath(path);
@@ -369,6 +371,45 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     setEntries(prevEntries => sortFileEntries(prevEntries, next));
   }, []);
 
+  /* ── 表头下拉菜单（列筛选，Win11 Explorer 风格）─────────── */
+
+  /** 打开/切换关闭表头下拉菜单：锚定按钮下方、左缘对齐列头
+   *  （右溢出时向左收进视口）；再点同列按钮 = 关闭。
+   *  仅大小/修改时间列有筛选区（名称/权限列不渲染下拉按钮） */
+  const openHeaderMenu = useCallback((e: React.MouseEvent, key: SortKey) => {
+    e.stopPropagation();  // 不触发表头点击排序
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const MENU_WIDTH = 210;
+    setHeaderMenu(prev => {
+      if (prev?.key === key) return null;
+      const x = Math.max(8, Math.min(rect.left, window.innerWidth - MENU_WIDTH - 8));
+      return { key, x, y: Math.round(rect.bottom) + 2 };
+    });
+  }, []);
+
+  /** 勾选/取消一个筛选桶：菜单保持打开（可连续多选，Win11 同款）
+   *  name/size/mtime/type 四列可筛选（perm 无筛选区）；type 桶为动态 string 键 */
+  const toggleColumnFilter = useCallback((key: SortKey, bucket: SizeBucket | MtimeBucket | NameBucket | string) => {
+    if (key !== "size" && key !== "mtime" && key !== "name" && key !== "type") return;
+    setColumnFilters(prev => key === "size"
+      ? { ...prev, size: toggleBucket(prev.size, bucket as SizeBucket) }
+      : key === "mtime"
+        ? { ...prev, mtime: toggleBucket(prev.mtime, bucket as MtimeBucket) }
+        : key === "name"
+          ? { ...prev, name: toggleBucket(prev.name, bucket as NameBucket) }
+          : { ...prev, type: toggleBucket(prev.type, bucket) });
+    // 筛选改变可见列表：清空选中（过滤后的可见索引与旧选中位不再对应）
+    setSelectedIdx(null);
+  }, []);
+
+  // 点击菜单外关闭（与右键菜单同一模式：window 级 click 兜底）
+  useEffect(() => {
+    if (!headerMenu) return;
+    const close = () => setHeaderMenu(null);
+    window.addEventListener("click", close);
+    return () => window.removeEventListener("click", close);
+  }, [headerMenu]);
+
   /* ── 列宽拖拽：mousedown 预览、mouseup 提交持久层 ────────── */
 
   /** 开始拖拽列宽：记录起点与该列当前渲染宽度（名称列自此从弹性转固定） */
@@ -376,8 +417,17 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     e.preventDefault();    // 阻止拖拽选中文本
     e.stopPropagation();  // 不触发表头排序
     const colEl = (e.currentTarget as HTMLElement).parentElement;
-    if (!colEl) return;
-    const startWidth = colEl.getBoundingClientRect().width;
+    const headerEl = colEl?.parentElement;
+    if (!colEl || !headerEl) return;
+    // 起始宽度取 grid 轨道宽（computed used value），不能用列头盒 getBoundingClientRect——
+    // 首列盒为铺满表头左缘有 margin-left: -12px 外扩，盒宽 = 轨道 + 12px，用它当起点
+    // 会让名称列每次 mousedown 都膨胀 12px（点击边界尚未拖动列就右移）。
+    const headerGrid = getComputedStyle(headerEl).gridTemplateColumns;
+    const colIndex = FILE_COLUMNS.findIndex(c => c.key === key);
+    const trackPx = parseFloat(headerGrid.split(" ")[colIndex]);
+    const startWidth = Number.isFinite(trackPx)
+      ? trackPx
+      : colEl.getBoundingClientRect().width;  // 解析失败兜底（如浏览器返回 used 值异常）
     dragWidthRef.current = startWidth;
     setDragWidth(startWidth);
     setResizing({ key, startX: e.clientX, startWidth });
@@ -388,20 +438,12 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     if (!resizing) return;
     const { key, startX, startWidth } = resizing;
 
-    // 可用空间上限：容器宽 - 行内边距/列间隙 - 名称列下限 - 其余列当前宽度
-    // （防止固定列总和超出容器后右缘被 overflow 裁剪）
-    const containerWidth = listAreaRef.current?.getBoundingClientRect().width;
-    let maxWidth: number | undefined;
-    if (containerWidth) {
-      const current = useSettingsStore.getState().fileManagerColumns ?? DEFAULT_COLUMN_WIDTHS;
-      const othersWidth = (Object.keys(current) as SortKey[])
-        .filter(k => k !== key && k !== "name" && current[k] !== null)
-        .reduce((sum, k) => sum + (current[k] as number), 0);
-      maxWidth = containerWidth - 48 - COLUMN_MIN_WIDTHS.name - othersWidth;
-    }
+    // 列宽不设上限（对齐 Explorer/Nautilus）：列总和超出容器后由 .fm-list 整体
+    // 横向滚动兜底（表头 sticky 顶部、与行同滚）。此前「上限=容器剩余空间」的约束
+    // 在列总和占满容器后会互相锁死所有列（无空白可吃，任何列都拖不大）。
 
     const handleMove = (e: MouseEvent) => {
-      const w = clampColumnWidth(key, startWidth + (e.clientX - startX), maxWidth);
+      const w = clampColumnWidth(key, startWidth + (e.clientX - startX));
       dragWidthRef.current = w;
       setDragWidth(w);
     };
@@ -597,18 +639,18 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       // 远程模式：使用服务端返回的真实家目录生成侧边栏
       const sections: SidebarSection[] = [
         {
-          title: "位置",
+          title: t("fileManager.location"),
           items: [
-            { icon: "🏠", label: "主目录", path: homeDir, type: "bookmark" },
-            { icon: "📄", label: "文档", path: `${homeDir}/Documents`, type: "bookmark" },
-            { icon: "⬇️", label: "下载", path: `${homeDir}/Downloads`, type: "bookmark" },
-            { icon: "🖼️", label: "图片", path: `${homeDir}/Pictures`, type: "bookmark" },
-            { icon: "🎵", label: "音乐", path: `${homeDir}/Music`, type: "bookmark" },
-            { icon: "🎬", label: "视频", path: `${homeDir}/Videos`, type: "bookmark" },
+            { icon: "🏠", label: t("fileManager.home"), path: homeDir, type: "bookmark" },
+            { icon: "📄", label: t("fileManager.documents"), path: `${homeDir}/Documents`, type: "bookmark" },
+            { icon: "⬇️", label: t("fileManager.downloads"), path: `${homeDir}/Downloads`, type: "bookmark" },
+            { icon: "🖼️", label: t("fileManager.pictures"), path: `${homeDir}/Pictures`, type: "bookmark" },
+            { icon: "🎵", label: t("fileManager.music"), path: `${homeDir}/Music`, type: "bookmark" },
+            { icon: "🎬", label: t("fileManager.videos"), path: `${homeDir}/Videos`, type: "bookmark" },
           ]
         },
         {
-          title: "设备",
+          title: t("fileManager.devices"),
           items: mounts.map(m => ({
             icon: "💾",
             label: m.mount_point,
@@ -617,9 +659,9 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
           }))
         },
         {
-          title: "其他位置",
+          title: t("fileManager.otherLocations"),
           items: [
-            { icon: "🌐", label: "网络", path: "/network", type: "network" }
+            { icon: "🌐", label: t("fileManager.network"), path: "/network", type: "network" }
           ]
         }
       ];
@@ -629,26 +671,26 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       // 离线模式：使用默认 Linux 侧边栏（保持 UI 结构一致）
       const sections: SidebarSection[] = [
         {
-          title: "位置",
+          title: t("fileManager.location"),
           items: [
-            { icon: "🏠", label: "主目录", path: "/home", type: "bookmark" },
-            { icon: "📄", label: "文档", path: "/home/Documents", type: "bookmark" },
-            { icon: "⬇️", label: "下载", path: "/home/Downloads", type: "bookmark" },
-            { icon: "🖼️", label: "图片", path: "/home/Pictures", type: "bookmark" },
-            { icon: "🎵", label: "音乐", path: "/home/Music", type: "bookmark" },
-            { icon: "🎬", label: "视频", path: "/home/Videos", type: "bookmark" },
+            { icon: "🏠", label: t("fileManager.home"), path: "/home", type: "bookmark" },
+            { icon: "📄", label: t("fileManager.documents"), path: "/home/Documents", type: "bookmark" },
+            { icon: "⬇️", label: t("fileManager.downloads"), path: "/home/Downloads", type: "bookmark" },
+            { icon: "🖼️", label: t("fileManager.pictures"), path: "/home/Pictures", type: "bookmark" },
+            { icon: "🎵", label: t("fileManager.music"), path: "/home/Music", type: "bookmark" },
+            { icon: "🎬", label: t("fileManager.videos"), path: "/home/Videos", type: "bookmark" },
           ]
         },
         {
-          title: "其他位置",
+          title: t("fileManager.otherLocations"),
           items: [
-            { icon: "🌐", label: "网络", path: "/network", type: "network" }
+            { icon: "🌐", label: t("fileManager.network"), path: "/network", type: "network" }
           ]
-        }
+        },
       ];
       setSidebarSections(sections);
     }
-  }, [activeServerId, username, homeDir, mounts, initialData]);
+  }, [activeServerId, username, homeDir, mounts, initialData, t]);
 
   // ── 断连即时响应 ─────────────────────────────────────
   // 当 activeServerId 从有值变为 null（断连），立即清空数据并显示离线占位符
@@ -771,7 +813,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         pathInputRef.current?.blur();
       } catch {
         // 路径不存在：弹窗提示，恢复为当前路径（正确格式）
-        setPathErrorDialog(`路径不存在: ${cleanPath}`);
+        setPathErrorDialog(t("fileManager.pathNotFound", { path: cleanPath }));
         // 同样通过失焦统一处理，blur handler 会将 pathInput 恢复为 currentPath
         pathInputRef.current?.blur();
       }
@@ -929,7 +971,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     const outcome = await openRemoteFile(activeServerId, fullPath, manager, entry.size);
     if (outcome.kind === 'error') {
       log.error('打开失败:', outcome.message);
-      alert(`打开失败: ${outcome.message}`);
+      pushNotification({ title: t("common.error"), body: t("fileManager.openFailed", { message: outcome.message }), source: t("fileManager.source"), urgency: "normal" });
     }
   }, [currentPath, navigateTo, manager, activeServerId]);
 
@@ -963,7 +1005,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   const applyProperties = useCallback(async () => {
     if (!propertiesEntry || permSaving) return;
     if (!activeServerId) {
-      setPermError("请先连接到远程服务器");
+      setPermError(t("fileManager.notConnected"));
       return;
     }
     const { modeChanged, ownerChanged } = permDirty;
@@ -980,7 +1022,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
           mode: matrixToOctal(permMatrix),
           recursive: permRecursive,
         });
-        if (!ok) { setPermError("修改权限失败"); return; }
+        if (!ok) { setPermError(t("fileManager.permChangeFailed")); return; }
       }
       if (ownerChanged) {
         const ok = await invoke<boolean>('remote_chown', {
@@ -990,17 +1032,17 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
           group: permGroup,
           recursive: permRecursive,
         });
-        if (!ok) { setPermError("修改所有者失败"); return; }
+        if (!ok) { setPermError(t("fileManager.ownerChangeFailed")); return; }
       }
       setPropertiesEntry(null);
       loadDir(currentPath);  // 成功：关闭对话框 + 刷新目录
     } catch (err) {
       log.error("应用属性失败:", err);
-      setPermError(String(err));
+      setPermError(formatUnknownError(err));
     } finally {
       setPermSaving(false);
     }
-  }, [propertiesEntry, activeServerId, currentPath, permMatrix, permOwner, permGroup, permRecursive, permSaving, permDirty, loadDir]);
+  }, [propertiesEntry, activeServerId, currentPath, permMatrix, permOwner, permGroup, permRecursive, permSaving, permDirty, loadDir, t]);
 
   // ── Script Run（右键菜单入口）：打开终端并注入命令 ────
   // 方案 1 设计：双击 .sh 一律编辑器查看；运行是显式意图（右键菜单选择），
@@ -1020,7 +1062,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   // ── File Operations ───────────────────────────────────
   const handleMkdir = useCallback(async () => {
     // 使用简单的 prompt（后续可以改为对话框）
-    const name = prompt("新建文件夹名称:");
+    const name = prompt(t("fileManager.promptNewFolder"));
     if (!name || name.trim() === "") return;
 
     // 构建新路径（Linux 格式）
@@ -1035,7 +1077,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       if (activeServerId) {
         await invoke("remote_mkdir", { serverId: activeServerId, path: newPath });
       } else {
-        alert("请先连接到远程服务器");
+        pushNotification({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
         return;
       }
 
@@ -1043,7 +1085,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       loadDir(currentPath);
     } catch (err) {
       log.error("mkdir 失败:", err);
-      alert(`创建文件夹失败: ${err}`);
+      pushNotification({ title: t("common.error"), body: t("fileManager.createFolderFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
     }
   }, [currentPath, activeServerId, loadDir]);
 
@@ -1086,7 +1128,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
           newPath
         });
       } else {
-        alert("请先连接到远程服务器");
+        pushNotification({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
         setEditingEntry(null);
         setEditingName("");
         return;
@@ -1096,7 +1138,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       loadDir(currentPath);
     } catch (err) {
       log.error("rename 失败:", err);
-      alert(`重命名失败: ${err}`);
+      pushNotification({ title: t("common.error"), body: t("fileManager.renameFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
     }
 
     // 清除编辑状态
@@ -1123,11 +1165,13 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     }
   }, [finishRename, cancelRename]);
 
-  const handleDelete = useCallback(async (entry: FileEntry) => {
-    // 使用简单的 confirm
-    const confirmed = confirm(`确定删除 "${entry.name}"?\n\n${entry.is_dir ? "这将删除文件夹及其所有内容。" : "此操作无法撤销。"}`);
-    if (!confirmed) return;
+  // ── 删除确认（应用内 ConfirmDialog，替代原生 confirm）────
+  // UI 入口（右键菜单）先 setDeleteTarget 打开确认弹窗，确认后才执行删除；
+  // 危险操作：红色警示图标 + 初始焦点在取消上（防回车误触）
+  const [deleteTarget, setDeleteTarget] = useState<FileEntry | null>(null);
 
+  // 执行删除（仅由 ConfirmDialog 确认回调调用）
+  const doDelete = useCallback(async (entry: FileEntry) => {
     // 构建路径（Linux 格式）
     const sep = "/";
     const path = currentPath === "/"
@@ -1140,7 +1184,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       if (activeServerId) {
         await invoke("remote_delete", { serverId: activeServerId, path });
       } else {
-        alert("请先连接到远程服务器");
+        pushNotification({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
         return;
       }
 
@@ -1148,7 +1192,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       loadDir(currentPath);
     } catch (err) {
       log.error("delete 失败:", err);
-      alert(`删除失败: ${err}`);
+      pushNotification({ title: t("common.error"), body: t("fileManager.deleteFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
     }
   }, [currentPath, activeServerId, loadDir]);
 
@@ -1161,7 +1205,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   // 新建文件夹
   const handleNewFolder = useCallback(async () => {
     setContextMenu(null);
-    const folderName = prompt("请输入文件夹名称：");
+    const folderName = prompt(t("fileManager.promptFolderName"));
     if (!folderName) return;
 
     const sep = "/";
@@ -1174,18 +1218,18 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         await invoke("remote_mkdir", { serverId: activeServerId, path: folderPath });
         loadDir(currentPath);
       } else {
-        alert("请先连接到远程服务器");
+        pushNotification({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
       }
     } catch (err) {
       log.error("mkdir 失败:", err);
-      alert(`创建文件夹失败: ${err}`);
+      pushNotification({ title: t("common.error"), body: t("fileManager.createFolderFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
     }
   }, [currentPath, activeServerId, loadDir]);
 
   // 新建文件
   const handleNewFile = useCallback(async () => {
     setContextMenu(null);
-    const fileName = prompt("请输入文件名称：");
+    const fileName = prompt(t("fileManager.promptFileName"));
     if (!fileName) return;
 
     const sep = "/";
@@ -1203,11 +1247,11 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         });
         loadDir(currentPath);
       } else {
-        alert("请先连接到远程服务器");
+        pushNotification({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
       }
     } catch (err) {
       log.error("new file 失败:", err);
-      alert(`创建文件失败: ${err}`);
+      pushNotification({ title: t("common.error"), body: t("fileManager.createFileFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
     }
   }, [currentPath, activeServerId, loadDir]);
 
@@ -1223,7 +1267,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
    */
   const uploadFileWithName = useCallback(async (localPath: string, fileName: string) => {
     if (!activeServerId) {
-      alert("请先连接到远程服务器");
+      pushNotification({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
       return;
     }
 
@@ -1242,18 +1286,18 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
 
       // 如果文件存在，询问用户是否覆盖
       if (fileInfo && fileInfo.exists) {
-        const size = fileInfo.size ? formatSize(fileInfo.size) : '未知';
+        const size = fileInfo.size ? formatSize(fileInfo.size) : t("fileManager.unknown");
         const mtime = fileInfo.mtime
           ? new Date(fileInfo.mtime * 1000).toLocaleString('zh-CN')
-          : '未知';
+          : t("fileManager.unknown");
 
         const confirmed = await ask(
-          `文件已存在：${fileName}\n\n大小：${size}\n修改时间：${mtime}\n\n是否覆盖？`,
+          t("fileManager.overwriteMessage", { name: fileName, size, mtime }),
           {
-            title: '确认覆盖',
+            title: t("fileManager.overwriteTitle"),
             kind: 'warning',
-            okLabel: '是',
-            cancelLabel: '否',
+            okLabel: t("fileManager.yes"),
+            cancelLabel: t("fileManager.no"),
           }
         );
 
@@ -1289,7 +1333,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
    */
   const uploadSingleFile = useCallback(async (localPath: string) => {
     if (!activeServerId) {
-      alert("请先连接到远程服务器");
+      pushNotification({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
       return;
     }
 
@@ -1321,7 +1365,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   const handleUpload = useCallback(async () => {
     // 检查是否有活跃服务器
     if (!activeServerId) {
-      alert("请先连接到远程服务器");
+      pushNotification({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
       return;
     }
 
@@ -1330,11 +1374,11 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       const selectedFiles = await open({
         multiple: true,  // 支持多选
         directory: false, // 选择文件（不是文件夹）
-        title: '选择要上传的文件',
+        title: t("fileManager.uploadTitle"),
         filters: [
-          { name: '所有文件', extensions: ['*'] },
-          { name: '文本文件', extensions: ['txt', 'md', 'json', 'toml', 'yaml', 'yml'] },
-          { name: '脚本文件', extensions: ['sh', 'py', 'js', 'ts', 'rs'] },
+          { name: t("fileManager.filterAllFiles"), extensions: ['*'] },
+          { name: t("fileManager.filterTextFiles"), extensions: ['txt', 'md', 'json', 'toml', 'yaml', 'yml'] },
+          { name: t("fileManager.filterScripts"), extensions: ['sh', 'py', 'js', 'ts', 'rs'] },
         ],
       });
 
@@ -1357,7 +1401,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       setContextMenu(null);
     } catch (err) {
       log.error('上传失败:', err);
-      alert(`上传失败: ${err}`);
+      pushNotification({ title: t("common.error"), body: t("fileManager.uploadFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
     }
   }, [activeServerId, uploadSingleFile]);
 
@@ -1369,7 +1413,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
    */
   const handleFilesDropped = useCallback(async (paths: string[]) => {
     if (!activeServerId) {
-      alert("请先连接到远程服务器");
+      pushNotification({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
       return;
     }
     if (paths.length === 0) return;
@@ -1383,7 +1427,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         if (!isFile) {
           const name = localPath.split(/[\\/]/).pop() || localPath;
           log.warn(`拖拽项不是文件，已跳过: ${name}`);
-          alert(`暂不支持上传文件夹：${name}\n\n请仅拖入文件。`);
+          pushNotification({ title: t("common.error"), body: t("fileManager.folderUploadUnsupported", { name }), source: t("fileManager.source"), urgency: "normal" });
           continue;
         }
         await uploadSingleFile(localPath);
@@ -1401,7 +1445,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   const handleUploadWithNewName = useCallback(async (localPath: string, newName: string) => {
     // 检查是否有活跃服务器
     if (!activeServerId) {
-      alert("请先连接到远程服务器");
+      pushNotification({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
       return;
     }
 
@@ -1412,7 +1456,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       setContextMenu(null);
     } catch (err) {
       log.error('上传失败:', err);
-      alert(`上传失败: ${err}`);
+      pushNotification({ title: t("common.error"), body: t("fileManager.uploadFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
     }
   }, [activeServerId, uploadFileWithName]);
 
@@ -1470,13 +1514,13 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   const handleDownload = useCallback(async (entry: FileEntry) => {
     // 检查是否有活跃服务器
     if (!activeServerId) {
-      alert("请先连接到远程服务器");
+      pushNotification({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
       return;
     }
 
     // 文件夹不能下载
     if (entry.is_dir) {
-      alert("暂不支持文件夹下载");
+      pushNotification({ title: t("common.error"), body: t("fileManager.folderDownloadUnsupported"), source: t("fileManager.source"), urgency: "normal" });
       return;
     }
 
@@ -1491,9 +1535,9 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       // 打开 Windows 保存对话框
       const localPath = await save({
         defaultPath: entry.name,  // 默认文件名
-        title: '保存文件',
+        title: t("fileManager.saveTitle"),
         filters: [
-          { name: '所有文件', extensions: ['*'] },
+          { name: t("fileManager.filterAllFiles"), extensions: ['*'] },
         ],
       });
 
@@ -1512,36 +1556,54 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       setContextMenu(null);
     } catch (err) {
       log.error('下载失败:', err);
-      alert(`下载失败: ${err}`);
+      pushNotification({ title: t("common.error"), body: t("fileManager.downloadFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
     }
   }, [activeServerId, currentPath]);
 
   // ── Context Menu ─────────────────────────────────────
-  // 智能计算右键菜单位置，紧贴鼠标右下角，避免超出屏幕边界
+  // 右键菜单锚点：鼠标右下方 +3 紧贴。
+  // 边界溢出的翻转校正在菜单挂载后按实测尺寸进行（见 ctxMenuRef 的
+  // useLayoutEffect）——菜单宽高随类型动态（min-width 180、菜单项可增减），
+  // 预先估尺寸不可靠，渲染后测量才精确
   const calculateMenuPosition = useCallback((mouseX: number, mouseY: number) => {
     const offset = 3;  // 距离鼠标的距离（紧贴）
-
-    // 简化：直接使用鼠标位置 + offset，不做边界检测
-    // 让 CSS 的 position: fixed 自动处理
-    const x = mouseX + offset;
-    const y = mouseY + offset;
-
-    return { x, y };
+    return { x: mouseX + offset, y: mouseY + offset };
   }, []);
+
+  // 菜单挂载后按实测尺寸校正位置：右/下溢出视口时翻转到鼠标左/上方
+  // （与 +3 锚点对称：翻转后菜单右/下缘贴鼠标左/上 3px）；
+  // 视口过窄两侧都放不下时钳到视口边。useLayoutEffect 在浏览器 paint 前同步执行，
+  // 校正不可见（无中间态闪烁），且任意菜单宽高（文件/空白菜单、条件项）都精确
+  useLayoutEffect(() => {
+    const el = ctxMenuRef.current;
+    if (!el || !contextMenu) return;
+    const MARGIN = 8;  // 距视口边缘最小留白（与表头下拉菜单钳制一致）
+    const w = el.offsetWidth, h = el.offsetHeight;
+    let { x, y } = contextMenu;
+    if (x + w > window.innerWidth - MARGIN) {
+      x = Math.max(MARGIN, x - w - 6);  // 6 = 两侧各 3px 锚点偏移
+    }
+    if (y + h > window.innerHeight - MARGIN) {
+      y = Math.max(MARGIN, y - h - 6);
+    }
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
+  }, [contextMenu]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent, entry: FileEntry, idx: number) => {
     e.preventDefault();
     e.stopPropagation();  // 阻止事件冒泡到父容器
 
+    const { x, y } = calculateMenuPosition(e.clientX, e.clientY);
     // 只有当前已选中该文件时，才显示文件菜单
     // 否则显示刷新菜单（和空白区域一样）
     if (selectedIdx === idx) {
-      setContextMenu({ x: e.clientX + 3, y: e.clientY + 3, type: 'file', entry });
+      setContextMenu({ x, y, type: 'file', entry });
     } else {
       // 未选中该文件，显示刷新菜单
-      setContextMenu({ x: e.clientX + 3, y: e.clientY + 3, type: 'empty' });
+      setContextMenu({ x, y, type: 'empty' });
     }
-  }, [selectedIdx]);
+  }, [selectedIdx, calculateMenuPosition]);
 
   // 空白区域右键菜单
   const handleEmptyContextMenu = useCallback((e: React.MouseEvent) => {
@@ -1576,6 +1638,12 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     // 如果正在编辑文件名，不处理任何键盘事件（编辑输入框会处理）
     if (editingEntry) return;
 
+    // 表头下拉菜单打开时：Esc 关闭，其余按键不透传（菜单为当前键盘焦点层）
+    if (headerMenu) {
+      if (e.key === "Escape") setHeaderMenu(null);
+      return;
+    }
+
     if (e.key === "Backspace") { e.preventDefault(); goUp(); }
     if (e.key === "Enter" && selectedIdx !== null) {
       handleOpen(visibleEntries[selectedIdx]);
@@ -1589,7 +1657,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       e.preventDefault();
       setSelectedIdx(prev => Math.max((prev ?? 0) - 1, 0));
     }
-  }, [visibleEntries, selectedIdx, goUp, handleOpen, editingEntry, isEditingPath]);
+  }, [visibleEntries, selectedIdx, goUp, handleOpen, editingEntry, isEditingPath, headerMenu]);
 
   // ── 监听上传完成事件 ─────────────────────────────────
   useEffect(() => {
@@ -1630,7 +1698,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         <div className="fm-drop-overlay">
           <div className="fm-drop-overlay-card">
             <div className="fm-drop-overlay-icon">⬆️</div>
-            <div className="fm-drop-overlay-title">释放以上传到当前目录</div>
+            <div className="fm-drop-overlay-title">{t("fileManager.dropToUpload")}</div>
             <div className="fm-drop-overlay-path">{currentPath}</div>
           </div>
         </div>
@@ -1642,7 +1710,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
           <div className="fm-sidebar">
             {sidebarSections.map((section, sectionIdx) => (
               <div key={sectionIdx} className="fm-sidebar-section">
-                <div className="fm-sidebar-section-title">{section.title}</div>
+                <div className="fm-sidebar-section-title">{section.titleKey ? t(section.titleKey) : section.title}</div>
                 {section.items.map((item, itemIdx) => (
                   <div
                     key={`${sectionIdx}-${itemIdx}`}
@@ -1650,7 +1718,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                     onClick={() => navigateTo(item.path)}
                   >
                     <span className="fm-si-icon">{item.icon}</span>
-                    <span className="fm-si-label">{item.label}</span>
+                    <span className="fm-si-label">{item.labelKey ? t(item.labelKey) : item.label}</span>
                   </div>
                 ))}
               </div>
@@ -1662,9 +1730,9 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
           <div className="fm-toolbar">
             {/* Navigation */}
             <div className="fm-toolbar-nav">
-              <button className="fm-toolbar-btn" onClick={goBack} disabled={historyIdx <= 0} title="后退">←</button>
-              <button className="fm-toolbar-btn" onClick={goForward} disabled={historyIdx >= history.length - 1} title="前进">→</button>
-              <button className="fm-toolbar-btn" onClick={goUp} title="上级目录">↑</button>
+              <button className="fm-toolbar-btn" onClick={goBack} disabled={historyIdx <= 0} title={t("fileManager.navBack")}>←</button>
+              <button className="fm-toolbar-btn" onClick={goForward} disabled={historyIdx >= history.length - 1} title={t("fileManager.navForward")}>→</button>
+              <button className="fm-toolbar-btn" onClick={goUp} title={t("fileManager.navUp")}>↑</button>
             </div>
 
             {/* Path Input */}
@@ -1714,7 +1782,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                 onFocus={handlePathInputFocus}
                 onBlur={handlePathInputBlur}
                 placeholder="/home"
-                title="输入路径并按 Enter 跳转"
+                title={t("fileManager.addressHint")}
               />
 
               {/* Suggestions Dropdown */}
@@ -1743,30 +1811,10 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
               <button
                 className="fm-toolbar-btn"
                 onClick={handleMkdir}
-                title="新建文件夹"
+                title={t("fileManager.newFolder")}
                 disabled={!activeServerId}
               >📁+</button>
-              <button className="fm-toolbar-btn" title="搜索">🔍</button>
-            </div>
-
-            {/* Dir/File Filter：目录/文件分段过滤（会话内不持久化，默认"全部"） */}
-            <div className="fm-toolbar-filter" role="group" aria-label="显示内容过滤">
-              {([
-                { key: "all", label: "全部" },
-                { key: "dirs", label: "文件夹" },
-                { key: "files", label: "文件" },
-              ] as { key: FilterMode; label: string }[]).map(seg => (
-                <button
-                  key={seg.key}
-                  className={`fm-seg-btn${filterMode === seg.key ? " active" : ""}`}
-                  onClick={() => {
-                    // 切换过滤清空选中：过滤后的可见索引与旧选中位不再对应
-                    setFilterMode(seg.key);
-                    setSelectedIdx(null);
-                  }}
-                  title={`仅显示${seg.label}`}
-                >{seg.label}</button>
-              ))}
+              <button className="fm-toolbar-btn" title={t("fileManager.search")}>🔍</button>
             </div>
 
             {/* View Toggle */}
@@ -1774,12 +1822,12 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
               <button
                 className={`fm-toolbar-btn ${viewMode === "list" ? "active" : ""}`}
                 onClick={() => setViewMode("list")}
-                title="列表视图"
+                title={t("fileManager.viewList")}
               >☰</button>
               <button
                 className={`fm-toolbar-btn ${viewMode === "grid" ? "active" : ""}`}
                 onClick={() => setViewMode("grid")}
-                title="网格视图"
+                title={t("fileManager.viewGrid")}
               >⊞</button>
             </div>
           </div>
@@ -1792,12 +1840,12 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
             <div className="offline-icon">
               <SymbolicIcon name="network-offline" size={32} />
             </div>
-            <div className="offline-title">无远程连接</div>
-            <div className="offline-desc">请先连接到远程服务器以浏览远程文件系统。</div>
+            <div className="offline-title">{t("fileManager.offlineTitle")}</div>
+            <div className="offline-desc">{t("fileManager.offlineDesc")}</div>
 
               {servers.length > 0 ? (
                 <div className="offline-servers">
-                  <div className="offline-servers-label">可用服务器</div>
+                  <div className="offline-servers-label">{t("fileManager.availableServers")}</div>
                   {servers.map((server) => (
                     <button
                       key={server.id}
@@ -1813,22 +1861,22 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                         <span className="osb-host">{server.host}:{server.port}</span>
                       </span>
                       <span className="osb-action">
-                        {server.status === "connecting" ? "连接中..." : "连接"}
+                        {server.status === "connecting" ? t("fileManager.connecting") : t("fileManager.connect")}
                       </span>
                     </button>
                   ))}
                 </div>
               ) : (
                 <div className="offline-no-servers">
-                  <span>暂无已配置的服务器</span>
-                  <span>请前往设置面板添加远程服务器</span>
+                  <span>{t("fileManager.noServers")}</span>
+                  <span>{t("fileManager.goAddServer")}</span>
                 </div>
               )}
             </div>
         ) : loading ? (
             <div className="fm-loading">
               <div className="spinner" />
-              加载中...
+              {t("common.loading")}
             </div>
           ) : error ? (
             <div className="fm-empty">
@@ -1842,17 +1890,19 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
               onClick={handleEmptyClick}
             >
               <div className="fm-empty-icon">{permissionDenied ? "🔒" : "📂"}</div>
-              <div className="fm-empty-text">{permissionDenied ? "无权限读取此目录内容" : "空目录"}</div>
+              <div className="fm-empty-text">{permissionDenied ? t("fileManager.noPermission") : t("fileManager.emptyDir")}</div>
             </div>
           ) : visibleEntries.length === 0 ? (
-            /* ── 过滤无匹配：目录非空，但当前过滤模式下无可见项 ── */
+            /* ── 筛选无匹配：目录非空，但当前列筛选下无可见项
+                  （无筛选时不可达：filterByColumnFilters 无勾选原样返回，
+                  真空目录由上面的 entries.length === 0 分支呈现）── */
             <div
               className="fm-empty"
               onContextMenu={handleEmptyContextMenu}
               onClick={handleEmptyClick}
             >
-              <div className="fm-empty-icon">{filterMode === "dirs" ? "📁" : "📄"}</div>
-              <div className="fm-empty-text">{filterMode === "dirs" ? "此目录下没有文件夹" : "此目录下没有文件"}</div>
+              <div className="fm-empty-icon">🔍</div>
+              <div className="fm-empty-text">{t("fileManager.noFilterMatch")}</div>
             </div>
           ) : viewMode === "list" ? (
             <div
@@ -1863,23 +1913,43 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
               {/* ✅ 表头固定（flex-shrink: 0），不参与滚动
                   点击列头翻转排序；列间手柄拖拽调宽（宽度经 --fm-cols 下发给表头与行） */}
               <div className="fm-list-header">
-                {FILE_COLUMNS.map(col => (
+                {FILE_COLUMNS.map(col => {
+                  // 该列筛选是否激活（name/size/mtime/type 有筛选区）：列头显示漏斗指示
+                  const filterActive = col.key === "size"
+                    ? columnFilters.size.length > 0
+                    : col.key === "mtime" ? columnFilters.mtime.length > 0
+                    : col.key === "name" ? columnFilters.name.length > 0
+                    : col.key === "type" ? columnFilters.type.length > 0 : false;
+                  return (
                   <span
                     key={col.key}
                     data-col={col.key}
-                    className={`fm-col-header${sortState.key === col.key ? " sorted" : ""}${resizing?.key === col.key ? " resizing" : ""}`}
+                    className={`fm-col-header${sortState.key === col.key ? " sorted" : ""}${resizing?.key === col.key ? " resizing" : ""}${headerMenu?.key === col.key ? " menu-open" : ""}${filterActive ? " filtered" : ""}`}
                     onClick={() => toggleSort(col.key)}
                     onMouseEnter={() => setHoveredCol(col.key)}
                     /* 拖拽调宽期间保持整列高亮（鼠标常会移出列头），结束时统一清理 */
                     onMouseLeave={() => { if (resizing?.key !== col.key) setHoveredCol(null); }}
                   >
-                    <span className="fm-col-label">{col.label}</span>
+                    <span className="fm-col-label">{t(col.labelKey)}</span>
                     {sortState.key === col.key && (
                       <SymbolicIcon
-                        name={sortState.dir === "asc" ? "pan-down" : "pan-up"}
+                        name={sortState.dir === "asc" ? "chevron-up" : "chevron-down"}
                         size={12}
                         className="fm-sort-indicator"
                       />
+                    )}
+                    {/* ▾ 下拉按钮：名称/大小/修改时间/类型列提供（可筛选），hover 列头浮现
+                        （Win11 Explorer 同款）；筛选激活时按钮常驻并显示漏斗图标
+                        （激活指示与入口合一，不再在文字后另放符号）；
+                        点击弹筛选菜单，不触发表头点击排序 */}
+                    {(col.key === "size" || col.key === "mtime" || col.key === "name" || col.key === "type") && (
+                      <button
+                        className="fm-col-menu-btn"
+                        title={t("fileManager.filter")}
+                        onClick={(e) => openHeaderMenu(e, col.key)}
+                      >
+                        <SymbolicIcon name={filterActive ? "funnel" : "chevron-down"} size={10} />
+                      </button>
                     )}
                     {col.key !== "perm" && (
                       <span
@@ -1889,7 +1959,8 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                       />
                     )}
                   </span>
-                ))}
+                  );
+                })}
               </div>
               {/* ✅ 文件列表滚动容器（flex: 1 + overflow-y: auto） */}
               <div
@@ -1949,6 +2020,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                     </div>
                     <span className="fm-file-size">{entry.is_dir ? "—" : formatSize(entry.size)}</span>
                     <span className="fm-file-mtime">{formatDate(entry.mtime)}</span>
+                    <span className="fm-file-type">{typeKeyLabel(typeKeyOf(entry))}</span>
                     <span className="fm-file-perm">{entry.permissions}</span>
                   </div>
                 ))}
@@ -2018,8 +2090,8 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       <div className="fm-statusbar">
         {/* 左侧：原有的文件数量、总大小信息 */}
         <div className="fm-statusbar-left">
-          <span>{isOffline ? `${PLACEHOLDER} 个文件夹, ${PLACEHOLDER} 个文件` : `${dirCount} 个文件夹, ${fileCount} 个文件`}</span>
-          <span>总大小: {isOffline ? PLACEHOLDER : formatSize(totalSize)}</span>
+          <span>{isOffline ? t("fileManager.dirFileCount", { dirs: PLACEHOLDER, files: PLACEHOLDER }) : t("fileManager.dirFileCount", { dirs: dirCount, files: fileCount })}</span>
+          <span>{t("fileManager.totalSize")} {isOffline ? PLACEHOLDER : formatSize(totalSize)}</span>
         </div>
 
         {/* 右侧：传输状态（新功能） */}
@@ -2028,9 +2100,48 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         </div>
       </div>
 
+      {/* Header Dropdown Menu - Win11 Explorer 风格列头下拉（列筛选），
+          Portal 渲染到 body：fixed 定位相对视口，不受滚动容器影响。
+          名称/大小/修改时间/类型列可打开（权限列无筛选区，不渲染下拉按钮） */}
+      {headerMenu && createPortal(
+        <div
+          className="fm-header-menu"
+          style={{ left: headerMenu.x, top: headerMenu.y }}
+          /* 菜单内点击（含复选框连续勾选）不冒泡到 window 的外部关闭监听 */
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* 筛选区：勾选为并集（OR），菜单保持打开可连续多选；全不勾 = 该列不过滤
+              名称=字母/拼音组、大小=区间组、时间=日期组、类型=当前目录动态清单
+              （类型桶按全量 entries 生成，不随其他列筛选跳变；按钮只在可筛选列渲染） */}
+          {(headerMenu.key === "size" ? SIZE_BUCKETS.map((b) => ({ key: b.key, label: t(b.labelKey) }))
+            : headerMenu.key === "mtime" ? MTIME_BUCKETS.map((b) => ({ key: b.key, label: t(b.labelKey) }))
+            : headerMenu.key === "type" ? listFileTypeBuckets(entries)
+            : NAME_BUCKETS.map((b) => ({ key: b.key, label: t(b.labelKey) }))).map(b => {
+            const checked = headerMenu.key === "size"
+              ? columnFilters.size.includes(b.key as SizeBucket)
+              : headerMenu.key === "mtime"
+                ? columnFilters.mtime.includes(b.key as MtimeBucket)
+                : headerMenu.key === "type"
+                  ? columnFilters.type.includes(b.key)
+                  : columnFilters.name.includes(b.key as NameBucket);
+            return (
+              <label key={b.key} className="fm-hm-check">
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => toggleColumnFilter(headerMenu.key, b.key)}
+                />
+                <span>{b.label}</span>
+              </label>
+            );
+          })}
+        </div>
+      , document.body)}
+
       {/* Context Menu - 使用 Portal 渲染到 body，确保 position: fixed 相对于视口 */}
       {contextMenu && createPortal(
         <div
+          ref={ctxMenuRef}
           className="fm-context-menu"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
@@ -2038,17 +2149,17 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
             // 文件/文件夹菜单
             <>
               <div className="fm-ctx-item" onClick={() => { handleOpen(contextMenu.entry!); setContextMenu(null); }}>
-                <span className="fm-ctx-icon">📂</span> 打开
+                <span className="fm-ctx-icon">📂</span> {t("fileManager.ctxOpen")}
               </div>
 
               {/* 脚本运行（仅 .sh 文件）：双击=编辑器查看（方案 1），运行收右键显式入口 */}
               {!contextMenu.entry!.is_dir && contextMenu.entry!.name.toLowerCase().endsWith('.sh') && (
                 <>
                   <div className="fm-ctx-item" onClick={() => { runScriptInTerminal(contextMenu.entry!, false); setContextMenu(null); }}>
-                    <span className="fm-ctx-icon">▶️</span> 在终端中运行
+                    <span className="fm-ctx-icon">▶️</span> {t("fileManager.ctxRunInTerminal")}
                   </div>
                   <div className="fm-ctx-item" onClick={() => { runScriptInTerminal(contextMenu.entry!, true); setContextMenu(null); }}>
-                    <span className="fm-ctx-icon">🛡️</span> 以 sudo 运行
+                    <span className="fm-ctx-icon">🛡️</span> {t("fileManager.ctxRunWithSudo")}
                   </div>
                 </>
               )}
@@ -2057,10 +2168,10 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
 
               {/* 文件操作 */}
               <div className="fm-ctx-item" onClick={() => { handleRename(contextMenu.entry!); setContextMenu(null); }}>
-                <span className="fm-ctx-icon">✏️</span> 重命名
+                <span className="fm-ctx-icon">✏️</span> {t("fileManager.ctxRename")}
               </div>
-              <div className="fm-ctx-item" onClick={() => { handleDelete(contextMenu.entry!); setContextMenu(null); }}>
-                <span className="fm-ctx-icon">🗑️</span> 删除
+              <div className="fm-ctx-item" onClick={() => { setDeleteTarget(contextMenu.entry!); setContextMenu(null); }}>
+                <span className="fm-ctx-icon">🗑️</span> {t("fileManager.ctxDelete")}
               </div>
 
               <div className="fm-ctx-separator" />
@@ -2075,7 +2186,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                 navigator.clipboard.writeText(path);
                 setContextMenu(null);
               }}>
-                <span className="fm-ctx-icon">📋</span> 复制路径
+                <span className="fm-ctx-icon">📋</span> {t("fileManager.ctxCopyPath")}
               </div>
 
               {/* 下载功能（仅文件） */}
@@ -2083,13 +2194,13 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                 <div className="fm-ctx-item" onClick={() => {
                   handleDownload(contextMenu.entry!);
                 }}>
-                  <span className="fm-ctx-icon">⬇️</span> 下载
+                  <span className="fm-ctx-icon">⬇️</span> {t("fileManager.ctxDownload")}
                 </div>
               )}
 
               <div className="fm-ctx-separator" />
               <div className="fm-ctx-item" onClick={() => { showProperties(contextMenu.entry!); setContextMenu(null); }}>
-                <span className="fm-ctx-icon">ℹ️</span> 属性
+                <span className="fm-ctx-icon">ℹ️</span> {t("fileManager.ctxProperties")}
               </div>
             </>
           )}
@@ -2098,19 +2209,19 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
             // 空白区域菜单
             <>
               <div className="fm-ctx-item" onClick={handleRefresh}>
-                <span className="fm-ctx-icon">🔄</span> 刷新
+                <span className="fm-ctx-icon">🔄</span> {t("fileManager.ctxRefresh")}
               </div>
               <div className="fm-ctx-separator" />
               <div className="fm-ctx-item" onClick={handleNewFolder}>
-                <span className="fm-ctx-icon">📁</span> 新建文件夹
+                <span className="fm-ctx-icon">📁</span> {t("fileManager.newFolder")}
               </div>
               <div className="fm-ctx-item" onClick={handleNewFile}>
-                <span className="fm-ctx-icon">📄</span> 新建文件
+                <span className="fm-ctx-icon">📄</span> {t("fileManager.ctxNewFile")}
               </div>
 
               {/* 上传功能 */}
               <div className="fm-ctx-item" onClick={handleUpload}>
-                <span className="fm-ctx-icon">⬆️</span> 上传文件
+                <span className="fm-ctx-icon">⬆️</span> {t("fileManager.ctxUpload")}
               </div>
             </>
           )}
@@ -2118,40 +2229,45 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         document.body
       )}
 
-      {/* Path Error Dialog — 路径不存在时弹窗提示（模态）- 使用 Portal */}
-      {pathErrorDialog && createPortal(
-        <div className="fm-path-error-overlay">
-          <div className="fm-path-error-dialog">
-            <div className="ped-header">
-              <span className="ped-icon">⚠️</span>
-              <span className="ped-title">路径不存在</span>
-            </div>
-            <div className="ped-message">{pathErrorDialog}</div>
-            <div className="ped-footer">
-              <button autoFocus onClick={() => setPathErrorDialog(null)}>确定</button>
-            </div>
-          </div>
-        </div>,
-        document.body
+      {/* 删除确认弹窗：危险操作（红色警示图标 + 焦点默认在取消上防回车误触） */}
+      {deleteTarget && (
+        <ConfirmDialog
+          title={t("fileManager.ctxDelete")}
+          message={t("fileManager.deleteConfirm", { name: deleteTarget.name })}
+          highlight={deleteTarget.name}
+          detail={deleteTarget.is_dir ? t("fileManager.deleteDetailDir") : t("fileManager.deleteDetailFile")}
+          confirmLabel={t("fileManager.ctxDelete")}
+          danger
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={() => { const target = deleteTarget; setDeleteTarget(null); doDelete(target); }}
+        />
       )}
 
-      {/* Rename Dialog - 文件名过长时弹窗重命名（模态）- 使用 Portal */}
-      {renameDialog && createPortal(
-        <div
-          className="fm-path-error-overlay"
-          onClick={(e) => e.stopPropagation()}
-          onKeyDown={(e) => e.stopPropagation()}
-          onKeyUp={(e) => e.stopPropagation()}
-          onKeyPress={(e) => e.stopPropagation()}
-        >
-          <div className="fm-rename-dialog">
-            <div className="rd-header">
-              <span className="rd-icon">📝</span>
-              <span className="rd-title">文件名过长，请重命名</span>
-            </div>
+      {/* Path Error Dialog — 路径不存在时弹窗提示（统一弹窗底座） */}
+      {pathErrorDialog && (
+        <Dialog onClose={() => setPathErrorDialog(null)}>
+          <div className="dg-title">{t("fileManager.pathErrorTitle")}</div>
+          <div className="dg-message">{pathErrorDialog}</div>
+          <div className="dg-actions">
+            <button className="dg-btn-primary" autoFocus onClick={() => setPathErrorDialog(null)}>{t("common.confirm")}</button>
+          </div>
+        </Dialog>
+      )}
+
+      {/* Rename Dialog - 文件名过长时弹窗重命名（统一弹窗底座）。
+          事件 stopPropagation 防止按键冒泡到列表快捷键（原行为保留） */}
+      {renameDialog && (
+        <Dialog onClose={() => setRenameDialog(null)} width={480}>
+          <div
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
+            onKeyUp={(e) => e.stopPropagation()}
+            onKeyPress={(e) => e.stopPropagation()}
+          >
+            <div className="dg-title">{t("fileManager.renameTitle")}</div>
             <div className="rd-content">
               <div className="rd-original">
-                <div className="rd-label">原始文件名：</div>
+                <div className="rd-label">{t("fileManager.renameOriginal")}</div>
                 <div className="rd-original-name">
                   {renameDialog.originalName.length > 60
                     ? renameDialog.originalName.substring(0, 60) + '...'
@@ -2159,7 +2275,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                 </div>
               </div>
               <div className="rd-input-section">
-                <div className="rd-label">新文件名：</div>
+                <div className="rd-label">{t("fileManager.renameNew")}</div>
                 <input
                   ref={renameInputRef}
                   type="text"
@@ -2184,14 +2300,10 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                         handleUploadWithNewName(renameDialog.localPath, renameDialog.newName.trim());
                       }
                     }
-                    // Escape 键取消
-                    if (e.key === 'Escape') {
-                      setRenameDialog(null);
-                    }
                   }}
                   onKeyUp={(e) => e.stopPropagation()}
                   onKeyPress={(e) => e.stopPropagation()}
-                  placeholder="请输入新文件名"
+                  placeholder={t("fileManager.renamePlaceholder")}
                   autoFocus
                 />
               </div>
@@ -2204,22 +2316,20 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                   return (
                     <span className={isValid ? 'rd-byte-valid' : 'rd-byte-invalid'}>
                       {isValid ? (
-                        <>剩余 {remaining} 字节</>
+                        <>{t("fileManager.renameBytesRemaining", { count: remaining })}</>
                       ) : (
-                        <>超出 {Math.abs(remaining)} 字节</>
+                        <>{t("fileManager.renameBytesOver", { count: Math.abs(remaining) })}</>
                       )}
-                      <span className="rd-byte-hint">（当前 {currentBytes} / 最大 {renameDialog.maxBytes} 字节）</span>
+                      <span className="rd-byte-hint">{t("fileManager.renameByteHint", { current: currentBytes, max: renameDialog.maxBytes })}</span>
                     </span>
                   );
                 })()}
               </div>
             </div>
-            <div className="rd-footer">
-              <button className="rd-btn-cancel" onClick={() => setRenameDialog(null)}>
-                取消
-              </button>
+            <div className="dg-actions">
+              <button className="dg-btn" onClick={() => setRenameDialog(null)}>{t("common.cancel")}</button>
               <button
-                className="rd-btn-confirm"
+                className="dg-btn-primary"
                 disabled={new TextEncoder().encode(renameDialog.newName).length > renameDialog.maxBytes || renameDialog.newName.trim() === ''}
                 onClick={() => {
                   const newName = renameDialog.newName.trim();
@@ -2231,12 +2341,11 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                   }
                 }}
               >
-                确定
+                {t("common.confirm")}
               </button>
             </div>
           </div>
-        </div>,
-        document.body
+        </Dialog>
       )}
 
       {/* Properties Dialog - 使用 Portal（分页：常规=只读信息 / 权限=可编辑 chmod+chown） */}
@@ -2261,9 +2370,9 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                 className={`pd-tab ${permTab === 'general' ? 'pd-tab-active' : ''}`}
                 onClick={() => setPermTab('general')}
               >
-                常规
+                {t("fileManager.propsTabGeneral")}
                 {/* 权限页有未保存更改时，常规页标题旁给出徽标提示 */}
-                {permTab === 'general' && permHasChanges && <span className="pd-tab-badge" title="有未保存的更改" />}
+                {permTab === 'general' && permHasChanges && <span className="pd-tab-badge" title={t("fileManager.propsUnsavedBadge")} />}
               </button>
               <button
                 role="tab"
@@ -2271,8 +2380,8 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                 className={`pd-tab ${permTab === 'permissions' ? 'pd-tab-active' : ''}`}
                 onClick={() => setPermTab('permissions')}
               >
-                权限
-                {permTab !== 'permissions' && permHasChanges && <span className="pd-tab-badge" title="有未保存的更改" />}
+                {t("fileManager.propsTabPermissions")}
+                {permTab !== 'permissions' && permHasChanges && <span className="pd-tab-badge" title={t("fileManager.propsUnsavedBadge")} />}
               </button>
             </div>
 
@@ -2280,59 +2389,59 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
               {permTab === 'general' ? (<>
                 {/* ── 常规页：只读信息 ── */}
                 <div className="pd-row">
-                  <span className="pd-label">类型:</span>
-                  <span className="pd-value">{propertiesEntry.is_dir ? "文件夹" : "文件"}</span>
+                  <span className="pd-label">{t("fileManager.propsType")}</span>
+                  <span className="pd-value">{propertiesEntry.is_dir ? t("fileManager.propsFolder") : t("fileManager.propsFile")}</span>
                 </div>
                 <div className="pd-row">
-                  <span className="pd-label">位置:</span>
+                  <span className="pd-label">{t("fileManager.propsLocation")}</span>
                   {/* 完整路径（等宽字体，可选中复制） */}
                   <span className="pd-value pd-location">
                     {currentPath === '/' ? `/${propertiesEntry.name}` : `${currentPath}/${propertiesEntry.name}`}
                   </span>
                 </div>
                 <div className="pd-row">
-                  <span className="pd-label">大小:</span>
+                  <span className="pd-label">{t("fileManager.propsSize")}</span>
                   <span className="pd-value">{formatSize(propertiesEntry.size)}</span>
                 </div>
                 <div className="pd-row">
-                  <span className="pd-label">修改时间:</span>
+                  <span className="pd-label">{t("fileManager.propsModified")}</span>
                   <span className="pd-value">{formatDate(propertiesEntry.mtime)}</span>
                 </div>
                 {/* 访问控制速览（当前服务器状态；编辑请切到「权限」页） */}
                 <div className="pd-row">
-                  <span className="pd-label">权限:</span>
+                  <span className="pd-label">{t("fileManager.propsPermissions")}</span>
                   <span className="pd-value pd-mono">
                     {propertiesEntry.permissions || "—"}
-                    {permDirty.modeChanged && <span className="pd-badge-dirty">未保存</span>}
+                    {permDirty.modeChanged && <span className="pd-badge-dirty">{t("fileManager.propsUnsaved")}</span>}
                   </span>
                 </div>
                 <div className="pd-row">
-                  <span className="pd-label">所有者:</span>
+                  <span className="pd-label">{t("fileManager.propsOwner")}</span>
                   <span className="pd-value pd-mono">
                     {propertiesEntry.owner || propertiesEntry.group
                       ? `${propertiesEntry.owner || "—"}:${propertiesEntry.group || "—"}`
                       : "—"}
-                    {permDirty.ownerChanged && <span className="pd-badge-dirty">未保存</span>}
+                    {permDirty.ownerChanged && <span className="pd-badge-dirty">{t("fileManager.propsUnsaved")}</span>}
                   </span>
                 </div>
-                <div className="pd-hint">如需修改权限或所有者，请切换到「权限」页</div>
+                <div className="pd-hint">{t("fileManager.propsGeneralHint")}</div>
               </>) : (<>
                 {/* ── 权限页：可编辑（chmod + chown） ── */}
                 {/* 快捷预设：一键填充矩阵（目录/文件各一组常用值） */}
                 <div className="pd-preset-row">
-                  <span className="pd-preset-label">预设:</span>
+                  <span className="pd-preset-label">{t("fileManager.propsPreset")}</span>
                   {(propertiesEntry.is_dir
-                    ? [{ mode: 0o755, label: "755 标准" }, { mode: 0o700, label: "700 私有" }]
-                    : [{ mode: 0o644, label: "644 标准" }, { mode: 0o600, label: "600 私有" }, { mode: 0o444, label: "444 只读" }]
+                    ? [{ mode: 0o755, key: "preset755", hintKey: "presetHintStandard" }, { mode: 0o700, key: "preset700", hintKey: "presetHintPrivate" }]
+                    : [{ mode: 0o644, key: "preset644", hintKey: "presetHintStandard" }, { mode: 0o600, key: "preset600", hintKey: "presetHintPrivate" }, { mode: 0o444, key: "preset444", hintKey: "presetHintReadonly" }]
                   ).map(p => (
                     <button
-                      key={p.label}
+                      key={p.key}
                       className="pd-preset-btn"
                       disabled={permSaving}
-                      title={`将权限设置为 ${p.label.split(' ')[0]}（${p.label.includes('标准') ? '通用安全默认值' : p.label.includes('私有') ? '仅所有者可访问' : '任何人不可写'}）`}
+                      title={t("fileManager.presetApply", { mode: p.mode.toString(8), hint: t(`fileManager.${p.hintKey}`) })}
                       onClick={() => setPermMatrix(parsePermissions(octalToPermString(p.mode)))}
                     >
-                      {p.label}
+                      {t(`fileManager.${p.key}`)}
                     </button>
                   ))}
                 </div>
@@ -2341,17 +2450,17 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                 <div className="pd-perm">
                   <div className="pd-perm-grid">
                     <span className="pd-perm-head" />
-                    {["读取", "写入", "执行"].map(col => (
-                      <span key={col} className="pd-perm-head">{col}</span>
+                    {(["permRead", "permWrite", "permExecute"] as const).map(colKey => (
+                      <span key={colKey} className="pd-perm-head">{t(`fileManager.${colKey}`)}</span>
                     ))}
-                    {(["所有者", "组", "其他"] as const).map((rowLabel, r) => (
-                      <React.Fragment key={rowLabel}>
-                        <span className="pd-perm-rowlabel">{rowLabel}</span>
+                    {(["permOwnerRow", "permGroupRow", "permOthersRow"] as const).map((rowKey, r) => (
+                      <React.Fragment key={rowKey}>
+                        <span className="pd-perm-rowlabel">{t(`fileManager.${rowKey}`)}</span>
                         {[0, 1, 2].map(c => (
                           <label key={c} className="pd-perm-cell">
                             <input
                               type="checkbox"
-                              aria-label={`${rowLabel}${["读取", "写入", "执行"][c]}`}
+                              aria-label={`${t(`fileManager.${rowKey}`)} ${t(`fileManager.${(["permRead", "permWrite", "permExecute"] as const)[c]}`)}`}
                               checked={permMatrix[r][c]}
                               disabled={permSaving}
                               onChange={() => setPermMatrix(prev => {
@@ -2375,7 +2484,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                 {/* 所有者区：owner / group 文本输入（初值 entry.owner/entry.group，缺失回退 "—" 占位） */}
                 <div className="pd-owner-row">
                   <label className="pd-owner-field">
-                    <span className="pd-owner-label">所有者</span>
+                    <span className="pd-owner-label">{t("fileManager.permOwnerRow")}</span>
                     <input
                       className="pd-input"
                       value={permOwner}
@@ -2385,7 +2494,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                     />
                   </label>
                   <label className="pd-owner-field">
-                    <span className="pd-owner-label">组</span>
+                    <span className="pd-owner-label">{t("fileManager.propsGroup")}</span>
                     <input
                       className="pd-input"
                       value={permGroup}
@@ -2395,7 +2504,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                     />
                   </label>
                 </div>
-                <div className="pd-hint">修改所有者为其他用户需要 root 权限</div>
+                <div className="pd-hint">{t("fileManager.ownerRootHint")}</div>
 
                 {/* 仅目录：递归应用 */}
                 {propertiesEntry.is_dir && (
@@ -2406,7 +2515,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                       disabled={permSaving}
                       onChange={e => setPermRecursive(e.target.checked)}
                     />
-                    应用到子文件和文件夹
+                    {t("fileManager.propsRecursive")}
                   </label>
                 )}
               </>)}
@@ -2414,11 +2523,11 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
             {/* 内联错误（Adwaita error 红），请求失败时不关闭对话框 */}
             {permError && <div className="pd-error">{permError}</div>}
             <div className="pd-footer">
-              <button className="pd-btn" disabled={permSaving} onClick={() => setPropertiesEntry(null)}>关闭</button>
+              <button className="pd-btn" disabled={permSaving} onClick={() => setPropertiesEntry(null)}>{t("fileManager.close")}</button>
               {/* 「应用」仅权限页显示；无更改时禁用（避免无意义请求） */}
               {permTab === 'permissions' && (
                 <button className="pd-btn-primary" disabled={permSaving || !permHasChanges} onClick={applyProperties}>
-                  {permSaving ? "应用中..." : "应用"}
+                  {permSaving ? t("fileManager.applying") : t("fileManager.apply")}
                 </button>
               )}
             </div>

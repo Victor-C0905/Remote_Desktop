@@ -5,6 +5,7 @@
  * 不直接创建窗口（窗口创建属于 FileManager 的职责，保持网关层纯逻辑可测试）。
  */
 import { invoke } from '@tauri-apps/api/core';
+import i18n from '../i18n';
 import { FileFormatRegistry } from './registry';
 import { pdfPlugin } from './plugins/pdf';
 import { archivePlugin } from './plugins/archive';
@@ -71,7 +72,7 @@ export function decideOpenTarget(info: RemoteFileInfo, registry: FileFormatRegis
 
   if (match === null) {
     // 未知格式回退：十六进制查看器（对齐原设计"HexViewer fallback"）
-    return { kind: 'hex', needsSizeConfirm: false, reason: `未知格式（扩展名 .${info.extension || '无'}）` };
+    return { kind: 'hex', needsSizeConfirm: false, reason: i18n.t('fileOpener.unknownFormat', { ext: info.extension || i18n.t('fileOpener.noExtension') }) };
   }
 
   // archive 无大小确认（解压结果大小不可预知）

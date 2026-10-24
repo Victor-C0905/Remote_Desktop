@@ -3,7 +3,7 @@
 // 此文件仅保留 re-export，维持既有 `crate::protocol::serde::Payload` 等引用路径不变
 pub use quirel_protocol::{
     Envelope, Payload, SubscriptionType,
-    MetricsSnapshot, DiskInfo, MountInfo, FileEntry,
+    MetricsSnapshot, DiskInfo, MountInfo, FileEntry, ProcessEntry,
     FileDiff, DiffType,
     AuthStatsSnapshot, ConnectionStatsSnapshot, PerformanceStatsSnapshot,
     ResponseTimePercentiles, StatsResponse,

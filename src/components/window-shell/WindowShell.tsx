@@ -13,6 +13,20 @@ import {
 } from './aeroSnap';
 import styles from './WindowShell.module.css';
 
+/**
+ * 窗口拖拽状态广播事件：拖拽时 DOM 走 transform 即时位移，而 child-HWND 类
+ * 内容（浏览器 webview）的 bounds 经 gBCR→invoke→runtime→SetBounds 链路更新
+ * （百毫秒级滞后），不隐藏会"画面与窗口分离"。监听方（BrowserApp）按
+ * detail.windowId 过滤，拖拽期间自行隐藏 webview。
+ */
+export const WINDOW_DRAG_EVENT = 'quirel-window-drag';
+
+function broadcastWindowDrag(windowId: string, dragging: boolean) {
+  window.dispatchEvent(
+    new CustomEvent(WINDOW_DRAG_EVENT, { detail: { windowId, dragging } }),
+  );
+}
+
 export interface WindowShellProps {
   // 窗口属性 (由 Desktop 提供)
   windowId: string;
@@ -21,6 +35,11 @@ export interface WindowShellProps {
   position: { x: number; y: number };
   size: { width: number; height: number };
   // ✅ 删除 zIndex prop，改用 CSS 固定规则
+  // zIndex（可选）：非激活窗口的层叠序。内联样式优先级高于 CSS 类，
+  // 仅在非激活时传入（激活窗口传 undefined，走 .windowShellActive 的 30）。
+  // 用于 MRU 层叠：按激活历史排名计算（20+rank），DOM 顺序保持创建顺序，
+  // 避免重排 React children 数组（曾引发窗口内容重载，见 WindowManagerContext 回退注释）。
+  zIndex?: number;
   isMinimized?: boolean;
   isMaximized?: boolean; // ✅ 新增：最大化状态
   // ✅ Aero Snap 新增 props（由 Desktop 注入）
@@ -74,7 +93,7 @@ export function WindowShell({
   isActive,
   position,
   size,
-  // ✅ 删除 zIndex prop，改用 CSS 固定规则
+  zIndex, // 可选：非激活窗口层叠序（内联覆盖 CSS 的 20；激活窗口传 undefined 走 CSS 的 30）
   isMinimized = false,
   isMaximized = false, // ✅ 新增：最大化状态
   // ✅ Aero Snap 新增 props
@@ -115,6 +134,7 @@ export function WindowShell({
   //    mousedown 只记录起点,由 mousemove 检测到拖动(超过 3px 阈值)后才执行 tear-off。
   const mousedownPosRef = useRef({ x: 0, y: 0 });  // mousedown 的 client 坐标(阈值判断)
   const tornOffRef = useRef(false);               // 当前拖拽是否已执行 tear-off
+  const dragBroadcastRef = useRef(false);         // 本次拖拽是否已广播"拖拽开始"（首次实际移动才广播）
 
   // ── Resize 状态 ──────────────────────────────────────
   const [isResizing, setIsResizing] = useState(false);
@@ -141,55 +161,49 @@ export function WindowShell({
     return () => clearTimeout(timer);
   }, []);
 
-  // ── 拖拽开始 ────────────────────────────────────────
-  // 只在 standard 模式下通过 HeaderBar 拖拽
-  // frameless 模式下应用自己实现拖拽（通过回调API）
-  // ✅ Windows 11 风格:从最大化/snap 状态按下标题栏 → 立即还原 + 跟随光标
-  const handleDragStart = useCallback(
-    (e: React.MouseEvent) => {
-      if (mode === 'frameless') return;
-
-      e.preventDefault();
-      e.stopPropagation();
-      onFocus();
-
-      // ✅ Windows 行为:tear-off 只在真正拖动(mousemove 超过 3px 阈值)时发生,
-      //    单纯点击标题栏(不拖动)不还原 snap/maximize 状态。
-      //    mousedown 只记录起点;由 handleMouseMove 检测到拖动后才执行 tear-off 还原。
-      mousedownPosRef.current = { x: e.clientX, y: e.clientY };
-      tornOffRef.current = false;
-
-      // 记录拖拽偏移(普通窗口用;maximized/snap 窗口在 tear-off 时会重算 dragStartPos)
-      const currentState = windowStateRef.current;
-      dragStartPos.current = {
-        x: e.clientX - currentState.x,
-        y: e.clientY - currentState.y,
-      };
-
-      setIsDragging(true);
-    },
-    [onFocus, mode],
-  );
-
-  // ── 双击标题栏最大化（Adwaita 标准）────────────────────
-  const handleHeaderBarDoubleClick = useCallback(
-    (e: React.MouseEvent) => {
-      // frameless 模式下，不处理双击
-      if (mode === 'frameless') return;
-
-      // ✅ Adwaita 标准：双击 HeaderBar 触发最大化/取消最大化
-      e.preventDefault();
-      e.stopPropagation();
-      onMaximize();
-    },
-    [mode, onMaximize]
-  );
+  // ── 开窗动画归位后的 resize 补偿 ──────────────────────
+  // 开窗动画用 transform scale(0.96→1)。任何在缩放期间做 gBCR 测量的子组件
+  // 都会拿到缩水 4% 的宽度，且归位后布局盒不再变化、无法自行重算——页签引擎
+  // （@sinm/react-chrome-tabs）正是如此：getTabsWidth() 用 gBCR 记账页签总宽
+  // 写入 content div，之后不再重算，页签布局与 + 按钮定位被冻结在 96%，
+  // 直到第一次新增页签才恢复。scale 归位后补发一次 window resize，让引擎
+  // （监听 resize → layoutTabs）按真实尺寸重排；其余 resize 监听方读到的
+  // 都是当前布局，幂等无副作用。
+  // 触发：本窗口容器 transform 过渡结束（transitionend，精确）；另设 650ms
+  // 兜底定时器（翻转发生在 200ms，transform 过渡 300ms，500ms 归位；
+  // reduced-motion 等场景 transitionend 可能不触发）
+  useEffect(() => {
+    if (isOpening) return;
+    let done = false;
+    const fire = () => {
+      if (done) return;
+      done = true;
+      window.dispatchEvent(new Event('resize'));
+    };
+    const el = windowRef.current;
+    const onEnd = (e: TransitionEvent) => {
+      if (e.target === el && e.propertyName === 'transform') fire();
+    };
+    el?.addEventListener('transitionend', onEnd);
+    const fallback = setTimeout(fire, 650);
+    return () => {
+      el?.removeEventListener('transitionend', onEnd);
+      clearTimeout(fallback);
+    };
+  }, [isOpening]);
 
   // ── 拖拽移动（使用 requestAnimationFrame 优化性能）────
   useEffect(() => {
     if (!isDragging) return;
 
     const handleMouseMove = (e: MouseEvent) => {
+      // 首次实际移动才广播"拖拽开始"：mousedown 即广播会让点击标题栏
+      // （未移动）也触发 webview 隐藏→显示一轮 IPC，造成无谓闪隐
+      if (!dragBroadcastRef.current) {
+        dragBroadcastRef.current = true;
+        broadcastWindowDrag(windowId, true);
+      }
+
       // ✅ Aero Snap tear-off 时机(对齐 Windows):
       //    只有真正拖动(mousemove 超过 3px 阈值)才从 maximized/snap 状态撕下还原,
       //    单纯点击标题栏(未移动)不还原,窗口保持 snap/maximize 状态。
@@ -371,6 +385,10 @@ export function WindowShell({
         }
 
         setIsDragging(false);
+        if (dragBroadcastRef.current) {
+          dragBroadcastRef.current = false;
+          broadcastWindowDrag(windowId, false);
+        }
         return;  // 不走普通拖拽结束逻辑
       }
 
@@ -383,6 +401,10 @@ export function WindowShell({
 
       // 拖拽结束时，更新 state（触发一次重渲染）
       setIsDragging(false);
+      if (dragBroadcastRef.current) {
+        dragBroadcastRef.current = false;
+        broadcastWindowDrag(windowId, false);
+      }
 
       // ✅ 统一状态管理：同步位置到 Desktop
       if (onPositionChange) {
@@ -404,7 +426,7 @@ export function WindowShell({
         rafIdRef.current = null;
       }
     };
-  }, [isDragging, size, position, snapZone, preMaximizeState, preSnapState, isOpening, onSnap, onMaximize, onUnsnap, onPositionChange, onSizeChange]); // ✅ tear-off 在 mousemove 使用 position/snapZone/preState,变化时需重绑定
+  }, [isDragging, size, position, snapZone, preMaximizeState, preSnapState, isOpening, onSnap, onMaximize, onUnsnap, onPositionChange, onSizeChange, windowId]); // ✅ tear-off 在 mousemove 使用 position/snapZone/preState,变化时需重绑定;windowId 用于拖拽广播
 
   // ── Resize 开始 ──────────────────────────────────────
   // ✅ 最大化状态下禁用 resize
@@ -555,12 +577,59 @@ export function WindowShell({
   }, [isResizing, resizeDirection, onPositionChange, onSizeChange, isOpening]); // ✅ 添加 isOpening
 
   const windowRef = useRef<HTMLDivElement>(null);
+  const headerRef = useRef<HTMLDivElement>(null);
 
   // ── 窗口聚焦（点击窗口任意区域）──────────────────────
-  const handleWindowMouseDown = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    onFocus();
-  };
+  // ✅ 用原生监听而非 React onMouseDown：portal 进标题栏的应用内容
+  //    （如编辑器页签条）的事件沿 DOM 树冒泡，沿 React 树冒泡到不了这里
+  useEffect(() => {
+    const el = windowRef.current;
+    if (!el) return;
+    const onDown = () => {
+      // 注意：这里不能 stopPropagation——会切断事件到达 React 委托根，
+      // 导致窗口内所有 React onMouseDown（缩放把手等）失效
+      onFocus();
+    };
+    el.addEventListener('mousedown', onDown);
+    return () => el.removeEventListener('mousedown', onDown);
+  }, [onFocus]);
+
+  // ── 标题栏拖拽/双击最大化：原生监听（理由同上）────────
+  useEffect(() => {
+    if (mode === 'frameless') return;
+    const el = headerRef.current;
+    if (!el) return;
+
+    const onDown = (e: MouseEvent) => {
+      // 点在控制按钮（红绿灯）或页签上不启动窗口拖拽
+      // （页签有自己的拖拽排序，两者不能同时进行）
+      const target = e.target as Element;
+      if (target.closest?.('button') || target.closest?.('.chrome-tab')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      onFocus();
+      mousedownPosRef.current = { x: e.clientX, y: e.clientY };
+      tornOffRef.current = false;
+      const currentState = windowStateRef.current;
+      dragStartPos.current = {
+        x: e.clientX - currentState.x,
+        y: e.clientY - currentState.y,
+      };
+      setIsDragging(true);
+    };
+    const onDbl = (e: MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      onMaximize();
+    };
+
+    el.addEventListener('mousedown', onDown);
+    el.addEventListener('dblclick', onDbl);
+    return () => {
+      el.removeEventListener('mousedown', onDown);
+      el.removeEventListener('dblclick', onDbl);
+    };
+  }, [mode, onFocus, onMaximize]);
 
   // ── Aero Snap 预览渲染（通过 Portal 渲染到 body，避免被父级 transform/overflow 影响）──
   const snapPreviewNode = snapPreview ? createPortal(
@@ -588,6 +657,8 @@ export function WindowShell({
         width: size.width,
         height: size.height,
         display: isMinimized ? 'none' : 'flex',
+        // 层叠：非激活窗口用激活历史排名（20+rank），激活窗口 undefined 走 CSS 30
+        zIndex,
         transform: `translate(${position.x}px, ${position.y}px) scale(${isOpening ? 0.96 : 1})`,
         willChange: isDragging ? 'transform' : 'auto',
         opacity: isOpening ? 0 : 1,
@@ -597,18 +668,24 @@ export function WindowShell({
             ? 'opacity 0.2s ease-out'
             : 'opacity 0.2s ease-out, transform 300ms cubic-bezier(0.25, 0, 0, 1), width 300ms cubic-bezier(0.25, 0, 0, 1), height 300ms cubic-bezier(0.25, 0, 0, 1)',
       }}
-      onMouseDown={handleWindowMouseDown}
     >
       {/* ── HeaderBar - 窗口标题栏（由 Shell 提供）────────── */}
       {/* standard 模式：显示标准 HeaderBar + WindowControls */}
       {/* frameless 模式：不显示 HeaderBar，应用自己实现控制按钮 */}
       {mode === 'standard' && (
         <div
+          ref={headerRef}
           className={styles.windowHeaderBar}
-          onMouseDown={handleDragStart}
-          onDoubleClick={handleHeaderBarDoubleClick}
         >
           <div className={styles.windowTitle}>{title}</div>
+          {/* 应用注入槽位：应用可将自定义内容（如 Chrome 式标签条）portal 到此。
+              槽位内有内容时标题自动隐藏（CSS :has）。
+              槽位空白区域仍可拖拽窗口/双击最大化；
+              交互元素（页签/菜单）自行阻止双击冒泡。 */}
+          <div
+            className={styles.windowHeaderSlot}
+            data-titlebar-slot={windowId}
+          />
           <WindowControls onClose={onClose} onMinimize={onMinimize} onMaximize={onMaximize} />
         </div>
       )}

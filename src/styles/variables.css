@@ -19,6 +19,7 @@
   --quirel-card-bg:        #faf5f3;      /* RGB(250,245,243) - 卡片背景（最浅） */
   --quirel-card-hover:     #ebe5d9;      /* RGB(235,229,217) - 卡片悬停（较深） */
   --quirel-headerbar-bg:   #f5f0e6;      /* RGB(245,240,230) - HeaderBar（中等） */
+  --quirel-terminal-bg:    #1e1e1e;      /* 终端表面（xterm 画布同色）；Chrome 页签 dark 变体与其无缝融合 */
   --quirel-sidebar-bg:     #f5f0e6;      /* RGB(245,240,230) - 侧边栏（中等） */
   --quirel-sidebar-fg:     #3f3f3f;
   --quirel-sidebar-border: #d5d0c4;      /* RGB(213,208,196) - 边框（最深） */
@@ -150,4 +151,15 @@
   /* 3. 应用内部浮动元素不得超过 Layer 60-70                 */
   /* 4. 全局弹窗不得超过 Layer 80-90                         */
   /* 5. Dock 低于窗口，窗口可以遮挡 Dock（Adwaita 行为）       */
+}
+
+/* ── 毛玻璃关闭态覆盖（默认关闭）────────────────────────────
+   放在 :root 之外：important 声明压过 applyThemeColors 按主题 inline
+   写入的 --quirel-frosted-bg（非重要 inline 样式），实现整站开关。
+   消费方（TopBar/WindowShell/Settings 侧栏/Dock）统一引用这些变量，
+   开关切换无需改动任何组件样式 */
+html:not([data-frosted="on"]) {
+  --quirel-frosted-bg:     var(--quirel-headerbar-bg) !important;
+  --quirel-frosted-blur:   none !important;
+  --quirel-frosted-border: var(--quirel-border-color) !important;
 }

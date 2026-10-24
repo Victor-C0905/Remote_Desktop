@@ -6,6 +6,7 @@
  * 边界原则：服务器之间的边界画在"执行权"上，不画在"可见性"上。
  */
 
+import i18n from '../../i18n';
 import type { TransferTask } from '../../hooks/useTransferProgress';
 // ServerConfig 定义于 src/types/server.ts（serversStore 仅重导出，此处直接引用源头）
 import type { ServerConfig } from '../../types/server';
@@ -21,15 +22,15 @@ export interface TransferGroup {
   summary: string;
 }
 
-/** 状态中文标签（用于折叠组的摘要行） */
-const STATUS_LABELS: Record<TransferTask['status'], string> = {
-  active: '进行中',
-  pending: '排队中',
-  paused: '已暂停',
-  completed: '已完成',
-  error: '失败',
-  cancelled: '已取消',
-  interrupted: '已中断',
+/** 状态 → 词典 key（折叠组摘要行；渲染时经 i18n.t 取当前语言） */
+const STATUS_LABEL_KEYS: Record<TransferTask['status'], string> = {
+  active: 'transfer.status.active',
+  pending: 'transfer.status.pending',
+  paused: 'transfer.status.paused',
+  completed: 'transfer.status.completed',
+  error: 'transfer.status.error',
+  cancelled: 'transfer.status.cancelled',
+  interrupted: 'transfer.status.interrupted',
 };
 
 /**
@@ -56,7 +57,7 @@ export function groupTransfersByServer(
     const server = servers.find((s) => s.id === serverId);
     groups.push({
       serverId,
-      serverName: server?.name || server?.host || '未知服务器',
+      serverName: server?.name || server?.host || i18n.t('transfer.unknownServer'),
       isCurrent: serverId === activeServerId,
       tasks,
       summary: buildGroupSummary(tasks),
@@ -82,6 +83,6 @@ export function buildGroupSummary(tasks: TransferTask[]): string {
     counts.set(t.status, (counts.get(t.status) ?? 0) + 1);
   }
   return [...counts.entries()]
-    .map(([status, n]) => `${n} 个${STATUS_LABELS[status]}`)
+    .map(([status, n]) => i18n.t('transfer.statusCount', { count: n, label: i18n.t(STATUS_LABEL_KEYS[status]) }))
     .join(' · ');
 }

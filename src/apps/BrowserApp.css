@@ -1,152 +1,312 @@
-/* ============================================================
-   BrowserApp — 远程浏览会话控制面板（Adwaita 风格）
-   ============================================================ */
+/* src/apps/BrowserApp.css — 内置浏览器（导航行 + content 占位区；
+   标签条 = 窗口标题栏本体，样式由 ChromeTabStrip 提供） */
 
-.ba {
+.br-app {
   display: flex;
   flex-direction: column;
   height: 100%;
-  min-height: 0; /* 建立 flex 约束链 */
-  background: var(--quirel-window-bg);
+  /* 对齐 fm-app / terminal-app 根类形态：作为可收缩容器显式允许压缩，
+     防止内容反向撑破 height:100% 约束（高度链实证见 BrowserApp 诊断日志） */
+  min-height: 0;
+  overflow: hidden;
+  background: var(--quirel-window-bg, #fafafa);
 }
 
-/* ── Header Bar ──────────────────────────────────────── */
-.ba-headerbar {
-  height: var(--headerbar-height);
-  background: var(--quirel-headerbar-bg);
-  border-bottom: 1px solid var(--quirel-border-color);
+/* 槽位缺失时的应用内标签条回退：占满顶行（正常形态 portal 进标题栏）。
+   组件行 wrapper 自带 flex:1 1 auto + height:100%，仅 shrink:0 会把
+   basis 留在 100% 高占满整列，必须重置为 auto basis */
+.br-app > .chrome-tabstrip-row {
+  flex: 0 0 auto;
+}
+
+/* appLayout 显式撑满（TextEditor .te-app-content 已验证形态）：
+   appLayout 自身靠 flex-basis:0% + grow 从父级取高，在 br-app 直接
+   嵌套下实测塌为 0（512x0，占位常显根因）；补 height:100% 双保险，
+   不与 flex:1 冲突（定高后 grow 无剩余空间可分）。CSS Module hash
+   类名以属性选择器匹配（AppLayout_appLayout__hash）。 */
+.br-app > div[class*="appLayout"] {
+  height: 100%;
+}
+
+/* ── 导航行（AppLayout toolbar；Edge/Chrome 第二行）────── */
+.br-navbar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 12px;
+  gap: 4px;
+  width: 100%;
+  padding: 4px 8px;
+}
+
+.br-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--quirel-text-secondary);
+  cursor: pointer;
   flex-shrink: 0;
 }
+.br-nav-btn:hover { background: var(--quirel-card-hover); color: var(--quirel-text-primary); }
 
-.ba-title {
-  font-size: var(--font-body);
-  font-weight: 700;
-  color: var(--quirel-text-primary);
-}
-
-.ba-badge {
-  font-size: var(--font-small);
-  padding: 2px 8px;
-  border-radius: var(--radius-full, 999px);
-  background: var(--quirel-border-color);
-  color: var(--quirel-text-secondary);
-}
-
-/* ── Body ────────────────────────────────────────────── */
-.ba-body {
+.br-addressbar {
   flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  align-items: stretch;
-}
-
-.ba-status {
-  border: 1px solid var(--quirel-border-color);
-  border-radius: var(--radius-md, 8px);
-  padding: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.ba-status-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  gap: 6px;
+  padding: 0 10px;
+  height: 28px;
+  border-radius: 14px;
+  background: var(--quirel-card-bg);
+  /* 联想下拉的定位锚点（absolute 飞出层不参与 flex 布局） */
+  position: relative;
 }
 
-.ba-status-label {
-  font-size: var(--font-body);
-  color: var(--quirel-text-secondary);
+.br-loading-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--quirel-accent-bg, #15aa70);
+  animation: br-pulse 1s ease-in-out infinite;
+  flex-shrink: 0;
+}
+@keyframes br-pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
 }
 
-.ba-status-value {
-  font-size: var(--font-body);
-  font-weight: 600;
+.br-address {
+  flex: 1;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 12px;
   color: var(--quirel-text-primary);
 }
+.br-address::placeholder { color: var(--quirel-text-disabled); }
 
-.ba-hint {
-  font-size: var(--font-small);
-  color: var(--quirel-text-secondary);
-  line-height: 1.5;
+/* ── 地址栏联想下拉（搜索引擎 suggest；锚定地址栏，与设置菜单同款
+   Win11 飞出形态。展开期间父层隐藏 webview——child HWND 盖住 React 层）── */
+.br-suggest {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border-radius: 10px;
+  background: var(--quirel-window-bg, #fff);
+  border: 1px solid var(--quirel-border-color);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
 }
 
-.ba-btn {
-  align-self: flex-start;
-  padding: 8px 16px;
-  font-size: var(--font-body);
-  font-weight: 600;
-  color: #fff;
-  background: var(--quirel-accent, #3584e4);
-  border: none;
-  border-radius: var(--radius-md, 8px);
+.br-suggest-item {
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--quirel-text-primary);
   cursor: pointer;
-  transition: filter 0.15s ease;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  user-select: none;
+}
+/* 键盘选中与悬停同款高亮；悬停仅为 CSS 视觉反馈，不落 activeIndex
+   （回车只提交键盘 ↑↓ 选中项，避免鼠标停在词表上时回车误选悬停项） */
+.br-suggest-item:hover,
+.br-suggest-item.is-active { background: var(--quirel-card-hover); }
+
+/* 无痕态：地址栏染色 + 无痕徽标（Chrome 同款视觉提示） */
+.br-incognito-badge { color: var(--quirel-text-secondary); flex-shrink: 0; }
+.br-navbar.br-incognito .br-addressbar {
+  background: var(--quirel-incognito-bar, #4a4458);
+  background: color-mix(in srgb, var(--quirel-card-bg) 76%, #5f4b8b);
 }
 
-.ba-btn:hover:not(:disabled) {
-  filter: brightness(1.1);
+/* ── 设置下拉（导航行右端锚定；Win11 飞出面板形态）────── */
+.br-settings-wrap { position: relative; flex-shrink: 0; }
+.br-settings-btn.is-open { background: var(--quirel-card-hover); color: var(--quirel-text-primary); }
+
+.br-settings-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 30;
+  min-width: 216px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-radius: 10px;
+  background: var(--quirel-window-bg, #fff);
+  border: 1px solid var(--quirel-border-color);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
 }
 
-.ba-btn:disabled {
-  opacity: 0.6;
+.br-settings-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--quirel-text-primary);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.br-settings-item:hover { background: var(--quirel-card-hover); }
+/* 禁用态（如"在系统浏览器中打开"无可打开地址时）：静默置灰、去手型 */
+.br-settings-item:disabled {
+  opacity: 0.45;
   cursor: default;
 }
+.br-settings-item:disabled:hover { background: transparent; }
+.br-settings-label { flex: 1; }
+.br-settings-check { color: var(--quirel-accent-bg, #15aa70); flex-shrink: 0; }
 
-/* ── 未连接占位 ─────────────────────────────────────── */
-.ba-empty {
+.br-settings-heading {
+  padding: 4px 8px 2px;
+  font-size: 11px;
+  color: var(--quirel-text-secondary);
+}
+.br-settings-divider {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--quirel-border-color);
+  flex-shrink: 0;
+}
+.br-settings-hint {
+  padding: 6px 8px 2px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--quirel-text-disabled);
+}
+
+/* 无痕开关（迷你 toggle；关=灰轨白钮，开=强调色） */
+.br-switch {
+  width: 28px;
+  height: 16px;
+  border-radius: 8px;
+  background: var(--quirel-border-color);
+  position: relative;
+  transition: background 0.15s ease;
+  flex-shrink: 0;
+}
+.br-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  transition: transform 0.15s ease;
+}
+.br-switch.on { background: var(--quirel-accent-bg, #15aa70); }
+.br-switch.on::after { transform: translateX(12px); }
+
+/* ── content 占位区（webview child HWND 覆盖其上）────── */
+/* AppLayout 的 .appContent 是 block 容器（仅 overflow 滚动语义，非 flex），
+   flex:1 在其中无效——高度塌为内容高度（占位 absolute 不占流 → 0），
+   即"占位常显、webview 无 bounds"的根因（高度链探针 512x0 实证）。
+   修复与 TextEditor .te-content-wrapper 同款：显式 height:100% 撑满 */
+.br-content {
+  position: relative;
+  height: 100%;
+  min-height: 0;
+  background: var(--quirel-view-bg);
+}
+
+.br-content-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--quirel-text-disabled);
+  font-size: 13px;
+}
+
+/* 拖拽中：webview 暂时隐藏（防 child HWND 画面与窗口分离），占位字样一并
+   隐藏，content 区露纯背景色；松手后 webview 按最终 bounds 归位显示 */
+.br-dragging .br-content-placeholder { visibility: hidden; }
+
+/* ── 启动画面：webview 首帧前的引擎品牌层（感知提速，真实加载不变）──
+   模拟官网观感（白/深底 + 品牌色 logo 文字），静态呈现——循环进度动画
+   会放大等待感；仅单次入场淡入。webview 就绪后 child HWND 整面盖住 */
+.br-boot {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  background: #fff;
+  animation: br-boot-in 0.25s ease-out;
+}
+@media (prefers-color-scheme: dark) {
+  .br-boot { background: #1f1f1f; }
+}
+.br-boot-name {
+  font-size: 34px;
+  font-weight: 600;
+  letter-spacing: -0.5px;
+}
+.br-boot-name--google {
+  background: linear-gradient(90deg, #4285f4 0%, #ea4335 34%, #fbbc05 67%, #34a853 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.br-boot-name--bing {
+  color: #0078d4;
+}
+@media (prefers-color-scheme: dark) {
+  .br-boot-name--bing { color: #4db2ff; }
+}
+.br-boot-hint {
+  font-size: 12px;
+  color: var(--quirel-text-disabled);
+}
+@keyframes br-boot-in {
+  from { opacity: 0; }
+}
+/* 拖拽中与占位同款隐藏，露纯背景 */
+.br-dragging .br-boot { visibility: hidden; }
+
+/* ── 错误条 ──────────────────────────────────────────── */
+.br-error {
+  flex-shrink: 0;
+  padding: 8px 12px;
+  background: var(--quirel-danger-bg);
+  color: var(--quirel-danger-fg);
+  font-size: 12px;
+}
+.br-error-title { font-weight: 600; margin-bottom: 2px; }
+
+/* ── 未连接占位 ──────────────────────────────────────── */
+.br-empty {
   flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  color: var(--quirel-text-secondary);
+  color: var(--quirel-text-disabled);
 }
-
-.ba-empty-icon {
-  font-size: 48px;
-  opacity: 0.6;
-}
-
-.ba-empty-title {
-  font-size: var(--font-body);
-  font-weight: 700;
-  color: var(--quirel-text-primary);
-}
-
-.ba-empty-desc {
-  font-size: var(--font-small);
-}
-
-/* ── 错误面板 ────────────────────────────────────────── */
-.ba-error {
-  border: 1px solid var(--quirel-border-color);
-  border-radius: var(--radius-md, 8px);
-  padding: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.ba-error-title {
-  font-size: var(--font-body);
-  font-weight: 700;
-  color: var(--quirel-text-primary);
-}
-
-.ba-error-desc {
-  font-size: var(--font-small);
-  color: var(--quirel-text-secondary);
-  word-break: break-all;
-}
+.br-empty-icon { opacity: 0.6; }
+.br-empty-title { font-size: 14px; font-weight: 600; color: var(--quirel-text-secondary); }
+.br-empty-desc { font-size: 12px; }

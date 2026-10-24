@@ -1,4 +1,5 @@
 import { useEffect, useCallback } from "react";
+import { invoke } from "@tauri-apps/api/core";
 
 /* ── Types ─────────────────────────────────────────────── */
 
@@ -9,7 +10,8 @@ interface ShortcutConfig {
   shift?: boolean;
   meta?: boolean;
   action: () => void;
-  description?: string;
+  /** 描述的词典 key（渲染处 t()，P7） */
+  descriptionKey?: string;
 }
 
 interface UseGlobalShortcutsOptions {
@@ -37,7 +39,10 @@ export function useGlobalShortcuts(
 
         if (keyMatch && ctrlMatch && altMatch && shiftMatch && metaMatch) {
           e.preventDefault();
-          shortcut.action();
+          // async action（如 F11 全屏）失败不至于静默——"快捷键没反应"可归因
+          Promise.resolve(shortcut.action()).catch((err) =>
+            console.warn("[GlobalShortcuts] action 失败:", shortcut.key, err)
+          );
           return;
         }
       }
@@ -64,37 +69,37 @@ export function createAppShortcuts(
       key: "Meta",
       meta: true,
       action: toggleOverview,
-      description: "打开活动概览",
+      descriptionKey: "shortcuts.overview",
     },
     {
       key: "OS",
       meta: true,
       action: toggleOverview,
-      description: "打开活动概览",
+      descriptionKey: "shortcuts.overview",
     },
     {
       key: "1",
       meta: true,
       action: () => openApp("files"),
-      description: "打开文件管理器",
+      descriptionKey: "shortcuts.files",
     },
     {
       key: "2",
       meta: true,
       action: () => openApp("terminal"),
-      description: "打开终端",
+      descriptionKey: "shortcuts.terminal",
     },
     {
       key: "3",
       meta: true,
       action: () => openApp("monitor"),
-      description: "打开系统监控",
+      descriptionKey: "shortcuts.monitor",
     },
     {
       key: "4",
       meta: true,
       action: () => openApp("settings"),
-      description: "打开设置",
+      descriptionKey: "shortcuts.settings",
     },
     {
       key: "Escape",
@@ -102,12 +107,25 @@ export function createAppShortcuts(
         closeOverview();
         closeNotifications();
       },
-      description: "关闭概览/通知中心",
+      descriptionKey: "shortcuts.closeOverlays",
     },
     {
       key: "F1",
       action: () => openApp("settings"),
-      description: "打开设置",
+      descriptionKey: "shortcuts.settings",
+    },
+    {
+      // F11 全屏切换（Windows 桌面惯例）：Rust 侧 Win32 自控实现真全屏
+      // （铺满显示器全 rect + TOPMOST 压过任务栏，浏览器 F11 语义），状态
+      // 经 fullscreen://changed 事件广播（TopBar 据此禁用 OS 窗口拖拽区）。
+      // 不用 tauri set_fullscreen：tao 在透明无边框窗口上任务栏不覆盖、
+      // 状态脱节。焦点在 webview child HWND 内时按键不经过前端 DOM，
+      // F11 由网页层处置（airspace 固有边界）
+      key: "F11",
+      action: async () => {
+        await invoke("toggle_fullscreen");
+      },
+      descriptionKey: "shortcuts.fullscreen",
     },
   ];
 }

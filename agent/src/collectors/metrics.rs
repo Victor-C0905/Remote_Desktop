@@ -107,6 +107,7 @@ impl MetricsCollector {
             mem_used_bytes: mem_used,
             mem_total_bytes: sys.total_memory(),
             swap_used_bytes: sys.used_swap(),
+            swap_total_bytes: sys.total_swap(),
             disks,
             network_rx_bytes: network_rx,
             network_tx_bytes: network_tx,

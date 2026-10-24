@@ -1,4 +1,7 @@
-import { memo } from "react";
+import { memo, useCallback } from "react";
+import { useTranslation } from "react-i18next";
+import type { MouseEvent as ReactMouseEvent } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useServerManager, getStatusColor } from "../../context/ServerManager";
 import { formatBytesSafe, formatPercentSafe } from "../../utils/offlineDefaults";
 import { NotificationBadge } from "../NotificationCenter";
@@ -38,18 +41,30 @@ export const TopBar = memo(function TopBar({
   onActivitiesClick,
   onNotificationClick,
 }: TopBarProps) {
+  const { t } = useTranslation();
   const { activeServer, servers } = useServerManager();
   // 网络断开自动重连期间 activeServerId 已清空（activeServer 为 null），
   // 回退到 reconnecting 状态的服务器，保持状态指示可见
   const statusServer = activeServer || servers.find((s) => s.status === "reconnecting") || null;
 
+  // OS 窗口拖拽：invoke 单命令 start_os_drag，全屏态由 Rust 单点裁决
+  // （拖拽允许性与全屏状态同在 fullscreen 模块，无前端状态/事件链时序盲区）。
+  const onBarMouseDown = useCallback(async (e: ReactMouseEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    // 子控件（按钮/输入框）不触发拖拽（对齐原 drag-region 的 target 属性语义）
+    if ((e.target as HTMLElement).closest("button, a, input, [data-no-drag]")) return;
+    await invoke("start_os_drag").catch((err) =>
+      console.warn("[TopBar] 拖拽请求失败:", err)
+    );
+  }, []);
+
   return (
-    <div className={styles.topBar} data-tauri-drag-region>
+    <div className={styles.topBar} onMouseDown={onBarMouseDown}>
       <button
         className={styles.activitiesBtn}
         onClick={onActivitiesClick}
       >
-        活动
+        {t('topbar.activities')}
       </button>
       <div className={styles.separator} />
       <div className={styles.connectionIndicator}>
@@ -58,10 +73,10 @@ export const TopBar = memo(function TopBar({
           style={{ background: statusServer ? getStatusColor(statusServer.status) : "#9a9996" }}
         />
         <span>
-          {statusServer?.status === "connected" ? "已连接" :
-           statusServer?.status === "connecting" ? "连接中..." :
-           statusServer?.status === "reconnecting" ? "重连中..." :
-           statusServer?.status === "error" ? "连接失败" : "未连接"}
+          {statusServer?.status === "connected" ? t('connection.status.connected') :
+           statusServer?.status === "connecting" ? t('connection.status.connecting') :
+           statusServer?.status === "reconnecting" ? t('connection.status.reconnecting') :
+           statusServer?.status === "error" ? t('connection.status.error') : t('connection.status.disconnected')}
         </span>
         {statusServer && (
           <span className={styles.serverName}>
@@ -83,7 +98,7 @@ export const TopBar = memo(function TopBar({
       <div className={styles.clock}>{clock}</div>
       
       {/* Notification */}
-      <button className={styles.notificationBtn} onClick={onNotificationClick} aria-label="通知">
+      <button className={styles.notificationBtn} onClick={onNotificationClick} aria-label={t('topbar.notifications')}>
         <SymbolicIcon name={unreadNotifications > 0 ? "bell" : "bell-outline"} size={14} />
         <NotificationBadge
           count={unreadNotifications}

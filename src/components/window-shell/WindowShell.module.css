@@ -79,12 +79,20 @@
    ═════════════════════════════════════════════════════════════ */
 
 .windowHeaderBar {
-  height: var(--headerbar-height); /* 48px */
+  position: relative; /* 标题绝对居中的定位基准 */
+  justify-content: flex-end; /* 标题绝对定位/空槽位隐藏后，控制按钮保持在右侧 */
+  height: 44px;
+  /* 不用 --headerbar-height（48px，BrowserApp/Settings/SystemMonitor 等应用内
+     顶栏共享该变量）。44px = 顶部 8px 呼吸空隙 + 36px 页签（库原生高度）：
+     页签保持底部锚定，下方融合色（2px 下探 + 底缝桥接）与 48px 时代完全一致；
+     顶部留空后「页签文字与控制圆点同线」无法靠高度相等达成（数学上要求
+     页签满高），改由页签内容整体上移 G/2 = 4px 实现（见 ChromeTabStrip.css
+     .chrome-tab-content 规则），页签几何零变形 */
   /* 毛玻璃效果：引用全局变量，与 TopBar 保持一致 */
   background: var(--quirel-frosted-bg);
   backdrop-filter: var(--quirel-frosted-blur);
   -webkit-backdrop-filter: var(--quirel-frosted-blur);
-  border-bottom: 1px solid var(--quirel-frosted-border);
+  /* 无底线：活动页签与下方内容区的融合更连贯（Chrome 同款） */
   display: flex;
   align-items: center;
   padding: 0 12px;
@@ -94,20 +102,112 @@
   user-select: none;
 }
 
+/* ── 底缝桥接：毛玻璃底边伪影的全宽遮盖 ──
+   backdrop-filter 在 header 最底 1-2 行会采样到下方更深的壁纸渐变，
+   与下方顶栏交界处形成一条比两侧都暗的过渡带（实测行 116-117，
+   RGB 比毛玻璃面/顶栏面深 30-40）。桥接用"标题栏正下方表面"的同色
+   4px 覆盖层下探 2px 盖掉暗带（2px 进入下方表面同色不可见）。
+   必须在窗口级全宽铺：页签条等应用局部桥接盖不到槽位之外的裸露带。
+
+   桥接色 = 下方表面色是页签底部圆角"圆滑"的关键机制：页签 SVG 底缘
+   最后一行是抗锯齿半透明行，颜色 = 填充色 × 背后垫色（桥接层），
+   桥接若与页签/下方表面不同色，交界行就是一条异色细带，切断页签
+   底部凹弧（flare）与下方表面的连续。有 ChromeTabStrip 的应用按行
+   wrapper 的 data-tabstrip-variant 随动：
+   - light（TextEditor）：下方是 AppTopbar 顶栏/内容区 --quirel-window-bg
+   - dark（Terminal）：下方是黑色终端区 --quirel-terminal-bg */
+.windowHeaderBar::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -2px;
+  height: 4px;
+  background: var(--quirel-headerbar-bg);
+  pointer-events: none; /* 不挡拖拽与双击最大化 */
+}
+
+.windowHeaderBar:has([data-tabstrip-variant='light'])::after {
+  background: var(--quirel-window-bg);
+}
+
+.windowHeaderBar:has([data-tabstrip-variant='dark'])::after {
+  background: var(--quirel-terminal-bg);
+}
+
+/* ── 左玻璃列应用的桥接变体（Settings 侧栏毛玻璃）──
+   侧栏改玻璃后，默认桥接的不透明 headerbar-bg 条贴在半透明玻璃上
+   暴露成一条粗横线。glass-left 变体改为「遮罩 + 刻意细线」双层：
+   - 遮罩层（整宽 2px）：左段（--sidebar-width）玻璃同色 frosted-bg
+     半透明 tint——底缝暗带透出仅 ~20%（30-40 RGB × 0.2 ≈ 6-8），不可辨；
+     右段 window-bg，与 .st-main 不透明底色同色融合；
+   - 细线层（仅侧栏列 1px，叠在遮罩之上、贴 header 最底行）：用户选择
+     保留一条分隔线，颜色用右侧主区背景色 window-bg——浅色细缝贴近玻璃
+     复合色，比深色边框线（sidebar-border）更融入背景，仅余一丝明暗差；
+   - 不下探（bottom:0）：半透明叠加会让侧栏顶部变得更浑浊。
+   注意锚点必须是 .windowShell（.st 根在 contentFrame 内，是 headerBar
+   的兄弟子树，.windowHeaderBar:has() 够不到）。 */
+.windowShell:has([data-headerbar-bridge='glass-left']) .windowHeaderBar::after {
+  bottom: 0;
+  height: 2px;
+  background:
+    /* 细线层：侧栏列宽 1px，右段渐变为透明（主区交界保持无缝） */
+    linear-gradient(
+      90deg,
+      var(--quirel-window-bg) 0,
+      var(--quirel-window-bg) var(--sidebar-width),
+      transparent var(--sidebar-width)
+    )
+    left bottom / 100% 1px no-repeat,
+    /* 遮罩层：盖住标题栏 blur 底缘暗带 */
+    linear-gradient(
+      90deg,
+      var(--quirel-frosted-bg) 0,
+      var(--quirel-frosted-bg) var(--sidebar-width),
+      var(--quirel-window-bg) var(--sidebar-width)
+    );
+}
+
 /* ✅ 最大化时标题栏不显示拖拽光标 */
 .windowShellMaximized .windowHeaderBar {
   cursor: default;
 }
 
 .windowTitle {
+  /* 绝对居中：不受右侧控制按钮宽度挤压（flex 盒居中会偏左半格） */
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 160px); /* 预留两侧：左槽位/右控制按钮 */
   font-size: var(--font-small); /* 9pt */
   font-weight: 600;
-  color: var(--quirel-text-primary); /* ✅ 使用主题文字颜色(亮色: rgba(0,0,0,0.87), 暗色: rgba(255,255,255,0.87)) */
-  flex: 1;
+  color: var(--quirel-text-primary);
   text-align: center;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  pointer-events: none; /* 纯展示：不挡标题栏拖拽 */
+}
+
+/* 应用注入槽位：应用将自定义内容（如 Chrome 式标签条）portal 到此。
+   占据标题与控制按钮之间的全部空间，空白区域保持拖拽/双击最大化；
+   槽位内有内容时自动隐藏默认标题（Chrome 标题栏即标签条形态）。 */
+.windowHeaderSlot {
+  flex: 1 1 auto;
+  min-width: 0;
+  align-self: stretch;
+  display: flex;
+  align-items: flex-end;
+  overflow: visible;
+}
+
+.windowHeaderBar:has(.windowHeaderSlot:not(:empty)) .windowTitle {
+  display: none;
+}
+
+/* 未注入内容的应用（FileManager 等）：槽位不占空间，标题保持整栏居中 */
+.windowHeaderSlot:empty {
+  display: none;
 }
 
 /* ═════════════════════════════════════════════════════════════

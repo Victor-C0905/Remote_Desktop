@@ -1,15 +1,29 @@
 /**
- * 文本编辑面板组件
+ * 文本编辑面板组件（CodeMirror 6 内核）
  *
- * 简单的文本编辑器面板，提供基础的文本编辑功能
- * - 自动调整高度（根据内容）
- * - 禁用拼写检查
- * - 禁用 resize（用户不能手动调整大小）
- * - 光标位置跟踪（行号、列号）
- * - 无语法高亮、行号等高级功能
+ * 基于 CodeMirror 6 的编辑面板，提供大型项目级编辑体验：
+ * - 行号 gutter、当前行高亮、括号匹配、选区匹配高亮
+ * - 按扩展名动态加载语法高亮（@codemirror/language-data 按需分包）
+ * - Ctrl+F 查找替换面板、Ctrl+G 跳转行（basicSetup 默认键位）
+ * - 自动换行开关（Compartment 动态切换）
+ * - 主题全部走 --quirel-* CSS 变量，亮暗主题自动跟随
+ *
+ * 数据流：
+ * - 内部 doc 变更 → updateListener → onChange（同步 useFileManager）
+ * - 外部 content 变化（文件加载完成）→ 与内部 doc 不一致时 dispatch 替换
+ * - 光标/选区/文档统计 → onCursorChange / onStatsChange（状态栏展示）
  */
 
-import { useRef, useEffect } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
+import { Compartment, EditorState } from '@codemirror/state';
+import { EditorView, placeholder as cmPlaceholder } from '@codemirror/view';
+import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
+import { undo, redo } from '@codemirror/commands';
+import { openSearchPanel } from '@codemirror/search';
+import { tags as t } from '@lezer/highlight';
+import { basicSetup } from 'codemirror';
+import i18n from '../../../i18n';
+import { findLanguageForPath } from '../utils/language';
 import '../TextEditor.css';
 
 /**
@@ -22,8 +36,20 @@ export interface CursorPosition {
   column: number;
 }
 
+/**
+ * 文档统计信息（状态栏展示用）
+ */
+export interface DocStats {
+  /** 总行数 */
+  lines: number;
+  /** 字符数 */
+  chars: number;
+  /** 当前选中的字符数 */
+  selected: number;
+}
+
 interface TextEditorPaneProps {
-  /** 当前文本内容 */
+  /** 当前文本内容（外部数据源，与内部 doc 双向同步） */
   content: string;
 
   /** 内容变更回调 */
@@ -31,13 +57,186 @@ interface TextEditorPaneProps {
 
   /** 光标位置变更回调（可选） */
   onCursorChange?: (position: CursorPosition) => void;
+
+  /** 文档统计变更回调（行数/字符数/选中数，可选） */
+  onStatsChange?: (stats: DocStats) => void;
+
+  /** 文件路径（用于匹配语法高亮语言，可选） */
+  filePath?: string;
+
+  /** 是否自动换行（默认关，对齐 VS Code） */
+  wrapText?: boolean;
+
+  /** 文档为空时的占位提示（可选） */
+  placeholder?: string;
 }
+
+/**
+ * 编辑面板命令句柄（工具栏按钮直连 CodeMirror 命令）
+ */
+export interface TextEditorPaneHandle {
+  /** 撤销 */
+  undo(): void;
+  /** 重做 */
+  redo(): void;
+  /** 打开查找替换面板（同 Ctrl+F） */
+  openSearch(): void;
+}
+
+/**
+ * 查找面板/跳转行等内置 UI 的本地化文案
+ * （CodeMirror phrases 机制：按英文原文映射，未命中的键回退英文）
+ * 构建函数：编辑器创建时取当前语言（已打开的编辑器保持创建时语言）
+ */
+function makePhrases() {
+  return EditorState.phrases.of({
+    Find: i18n.t('textEditor.phrases.find'),
+    Replace: i18n.t('textEditor.phrases.replace'),
+    next: i18n.t('textEditor.phrases.next'),
+    previous: i18n.t('textEditor.phrases.previous'),
+    all: i18n.t('textEditor.phrases.all'),
+    'match case': i18n.t('textEditor.phrases.matchCase'),
+    'by word': i18n.t('textEditor.phrases.byWord'),
+    regexp: i18n.t('textEditor.phrases.regexp'),
+    replace: i18n.t('textEditor.phrases.replace'),
+    'replace all': i18n.t('textEditor.phrases.replaceAll'),
+    close: i18n.t('textEditor.phrases.close'),
+    'current match': i18n.t('textEditor.phrases.currentMatch'),
+    'replaced $ matches': i18n.t('textEditor.phrases.replaced'),
+    'go to line': i18n.t('textEditor.phrases.goToLine'),
+    'Line:': i18n.t('textEditor.phrases.line'),
+  });
+}
+
+/**
+ * 编辑器主题：结构样式通过 EditorView.theme 注入（保证优先级），
+ * 颜色全部引用 --quirel-* CSS 变量，随主题切换自动生效。
+ */
+const editorTheme = EditorView.theme({
+  '&': {
+    height: '100%',
+    backgroundColor: 'var(--quirel-window-bg)',
+    color: 'var(--quirel-text-primary)',
+  },
+  '.cm-scroller': {
+    fontFamily: 'var(--font-mono)',
+    fontSize: '15px',
+    lineHeight: '1.6',
+    overflow: 'auto',
+  },
+  '.cm-content': {
+    caretColor: 'var(--quirel-accent-bg)',
+    padding: '8px 0 40vh 0', /* 底部预留滚动空间（现代编辑器惯例） */
+    tabSize: '4',
+  },
+  '&.cm-focused': { outline: 'none' },
+  '.cm-cursor, .cm-dropCursor': {
+    borderLeftColor: 'var(--quirel-accent-bg)',
+    borderLeftWidth: '2px',
+  },
+  '.cm-gutters': {
+    backgroundColor: 'var(--quirel-window-bg)',
+    color: 'var(--quirel-text-secondary)',
+    borderRight: '1px solid var(--quirel-border-color)',
+  },
+  '.cm-lineNumbers .cm-gutterElement': {
+    padding: '0 10px 0 14px',
+    minWidth: '44px',
+  },
+  '.cm-activeLine': {
+    backgroundColor: 'color-mix(in srgb, var(--quirel-accent-bg) 7%, transparent)',
+  },
+  '.cm-activeLineGutter': {
+    backgroundColor: 'transparent',
+    color: 'var(--quirel-text-primary)',
+    fontWeight: '600',
+  },
+  '.cm-selectionBackground': {
+    backgroundColor: 'color-mix(in srgb, var(--quirel-accent-bg) 20%, transparent) !important',
+  },
+  '.cm-selectionMatch': {
+    backgroundColor: 'color-mix(in srgb, var(--quirel-accent-bg) 12%, transparent)',
+  },
+  '.cm-searchMatch': {
+    backgroundColor: 'color-mix(in srgb, #f5c211 35%, transparent)',
+    outline: '1px solid color-mix(in srgb, #f5c211 60%, transparent)',
+  },
+  '.cm-searchMatch.cm-searchMatch-selected': {
+    backgroundColor: 'color-mix(in srgb, #f5c211 60%, transparent)',
+  },
+  /* 查找替换面板（Ctrl+F）：对齐 HeaderBar 底色与项目控件语言 */
+  '.cm-panels': {
+    backgroundColor: 'var(--quirel-headerbar-bg)',
+    color: 'var(--quirel-text-primary)',
+  },
+  '.cm-panels-top': { borderBottom: '1px solid var(--quirel-border-color)' },
+  '.cm-search': {
+    padding: '6px 12px',
+    fontFamily: 'var(--font-ui)',
+    fontSize: '12px',
+  },
+  '.cm-textfield': {
+    border: '1px solid var(--quirel-border-color)',
+    borderRadius: 'var(--radius-xs)',
+    background: 'var(--quirel-view-bg)',
+    color: 'var(--quirel-text-primary)',
+    fontFamily: 'var(--font-ui)',
+    fontSize: '12px',
+  },
+  '.cm-button': {
+    border: '1px solid var(--quirel-border-color)',
+    borderRadius: 'var(--radius-xs)',
+    background: 'transparent',
+    color: 'var(--quirel-text-secondary)',
+    fontFamily: 'var(--font-ui)',
+    fontSize: '12px',
+  },
+  '.cm-button:hover': {
+    background: 'var(--quirel-view-bg)',
+    color: 'var(--quirel-text-primary)',
+  },
+  '.cm-foldPlaceholder': {
+    background: 'transparent',
+    border: 'none',
+    color: 'var(--quirel-text-secondary)',
+    padding: '0 6px',
+    margin: '0 4px',
+  },
+  '.cm-tooltip': {
+    border: '1px solid var(--quirel-border-color)',
+    borderRadius: 'var(--radius-sm)',
+    background: 'var(--quirel-view-bg)',
+  },
+  '.cm-placeholder': { color: 'var(--quirel-text-disabled)' },
+});
+
+/**
+ * 语法高亮配色（Adwaita 语义化）：
+ * - 跟随主题的令牌（accent / text-secondary）保证亮暗一致的可读性
+ * - 固定常量色（橙/蓝）为 Adwaita 调色板中亮暗背景均通读的色值
+ * - 函数/类型/变量保持默认前景色，保持 GNOME 编辑器的克制风格
+ */
+const semanticHighlighting = syntaxHighlighting(
+  HighlightStyle.define([
+    { tag: t.comment, color: 'var(--quirel-text-secondary)', fontStyle: 'italic' },
+    {
+      tag: [t.keyword, t.modifier, t.operatorKeyword, t.controlKeyword, t.moduleKeyword],
+      color: 'var(--quirel-accent-bg)',
+    },
+    { tag: [t.string, t.special(t.string)], color: '#e66100' },
+    { tag: [t.number, t.bool, t.null, t.atom], color: '#3584e4' },
+    { tag: [t.heading], color: 'var(--quirel-accent-bg)', fontWeight: '700' },
+    { tag: [t.link, t.url], color: '#3584e4', textDecoration: 'underline' },
+    { tag: [t.invalid], color: '#c01c28' },
+  ]),
+  { fallback: true },
+);
 
 /**
  * 文本编辑面板组件
  *
- * 基础的文本编辑器，使用 textarea 元素实现
- * 自动调整高度以适应内容，并跟踪光标位置
+ * 挂载时创建一次 EditorView；content/语言/换行等外部输入
+ * 通过受控 effect 同步进 view，避免重建实例丢失撤销历史。
  *
  * @param props - 组件属性
  * @returns 文本编辑面板 React 元素
@@ -46,104 +245,178 @@ interface TextEditorPaneProps {
  * ```tsx
  * const Editor = () => {
  *   const [content, setContent] = useState('');
- *   const [cursorPos, setCursorPos] = useState({ line: 1, column: 1 });
  *   return (
  *     <TextEditorPane
  *       content={content}
  *       onChange={setContent}
- *       onCursorChange={setCursorPos}
+ *       filePath="/home/user/main.ts"
+ *       wrapText={false}
  *     />
  *   );
  * };
  * ```
  */
-export function TextEditorPane({ content, onChange, onCursorChange }: TextEditorPaneProps) {
-  // 引用 textarea 元素
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+export const TextEditorPane = forwardRef<TextEditorPaneHandle, TextEditorPaneProps>(function TextEditorPane({
+  content,
+  onChange,
+  onCursorChange,
+  onStatsChange,
+  filePath,
+  wrapText = false,
+  placeholder,
+}, ref) {
+  const hostRef = useRef<HTMLDivElement>(null);
+  const viewRef = useRef<EditorView | null>(null);
 
-  /**
-   * 计算光标位置
-   *
-   * 根据光标在文本中的位置，计算行号和列号
-   *
-   * @param textarea - textarea 元素
-   * @returns 光标位置信息（行号、列号）
-   */
-  const calculateCursorPosition = (textarea: HTMLTextAreaElement): CursorPosition => {
-    const cursorIndex = textarea.selectionStart;
-    const text = textarea.value;
+  // 语言/换行通过 Compartment 动态切换，无需重建 EditorState
+  const langCompartment = useRef(new Compartment());
+  const wrapCompartment = useRef(new Compartment());
 
-    // 计算行号：光标之前的换行符数量 + 1
-    let line = 1;
-    let column = 1;
-    let lastNewlineIndex = -1;
+  // 回调通过 ref 透传，避免 updateListener 闭包过期
+  const callbacksRef = useRef({ onChange, onCursorChange, onStatsChange });
+  callbacksRef.current = { onChange, onCursorChange, onStatsChange };
 
-    for (let i = 0; i < cursorIndex; i++) {
-      if (text[i] === '\n') {
-        line++;
-        lastNewlineIndex = i;
-      }
-    }
+  // 命令句柄：工具栏撤销/重做/查找按钮直连 CodeMirror 命令
+  useImperativeHandle(ref, () => ({
+    undo: () => {
+      if (viewRef.current) undo(viewRef.current);
+    },
+    redo: () => {
+      if (viewRef.current) redo(viewRef.current);
+    },
+    openSearch: () => {
+      const view = viewRef.current;
+      if (!view) return;
+      openSearchPanel(view);
+      view.focus();
+    },
+  }), []);
 
-    // 计算列号：光标位置 - 最后一个换行符位置
-    column = cursorIndex - lastNewlineIndex;
-
-    return { line, column };
+  // 创建 EditorView（仅挂载时一次；doc 取挂载时刻的 content）
+  // ⚠️ 会话保活（同 Terminal.tsx）：React 对被拖动页签的子树会强制重跑
+  // effect（deps 未变仍 cleanup→init），若 cleanup 立即 destroy 视图，
+  // 撤销历史与光标随之丢失。cleanup 只调度 setTimeout(0) 的延迟销毁；
+  // 紧随其后的 setup 发现视图仍在则取消销毁直接保活。真实卸载时无人
+  // 取消，延迟销毁照常执行。
+  const destroyTimerRef = useRef<number | null>(null);
+  /** 调度延迟销毁 EditorView（真实卸载执行；假重跑被下一 setup 取消） */
+  const scheduleViewDestroy = () => {
+    destroyTimerRef.current = window.setTimeout(() => {
+      destroyTimerRef.current = null;
+      viewRef.current?.destroy();
+      viewRef.current = null;
+    }, 0);
   };
 
-  /**
-   * 处理光标位置变更
-   *
-   * 当光标移动时，计算新的光标位置并触发回调
-   */
-  const handleCursorChange = () => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-
-    const newPosition = calculateCursorPosition(textarea);
-
-    // 触发回调（如果提供）
-    if (onCursorChange) {
-      onCursorChange(newPosition);
-    }
-  };
-
-  /**
-   * 自动调整 textarea 高度
-   *
-   * 根据内容自动调整高度，确保所有内容可见
-   * 使用 scrollHeight 计算实际内容高度
-   */
   useEffect(() => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
+    if (!hostRef.current) return;
 
-    // 重置高度以获取正确的 scrollHeight
-    textarea.style.height = '0px';
+    // 取消上一次 cleanup 调度的延迟销毁（假重跑保活路径）
+    if (destroyTimerRef.current !== null) {
+      clearTimeout(destroyTimerRef.current);
+      destroyTimerRef.current = null;
+    }
 
-    // 设置新高度（内容高度 + padding）
-    const scrollHeight = textarea.scrollHeight;
-    textarea.style.height = `${scrollHeight}px`;
-  }, [content]); // 依赖 content，内容变更时重新计算高度
+    // 视图仍在（假重跑）：跳过重建，保留撤销历史与光标；
+    // 但必须重新返回延迟销毁 cleanup，保证真实卸载仍能释放
+    if (viewRef.current) {
+      return scheduleViewDestroy;
+    }
 
-  return (
-    <div className="te-text-pane">
-      <textarea
-        ref={textareaRef}
-        className="te-textarea"
-        value={content}
-        onChange={(e) => {
-          onChange(e.target.value);
-          // 内容变更时也更新光标位置
-          handleCursorChange();
-        }}
-        onKeyUp={handleCursorChange} // 键盘导航（上下左右、Home/End）
-        onClick={handleCursorChange} // 鼠标点击
-        onSelect={handleCursorChange} // 选择文本时
-        spellCheck={false} // 禁用拼写检查
-        // 禁用 resize（用户不能手动调整大小）
-        // 注意：CSS 中也设置了 resize: none，这里作为补充
-      />
-    </div>
-  );
-}
+    const view = new EditorView({
+      parent: hostRef.current,
+      state: EditorState.create({
+        doc: content,
+        extensions: [
+          basicSetup,
+          makePhrases(),
+          editorTheme,
+          semanticHighlighting,
+          langCompartment.current.of([]),
+          wrapCompartment.current.of(wrapText ? EditorView.lineWrapping : []),
+          placeholder ? cmPlaceholder(placeholder) : [],
+          EditorView.updateListener.of((update) => {
+            if (!update.docChanged && !update.selectionSet) return;
+
+            // 光标位置（行/列，均从 1 开始）
+            const sel = update.state.selection.main;
+            const line = update.state.doc.lineAt(sel.head);
+            callbacksRef.current.onCursorChange?.({
+              line: line.number,
+              column: sel.head - line.from + 1,
+            });
+
+            // 文档统计（行数/字符数/选中字符数）
+            callbacksRef.current.onStatsChange?.({
+              lines: update.state.doc.lines,
+              chars: update.state.doc.length,
+              selected: sel.to - sel.from,
+            });
+
+            // 内容变更同步给外部数据源
+            if (update.docChanged) {
+              callbacksRef.current.onChange(update.state.doc.toString());
+            }
+          }),
+        ],
+      }),
+    });
+    viewRef.current = view;
+
+    // cleanup 只调度延迟销毁（假重跑的 setup 会取消它；真实卸载照常执行）
+    return scheduleViewDestroy;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅挂载时创建一次
+  }, []);
+
+  // 外部 content 变化（文件加载完成等）：与内部 doc 不一致时整体替换
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    if (view.state.doc.toString() === content) return;
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: content },
+    });
+  }, [content]);
+
+  // 文件路径变化 → 匹配并异步加载语法包（按需分包，加载后切换 Compartment）
+  useEffect(() => {
+    let cancelled = false;
+    const view = viewRef.current;
+    if (!view) return;
+
+    const desc = findLanguageForPath(filePath ?? '');
+    if (!desc) {
+      view.dispatch({ effects: langCompartment.current.reconfigure([]) });
+      return;
+    }
+
+    desc
+      .load()
+      .then((lang) => {
+        if (!cancelled && viewRef.current) {
+          viewRef.current.dispatch({ effects: langCompartment.current.reconfigure(lang) });
+        }
+      })
+      .catch((err) => {
+        // 加载失败仅失去高亮，不影响编辑
+        console.warn('[TextEditorPane] 语法包加载失败:', desc.name, err);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [filePath]);
+
+  // 自动换行开关（Compartment 热切换）
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      effects: wrapCompartment.current.reconfigure(
+        wrapText ? EditorView.lineWrapping : [],
+      ),
+    });
+  }, [wrapText]);
+
+  return <div ref={hostRef} className="te-cm-host" />;
+});

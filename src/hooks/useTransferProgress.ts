@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { listen } from '@tauri-apps/api/event';
+import i18n from '../i18n';
 import { transferStorage } from '../utils/transferStorage';
 import { createLogger } from '../utils/logger';
 
@@ -27,13 +28,16 @@ function showCompletionNotification(payload: TransferProgressPayload) {
   }
 
   // 创建通知
-  const direction = payload.direction === 'upload' ? '上传' : '下载';
-  const notification = new Notification(`${direction}完成`, {
-    body: `${payload.file_name} 已成功${direction}`,
-    icon: '/favicon.ico', // 可以替换为应用图标
-    tag: `transfer-${payload.id}`, // 防止重复通知
-    requireInteraction: false, // 自动关闭
-  });
+  const isUpload = payload.direction === 'upload';
+  const notification = new Notification(
+    i18n.t(isUpload ? 'transfer.notify.uploadFinishedTitle' : 'transfer.notify.downloadFinishedTitle'),
+    {
+      body: i18n.t(isUpload ? 'transfer.notify.uploadDone' : 'transfer.notify.downloadDone', { name: payload.file_name }),
+      icon: '/favicon.ico', // 可以替换为应用图标
+      tag: `transfer-${payload.id}`, // 防止重复通知
+      requireInteraction: false, // 自动关闭
+    }
+  );
 
   // 3 秒后自动关闭
   setTimeout(() => {
@@ -78,7 +82,7 @@ export function degradeUnfinishedTasks(tasks: TransferTask[]): TransferTask[] {
   return tasks.map(t =>
     isTerminalStatus(t.status)
       ? t
-      : { ...t, status: 'interrupted' as const, error: '连接已断开，传输已中断' }
+      : { ...t, status: 'interrupted' as const, error: i18n.t('transfer.interruptedError') }
   );
 }
 

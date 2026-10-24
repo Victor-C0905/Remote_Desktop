@@ -18,8 +18,8 @@
  *
  * 4. Theme - 主题接口
  *    - id: 唯一标识符（与 ThemeId 对应）
- *    - name: 显示名称
- *    - description: 描述文字
+ *    - nameKey: 显示名称的词典 key（文案在 src/i18n/locales 的 themes 域）
+ *    - descriptionKey: 描述文字的词典 key
  *    - lightColors: 亮色模式颜色配置
  *    - darkColors: 暗色模式颜色配置
  *    - accentColorOptions?: 可选的强调色列表（不定义则使用默认强调色）
@@ -39,11 +39,11 @@
  * 步骤 1：在 ThemeId 类型中添加新 ID
  *   export type ThemeId = 'paper' | 'neutral' | 'dark' | 'myNewTheme';
  *
- * 步骤 2：在 themes 对象中添加新主题配置
+ * 步骤 2：在 themes 对象中添加新主题配置（名称/描述先加入 i18n 词典 themes 域）
  *   myNewTheme: {
  *     id: 'myNewTheme',
- *     name: '我的新主题',
- *     description: '主题描述',
+ *     nameKey: 'themes.myNewTheme.name',
+ *     descriptionKey: 'themes.myNewTheme.description',
  *     lightColors: {
  *       windowBg: '#ffffff',      // 主窗口背景
  *       viewBg: '#f5f5f5',        // 内容区背景（最浅）
@@ -161,10 +161,10 @@ export interface ThemeColors {
 export interface Theme {
   /** 主题唯一标识符 */
   id: ThemeId;
-  /** 显示名称 */
-  name: string;
-  /** 描述文字 */
-  description: string;
+  /** 显示名称的词典 key（i18n themes 域） */
+  nameKey: string;
+  /** 描述文字的词典 key */
+  descriptionKey: string;
   /** 亮色模式颜色配置 */
   lightColors: ThemeColors;
   /** 暗色模式颜色配置 */
@@ -191,8 +191,8 @@ export const themes: Record<ThemeId, Theme> = {
   // --------------------------------------------------------
   paper: {
     id: 'paper',
-    name: '纸张',
-    description: '温暖的纸张色调，层次分明',
+    nameKey: 'themes.paper.name',
+    descriptionKey: 'themes.paper.description',
     lightColors: {
       windowBg: '#fafafa',           // 柔和白
       viewBg: '#faf5f3',             // 内容区（最浅）- RGB(250,245,243)
@@ -262,8 +262,8 @@ export const themes: Record<ThemeId, Theme> = {
   // --------------------------------------------------------
   neutral: {
     id: 'neutral',
-    name: '中性色调（Adwaita 标准）',
-    description: '符合 Adwaita 标准的中性色调',
+    nameKey: 'themes.neutral.name',
+    descriptionKey: 'themes.neutral.description',
     lightColors: {
       windowBg: '#fafafa',           // 柔和白
       viewBg: '#f5f5f5',             // 内容区 - 中性浅灰
@@ -334,8 +334,8 @@ export const themes: Record<ThemeId, Theme> = {
   // --------------------------------------------------------
   dark: {
     id: 'dark',
-    name: '暗色',
-    description: '深色主题，高对比度，适合夜间使用',
+    nameKey: 'themes.dark.name',
+    descriptionKey: 'themes.dark.description',
     lightColors: {
       windowBg: '#242424',           // 中性暗色
       viewBg: '#1e1e1e',             // 最深背景
