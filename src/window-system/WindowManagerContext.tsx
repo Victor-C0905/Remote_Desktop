@@ -374,11 +374,14 @@ export function initWindowEventBridge(manager: WindowManager) {
 
   LIST_EVENTS.forEach(eventType => {
     manager.on(eventType, (event: WindowEvent) => {
-      // ✅ 影响激活栈（MRU 层叠）的事件：通知所有窗口。
-      // focused/restored 把窗口移到栈顶、closed 从栈中移除，
-      // 都会改变其他窗口的 zRank（层叠排名）；
-      // created 仅压栈顶不影响既有排名，无需全量通知。
+      // ✅ 影响激活栈（MRU 层叠）或激活归属的事件：通知所有窗口。
+      // focused/restored 把窗口移到栈顶、closed 从栈中移除，会改变其他窗口的
+      // zRank（层叠排名）；created 直接改写 activeWindowId（WindowManager.create
+      // 不走 focus()），旧激活窗口的 isActive true→false 必须传播，否则其
+      // useWindowState 快照停在缓存旧值——浏览器 webview 失活隐藏失效，
+      // 网页铺在新窗口上（airspace 下唯一让位通路就是这条可见性链）
       if (eventType === 'window:focused' ||
+          eventType === 'window:created' ||
           eventType === 'window:restored' ||
           eventType === 'window:closed') {
         windowStateListeners.forEach((_, wId) => {

@@ -80,9 +80,12 @@ export function ArrivalToast({ onOpen }: { onOpen: () => void }) {
 
   if (!visible || !current) return null;
 
+  // data-browser-overlay：浏览器 webview 子窗口让位标记（child HWND 无法被
+  // DOM z-index 遮挡），BrowserApp 检测到即隐藏 webview 让位
   return (
     <div
       className={`at-toast${leaving ? " at-toast-leaving" : ""}`}
+      data-browser-overlay
       role="status"
       onClick={() => {
         dismiss();

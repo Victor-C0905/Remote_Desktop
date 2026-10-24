@@ -1,20 +1,22 @@
 //! SOCKS5 over QUIC 代理会话管理
 //!
 //! 生命周期：
-//! - proxy_start_session：本地 SOCKS5 监听（支持固定端口）+ spawn 浏览器
-//! - QUIC 断开：suspend_session 仅停监听，浏览器保留（固定端口保证重连后浏览器无需重开）
+//! - proxy_start_session / browser_open：绑 SOCKS5 监听（支持固定端口）+ 启动内置浏览器
+//!   （WebView2 独立 Environment，user-data-dir 按 server 隔离 + 代理参数锁定端口）
+//! - QUIC 断开：suspend_session 仅停监听，浏览器窗口保留（页面显示连接错误）
 //! - 重连后再次 start：检测到陈旧会话 → 沿用原端口重启监听，浏览器无感恢复
-//! - proxy_stop_session（关浏览窗口）/ App 退出：停监听 + kill 浏览器
-//! - 残留自愈（spawn_primary_browser）：App 异常退出后浏览器残留（占用
-//!   profile 且代理参数指向死端口），新 spawn 会退化为转发进程 → 探测到
-//!   后清理残留实例并重开真正的主进程
+//! - browser_close_window（关浏览器窗口）：销毁 webview + Environment，监听保留
+//! - proxy_stop_session / App 退出：停监听 + 销毁浏览器
 
 pub mod browser;
+pub mod browser_settings;
+pub mod browser_window;
 pub mod socks5;
+pub mod suggest;
+pub mod webview_host;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::process::Child;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -31,36 +33,16 @@ use quirel_protocol::{Envelope, Payload};
 #[derive(serde::Serialize)]
 pub struct ProxySessionInfo {
     pub port: u16,
-    pub browser: String,
-}
-
-/// 系统已安装的浏览器（前端选择列表）
-#[derive(serde::Serialize)]
-pub struct BrowserInfo {
-    pub id: String,
-    pub name: String,
-    pub path: String,
-}
-
-/// 列出本机可用浏览器（供远程浏览应用展示选择）
-#[tauri::command]
-pub fn proxy_list_browsers() -> Vec<BrowserInfo> {
-    browser::list_browsers()
-        .into_iter()
-        .map(|(id, name, path)| BrowserInfo { id: id.into(), name: name.into(), path })
-        .collect()
 }
 
 struct ProxySession {
     port: u16,
-    /// 浏览器名（会话信息展示 / profile 目录定位）
-    browser_name: String,
     /// 监听任务句柄（abort 即关闭监听）
     listener_task: tokio::task::JoinHandle<()>,
     /// 监听是否存活（suspend 时同步置 false，避免 is_finished 的微小竞态）
     listener_alive: bool,
-    /// 浏览器子进程（stop 时 kill）
-    browser_child: Arc<Mutex<Option<Child>>>,
+    /// 内置浏览器宿主（None = 窗口已关但监听保留，可重建）
+    host: std::sync::Mutex<Option<Arc<browser_window::BrowserWindowHost>>>,
 }
 
 /// 代理会话管理器（Tauri managed state）
@@ -78,6 +60,20 @@ impl ProxySessionManager {
             sessions: Mutex::new(HashMap::new()),
             creation_lock: tokio::sync::Mutex::new(()),
         }
+    }
+
+    /// server 的 SOCKS5 监听端口（仅活跃会话；断线挂起返回 None）
+    ///
+    /// 供 suggest 等本地复用隧道的功能取端口。过滤 listener_alive：挂起会话
+    /// 的端口已被释放，若不过滤，随机端口被其他会话复用时会话错接（联想词
+    /// 经别的 server 隧道出去，搜索词跨服务器泄漏）。
+    pub(crate) fn socks_port(&self, server_id: &str) -> Option<u16> {
+        self.sessions
+            .lock()
+            .unwrap()
+            .get(server_id)
+            .filter(|s| s.listener_alive)
+            .map(|s| s.port)
     }
 }
 
@@ -97,6 +93,12 @@ pub fn suspend_session(app: &AppHandle, server_id: &str) {
     if let Some(sess) = guard.get_mut(server_id) {
         sess.listener_task.abort();
         sess.listener_alive = false;
+        // 挂起时隐藏 webview：多服务器会话并存时，后创建会话的 webview z-order
+        // 恒高，切回旧服务器时残留可见的旧 webview 会压在新标签条上；重连成功
+        // 后由前端 browser_set_visible effect 恢复可见性
+        if let Some(host) = sess.host.lock().unwrap().as_ref() {
+            host.set_visible(false);
+        }
         tracing::info!(
             "[Proxy] 连接断开，代理挂起（浏览器保留等待重连）: server_id={}, port={}",
             server_id, sess.port
@@ -119,17 +121,15 @@ pub fn cleanup_all_sessions(app: &AppHandle) {
     }
 }
 
-/// 移除会话并终止其监听任务与浏览器进程（幂等：会话不存在时静默）。
-/// cleanup_session（断连清理）与 proxy_stop_session（手动停止）的公共实现。
+/// 移除会话并终止其监听任务与浏览器（幂等：会话不存在时静默）。
+/// cleanup_all_sessions（App 退出）与 proxy_stop_session 的公共实现。
 fn remove_and_terminate(app: &AppHandle, server_id: &str, reason: &str) {
     let sessions: State<ProxySessionManager> = app.state();
     let session = sessions.sessions.lock().unwrap().remove(server_id);
     if let Some(sess) = session {
         sess.listener_task.abort();
-        if let Some(mut child) = sess.browser_child.lock().unwrap().take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
+        // host drop（Arc 归零）→ BrowserWindowHost::Drop 通知 runtime 线程销毁全部 webview
+        drop(sess.host.into_inner().unwrap());
         tracing::info!("[Proxy] {}: server_id={}, port={}", reason, server_id, sess.port);
     }
 }
@@ -337,284 +337,356 @@ fn port_conflict_with(app: &AppHandle, server_id: &str, port: u16) -> Option<Str
         .map(|(id, _)| id.clone())
 }
 
-/// 误杀保护：其他活跃会话是否正在使用同一浏览器（同 profile 主进程）
+/// 固定端口监听：与其他会话冲突或绑定失败时回落随机端口
 ///
-/// 同 profile 单实例下，其他活跃会话的浏览器主进程必须保留（其窗口依赖它）。
-/// 残留清理前必须检查，否则会杀掉其他会话正在使用的浏览器。
-fn other_active_session_uses_browser(app: &AppHandle, server_id: &str, browser_name: &str) -> bool {
-    let sessions: State<ProxySessionManager> = app.state();
-    let guard = sessions.sessions.lock().unwrap();
-    guard.iter().any(|(id, s)| {
-        *id != server_id
-            && s.listener_alive
-            && s.browser_name == browser_name
-            // 浏览器主进程仍在运行（try_wait 出错时保守视为存活）
-            && s.browser_child.lock().unwrap().as_mut()
-                .map(|c| c.try_wait().map(|st| st.is_none()).unwrap_or(true))
-                .unwrap_or(false)
-    })
-}
-
-/// 探测 spawn 出的浏览器进程是否"快速退出"（转发进程特征）
-///
-/// 同 profile 已有实例（如上次 App 异常退出残留的浏览器）时，新 spawn 的
-/// 进程只是转发器：把 --new-window 请求转给已运行实例后数百毫秒内退出；
-/// 真正的主进程持续存活。探测窗口 ~750ms（150ms × 5 轮）：
-/// - 期间任一时刻发现已退出 → 转发进程
-/// - 全程存活 → 主进程（正常启动最多增加 150ms 首轮等待）
-async fn exited_quickly(child: &mut Child) -> bool {
-    for _ in 0..5 {
-        tokio::time::sleep(Duration::from_millis(150)).await;
-        if matches!(child.try_wait(), Ok(Some(_))) {
-            return true;
-        }
-    }
-    false
-}
-
-/// spawn 浏览器并确保其为 profile 的主进程（非转发进程）
-///
-/// 残留场景自愈：上次 App 异常退出后浏览器残留（代理参数指向已死端口，
-/// 无法接管），新 spawn 会退化为转发进程。探测到后：
-/// 1. 误杀保护：其他活跃会话在用同浏览器 → 报错（同 profile 单实例，
-///    本会话无法获得独立主进程）
-/// 2. 清理残留实例（按 profile 路径精确匹配，见 browser::terminate_profile_processes）
-/// 3. 等待 profile 单实例锁随进程退出释放，重新 spawn 真正的主进程
-async fn spawn_primary_browser(
+/// 仅用于浏览器打开入口（browser_open 携带的用户设置固定端口）：回落保证
+/// 浏览器总能打开（warn 记录固定端口不可用原因）。host 存活的恢复路径
+/// 不可用本函数——Environment 代理参数锁定原端口，回落会让浏览器流量
+/// 指向死端口，该路径由调用方直接 spawn 并保持报错。
+async fn spawn_listener_with_fallback(
     app: &AppHandle,
     server_id: &str,
-    browser_path: &PathBuf,
-    browser_name: &str,
-    port: u16,
-    profile: &PathBuf,
-) -> Result<Child, AppError> {
-    let mut child = browser::spawn_browser(browser_path, port, profile)?;
-
-    if !exited_quickly(&mut child).await {
-        // 持续存活 → 真正的主进程
-        return Ok(child);
-    }
-
-    // 快速退出 → profile 被其他实例占用
-    if other_active_session_uses_browser(app, server_id, browser_name) {
-        return Err(
-            AppError::new(codes::PROXY_BROWSER_IN_USE).with_param("browser", browser_name)
+    fixed: u16,
+    quic_conn: Arc<quinn::Connection>,
+) -> Result<(u16, tokio::task::JoinHandle<()>), AppError> {
+    // 与其他会话的固定端口冲突：同属"固定端口不可用"，一并回落
+    if let Some(holder) = port_conflict_with(app, server_id, fixed) {
+        tracing::warn!(
+            "[Proxy] 固定端口 {} 与会话 {} 冲突，回落随机端口",
+            fixed, holder
         );
+        return spawn_socks5_listener(quic_conn, 0).await;
     }
-
-    // 残留实例带着旧代理参数（指向已死端口），清理后重开
-    tracing::info!(
-        "[Proxy] 检测到 profile 被残留浏览器占用，清理后重开: {}",
-        profile.display()
-    );
-    browser::terminate_profile_processes(browser_path, profile)?;
-    // 等待 profile 单实例锁随残留进程退出释放（子进程句柄释放有延迟）
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
-    let mut child = browser::spawn_browser(browser_path, port, profile)?;
-    if exited_quickly(&mut child).await {
-        // 二次验证仍快速退出：清理未生效或锁未释放，报错让用户手动处理
-        return Err(AppError::new(codes::PROXY_BROWSER_SPAWN_FAILED).with_detail(format!(
-            "browser exited immediately, profile may still be locked: {}",
-            profile.display()
-        )));
+    match spawn_socks5_listener(quic_conn.clone(), fixed).await {
+        Ok(result) => Ok(result),
+        Err(e) => {
+            tracing::warn!(
+                "[Proxy] 固定端口 {} 绑定失败（{}），回落随机端口",
+                fixed,
+                e.detail.unwrap_or_else(|| "未知错误".into())
+            );
+            spawn_socks5_listener(quic_conn, 0).await
+        }
     }
-    Ok(child)
 }
 
-/// 启动代理会话：SOCKS5 监听（支持固定端口）+ 浏览器
+/// 浏览器数据根目录（browser-data/，按 server 分子目录）
+fn browser_data_root(app: &AppHandle) -> Result<PathBuf, AppError> {
+    let dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| AppError::new(codes::IO_FAILED).with_detail(format!("app cache dir: {e}")))?;
+    Ok(dir.join("browser-data"))
+}
+
+/// server_id → 路径安全片段（uuid；防御性净化，未来 id 来源变化也不产生路径穿越）
+fn safe_server_id(server_id: &str) -> String {
+    server_id
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect()
+}
+
+/// 浏览器数据目录（user-data-dir），按 server 隔离（spec 第 5 节第 4 条）。
+/// 同时承载随服务器持久化的浏览器设置（browser_settings::load/save）。
+pub(crate) fn browser_data_dir(app: &AppHandle, server_id: &str) -> Result<PathBuf, AppError> {
+    let dir = browser_data_root(app)?.join(safe_server_id(server_id));
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| AppError::new(codes::IO_FAILED).with_detail(format!("create browser data dir: {e}")))?;
+    Ok(dir)
+}
+
+/// 无痕浏览数据目录（持久目录的兄弟目录）：每次无痕会话即弃即焚——
+/// 开启前清残留 + 会话结束（runtime 退出）删除。settings.json 等持久
+/// 数据始终在 browser_data_dir，不受无痕清空影响。
+fn browser_incognito_dir(app: &AppHandle, server_id: &str) -> Result<PathBuf, AppError> {
+    Ok(browser_data_root(app)?.join(format!("{}-incognito", safe_server_id(server_id))))
+}
+
+/// 取主窗口 HWND（Controller 的 parent）
 ///
-/// - `browser_id`：空/"auto" 自动探测；候选 id（edge/chrome/firefox）选指定浏览器；
-///   其他值视为自定义浏览器可执行文件路径
-/// - `port`：固定端口（断线重连后浏览器无需重开的前提）；None/0 时随机分配
+/// 返回句柄整数值而非 HWND：HWND 含裸指针不满足 Send，跨 await 持有会使
+/// command future 非 Send（tauri 要求 Send）；spawn 线程内还原为 HWND
+/// （与 browser_window.rs SendHwnd 同一语义）。
+fn main_window_hwnd(app: &AppHandle) -> Result<isize, AppError> {
+    app.get_webview_window("main")
+        .ok_or_else(|| AppError::new(codes::PROXY_BROWSER_WINDOW_FAILED).with_detail("main window not found"))?
+        .hwnd()
+        // hwnd() 成功即返回真实窗口句柄（非 0）：句柄为 0/NULL 的情形在
+        // tauri 内部已作为 Err 返回，故 Ok 分支非 0 有保证，spawn 侧无需二次校验
+        .map(|h| h.0 as isize)
+        .map_err(|e| AppError::new(codes::PROXY_BROWSER_WINDOW_FAILED).with_detail(format!("hwnd: {e}")))
+}
+
+/// 为会话创建浏览器 host（Environment + 首个 tab；睡眠超时由前端设置传入，
+/// 恢复路径无入参时默认 120 分钟——计划 Step 4）
+///
+/// 浏览器设置随服务器持久化（data_dir/settings.json）：无痕态改用即弃
+/// 兄弟目录（开启前清残留），正常态目录原样复用（登录态保留）
+async fn create_host(
+    app: &AppHandle,
+    server_id: &str,
+    port: u16,
+    sleep_minutes: u64,
+    first_url: &str,
+) -> Result<Arc<browser_window::BrowserWindowHost>, AppError> {
+    let data_dir = browser_data_dir(app, server_id)?;
+    let settings = browser_settings::load(&data_dir);
+    let profile_dir = if settings.incognito {
+        let incognito_dir = browser_incognito_dir(app, server_id)?;
+        // 残留清理：上次无痕会话可能未及删除（崩溃/强杀），开启前兜底；
+        // NotFound 属正常（目录本就应不存在）
+        if let Err(e) = std::fs::remove_dir_all(&incognito_dir) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!("[Proxy] 无痕数据目录残留清理失败（尽力继续）: {e}");
+            }
+        }
+        std::fs::create_dir_all(&incognito_dir)
+            .map_err(|e| AppError::new(codes::IO_FAILED).with_detail(format!("create incognito data dir: {e}")))?;
+        incognito_dir
+    } else {
+        data_dir
+    };
+    let hwnd = main_window_hwnd(app)?;
+    browser_window::BrowserWindowHost::spawn(
+        app.clone(),
+        server_id.to_string(),
+        profile_dir,
+        port,
+        hwnd,
+        std::time::Duration::from_secs(sleep_minutes * 60),
+        first_url.to_string(),
+        settings,
+    )
+    .await
+}
+
+/// 默认首页 URL：当前设置搜索引擎的官网（随服务器持久化于 settings.json）。
+/// 秒开依赖 webview user_data_dir 的持久化 HTTP 缓存。目录定位失败时回退
+/// 默认引擎（Google）官网——首页解析不应阻断浏览器打开。
+fn default_home_url(app: &AppHandle, server_id: &str) -> String {
+    browser_data_dir(app, server_id)
+        .map(|dir| browser_settings::load(&dir).search_engine.home_url())
+        .unwrap_or_else(|_| browser_settings::SearchEngine::default().home_url())
+}
+
+/// 启动代理会话：SOCKS5 监听（支持固定端口）+ 内置浏览器
 ///
 /// 会话状态机：
-/// - 无会话 → 全新启动（绑端口 + spawn 浏览器）
-/// - 会话活跃（监听 + 浏览器都在）→ 仅再开一个浏览器窗口
-/// - 会话陈旧（断线挂起 / 浏览器被手动关闭）→ 原端口重启监听；
-///   浏览器还活着则不重开（无感恢复），死了则重新 spawn
+/// - 无会话 → 全新启动（绑端口 + 创建 host）
+/// - 监听活跃 + host 在 → no-op（返回现状，前端聚焦窗口）
+/// - 监听活跃 + host 无（窗口刚关）→ 原端口重建 host（Environment 重新创建，登录态保留）
+/// - 陈旧会话（断线挂起）→ 原端口（host 在时）或设置端口重启监听；host 无则重建
 #[tauri::command]
 pub async fn proxy_start_session(
     server_id: String,
-    browser_id: Option<String>,
     port: Option<u16>,
     app: AppHandle,
+) -> Result<ProxySessionInfo, AppError> {
+    // 恢复路径无 sleep_minutes 入参，统一默认 120（重建 host 场景罕见，
+    // 设置变更主要影响新会话——计划 Step 4）
+    let first_url = default_home_url(&app, &server_id);
+    start_session_inner(&server_id, port, 120, &first_url, &app).await
+}
+
+/// browser_open(server_id, url?, sleep_minutes?, port?)：前端打开浏览器唯一入口（spec 第 8 节）
+///
+/// port 为用户设置的固定 SOCKS5 端口（None/0 = 随机端口）：透传给会话启动，
+/// 使"固定端口"设置在 App 重启后仍生效（无它则恒随机端口，设置沦为死配置）。
+#[tauri::command]
+pub async fn browser_open(
+    server_id: String,
+    url: Option<String>,
+    sleep_minutes: Option<u64>,
+    port: Option<u16>,
+    app: AppHandle,
+) -> Result<ProxySessionInfo, AppError> {
+    // url 未指定 → 默认首页 = 当前设置搜索引擎的官网（settings.json）
+    let first_url = url.unwrap_or_else(|| default_home_url(&app, &server_id));
+    start_session_inner(
+        &server_id,
+        port,
+        sleep_minutes.unwrap_or(120),
+        &first_url,
+        &app,
+    )
+    .await
+}
+
+async fn start_session_inner(
+    server_id: &str,
+    requested_port: Option<u16>,
+    sleep_minutes: u64,
+    first_url: &str,
+    app: &AppHandle,
 ) -> Result<ProxySessionInfo, AppError> {
     // 串行化整个创建流程（跨 await 持锁）：并发调用排队执行，
     // 后到者会看到先到者刚注册的会话并走"已存在"路径，不再双重绑端口
     let sessions_state = app.state::<ProxySessionManager>();
     let _creation_guard = sessions_state.creation_lock.lock().await;
 
+    let requested_port = requested_port.filter(|p| *p > 0);
+
     // 从 ConnectionManager 取该 server 的 QUIC 连接（代理流只能走 QUIC）
     let quic_conn = {
         let manager: State<ConnectionManager> = app.state();
         let conns = manager.connections.lock().unwrap();
-        conns.get(&server_id)
+        conns.get(server_id)
             .and_then(|c| c.quic_conn.clone())
             .ok_or_else(|| AppError::new(codes::CONNECTION_NOT_FOUND))?
     };
 
-    // 解析浏览器选择（auto / 指定 id / 自定义路径）
-    let browser_id = browser_id.unwrap_or_default();
-    let (browser_path, browser_name) = browser::resolve_browser(&browser_id)?;
-    let requested_port = port.filter(|p| *p > 0);
-
     // ── 会话已存在：按状态分发 ─────────────────────────────
-    let existing_state = {
+    let existing = {
         let sessions: State<ProxySessionManager> = app.state();
         let guard = sessions.sessions.lock().unwrap();
-        guard.get(&server_id).map(|s| {
-            (
-                s.port,
-                s.browser_name.clone(),
-                s.listener_alive,
-                // 浏览器主进程是否仍在运行（try_wait 出错时保守视为存活）
-                s.browser_child.lock().unwrap().as_mut()
-                    .map(|c| c.try_wait().map(|st| st.is_none()).unwrap_or(true))
-                    .unwrap_or(false),
-            )
+        guard.get(server_id).map(|s| {
+            (s.port, s.listener_alive, s.host.lock().unwrap().is_some())
         })
     };
 
-    if let Some((sess_port, sess_browser_name, listener_alive, browser_alive)) = existing_state {
-        if !listener_alive {
-            // ── 陈旧会话（断线挂起）：重建监听 ──
-            // 浏览器还活着 → 必须沿用原端口（浏览器代理参数指向它）；
-            // 浏览器已关 → 无端口约束，优先用新设置的固定端口
-            let rebuild_port = if browser_alive { sess_port } else { requested_port.unwrap_or(sess_port) };
-            if let Some(holder) = port_conflict_with(&app, &server_id, rebuild_port) {
-                return Err(
-                    AppError::new(codes::PROXY_PORT_CONFLICT)
-                        .with_param("port", rebuild_port.to_string())
-                        .with_param("holder", holder),
-                );
+    if let Some((sess_port, listener_alive, host_alive)) = existing {
+        if listener_alive {
+            if host_alive {
+                // 活跃会话：no-op
+                return Ok(ProxySessionInfo { port: sess_port });
             }
-
-            // 绑定失败（如端口被非本应用进程占用）时直接报错，不 spawn 浏览器
-            let (actual_port, listener_task) = spawn_socks5_listener(quic_conn.clone(), rebuild_port).await?;
-
-            // 浏览器已关才重开；还开着则无感恢复
-            let new_child = if browser_alive {
-                None
-            } else {
-                let profile = browser_profile_dir(&app, &browser_name)?;
-                // spawn_primary_browser：残留实例占用 profile 时清理后重开
-                // （否则新进程退化为转发进程，浏览器仍用旧代理参数连不上）
-                Some(match spawn_primary_browser(
-                    &app, &server_id, &browser_path, &browser_name, actual_port, &profile,
-                ).await {
-                    Ok(c) => c,
-                    Err(e) => {
-                        listener_task.abort();
-                        return Err(e);
-                    }
-                })
-            };
-
-            // 更新会话条目（期间条目被并发替换的概率极低，覆盖即可）
+            // 窗口刚关（监听保留）：原端口重建 host（Environment 重新创建）
+            let host = create_host(app, server_id, sess_port, sleep_minutes, first_url).await?;
             let sessions: State<ProxySessionManager> = app.state();
-            let mut guard = sessions.sessions.lock().unwrap();
-            if let Some(sess) = guard.get_mut(&server_id) {
-                sess.port = actual_port;
-                sess.browser_name = browser_name.to_string();
-                sess.listener_task = listener_task;
-                sess.listener_alive = true;
-                if let Some(child) = new_child {
-                    *sess.browser_child.lock().unwrap() = Some(child);
-                }
+            if let Some(sess) = sessions.sessions.lock().unwrap().get_mut(server_id) {
+                *sess.host.lock().unwrap() = Some(host);
+            } else {
+                // 竞态防御：create_host 期间会话可能被并发移除（如 proxy_stop_session
+                // / App 退出走的 remove_and_terminate）。新 host 未入册即成孤儿，
+                // 显式 request_close 通知 runtime 线程销毁窗口并报错（幂等；即便
+                // 遗漏，局部 Arc drop 也会经 BrowserWindowHost::Drop 兜底关闭）
+                host.request_close();
+                return Err(AppError::new(codes::PROXY_BROWSER_WINDOW_CLOSED)
+                    .with_detail("session removed concurrently while recreating host"));
             }
-
-            tracing::info!(
-                "[Proxy] 会话已恢复: server_id={}, socks_port={}, browser_alive={}, browser={}",
-                server_id, actual_port, browser_alive, browser_name
-            );
-            return Ok(ProxySessionInfo { port: actual_port, browser: browser_name.to_string() });
+            tracing::info!("[Proxy] 浏览器窗口重建（监听未变）: server_id={}, port={}", server_id, sess_port);
+            return Ok(ProxySessionInfo { port: sess_port });
         }
 
-        // ── 监听仍在运行（连接未断）──
-        if browser_alive {
-            // 活跃会话：只 spawn 新浏览器窗口（同 profile），不重建监听
-            let profile = browser_profile_dir(&app, &browser_name)?;
-            // 浏览器同 profile 单实例：后续 spawn 只发消息即退出，无需跟踪 Child
-            let _ = browser::spawn_browser(&browser_path, sess_port, &profile)?;
-            return Ok(ProxySessionInfo { port: sess_port, browser: sess_browser_name });
-        }
-
-        // 监听活着但浏览器被手动关闭：连接没变，无需重绑端口，补 spawn 浏览器即可
-        let profile = browser_profile_dir(&app, &browser_name)?;
-        // spawn_primary_browser：残留实例占用 profile 时清理后重开（同上）
-        let child = match spawn_primary_browser(
-            &app, &server_id, &browser_path, &browser_name, sess_port, &profile,
-        ).await {
-            Ok(c) => c,
-            Err(e) => return Err(e),
+        // ── 陈旧会话（断线挂起）：重建监听 ──
+        // host 还在 → 必须沿用原端口（Environment 代理参数指向它），绑定失败
+        // 保持报错（回落会让浏览器流量指向死端口）；
+        // host 已关 → 无端口约束：带固定端口请求时失败回落随机端口
+        // （Environment 将以实际端口重建），无请求时沿用原端口（现状语义）
+        let (actual_port, listener_task) = match (host_alive, requested_port) {
+            (true, _) | (false, None) => {
+                if let Some(holder) = port_conflict_with(app, server_id, sess_port) {
+                    return Err(
+                        AppError::new(codes::PROXY_PORT_CONFLICT)
+                            .with_param("port", sess_port.to_string())
+                            .with_param("holder", holder),
+                    );
+                }
+                spawn_socks5_listener(quic_conn, sess_port).await?
+            }
+            (false, Some(fixed)) => {
+                spawn_listener_with_fallback(app, server_id, fixed, quic_conn).await?
+            }
         };
+
+        // 旧 QUIC 连接对象已随断线更换：旧端口下池连接全部随旧流死亡，
+        // 清空防复用首查必失败一次；随即按实际端口重预热热连接池（后台
+        // 执行，与下方 host 重建并行）
+        suggest::clear_streams_for_port(sess_port).await;
+        tokio::spawn(suggest::warm_up_connections(actual_port));
+
+        // host 已关才重建；还开着则无感恢复。失败时回收监听任务
+        // （否则端口监听永久泄漏——沿用旧实现同路径的防泄漏语义）
+        let new_host = if host_alive {
+            None
+        } else {
+            Some(match create_host(app, server_id, actual_port, sleep_minutes, first_url).await {
+                Ok(h) => h,
+                Err(e) => {
+                    listener_task.abort();
+                    return Err(e);
+                }
+            })
+        };
+
         let sessions: State<ProxySessionManager> = app.state();
         let mut guard = sessions.sessions.lock().unwrap();
-        if let Some(sess) = guard.get_mut(&server_id) {
-            *sess.browser_child.lock().unwrap() = Some(child);
-            sess.browser_name = browser_name.to_string();
+        if let Some(sess) = guard.get_mut(server_id) {
+            sess.port = actual_port;
+            sess.listener_task = listener_task;
+            sess.listener_alive = true;
+            if let Some(host) = new_host {
+                *sess.host.lock().unwrap() = Some(host);
+            }
+            // 恢复成功后重发全量标签列表，驱动前端标签条回灌：断线期间前端
+            // 已清空 tabs，此后仅增量 page-state 事件（空列表上合并不生效），
+            // 不补发则标签条空白直到用户新建/关闭标签
+            if let Some(host) = sess.host.lock().unwrap().as_ref() {
+                host.refresh_tabs();
+            }
+        } else {
+            // 竞态防御：spawn_socks5_listener 之后、get_mut 之前会话可能被并发
+            // 移除（remove_and_terminate）。新监听任务无人接管会成孤儿（端口
+            // 监听永久泄漏），必须 abort；new_host 为局部 Arc，函数返回 drop
+            // 时经 BrowserWindowHost::Drop 自动通知 runtime 销毁窗口，无需额外处理
+            listener_task.abort();
+            return Err(AppError::new(codes::PROXY_BROWSER_WINDOW_CLOSED)
+                .with_detail("session removed concurrently during listener rebuild"));
         }
         tracing::info!(
-            "[Proxy] 浏览器重启（监听未变）: server_id={}, socks_port={}, browser={}",
-            server_id, sess_port, browser_name
+            "[Proxy] 会话已恢复: server_id={}, socks_port={}, host_alive={}",
+            server_id, actual_port, host_alive
         );
-        return Ok(ProxySessionInfo { port: sess_port, browser: browser_name.to_string() });
+        return Ok(ProxySessionInfo { port: actual_port });
     }
 
     // ── 全新会话 ─────────────────────────────────────────
-    let bind_port = requested_port.unwrap_or(0);
-    if let Some(holder) = port_conflict_with(&app, &server_id, bind_port) {
-        return Err(
-            AppError::new(codes::PROXY_PORT_CONFLICT)
-                .with_param("port", bind_port.to_string())
-                .with_param("holder", holder),
-        );
-    }
-    let (port, listener_task) = spawn_socks5_listener(quic_conn.clone(), bind_port).await?;
-
-    // spawn 浏览器；失败时必须回收已启动的监听任务（否则端口监听永久泄漏）
-    let profile = match browser_profile_dir(&app, &browser_name) {
-        Ok(p) => p,
-        Err(e) => {
-            listener_task.abort();
-            return Err(e);
-        }
+    // 固定端口：冲突或绑定失败回落随机端口（保证浏览器能打开，warn 记录）；
+    // 随机端口（None）：维持现状
+    let (port, listener_task) = match requested_port {
+        Some(fixed) => spawn_listener_with_fallback(app, server_id, fixed, quic_conn).await?,
+        None => spawn_socks5_listener(quic_conn, 0).await?,
     };
-    // spawn_primary_browser：残留实例占用 profile 时清理后重开
-    // （App 异常退出后浏览器残留场景，新 spawn 否则退化为转发进程，
-    //   残留浏览器仍用旧代理参数 → 页面连接错误且重试无效）
-    let child = match spawn_primary_browser(
-        &app, &server_id, &browser_path, &browser_name, port, &profile,
-    ).await {
-        Ok(c) => c,
+
+    // 创建 host；失败时回收监听任务（否则端口监听永久泄漏）
+    let host = match create_host(app, server_id, port, sleep_minutes, first_url).await {
+        Ok(h) => h,
         Err(e) => {
             listener_task.abort();
             return Err(e);
         }
     };
 
-    // 注册会话
     let sessions: State<ProxySessionManager> = app.state();
     sessions.sessions.lock().unwrap().insert(
-        server_id.clone(),
+        server_id.to_string(),
         ProxySession {
             port,
-            browser_name: browser_name.to_string(),
             listener_task,
             listener_alive: true,
-            browser_child: Arc::new(Mutex::new(Some(child))),
+            host: std::sync::Mutex::new(Some(host)),
         },
     );
 
-    tracing::info!(
-        "[Proxy] 会话已启动: server_id={}, socks_port={}, browser={}",
-        server_id, port, browser_name
-    );
-    Ok(ProxySessionInfo { port, browser: browser_name.to_string() })
+    // 兜底重发全量标签列表：首个 tab 的 emit_tabs 发生在 runtime 线程启动时
+    // （早于 browser_open 返回），若前端 browser://tabs 监听尚未注册完成则
+    // 事件丢失——tabs 停留空列表，此后仅增量 page-state（空列表上合并不
+    // 生效），表现为占位提示常显、地址栏为空。返回前补发一次（此刻前端
+    // invoke 尚未 resolve、监听必然就位），幂等无害。
+    if let Some(sess) = sessions.sessions.lock().unwrap().get(server_id) {
+        if let Some(host) = sess.host.lock().unwrap().as_ref() {
+            host.refresh_tabs();
+        }
+    }
+
+    tracing::info!("[Proxy] 会话已启动: server_id={}, socks_port={}", server_id, port);
+    // 联想词连接预热：建连挪到启动时刻，首次联想直接用热连接（失败静默）
+    tokio::spawn(suggest::warm_up_connections(port));
+    Ok(ProxySessionInfo { port })
 }
 
-/// 停止代理会话：关监听 + kill 浏览器
+/// 停止代理会话：关监听 + 销毁浏览器
 #[tauri::command]
 pub async fn proxy_stop_session(server_id: String, app: AppHandle) -> Result<(), String> {
     remove_and_terminate(&app, &server_id, "会话已停止");
@@ -625,54 +697,24 @@ pub async fn proxy_stop_session(server_id: String, app: AppHandle) -> Result<(),
 #[derive(serde::Serialize)]
 pub struct ProxySessionStatus {
     pub port: u16,
-    pub browser: String,
     /// 监听是否存活（false = 断线挂起，需重建）
     pub listener_alive: bool,
-    /// 浏览器主进程是否仍在运行
+    /// 浏览器窗口是否开着（host 存在）
     pub browser_alive: bool,
 }
 
 /// 查询代理会话状态（无会话返回 null）
 ///
-/// 前端据此区分重连后的恢复策略：浏览器还活着 → 调 proxy_start_session
-/// 仅重建监听（无感恢复网络，不弹新浏览器窗口）；浏览器已关或无会话 →
-/// 等待用户主动点击"打开浏览器"，连接服务器本身不自动 spawn 浏览器。
+/// browser_alive = 浏览器窗口开着（host 存在）。前端据此区分重连后的
+/// 恢复策略：窗口开着 → 调 proxy_start_session 仅重建监听（无感恢复）；
+/// 窗口已关或无会话 → 等待用户主动打开。
 #[tauri::command]
 pub fn proxy_session_status(server_id: String, app: AppHandle) -> Option<ProxySessionStatus> {
     let sessions: State<ProxySessionManager> = app.state();
     let guard = sessions.sessions.lock().unwrap();
     guard.get(&server_id).map(|s| ProxySessionStatus {
         port: s.port,
-        browser: s.browser_name.clone(),
         listener_alive: s.listener_alive,
-        // 浏览器主进程是否仍在运行（try_wait 出错时保守视为存活）
-        browser_alive: s
-            .browser_child
-            .lock()
-            .unwrap()
-            .as_mut()
-            .map(|c| c.try_wait().map(|st| st.is_none()).unwrap_or(true))
-            .unwrap_or(false),
+        browser_alive: s.host.lock().unwrap().is_some(),
     })
-}
-
-/// 代理浏览器的独立 profile 目录，按浏览器分离
-///
-/// Edge/Chrome/Firefox 的 profile 数据互不兼容，共用同一目录会导致
-/// 后切换的浏览器报"配置文件无法打开"并重建（登录态丢失）。
-/// 每个浏览器一个子目录，各自的登录态/书签/扩展独立保留。
-fn browser_profile_dir(app: &AppHandle, browser_name: &str) -> Result<PathBuf, AppError> {
-    let dir = app
-        .path()
-        .app_cache_dir()
-        .map_err(|e| AppError::new(codes::IO_FAILED).with_detail(format!("app cache dir: {e}")))?;
-    // 目录名做基础净化（浏览器名来自固定候选表或自定义路径，通常安全，防御性处理）
-    let safe_name = browser_name
-        .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
-        .collect::<String>();
-    let profile = dir.join("browser-profile").join(safe_name);
-    std::fs::create_dir_all(&profile)
-        .map_err(|e| AppError::new(codes::IO_FAILED).with_detail(format!("create profile dir: {e}")))?;
-    Ok(profile)
 }

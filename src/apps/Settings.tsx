@@ -24,13 +24,6 @@ const log = createLogger('Settings');
 
 type SettingsSection = "connection" | "appearance" | "keyboard" | "files" | "terminal" | "browser" | "notifications" | "stats" | "about";
 
-/** 本机可用浏览器（Rust 端 proxy_list_browsers 返回） */
-interface BrowserInfo {
-  id: string;
-  name: string;
-  path: string;
-}
-
 /* ── Sidebar Items ──────────────────────────────────── */
 
 interface SidebarItem {
@@ -519,20 +512,21 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
     return () => { cancelled = true; };
   }, []);
 
-  // 本机已安装浏览器列表（浏览器设置分区展示）
-  const [browserList, setBrowserList] = useState<BrowserInfo[]>([]);
-  useEffect(() => {
-    let cancelled = false;
-    invoke<BrowserInfo[]>("proxy_list_browsers")
-      .then((list) => { if (!cancelled) setBrowserList(list); })
-      .catch((e) => log.error("获取浏览器列表失败:", e));
-    return () => { cancelled = true; };
-  }, []);
-
-  // 默认浏览器（全局设置，远程浏览应用启动时使用）
-  const browserIdPref = useSettingsStore((s) => s.browserId);
+  // 内置浏览器：后台标签睡眠超时（分钟；0 = 永不睡眠）
+  const browserSleepMinutes = useSettingsStore((s) => s.browserSleepMinutes);
   // SOCKS5 固定端口（断线重连后浏览器无需重开）
   const browserProxyPort = useSettingsStore((s) => s.browserProxyPort);
+  // "在系统浏览器中打开"使用的浏览器（旧版浏览器功能同款设置）
+  const browserIdPref = useSettingsStore((s) => s.browserId);
+  // 本机可用浏览器列表（Rust proxy_list_browsers 枚举，安装变化少见：拉一次）
+  const [browserList, setBrowserList] = useState<{ id: string; name: string }[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    invoke<{ id: string; name: string }[]>("proxy_list_browsers")
+      .then((list) => { if (!cancelled) setBrowserList(list); })
+      .catch((e) => log.error("枚举系统浏览器失败:", e));
+    return () => { cancelled = true; };
+  }, []);
   // 启动时恢复上次窗口（响应式读取，勾选即时生效）
   const restoreWindowsOnStartup = useSettingsStore((s) => s.restoreWindowsOnStartup);
   // 毛玻璃效果开关（响应式读取，勾选即时生效）
@@ -1106,19 +1100,32 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
         );
 
       case "browser": {
-        const setBrowserId = useSettingsStore.getState().setBrowserId;
+        const setBrowserSleepMinutes = useSettingsStore.getState().setBrowserSleepMinutes;
+        const sleepOptions = [
+          { value: 0, labelKey: "settings.browserSleepNever" },
+          { value: 10, labelKey: "settings.browserSleepMinutes10" },
+          { value: 30, labelKey: "settings.browserSleepMinutes30" },
+          { value: 120, labelKey: "settings.browserSleepMinutes120" },
+        ];
         return (
           <div className="st-section">
             <div className="st-section-title text-heading">{t("settings.browserTitle")}</div>
 
             <div className="st-card">
-              <div className="st-card-header text-title">{t("settings.defaultBrowserTitle")}</div>
+              <div className="st-card-header text-title">{t("settings.builtInBrowserTitle")}</div>
+              {/* 系统浏览器选择：供"在系统浏览器中打开"使用（流量走隧道，
+                  与旧版浏览器功能对齐；自定义路径填可执行文件全路径） */}
               <div className="st-option-row">
-                <span className="st-option-label text-body">{t("settings.remoteBrowserUse")}</span>
+                <span className="st-option-label text-body">{t("settings.systemBrowser")}</span>
                 <select
                   className="st-select"
-                  value={browserList.some((b) => b.id === browserIdPref) || browserIdPref === "auto" ? browserIdPref : "auto"}
-                  onChange={(e) => setBrowserId(e.target.value)}
+                  value={
+                    browserList.some((b) => b.id === browserIdPref) || browserIdPref === "auto"
+                      ? browserIdPref
+                      : "auto"
+                  }
+                  onChange={(e) => useSettingsStore.getState().setBrowserId(e.target.value)}
+                  style={{ width: 200 }}
                 >
                   <option value="auto">{t("settings.browserAuto")}</option>
                   {browserList.map((b) => (
@@ -1126,9 +1133,6 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                   ))}
                 </select>
               </div>
-              {browserList.length === 0 && (
-                <div className="st-hint">{t("settings.noBrowsersHint")}</div>
-              )}
               <div className="st-option-row">
                 <span className="st-option-label text-body">{t("settings.socks5Port")}</span>
                 <input
@@ -1146,8 +1150,20 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                   style={{ width: 100 }}
                 />
               </div>
+              <div className="st-option-row">
+                <span className="st-option-label text-body">{t("settings.browserSleepTitle")}</span>
+                <select
+                  className="st-select"
+                  value={sleepOptions.some((o) => o.value === browserSleepMinutes) ? browserSleepMinutes : 120}
+                  onChange={(e) => setBrowserSleepMinutes(parseInt(e.target.value, 10))}
+                >
+                  {sleepOptions.map((o) => (
+                    <option key={o.value} value={o.value}>{t(o.labelKey)}</option>
+                  ))}
+                </select>
+              </div>
               <div className="st-hint">
-                {t("settings.browserPortHint")}
+                {t("settings.browserHint")}
               </div>
             </div>
           </div>

@@ -43,6 +43,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"]
 tracing-appender = "0.2"
 tracing-log = "0.2"
 tokio-rustls = "0.26"
+# suggest 联想词 TLS 根证书来源。注意：该 crate 已在依赖树内编译（quinn
+# platform-verifier → rustls-platform-verifier 传递引入），提为直接依赖
+# 不新增任何编译产物；替代方案（windows crate 枚举证书库）是重复造轮子
+rustls-native-certs = "0.8"
 tauri-plugin-store = "2.4.3"
 once_cell = "1.19"
 ctrlc = "3.4"
@@ -55,6 +59,17 @@ pkcs8 = { version = "0.10", features = ["pem", "encryption"] }
 pkcs1 = { version = "0.7", features = ["pem"] }
 pem = "3.0"
 sha2 = "0.10"
+
+# 内置浏览器：WebView2 独立 Environment（嵌入 Quirel 桌面）
+# 版本锁定说明：wry 0.55.1 引入 webview2-com 0.38，必须复用同版本，
+# 版本错位会导致 windows crate 双份编译（二进制 +5~15MB）
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.38"
+# features 显式声明本项目直接用到的 Win32 面（其余由依赖图聚合提供）：
+# Gdi=CreateRoundRectRgn、HiDpi=GetDpiForWindow（webview 圆角 region）、
+# Threading=CreateEventW/SetEvent（主循环唤醒事件）、Security=CreateEventW 的
+# SECURITY_ATTRIBUTES 参数类型（MsgWait 系列在 WindowsAndMessaging，依赖图已含）
+windows = { version = "0.61", features = ["Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_UI_HiDpi", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_Security"] }
 
 [profile.release]
 opt-level = 3          # 最高优化等级

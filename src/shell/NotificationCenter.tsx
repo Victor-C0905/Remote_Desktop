@@ -84,8 +84,10 @@ export function NotificationCenter({ isOpen, onClose }: NotificationCenterProps)
 
   if (!isOpen) return null;
 
+  // data-browser-overlay：浏览器 webview 子窗口让位标记（child HWND 无法被
+  // DOM z-index 遮挡），BrowserApp 检测到即隐藏 webview 让位
   return (
-    <div className="nc-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="nc-overlay" data-browser-overlay onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="nc-panel">
         {/* Header */}
         <div className="nc-header">

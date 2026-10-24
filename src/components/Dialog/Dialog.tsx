@@ -25,9 +25,12 @@ export function Dialog({ onClose, disableDismiss, width = 420, children }: Dialo
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose, disableDismiss]);
 
+  // data-browser-overlay：浏览器 webview 子窗口让位标记（child HWND 无法被
+  // DOM z-index 遮挡），BrowserApp 检测到即隐藏 webview 让位
   return createPortal(
     <div
       className="dg-overlay"
+      data-browser-overlay
       /* e.target 判断：点遮罩本身才关闭，点卡片内容冒泡上来不关闭 */
       onClick={(e) => { if (!disableDismiss && e.target === e.currentTarget) onClose(); }}
     >

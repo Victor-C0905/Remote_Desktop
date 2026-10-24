@@ -84,13 +84,13 @@ export function initWindowRegistry(registry: WindowRegistry): void {
     component: Settings,
   });
 
-  // Browser - 服务器视角网页浏览（SOCKS5 over QUIC 代理会话控制面板）
+  // Browser - 内置浏览器（WebView2 嵌入，chrome 区 + content 区）
   registry.register({
     id: 'browser',
     titleKey: 'apps.browser.title',
     icon: '🌐',
-    defaultSize: { width: 420, height: 380 },
-    minSize: { width: 360, height: 300 },
+    defaultSize: { width: 1000, height: 700 },
+    minSize: { width: 640, height: 440 },
     allowMultipleInstances: false,
     component: BrowserApp,
     desktopLabelKey: 'apps.browser.desktopLabel',

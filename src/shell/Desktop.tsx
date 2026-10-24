@@ -391,7 +391,9 @@ function DesktopContent() {
 
       {/* Overview Overlay */}
       {overviewVisible && (
-        <div className="overlay" onClick={(e) => {
+        // data-browser-overlay：浏览器 webview 子窗口让位标记（child HWND 无法
+        // 被 DOM z-index 遮挡），BrowserApp 检测到即隐藏 webview 让位
+        <div className="overlay" data-browser-overlay onClick={(e) => {
           if (e.target === e.currentTarget) setOverviewVisible(false);
         }}>
           <input
