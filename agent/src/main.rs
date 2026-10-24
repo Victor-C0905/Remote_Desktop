@@ -10,8 +10,12 @@ use quireld::{config, cert, event_bus, subscription, audit, server};
 #[cfg(unix)]
 use quireld::manager::Manager;
 
+/// 完整版本标识：包版本 + git 构建信息（由 build.rs 注入），例如 "0.3.0-beta.1 (dev-68-gbb44bf9)"
+const QUIREL_VERSION: &str =
+    concat!(env!("CARGO_PKG_VERSION"), " (", env!("QUIREL_BUILD_INFO"), ")");
+
 #[derive(Parser, Debug)]
-#[command(name = "quireld")]
+#[command(name = "quireld", version = QUIREL_VERSION)]
 #[command(about = "Quirel Control — 远程 Agent 服务端")]
 struct Args {
     /// 配置文件路径
@@ -263,6 +267,7 @@ async fn run_manager_mode(args: &Args) -> Result<()> {
     // 日志模式标识
     let log_mode = if std::env::var("RUST_LOG").is_ok() { "debug (RUST_LOG)" } else { "production" };
     tracing::info!("Quireld 启动中...");
+    tracing::info!("   版本: {}", QUIREL_VERSION);
     tracing::info!("   日志模式: {}", log_mode);
     tracing::info!("   日志级别: {}", cfg.log.level);
     tracing::info!("   日志目录: {}", if cfg.log.dir == "off" { "关闭".to_string() } else { cfg.log.dir.clone() });

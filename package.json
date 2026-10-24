@@ -11,7 +11,8 @@
     "test": "vitest",
     "test:ui": "vitest --ui",
     "test:run": "vitest run",
-    "release": "node scripts/release.mjs"
+    "release": "node scripts/release.mjs",
+    "prepare": "husky"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",
@@ -43,6 +44,8 @@
     "zustand": "^5.0.14"
   },
   "devDependencies": {
+    "@commitlint/cli": "^21.2.4",
+    "@commitlint/config-conventional": "^21.2.4",
     "@tauri-apps/cli": "^2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
@@ -50,6 +53,7 @@
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
     "@vitest/ui": "^4.1.9",
+    "husky": "^9.1.7",
     "jsdom": "^27.0.1",
     "typescript": "~5.8.3",
     "vite": "^7.0.4",
