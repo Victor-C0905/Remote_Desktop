@@ -10,6 +10,10 @@ const ALL_NAMES = [
   "emblem-ok", "user-trash", "window-close",
   "bell", "bell-outline",
   "pan-up", "pan-down",
+  "funnel",
+  "chevron-up", "chevron-down",
+  "go-previous", "go-next", "tab-new",
+  "external-link",
 ] as const;
 
 describe("SymbolicIcon", () => {

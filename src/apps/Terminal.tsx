@@ -3,17 +3,23 @@
 // 支持远程 PTY 连接（通过 QUIC Stream）和本地演示模式
 // 集成窗口系统：每个窗口实例独立状态，支持多窗口运行
 import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
+import { WebglAddon } from '@xterm/addon-webgl';
 // xterm.js 基础样式（必须导入，否则 canvas/text-layer 无法正确定位）
 import '@xterm/xterm/css/xterm.css';
 import { useServerManager } from '../context/ServerManager';
+import { ToolbarMenu } from '../components/ToolbarMenu/ToolbarMenu';
+import { ChromeTabStrip } from '../components/ChromeTabStrip/ChromeTabStrip';
 // import { useWindowState } from '../window-system/hooks/useWindowState'; // 未来集成时使用
 import { useWindowEvent } from '../window-system/hooks/useWindowEvent';
-import { describeTerminalFailure } from '../types/errors';
+import { describeTerminalFailure, formatUnknownError } from '../types/errors';
+import { useTranslation } from 'react-i18next';
+import i18n from '../i18n';
 import { createLogger } from '../utils/logger';
 import './Terminal.css';
 
@@ -34,8 +40,26 @@ interface TerminalTabMeta {
   label: string;
 }
 
+// ── 最小化期间的终端输出缓冲（Tier1 最小化闸门）──────────────────
+// 透明窗口使 WebView2 遮挡检测失效：最小化后页面仍被判定"可见"，PTY 输出
+// 持续触发 xterm 渲染吃 GPU/CPU。闸门策略：最小化期间不 write（不触发渲染），
+// 只入缓冲，恢复可见时按序冲刷。
+interface PendingOutput {
+  chunks: Uint8Array[];
+  bytes: number;
+  /** 缓冲超限丢弃过最旧数据，冲刷前需插入省略提示行 */
+  overflowed: boolean;
+}
+/** 缓冲上限 16MB：防长时间最小化 + 高频输出（如 cat 大文件）把内存打爆 */
+const MAX_PENDING_OUTPUT_BYTES = 16 * 1024 * 1024;
+
 let tabIdCounter = 0;
 const newTabId = () => `tab-${++tabIdCounter}`;
+
+// 页签标题用自增序号区分会话（不显示服务器名：服务器信息统一在底部状态栏展示）；
+// 取已有标签的最大序号 + 1，避免关闭中间页签后新建出现重复编号
+const nextTabNumber = (tabs: { label: string }[]) =>
+  tabs.reduce((max, t) => Math.max(max, Number(/(\d+)\s*$/.exec(t.label)?.[1] ?? 0)), 0) + 1;
 
 // ===================================================================
 // TerminalInstance: 单个终端实例（每个 tab 一个）
@@ -52,6 +76,10 @@ interface TerminalInstanceProps {
   workingDirectory?: string | null;
   /** 窗口创建后自动执行的命令（脚本运行：双击 .sh 由 FileManager 注入） */
   initialCommand?: string | null;
+  /** 本页签是否处于激活状态（WebGL 渲染器仅挂载在活动页签上，失活回落 DOM） */
+  isActive?: boolean;
+  /** OS 级窗口最小化（Tier1 闸门：最小化期间输出只缓冲不渲染） */
+  osMinimized?: boolean;
   // callback: terminal 实例创建后通知父组件（用于复制/粘贴）
   onTerminalReady?: (terminal: Terminal, sessionId: string | null, searchAddon: SearchAddon) => void;
 }
@@ -65,28 +93,134 @@ function TerminalInstance({
   cursorBlink,
   workingDirectory,
   initialCommand,
+  isActive,
+  osMinimized,
   onTerminalReady,
 }: TerminalInstanceProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const searchAddonRef = useRef<SearchAddon | null>(null);
+  /** WebGL 渲染器 addon（仅活动页签挂载；随 terminal.dispose 自动释放） */
+  const webglAddonRef = useRef<WebglAddon | null>(null);
+  /** 终端实例纪元：每次重建（服务器切换/重新初始化）+1，驱动 WebGL 挂载 effect 重跑 */
+  const [terminalEpoch, setTerminalEpoch] = useState(0);
+  /** 最小化期间的输出缓冲（null=无会话）；恢复可见时按序冲刷 */
+  const pendingOutputRef = useRef<PendingOutput | null>(null);
+  /** connectRemotePty 注册的冲刷函数（恢复可见时调用；会话销毁时置空） */
+  const flushOutputRef = useRef<(() => void) | null>(null);
+  // 渲染期直写 ref：connectRemotePty 的输出监听闭包经 ref 读取最新最小化状态
+  // （项目教训：useCallback/闭包内禁止直读 props，激活/状态对齐会被首帧旧值跳过）
+  const osMinimizedRef = useRef<boolean>(osMinimized ?? false);
+  osMinimizedRef.current = osMinimized ?? false;
   const sessionIdRef = useRef<string | null>(null);
   const unlistenRefs = useRef<UnlistenFn[]>([]);
   // IME 合成状态跟踪：防止合成期间焦点切换导致 compositionEnd 丢失，进而卡死输入
   const isComposingRef = useRef(false);
   const composingTimerRef = useRef<number | null>(null);
-  const [initializationStatus, setInitializationStatus] = useState<string>('等待容器挂载...');
+  const [initializationStatus, setInitializationStatus] = useState<string>(i18n.t('terminal.waitingMount'));
+
+  // ── 会话保活：防「拖拽重排触发 effect 假重跑」丢内容 ──────────
+  // 实测（内存级事件流取证）：页签拖拽重排后约 5ms，被移动页签的同一
+  // TerminalInstance（instance 编号不变 = 未重挂载）发生 cleanup→init，
+  // 且 deps 完全未变——React 强制重跑了 effect；若 cleanup 立即销毁
+  // xterm，终端缓冲区（输入/输出历史）随之真实丢失。编辑器丢字同理。
+  // 修复策略（机制无关）：cleanup 只调度 setTimeout(0) 的延迟销毁；
+  // 紧随其后的 setup 发现「终端仍在 + deps 未变」则取消销毁直接保活。
+  // - 真实卸载：无人取消，延迟销毁照常执行，无泄漏
+  // - deps 真变（切换服务器）：setup 同步 teardownNow 后完整重建，语义不变
+  // - StrictMode 双跑：run1 建 → cleanup 调度 → run2 取消并保活，
+  //   顺带消除了双跑重复建终端的浪费
+  const teardownTimerRef = useRef<number | null>(null);
+  /** 建立当前会话时的 deps 快照（JSON）：保活判定与服务器切换判定的依据 */
+  const depsKeyRef = useRef<string | null>(null);
+  // rAF 竞态防护状态移入 ref：延迟销毁在 cleanup 闭包之外执行，
+  // 访问不到 setup 局部的 disposed/initRafId，必须经 ref 读写
+  const disposedRef = useRef(false);
+  const initRafIdRef = useRef<number | null>(null);
+
+  /** 立即销毁当前会话（可从 setup 同步调用，也可由延迟定时器触发；全 ref 化） */
+  const teardownNow = () => {
+    if (teardownTimerRef.current !== null) {
+      clearTimeout(teardownTimerRef.current);
+      teardownTimerRef.current = null;
+    }
+    // 取消排队的初始化 rAF，防止为已销毁终端建立幽灵远程会话
+    disposedRef.current = true;
+    if (initRafIdRef.current !== null) {
+      cancelAnimationFrame(initRafIdRef.current);
+      initRafIdRef.current = null;
+    }
+    // 清理所有监听器和观察器
+    unlistenRefs.current.forEach(fn => fn());
+    unlistenRefs.current = [];
+
+    // 关闭远程终端会话
+    if (sessionIdRef.current) {
+      invoke('remote_terminal_close', { sessionId: sessionIdRef.current })
+        .catch(e => log.warn('关闭远程终端失败:', e));
+      sessionIdRef.current = null;
+    }
+
+    // 释放 xterm
+    try { terminalRef.current?.dispose(); } catch (e) { log.debug('terminal.dispose 失败:', e); }
+    terminalRef.current = null;
+    fitAddonRef.current = null;
+    // WebGL addon 已随 terminal.dispose 释放，清引用避免残留指向旧实例；
+    // 同步释放输出缓冲与冲刷句柄（会话已销毁，缓冲数据作废）
+    webglAddonRef.current = null;
+    pendingOutputRef.current = null;
+    flushOutputRef.current = null;
+
+    // 清理 DOM
+    const container = containerRef.current;
+    if (container) {
+      while (container.firstChild) {
+        container.removeChild(container.firstChild);
+      }
+    }
+  };
+
+  /** cleanup 入口：不立即销毁，只调度延迟销毁（假重跑的 setup 会取消它） */
+  const scheduleTeardown = () => {
+    if (teardownTimerRef.current !== null) {
+      clearTimeout(teardownTimerRef.current);
+    }
+    teardownTimerRef.current = window.setTimeout(() => {
+      teardownTimerRef.current = null;
+      teardownNow();
+    }, 0);
+  };
 
   // ── 创建 xterm 实例并连接远程 PTY ──────────
   useEffect(() => {
     const container = containerRef.current;
     if (!container) {
-      setInitializationStatus('❌ 容器 ref 为空');
+      setInitializationStatus(i18n.t('terminal.containerRefEmpty'));
       return;
     }
 
-    // 清理容器（防止 StrictMode 下重复挂载导致脏 DOM）
+    // 取消上一次 cleanup 调度的延迟销毁：拖拽重排触发的 effect 假重跑
+    //（cleanup→init 相邻发生）在此保活，终端与远程会话原样保留
+    if (teardownTimerRef.current !== null) {
+      clearTimeout(teardownTimerRef.current);
+      teardownTimerRef.current = null;
+    }
+
+    // 会话保活判定：终端仍在 + deps 未变 = React 假重跑（页签拖拽重排），
+    // 跳过重建；但必须返回延迟销毁 cleanup，保证真实卸载时仍能清理
+    const depsKey = JSON.stringify([activeServerId, activeServerName, activeServerHost, activeServerPort]);
+    if (terminalRef.current && depsKey === depsKeyRef.current) {
+      return scheduleTeardown;
+    }
+
+    // deps 真变（如切换服务器）：先同步销毁旧会话，再走完整重建（保留原有切换语义）
+    if (terminalRef.current) {
+      teardownNow();
+    }
+    depsKeyRef.current = depsKey;
+
+    // 清理容器（防御性：切换服务器路径已被 teardownNow 清空，此处兜底脏 DOM）
     while (container.firstChild) {
       container.removeChild(container.firstChild);
     }
@@ -104,6 +238,9 @@ function TerminalInstance({
         allowProposedApi: true,
       });
       terminalRef.current = terminal;
+      // 终端纪元 +1：通知 WebGL 挂载 effect（deps 含 terminalEpoch）在
+      // 新实例上重新执行——服务器切换时 isActive 不变，仅靠该信号触发重挂
+      setTerminalEpoch((e) => e + 1);
 
       // 2. 加载 FitAddon（响应式布局）
       const fitAddon = new FitAddon();
@@ -198,18 +335,37 @@ function TerminalInstance({
       }
 
       // 5. 等待下一帧，让浏览器完成 flex 布局后再 fit()
-      requestAnimationFrame(async () => {
+      // ⚠️ 会话卫生：rAF 句柄与 disposed 标志存入 ref（teardownNow 在 cleanup
+      //    闭包之外执行，访问不到 setup 局部变量，必须经 ref 读写）。延迟销毁
+      //    真正执行时置位 disposedRef 并取消 rAF，防止为幽灵终端建立远程会话；
+      //    假重跑保活路径不触碰两者，本 rAF 正常完成初始化。
+      disposedRef.current = false;
+      initRafIdRef.current = requestAnimationFrame(async () => {
+        if (disposedRef.current) return;
         try {
           fitAddon.fit();
           log.debug('✅ fit() 完成，cols:', terminal.cols, 'rows:', terminal.rows);
 
           // 6. 尝试连接远程 PTY 或启动演示模式
           if (activeServerId) {
-            setInitializationStatus('连接远程终端...');
-            await connectRemotePty(terminal, activeServerId, activeServerName, activeServerHost, activeServerPort, sessionIdRef, unlistenRefs, workingDirectory, initialCommand);
+            setInitializationStatus(i18n.t('terminal.connectingRemote'));
+            await connectRemotePty(terminal, activeServerId, activeServerName, activeServerHost, activeServerPort, sessionIdRef, unlistenRefs, workingDirectory, initialCommand, osMinimizedRef, pendingOutputRef, flushOutputRef);
+            // await 期间 teardown 已执行：刚建立的会话无人使用，立即关闭防泄漏
+            if (disposedRef.current) {
+              log.warn('初始化完成前组件已清理，关闭幽灵远程会话');
+              if (sessionIdRef.current) {
+                invoke('remote_terminal_close', { sessionId: sessionIdRef.current }).catch(e => log.warn('关闭幽灵会话失败:', e));
+                sessionIdRef.current = null;
+              }
+              // connectRemotePty 在 cleanup 之后 resolve，其注册的输出/断连
+              // 监听器来不及进 cleanup 的清空批次，这里补清
+              unlistenRefs.current.forEach(fn => fn());
+              unlistenRefs.current = [];
+              return;
+            }
           } else {
-            setInitializationStatus('演示模式');
-            terminal.write('[演示模式] 未连接远程服务器\r\n');
+            setInitializationStatus(i18n.t('terminal.demoMode'));
+            terminal.write(i18n.t('terminal.demoNotConnected'));
             runDemoShell(terminal);
           }
 
@@ -223,10 +379,10 @@ function TerminalInstance({
           log.info('✅ 初始化完成');
         } catch (err) {
           log.error('❌ 初始化失败:', err);
-          setInitializationStatus('❌ 初始化失败: ' + err);
+          setInitializationStatus(i18n.t('terminal.initFailedStatus', { error: formatUnknownError(err) }));
           // 回退到演示模式
-          terminal.write(`\x1b[31m[连接失败]\x1b[0m ${describeTerminalFailure(err)}\r\n`);
-          terminal.write('[演示模式] 输入 help 查看可用命令\r\n');
+          terminal.write(`\x1b[31m${i18n.t('terminal.connectFailedPrefix')}\x1b[0m ${describeTerminalFailure(err)}\r\n`);
+          terminal.write(i18n.t('terminal.demoHelpHint'));
           runDemoShell(terminal);
           // 即使失败也通知父组件（演示模式可用）
           if (onTerminalReady) {
@@ -313,43 +469,75 @@ function TerminalInstance({
         }
       });
 
-      return () => {
-        // 清理所有监听器和观察器
-        unlistenRefs.current.forEach(fn => fn());
-        unlistenRefs.current = [];
-
-        // 关闭远程终端会话
-        if (sessionIdRef.current) {
-          invoke('remote_terminal_close', { sessionId: sessionIdRef.current })
-            .catch(e => log.warn('关闭远程终端失败:', e));
-          sessionIdRef.current = null;
-        }
-
-        // 释放 xterm
-        try { terminal.dispose(); } catch (e) { log.debug('terminal.dispose 失败:', e); }
-        terminalRef.current = null;
-        fitAddonRef.current = null;
-
-        // 清理 DOM
-        while (container.firstChild) {
-          container.removeChild(container.firstChild);
-        }
-      };
+      // cleanup 不再立即销毁：只调度延迟销毁（0ms）。若紧随其后的 setup 判定
+      // 为假重跑（终端仍在 + deps 未变）会取消销毁实现保活；真实卸载时无人
+      // 取消，teardownNow 照常执行完整清理。诊断留痕移至 scheduleTeardown。
+      return scheduleTeardown;
     } catch (err) {
       log.error('❌ 初始化失败:', err);
-      setInitializationStatus('❌ 初始化失败: ' + err);
-      container.innerHTML = `<div style="color:#ff4444;padding:12px;font-family:monospace;">终端初始化失败: ${err}</div>`;
+      setInitializationStatus(i18n.t('terminal.initFailedStatus', { error: formatUnknownError(err) }));
+      // 创建半途失败：清扫半初始化状态（terminalRef 可能已赋值），并把
+      // depsKey 复位，避免下次 setup 把残缺终端误判为可保活
+      depsKeyRef.current = null;
+      teardownNow();
+      container.innerHTML = `<div style="color:#ff4444;padding:12px;font-family:monospace;">${i18n.t('terminal.initFailedHtml', { error: formatUnknownError(err) })}</div>`;
     }
   }, [activeServerId, activeServerName, activeServerHost, activeServerPort]);
+
+  // ── WebGL 渲染器：仅活动页签挂载，失活即卸载 ─────────────────────
+  // GPU 占用归因：全部页签常驻 DOM 渲染是主要来源之一。WebGL 渲染器由 GPU
+  // 合成、CPU 开销大幅降低；但 WebGL 上下文全浏览器上限约 16 个，多窗口×
+  // 多页签常驻挂载必撞线，且失活页签（display:none）挂载 WebGL 会以 0 尺寸
+  // 绘制图集纯浪费。策略：激活时挂载，失活时 dispose（xterm 自动回落 DOM
+  // 渲染器，终端实例与缓冲区不受影响）；创建失败/上下文丢失时静默回落 DOM。
+  // deps 含 terminalEpoch：会话重建（服务器切换）时 isActive 不变，靠纪元触发重挂。
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (!terminal) return;
+    if (!isActive) {
+      if (webglAddonRef.current) {
+        try { webglAddonRef.current.dispose(); } catch { /* 已随终端释放 */ }
+        webglAddonRef.current = null;
+        log.debug('WebGL 渲染器已卸载（页签失活，回落 DOM 渲染）');
+      }
+      return;
+    }
+    if (webglAddonRef.current) return; // 已挂载
+    try {
+      const addon = new WebglAddon();
+      // GPU 上下文丢失（驱动重置/显存回收）：卸载回落 DOM，避免持续异常
+      addon.onContextLoss(() => {
+        log.warn('WebGL 上下文丢失，回落 DOM 渲染');
+        try { addon.dispose(); } catch { /* 已释放 */ }
+        if (webglAddonRef.current === addon) webglAddonRef.current = null;
+      });
+      terminal.loadAddon(addon);
+      webglAddonRef.current = addon;
+      log.debug('WebGL 渲染器已挂载');
+    } catch (e) {
+      // WebGL 不可用（上下文耗尽/驱动问题/无头环境）：静默回落 DOM 渲染器
+      log.warn('WebGL 渲染器挂载失败，回落 DOM:', e);
+      webglAddonRef.current = null;
+    }
+  }, [isActive, terminalEpoch]);
+
+  // ── 最小化闸门：恢复可见时冲刷缓冲输出 ──────────────────────────
+  // 冲刷函数幂等（空缓冲 no-op），会话存续期间始终注册；会话销毁时被置空
+  useEffect(() => {
+    if (!osMinimized) {
+      try { flushOutputRef.current?.(); } catch (e) { log.debug('冲刷缓冲输出失败:', e); }
+    }
+  }, [osMinimized]);
 
   // ── fontSize / cursorBlink 变更 ───────────────────────
   useEffect(() => {
     const t = terminalRef.current;
     if (!t) return;
     t.options.fontSize = fontSize;
-    t.options.cursorBlink = cursorBlink;
+    // 最小化期间强制关闭光标闪烁（Tier1 闸门：停止无意义渲染）
+    t.options.cursorBlink = cursorBlink && !osMinimized;
     try { fitAddonRef.current?.fit(); } catch (e) { log.debug('fit 调整失败:', e); }
-  }, [fontSize, cursorBlink]);
+  }, [fontSize, cursorBlink, osMinimized]);
 
   // 渲染容器 div
   return (
@@ -374,6 +562,10 @@ async function connectRemotePty(
   unlistenRefs: React.MutableRefObject<UnlistenFn[]>,
   workingDirectory?: string | null,
   initialCommand?: string | null,
+  // Tier1 最小化闸门：最小化状态 ref + 缓冲/冲刷 ref（会话级缓冲挂在组件上）
+  minimizedRef?: React.MutableRefObject<boolean>,
+  pendingRef?: React.MutableRefObject<PendingOutput | null>,
+  flushRef?: React.MutableRefObject<(() => void) | null>,
 ): Promise<string> {
   // 1. 创建远程终端会话
   const result = await invoke<{ session_id: string }>('remote_spawn_terminal', {
@@ -392,18 +584,59 @@ async function connectRemotePty(
   log.info('✅ 远程终端创建成功:', sessionId);
 
   // 2. 显示连接信息
-  terminal.write(`\x1b[1;32m✅ 远程终端已连接\x1b[0m\r\n`);
-  terminal.write(`服务器: \x1b[1;34m${serverName || serverHost}:${serverPort || 8443}\x1b[0m\r\n`);
+  terminal.write(`\x1b[1;32m${i18n.t('terminal.connectedBanner')}\x1b[0m\r\n`);
+  terminal.write(i18n.t('terminal.connectedServer', {
+    name: `\x1b[1;34m${serverName || serverHost}:${serverPort || 8443}\x1b[0m`,
+  }) + '\r\n');
   terminal.write(`Session: ${sessionId}\r\n\r\n`);
 
   // 3. 监听终端输出事件
+  // Tier1 最小化闸门：最小化期间不 write（不触发渲染），只入缓冲；恢复可见时
+  // 由恢复 effect 或新数据到达路径按序冲刷。超 16MB 丢最旧并插入省略提示行。
+  if (pendingRef) {
+    pendingRef.current = { chunks: [], bytes: 0, overflowed: false };
+  }
+  // 幂等冲刷（空缓冲 no-op）：会话存续期间始终注册在 flushRef 上，
+  // 恢复 effect 与监听器路径共用；teardownNow 销毁会话时置空
+  const flushPendingOutput = () => {
+    const pending = pendingRef?.current;
+    if (!pending || pending.chunks.length === 0) return;
+    if (pending.overflowed) {
+      terminal.write(`\r\n\x1b[33m${i18n.t('terminal.outputBufferOverflow')}\x1b[0m\r\n`);
+    }
+    for (const chunk of pending.chunks) {
+      terminal.write(chunk);
+    }
+    if (pendingRef) {
+      pendingRef.current = { chunks: [], bytes: 0, overflowed: false };
+    }
+  };
+  if (flushRef) {
+    flushRef.current = flushPendingOutput;
+  }
+
   const unlistenOutput = await listen<{ session_id: string; data: number[] }>(
     'terminal-output',
     (event) => {
-      if (event.payload.session_id === sessionId) {
-        const bytes = new Uint8Array(event.payload.data);
-        terminal.write(bytes);
+      if (event.payload.session_id !== sessionId) return;
+      const bytes = new Uint8Array(event.payload.data);
+      if (minimizedRef?.current && pendingRef?.current) {
+        // 最小化闸门：只缓冲不渲染，恢复时按序冲刷
+        const pending = pendingRef.current;
+        pending.chunks.push(bytes);
+        pending.bytes += bytes.length;
+        if (pending.bytes > MAX_PENDING_OUTPUT_BYTES) {
+          // 丢最旧直到回到限内（至少保留最新一块）
+          while (pending.bytes > MAX_PENDING_OUTPUT_BYTES && pending.chunks.length > 1) {
+            pending.bytes -= pending.chunks.shift()!.length;
+          }
+          pending.overflowed = true;
+        }
+        return;
       }
+      // 常规路径：先冲刷残留缓冲（恢复瞬间到数据的竞态兜底），保证输出顺序
+      flushPendingOutput();
+      terminal.write(bytes);
     }
   );
   unlistenRefs.current.push(unlistenOutput);
@@ -413,7 +646,7 @@ async function connectRemotePty(
     'terminal-disconnected',
     (event) => {
       if (event.payload.session_id === sessionId) {
-        terminal.write('\r\n\x1b[31m[远程终端断开]\x1b[0m\r\n');
+        terminal.write(`\r\n\x1b[31m${i18n.t('terminal.disconnectedBanner')}\x1b[0m\r\n`);
         // 移除所有监听器
         unlistenRefs.current.forEach(fn => fn());
         unlistenRefs.current = [];
@@ -471,16 +704,16 @@ function runDemoShell(terminal: Terminal): void {
   const writePrompt = () => terminal.write(`\r\n\x1b[32m${username}@${hostname}\x1b[0m:\x1b[34m${cwd}\x1b[0m$ `);
 
   const commands: Record<string, () => void> = {
-    help: () => terminal.write('\r\n可用命令：help, echo, ls, pwd, cd, clear, date, whoami, exit\r\n'),
+    help: () => terminal.write(`\r\n${i18n.t('terminal.demoCommands')}\r\n`),
     ls: () => terminal.write('\r\nDesktop  Documents  Downloads  Music  Pictures  Videos  Projects\r\n'),
     pwd: () => terminal.write(`\r\n/home/${username}${cwd === '~' ? '' : '/' + cwd}\r\n`),
     whoami: () => terminal.write(`\r\n${username}\r\n`),
     date: () => terminal.write(`\r\n${new Date().toString()}\r\n`),
     clear: () => terminal.clear(),
-    exit: () => terminal.write('\r\n[演示模式已结束，关闭此标签或新建标签继续]\r\n'),
+    exit: () => terminal.write(`\r\n${i18n.t('terminal.demoExit')}\r\n`),
   };
 
-  terminal.write('[演示模式] 输入 help 查看可用命令\r\n');
+  terminal.write(i18n.t('terminal.demoHelpHint'));
   writePrompt();
 
   terminal.onData((data) => {
@@ -545,6 +778,7 @@ interface TerminalAppProps {
 }
 
 export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
+  const { t } = useTranslation();
   // ── 窗口系统集成 ────────────────────────────────────────────────────
   // 获取窗口状态（title、position、size、focused 等）
   // 用于窗口系统集成，确保每个窗口实例正确连接到窗口管理器
@@ -572,12 +806,42 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
   // ── 窗口实例独立状态（每个窗口实例有自己的 tabs、设置等）────────────
   const [tabs, setTabs] = useState<TerminalTabMeta[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
+
+  // 页签条挂载点：窗口标题栏槽位（Chrome 形态——标题栏即标签条）。
+  // WindowShell 的 HeaderBar 先于应用内容渲染，挂载时槽位必已存在；
+  // 找不到时（异常形态）回退到应用内。
+  const [titlebarSlot, setTitlebarSlot] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    setTitlebarSlot(document.querySelector<HTMLElement>(`[data-titlebar-slot="${windowId}"]`));
+  }, [windowId]);
   const [showSearch, setShowSearch] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [fontSize, setFontSize] = useState(14);
   const [cursorBlink, setCursorBlink] = useState(true);
   const [searchText, setSearchText] = useState('');
+
+  // ── OS 最小化闸门（Tier1）────────────────────────────────────
+  // 透明窗口破坏 WebView2 遮挡检测：最小化后页面仍被判定"可见"，PTY 输出
+  // 持续触发渲染吃 GPU/CPU。Rust 侧监听窗口 Resized + is_minimized，仅在
+  // 状态翻转时发出 app-minimize-changed；本组件将状态传给各终端实例
+  // （最小化期间输出只缓冲不渲染，恢复时冲刷）。全局 class 切换在 App.tsx。
+  const [osMinimized, setOsMinimized] = useState(false);
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    let cancelled = false;
+    listen<boolean>('app-minimize-changed', (event) => {
+      if (!cancelled) setOsMinimized(event.payload === true);
+    }).then((fn) => {
+      // 竞态防护：监听建立前组件已卸载，立即注销
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   // ── 活动终端的 refs（用于复制/粘贴/搜索）────────────────────────
   const activeTerminalRef = useRef<Terminal | null>(null);
@@ -591,7 +855,7 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
     if (tabs.length === 0) {
       const id = newTabId();
       initialTabIdRef.current = id;
-      setTabs([{ id, label: activeServer?.name || '本地演示' }]);
+      setTabs([{ id, label: t('terminal.tabLabel', { n: 1 }) }]);
       setActiveTabId(id);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -600,7 +864,7 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
   // ── 新建 tab ─────────────────────────────────────────────────
   const handleNewTab = () => {
     const id = newTabId();
-    setTabs((prev) => [...prev, { id, label: activeServer?.name || '本地演示' }]);
+    setTabs((prev) => [...prev, { id, label: t('terminal.tabLabel', { n: nextTabNumber(prev) }) }]);
     setActiveTabId(id);
   };
 
@@ -805,43 +1069,51 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
     }
   });
 
+  // ── 页签条行：ChromeTabStrip + 行内附件（连接状态、⌄ 菜单）──
+  // portal 进窗口标题栏（Chrome 形态，Windows Terminal 式行内附件）；
+  // 槽位缺失时（异常形态）回退渲染在应用内
+  const renderTabRow = () => (
+    <ChromeTabStrip
+      variant="dark"
+      tabs={tabs.map((t) => ({ id: t.id, label: t.label, dirty: false }))}
+      activeTabId={activeTabId ?? tabs[0]?.id ?? ''}
+      onActivate={(id) => {
+        setActiveTabId(id);
+      }}
+      onClose={(id) => handleCloseTab(id)}
+      onAdd={handleNewTab}
+      onReorder={(from, to) => {
+        setTabs((prev) => {
+          const arr = [...prev];
+          const [moved] = arr.splice(from, 1);
+          arr.splice(to, 0, moved);
+          return arr;
+        });
+      }}
+    >
+      {/* 低频操作收纳进 ⌄ 菜单：搜索/设置面板的开关，开启时菜单项打勾。
+          （标题栏连接状态小点已移除：底部状态栏已有完整连接信息，
+          标题栏圆点是遗留重复） */}
+      <ToolbarMenu
+        icon="⌄"
+        title={t('terminal.moreActions')}
+        items={[
+          { label: t('terminal.menuSearch'), checked: showSearch, onClick: () => setShowSearch((v) => !v) },
+          { label: t('terminal.menuSettings'), checked: showSettings, onClick: () => setShowSettings((v) => !v) },
+        ]}
+      />
+    </ChromeTabStrip>
+  );
+
   return (
     <div className="terminal-app" onClick={() => { if (contextMenu) setContextMenu(null); }}>
-      {/* Tab Bar - 整合原HeaderBar功能 */}
-      <div className="terminal-tabs-container">
-        {/* Tab List */}
-        <div className="terminal-tab-list">
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              className={`terminal-tab ${tab.id === activeTabId ? 'active' : ''}`}
-              onClick={() => setActiveTabId(tab.id)}
-            >
-              <span className="tab-icon">$</span>
-              <span className="tab-label">{tab.label}</span>
-              <span className="tab-close" onClick={(e) => handleCloseTab(tab.id, e)} title="关闭标签">×</span>
-            </button>
-          ))}
-          <button className="terminal-new-tab" onClick={handleNewTab} title="新建标签">+</button>
-        </div>
-
-        {/* Actions and Status */}
-        <div className="terminal-tab-actions">
-          {/* 文字按钮：与 FileManager 工具栏风格一致（替代 emoji 图标） */}
-          <button className="terminal-tab-btn" onClick={() => setShowSearch((v) => !v)} title="在终端输出中搜索">搜索</button>
-          <button className="terminal-tab-btn" onClick={() => setShowSettings((v) => !v)} title="字号 / 光标闪烁设置">设置</button>
-          {/* 连接状态：CSS 圆点（绿=已连接，灰=本地），服务器名常规字重 */}
-          <span className={`terminal-status ${activeServer ? 'is-remote' : 'is-local'}`} title={activeServer ? `${activeServer.host}:${activeServer.port}` : '未连接远程服务器'}>
-            <span className="terminal-status-dot" />
-            {activeServer ? activeServer.name : '本地'}
-          </span>
-        </div>
-      </div>
+      {/* Tab Bar —— 标题栏即标签条 */}
+      {titlebarSlot ? createPortal(renderTabRow(), titlebarSlot) : renderTabRow()}
 
       {/* Search Bar */}
       {showSearch && (
         <div className="terminal-search-bar">
-          <span className="terminal-search-label">搜索:</span>
+          <span className="terminal-search-label">{t('terminal.searchLabel')}</span>
           <input
             className="terminal-search-input"
             value={searchText}
@@ -850,12 +1122,12 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
               if (e.key === 'Enter') handleSearch();
             }}
             autoFocus
-            placeholder="在终端中搜索..."
+            placeholder={t('terminal.searchPlaceholder')}
           />
-          <button className="terminal-search-button" onClick={handleSearchPrev} title="上一个">↑</button>
-          <button className="terminal-search-button" onClick={handleSearchNext} title="下一个">↓</button>
-          <button className="terminal-search-button" onClick={handleSearch}>查找</button>
-          <button className="terminal-search-button" onClick={() => setShowSearch(false)}>关闭</button>
+          <button className="terminal-search-button" onClick={handleSearchPrev} title={t('terminal.searchPrev')}>↑</button>
+          <button className="terminal-search-button" onClick={handleSearchNext} title={t('terminal.searchNext')}>↓</button>
+          <button className="terminal-search-button" onClick={handleSearch}>{t('terminal.searchFind')}</button>
+          <button className="terminal-search-button" onClick={() => setShowSearch(false)}>{t('terminal.close')}</button>
         </div>
       )}
 
@@ -880,6 +1152,8 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
               fontSize={fontSize}
               cursorBlink={cursorBlink}
               workingDirectory={workingDirectory}
+              isActive={tab.id === activeTabId}
+              osMinimized={osMinimized}
               initialCommand={tab.id === initialTabIdRef.current ? (preloadData?.initialCommand ?? null) : null}
               onTerminalReady={(terminal, sessionId, searchAddon) => {
                 // 更新 refs（所有 tab 都更新，但只有活动 tab 的 terminal 可见）
@@ -893,8 +1167,8 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
         {tabs.length === 0 && (
           <div className="terminal-empty">
             <div className="empty-icon">🖥️</div>
-            <div className="empty-text">没有打开的终端</div>
-            <div className="empty-hint">点击"+ 新建"启动一个新的终端</div>
+            <div className="empty-text">{t('terminal.emptyText')}</div>
+            <div className="empty-hint">{t('terminal.emptyHint')}</div>
           </div>
         )}
       </div>
@@ -912,12 +1186,12 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
               <span className="terminal-status-item terminal-status-mono">
                 {activeServer.host}:{activeServer.port}
               </span>
-              <span className="terminal-status-item">{tabs.length} 个会话</span>
+              <span className="terminal-status-item">{t('terminal.sessionCount', { count: tabs.length })}</span>
             </>
           ) : (
             <span className="terminal-status-item">
               <span className="terminal-status-dot off" />
-              本地演示模式（未连接远程服务器）
+              {t('terminal.demoLocalStatus')}
             </span>
           )}
         </div>
@@ -930,7 +1204,7 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
       {showSettings && (
         <div className="terminal-settings-panel" onClick={(e) => e.stopPropagation()}>
           <label className="terminal-settings-label">
-            字号:
+            {t('terminal.fontSizeLabel')}
             <input
               type="range"
               className="terminal-settings-slider"
@@ -942,7 +1216,7 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
             <span className="terminal-settings-value">{fontSize}</span>
           </label>
           <label className="terminal-settings-label">
-            光标闪烁:
+            {t('terminal.cursorBlinkLabel')}
             <input
               type="checkbox"
               className="terminal-settings-checkbox"
@@ -950,17 +1224,17 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
               onChange={(e) => setCursorBlink(e.target.checked)}
             />
           </label>
-          <button className="terminal-settings-close-button" onClick={() => setShowSettings(false)}>关闭</button>
+          <button className="terminal-settings-close-button" onClick={() => setShowSettings(false)}>{t('terminal.close')}</button>
         </div>
       )}
 
       {/* Context Menu（只在未选中时显示，提供粘贴选项）*/}
       {contextMenu && (
         <div className="terminal-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(e) => e.stopPropagation()}>
-          <button className="terminal-menu-item" onClick={handlePaste}>粘贴</button>
+          <button className="terminal-menu-item" onClick={handlePaste}>{t('terminal.paste')}</button>
           <hr className="terminal-menu-divider" />
-          <button className="terminal-menu-item" onClick={() => { setShowSearch(true); setContextMenu(null); }}>搜索</button>
-          <button className="terminal-menu-item" onClick={() => { setShowSettings(true); setContextMenu(null); }}>设置</button>
+          <button className="terminal-menu-item" onClick={() => { setShowSearch(true); setContextMenu(null); }}>{t('terminal.menuSearch')}</button>
+          <button className="terminal-menu-item" onClick={() => { setShowSettings(true); setContextMenu(null); }}>{t('terminal.menuSettings')}</button>
         </div>
       )}
     </div>

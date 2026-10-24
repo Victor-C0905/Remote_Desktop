@@ -2,11 +2,13 @@ use serde::Serialize;
 use std::fs;
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
-use tauri::Manager;  // 导入 Manager trait
+use tauri::{Emitter, Manager};  // 导入 Emitter/Manager trait
 use tokio::sync::Mutex;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
+pub mod errors;
 mod connection;
+mod fullscreen;
 mod proxy;
 mod terminal;
 mod transfer;
@@ -540,16 +542,117 @@ async fn prepare_shutdown(_app: tauri::AppHandle) -> Result<(), String> {
 
 /* ── App Entry ──────────────────────────────────────────── */
 
+/// debug 构建专属：探测 vite dev server（devUrl localhost:1420）是否存活。
+/// vite `host: false` 在 Node 17+ 可能只绑 IPv6 ::1（netstat 实证），双栈都探；
+/// 任一可达即放行。不可达时弹原生 MessageBox（GUI 进程 eprintln 不可见）后退出，
+/// 避免透明窗口静默失败。release 构建打包了前端资源，不经过此路径。
+#[cfg(all(debug_assertions, target_os = "windows"))]
+fn ensure_dev_server_or_exit() {
+    use std::net::{SocketAddr, TcpStream};
+    use std::time::Duration;
+
+    let addrs: [SocketAddr; 2] = [
+        "127.0.0.1:1420".parse().expect("合法 IPv4 SocketAddr"),
+        "[::1]:1420".parse().expect("合法 IPv6 SocketAddr"),
+    ];
+    let reachable = addrs.iter().any(|a| {
+        TcpStream::connect_timeout(a, Duration::from_millis(800)).is_ok()
+    });
+    if reachable {
+        return;
+    }
+
+    eprintln!("[App] dev server (localhost:1420) 未运行，debug 客户端无法加载前端页面");
+
+    use windows::core::PCWSTR;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        MessageBoxW, MB_ICONWARNING, MB_OK, MB_SETFOREGROUND,
+    };
+    // PCWSTR 要求 NUL 结尾的 UTF-16；encode_utf16().chain([0]) 生成临时 Vec，
+    // 指针在 MessageBoxW 调用期间有效（Vec 绑定为 let，非内联临时值）
+    let title: Vec<u16> = "Quirel 开发模式\0".encode_utf16().collect();
+    let text: Vec<u16> = concat!(
+        "开发服务器未运行（http://localhost:1420）。\n\n",
+        "debug 版客户端的前端页面来自 Vite 开发服务器，单独运行 exe 只会得到透明空窗。\n\n",
+        "请在项目根目录执行：\nnpm run tauri dev\0",
+    )
+    .encode_utf16()
+    .collect();
+    unsafe {
+        MessageBoxW(
+            None,
+            PCWSTR(text.as_ptr()),
+            PCWSTR(title.as_ptr()),
+            MB_OK | MB_ICONWARNING | MB_SETFOREGROUND,
+        );
+    }
+    std::process::exit(1);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // debug 启动守卫：debug 版前端页面来自 devUrl（vite localhost:1420），
+    // dev 会话结束后单独运行 exe 时页面加载失败——transparent 窗口完全透明、
+    // 零报错，表象即「窗口打不开」（2026-10-23 复发实证）。创建任何窗口前
+    // 先探测 dev server，不可达则弹原生对话框明示原因并退出，杜绝透明空窗。
+    #[cfg(all(debug_assertions, target_os = "windows"))]
+    ensure_dev_server_or_exit();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .manage(pty::PtyManager::new())
+        .manage(fullscreen::FullscreenState::default())
         .manage(connection::ConnectionManager::new())
         .manage(proxy::ProxySessionManager::new())
         .manage(Arc::new(terminal::TerminalStreamManager::new()))
+        .on_window_event(|window, event| {
+            // Tier1 最小化闸门：透明窗口破坏 WebView2 遮挡检测，最小化后页面
+            // 仍被判定"可见"而持续渲染（终端 GPU 31% 归因结论之一）。在
+            // Resized 事件时探测真实最小化状态，仅状态翻转时通知前端，前端
+            // 据此缓冲终端输出/暂停动画/关闭毛玻璃滤镜。
+            if matches!(event, tauri::WindowEvent::Resized(_)) {
+                // 进程级去重：Resized 在拖拽尺寸时高频触发，只在最小化状态
+                // 翻转的边界各发一次（恢复时同样经 Resized 事件探测到）
+                static LAST_MINIMIZED: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                use std::sync::atomic::Ordering;
+                let minimized = window.is_minimized().unwrap_or(false);
+                if LAST_MINIMIZED.swap(minimized, Ordering::Relaxed) != minimized {
+                    let _ = window.emit("app-minimize-changed", minimized);
+                }
+            }
+            // 全屏物理锁死：任何来源的窗口移动/变形（系统 NC 通道绕过前端
+            // 与命令层）在事件回调里立即拉回锁定 rect。用 FullscreenState
+            // 的 locked 基准（进入全屏末尾保存），避免进入过程的中间态被误拦。
+            use tauri::Manager as _;
+            let fs_state = window.app_handle().state::<fullscreen::FullscreenState>();
+            let locked = *fs_state.locked.lock().unwrap();
+            if let Some((lx, ly, lw, lh)) = locked {
+                match event {
+                    tauri::WindowEvent::Moved(pos) => {
+                        if pos.x != lx || pos.y != ly {
+                            let _ = window.set_position(tauri::PhysicalPosition::new(lx, ly));
+                            tracing::warn!(
+                                "[Fullscreen] 拦截全屏移动: ({},{}) → ({},{})",
+                                pos.x, pos.y, lx, ly
+                            );
+                        }
+                    }
+                    tauri::WindowEvent::Resized(size) => {
+                        if size.width != lw || size.height != lh {
+                            let _ = window.set_size(tauri::PhysicalSize::new(lw, lh));
+                            tracing::warn!(
+                                "[Fullscreen] 拦截全屏变形: {}x{} → {}x{}",
+                                size.width, size.height, lw, lh
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        })
         .setup(|app| {
             // 初始化日志系统（必须在所有其他操作之前）
             init_logging(app);
@@ -579,6 +682,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             read_dir, stat_file, read_file_text,
             prepare_shutdown,
+            fullscreen::toggle_fullscreen,
+            fullscreen::is_fullscreen,
+            fullscreen::start_os_drag,
             ui_logging::log_write,
             ui_logging::get_app_version,
             pty::spawn_terminal,
@@ -609,15 +715,32 @@ pub fn run() {
             connection::remote_chmod, // 修改文件权限（属性对话框）
             connection::remote_chown, // 修改文件所有者（属性对话框）
             connection::get_stats,
+            connection::get_processes,          // 进程列表查询（SystemMonitor 进程页签）
             connection::get_agent_capabilities, // Agent 能力查询（前端门控新协议命令）
             connection::get_transfer_limit,     // 查询上传大小限制（设置页）
             connection::set_transfer_limit,     // 修改上传大小限制（仅 root）
             connection::subscribe,
             connection::unsubscribe,
             proxy::proxy_start_session,
+            proxy::browser_open,
             proxy::proxy_stop_session,
             proxy::proxy_session_status,
-            proxy::proxy_list_browsers,
+            proxy::browser_window::browser_close_window,
+            proxy::browser_window::browser_navigate,
+            proxy::browser_window::browser_back,
+            proxy::browser_window::browser_forward,
+            proxy::browser_window::browser_reload,
+            proxy::browser_window::browser_create_tab,
+            proxy::browser_window::browser_close_tab,
+            proxy::browser_window::browser_focus_tab,
+            proxy::browser_window::browser_reorder_tab,
+            proxy::browser_window::browser_set_bounds,
+            proxy::browser_window::browser_set_visible,
+            proxy::browser_window::browser_get_settings,
+            proxy::browser_window::browser_set_settings,
+            proxy::suggest::browser_suggest, // 地址栏联想词（经 SOCKS5 隧道取搜索引擎补全）
+            proxy::browser::proxy_list_browsers, // 枚举本机浏览器（设置页"系统浏览器"下拉）
+            proxy::browser::browser_open_in_system, // 系统浏览器打开当前页（挂同一隧道）
             terminal::remote_spawn_terminal,
             terminal::remote_terminal_write,
             terminal::remote_terminal_close,

@@ -8,6 +8,7 @@
  */
 
 import { useCallback, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { classifyArchive } from './commands';
 import { useArchiveListing } from './hooks/useArchiveListing';
 import { useEntryActions } from './hooks/useEntryActions';
@@ -23,6 +24,7 @@ interface ArchiveViewerProps {
 }
 
 export function ArchiveViewer({ preloadData }: ArchiveViewerProps) {
+  const { t } = useTranslation();
   const path = preloadData?.path;
   const serverId = preloadData?.serverId;
 
@@ -48,26 +50,26 @@ export function ArchiveViewer({ preloadData }: ArchiveViewerProps) {
       <div className="av-toolbar">
         <span className="av-name">📦 {fileName}</span>
         {tree.length > 0 && (
-          <span className="av-meta">{stats.files} 个文件 · 共 {fmtSize(stats.total)}</span>
+          <span className="av-meta">{t('archive.fileCount', { count: stats.files, size: fmtSize(stats.total) })}</span>
         )}
         <span className="av-spacer" />
         {notice && <span className="av-meta">{notice}</span>}
-        <button className="av-btn" onClick={refresh} disabled={loading || !kind}>刷新</button>
+        <button className="av-btn" onClick={refresh} disabled={loading || !kind}>{t('archive.refresh')}</button>
         <button
           className="av-btn av-btn-primary"
           onClick={() => setExtractDialog('ask')}
           disabled={loading || !kind || !tree.length}
-        >全部解压</button>
+        >{t('archive.extractAll')}</button>
       </div>
 
       <div className="av-body">
         {loading ? (
-          <div className="av-loading">读取压缩包内容…（大 tar.gz 可能需要数秒）</div>
+          <div className="av-loading">{t('archive.loading')}</div>
         ) : error ? (
           <div className="av-error">
             <span>{error.msg}</span>
             {error.detail && <pre>{error.detail}</pre>}
-            <button className="av-btn" onClick={refresh}>重试</button>
+            <button className="av-btn" onClick={refresh}>{t('common.retry')}</button>
           </div>
         ) : (
           <ArchiveTree nodes={tree} depth={0} expanded={expanded}

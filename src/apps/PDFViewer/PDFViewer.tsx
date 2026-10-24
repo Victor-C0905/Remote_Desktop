@@ -7,9 +7,11 @@
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import { createLogger } from '../../utils/logger';
+import { formatUnknownError } from '../../types/errors';
 import './PDFViewer.css';
 
 const log = createLogger('PDFViewer');
@@ -62,6 +64,7 @@ function base64ToBytes(b64: string): Uint8Array {
 }
 
 export function PDFViewer({ preloadData }: PDFViewerProps) {
+  const { t } = useTranslation();
   const [numPages, setNumPages] = useState(0);
   const [pageNum, setPageNum] = useState(1);
   const [error, setError] = useState<string | null>(null);
@@ -78,7 +81,7 @@ export function PDFViewer({ preloadData }: PDFViewerProps) {
   // 加载 PDF 文档
   useEffect(() => {
     if (!path || !serverId) {
-      setError('未指定文件或未连接服务器');
+      setError(t('pdf.notSpecified'));
       setLoading(false);
       return;
     }
@@ -107,7 +110,7 @@ export function PDFViewer({ preloadData }: PDFViewerProps) {
       } catch (err) {
         if (cancelled) return;
         log.error('加载 PDF 失败:', err);
-        setError(`无法加载 PDF: ${err}`);
+        setError(t('pdf.loadFailed', { message: formatUnknownError(err) }));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -120,7 +123,7 @@ export function PDFViewer({ preloadData }: PDFViewerProps) {
       docRef.current?.destroy();
       docRef.current = null;
     };
-  }, [path, serverId]);
+  }, [path, serverId, t]);
 
   // 渲染当前页
   useEffect(() => {
@@ -179,7 +182,7 @@ export function PDFViewer({ preloadData }: PDFViewerProps) {
 
   return (
     <div className="pv-root">
-      {loading && <div className="pv-status">加载中…</div>}
+      {loading && <div className="pv-status">{t('common.loading')}</div>}
       {error && (
         <div className="pv-error">
           <p>{error}</p>

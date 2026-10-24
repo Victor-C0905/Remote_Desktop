@@ -1,6 +1,21 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { useServerManager } from "../context/ServerManager";
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
+import {
+  formatBytes,
+  swapDisplay,
+  toFsRow,
+  sortProcesses,
+  toggleProcessSort,
+  DEFAULT_PROCESS_SORT,
+  type ProcessInfo,
+  type ProcessSortKey,
+  type ProcessSortState,
+  type MountInfo,
+} from "./systemMonitor/display";
+import { formatUnknownError } from "../types/errors";
 import { SUBSCRIPTION_CONFIG } from "../config/subscription";
 import {
   OFFLINE_METRICS,
@@ -14,6 +29,7 @@ import { createLogger } from '../utils/logger';
 import { StatsPanel } from "../components/StatsPanel";
 import { SymbolicIcon } from "../components/symbolic";
 import { ConnectionErrorState, ReconnectingState } from "../components/ConnectionState";
+import { AppTopbar } from "../components/app-shell/AppTopbar";
 import { getServerErrorInfo } from "../stores/serversStore";
 import { useOpenApp } from "../window-system/hooks/useOpenApp";
 // import { useWindowState } from "../window-system/hooks/useWindowState"; // 未来集成时使用
@@ -26,6 +42,8 @@ interface MetricsSnapshot {
   mem_used_bytes: number;
   mem_total_bytes: number;
   swap_used_bytes: number;
+  // 交换分区总量（协议 #[serde(default)] 扩展字段；0 = 旧 Agent 或未配置 swap）
+  swap_total_bytes: number;
   disks: DiskInfo[];
   network_rx_bytes: number;
   network_tx_bytes: number;
@@ -38,16 +56,6 @@ interface DiskInfo {
   used_bytes: number;
 }
 
-interface ProcessInfo {
-  pid: number;
-  name: string;
-  user: string;
-  cpu_percent: number;
-  mem_percent: number;
-  mem_bytes: number;
-  state: string;
-}
-
 interface HistoryPoint {
   time: number;
   value: number;
@@ -55,32 +63,23 @@ interface HistoryPoint {
 
 type TabId = "processes" | "resources" | "filesystems" | "stats";
 
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
-  return (bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1) + " " + units[i];
-}
+/** 进程表头列定义（key 同时用作排序键，对齐 FileManager FILE_COLUMNS 模式；
+ *  PID/CPU 为通用缩写不进词典，其余走 labelKey） */
+const PROCESS_COLUMNS: { key: ProcessSortKey; label: string; labelKey?: string; cellClass: string }[] = [
+  { key: "pid", label: "PID", cellClass: "sm-ph-pid" },
+  { key: "name", label: "", labelKey: "monitor.colName", cellClass: "sm-ph-name" },
+  { key: "user", label: "", labelKey: "monitor.colUser", cellClass: "sm-ph-user" },
+  { key: "cpu", label: "CPU", cellClass: "sm-ph-cpu" },
+  { key: "mem", label: "", labelKey: "monitor.colMem", cellClass: "sm-ph-mem" },
+  { key: "state", label: "", labelKey: "monitor.colState", cellClass: "sm-ph-state" },
+];
 
 function formatPercent(value: number): string {
   return value.toFixed(1) + "%";
 }
 
-function generateDemoProcesses(): ProcessInfo[] {
-  const processes: ProcessInfo[] = [
-    { pid: 1, name: "systemd", user: "root", cpu_percent: 0.1, mem_percent: 0.5, mem_bytes: 4096000, state: "S" },
-    { pid: 1234, name: "gnome-shell", user: "user", cpu_percent: 3.2, mem_percent: 4.5, mem_bytes: 368640000, state: "S" },
-    { pid: 2345, name: "firefox", user: "user", cpu_percent: 8.5, mem_percent: 12.3, mem_bytes: 1000000000, state: "S" },
-    { pid: 3456, name: "code", user: "user", cpu_percent: 5.1, mem_percent: 8.2, mem_bytes: 670000000, state: "S" },
-    { pid: 4567, name: "node", user: "user", cpu_percent: 2.3, mem_percent: 3.1, mem_bytes: 250000000, state: "S" },
-    { pid: 5678, name: "rustc", user: "user", cpu_percent: 15.2, mem_percent: 6.5, mem_bytes: 520000000, state: "R" },
-    { pid: 6789, name: "docker", user: "root", cpu_percent: 1.2, mem_percent: 2.1, mem_bytes: 170000000, state: "S" },
-    { pid: 7890, name: "nginx", user: "root", cpu_percent: 0.3, mem_percent: 0.8, mem_bytes: 65000000, state: "S" },
-    { pid: 8901, name: "postgres", user: "postgres", cpu_percent: 0.5, mem_percent: 1.5, mem_bytes: 120000000, state: "S" },
-    { pid: 9012, name: "redis-server", user: "redis", cpu_percent: 0.2, mem_percent: 0.3, mem_bytes: 24000000, state: "S" },
-  ];
-  return processes.sort((a, b) => b.cpu_percent - a.cpu_percent);
-}
+// 进程列表轮询间隔：页签可见 + 能力支持时按需拉取，离开页签即停
+const PROCESSES_REFRESH_MS = 3000;
 
 /* ── Mini Chart Component (Canvas-based) ─────────────── */
 
@@ -140,6 +139,7 @@ function MiniChart({ data, color, height, max }: MiniChartProps) {
 /* ── Main Component ───────────────────────────────────── */
 
 export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
+  const { t } = useTranslation();
   // 窗口系统集成（未来可能需要使用 windowState）
   // const windowState = useWindowState(windowId);
   const { activeServerId, activeServer, servers, connectServer } = useServerManager();
@@ -155,8 +155,14 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
   // 永远不为 null：离线时 = OFFLINE_METRICS，在线时 = 真实数据
   const [metrics, setMetrics] = useState<MetricsSnapshot | typeof OFFLINE_METRICS>(OFFLINE_METRICS);
   const [processes, setProcesses] = useState<ProcessInfo[]>([]);
-  const [processSort, setProcessSort] = useState<"cpu" | "mem" | "pid">("cpu");
-  const [selectedPid, setSelectedPid] = useState<number | null>(null);
+  // 能力门控：null=查询中，false=旧 Agent（绝不盲发——盲发会断流）
+  const [procSupported, setProcSupported] = useState<boolean | null>(null);
+  const [procError, setProcError] = useState<string | null>(null);
+  // 文件系统页签：remote_get_mounts 真实挂载点（设备名/文件系统类型来自 sysinfo，
+  // 是 2026-06 就存在的老命令，早于能力系统，所有存量 Agent 均支持，无需门控）
+  const [mounts, setMounts] = useState<MountInfo[]>([]);
+  // 进程排序：列头点击切换（对齐 FileManager，状态机见 display.ts）
+  const [processSort, setProcessSort] = useState<ProcessSortState>(DEFAULT_PROCESS_SORT);
   // 是否已收到过真实在线数据（用于区分「从未连接」和「断连后」）
   const [hasReceivedData, setHasReceivedData] = useState(false);
 
@@ -184,6 +190,9 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
       // 断连/无连接 → 立即切换为离线占位符（同步，UI 即时响应）
       setMetrics(OFFLINE_METRICS);
       setProcesses([]);
+      setProcSupported(null);
+      setProcError(null);
+      setMounts([]);
       setHasReceivedData(false);
       // 清空历史数据（重连后重新积累）
       cpuHistoryRef.current = [];
@@ -281,22 +290,70 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
 
   // 移除原有的轮询逻辑（fetchMetrics 和 setInterval）
 
+  // 能力查询：决定进程页签是真实数据还是「不支持」空态
   useEffect(() => {
-    if (activeTab === "processes") {
-      // 进程列表暂时使用 demo 数据（Agent 未实现进程列表）
-      setProcesses(generateDemoProcesses());
+    if (!activeServerId) {
+      setProcSupported(null);
+      return;
     }
-  }, [activeTab]);
+    let cancelled = false;
+    setProcSupported(null);
+    invoke<string[]>("get_agent_capabilities", { serverId: activeServerId })
+      .then((caps) => {
+        if (!cancelled) setProcSupported(caps.includes("processes"));
+      })
+      .catch(() => {
+        // 查询失败按不支持处理（空态），绝不发送 GetProcesses
+        if (!cancelled) setProcSupported(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeServerId]);
 
-  const sortedProcesses = useCallback(() => {
-    const sorted = [...processes];
-    switch (processSort) {
-      case "cpu": return sorted.sort((a, b) => b.cpu_percent - a.cpu_percent);
-      case "mem": return sorted.sort((a, b) => b.mem_percent - a.mem_percent);
-      case "pid": return sorted.sort((a, b) => a.pid - b.pid);
-    }
-    return sorted;
-  }, [processes, processSort]);
+  // 进程拉取：页签可见 + 能力支持时 3s 轮询；切页签/断连/卸载即停
+  useEffect(() => {
+    if (activeTab !== "processes" || !activeServerId || procSupported !== true) return;
+    let cancelled = false;
+    const fetchOnce = () => {
+      invoke<ProcessInfo[]>("get_processes", { serverId: activeServerId })
+        .then((list) => {
+          if (!cancelled) {
+            setProcesses(list);
+            setProcError(null);
+          }
+        })
+        .catch((e) => {
+          if (!cancelled) setProcError(formatUnknownError(e));
+        });
+    };
+    fetchOnce();
+    const timer = setInterval(fetchOnce, PROCESSES_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [activeTab, activeServerId, procSupported]);
+
+  // 文件系统页签：切到时拉取一次真实挂载点（挂载信息变化低频，无需定时刷新）
+  useEffect(() => {
+    if (activeTab !== "filesystems" || !activeServerId) return;
+    let cancelled = false;
+    invoke<MountInfo[]>("remote_get_mounts", { serverId: activeServerId })
+      .then((m) => {
+        if (!cancelled) setMounts(m);
+      })
+      .catch((e) => log.error("获取挂载点失败:", e));
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, activeServerId]);
+
+  // 排序纯函数在 display.ts（单测覆盖）；渲染层只做数据编排
+  const sortedProcesses = useMemo(
+    () => sortProcesses(processes, processSort),
+    [processes, processSort]
+  );
 
   // ── 离线判断 ──
   const isOffline = '_offline' in metrics && (metrics as typeof OFFLINE_METRICS)._offline === true;
@@ -309,8 +366,45 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
   const showSkeleton = !!activeServerId && !hasReceivedData;
   const showOffline = !activeServerId;
 
+  // 资源页签 Swap 卡片展示三元组（渲染前统一计算，避免渲染处三次重复调用）
+  const swap = swapDisplay(metrics.swap_used_bytes, metrics.swap_total_bytes, isOffline);
+
   return (
     <div className="sm">
+      {/* 应用内顶栏 — 对齐 TextEditor（共享 AppTopbar）：页签直接置左
+          （原「视图/排序」菜单已移除——视图与右侧页签重复，排序改为
+          进程列表列头点击排序，对齐 FileManager 交互）；固定在内容区
+          上方，不随内容滚动 */}
+      <AppTopbar>
+        {/* 视图页签 */}
+        <div className="sm-tabs">
+          <button
+            className={`sm-tab${activeTab === "processes" ? " active" : ""}`}
+            onClick={() => setActiveTab("processes")}
+          >
+            {t('monitor.tabProcesses')}
+          </button>
+          <button
+            className={`sm-tab${activeTab === "resources" ? " active" : ""}`}
+            onClick={() => setActiveTab("resources")}
+          >
+            {t('monitor.tabResources')}
+          </button>
+          <button
+            className={`sm-tab${activeTab === "filesystems" ? " active" : ""}`}
+            onClick={() => setActiveTab("filesystems")}
+          >
+            {t('monitor.tabFilesystems')}
+          </button>
+          <button
+            className={`sm-tab${activeTab === "stats" ? " active" : ""}`}
+            onClick={() => setActiveTab("stats")}
+          >
+            {t('monitor.tabStats')}
+          </button>
+        </div>
+      </AppTopbar>
+
       {/* Content — 三层状态门控 */}
       <div className="sm-content">
         {showOffline ? (
@@ -337,9 +431,9 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
             <div className="sm-offline-overlay">
               <div className="offline-badge">
                 <SymbolicIcon name="network-offline" size={16} className="offline-badge-icon" />
-                未连接
+                {t('monitor.notConnected')}
               </div>
-              <div className="offline-hint">连接到远程服务器以查看系统监控数据</div>
+              <div className="offline-hint">{t('monitor.offlineHint')}</div>
             </div>
           </div>
           )
@@ -349,71 +443,51 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
         ) : (
           /* 层 2: 真实数据内容（已收到在线数据） */
           <>
-            {/* Tab Toolbar - 原HeaderBar的Tab功能 */}
-            <div className="sm-toolbar">
-              <div className="sm-tabs">
-                <button
-                  className={`sm-tab${activeTab === "processes" ? " active" : ""}`}
-                  onClick={() => setActiveTab("processes")}
-                >
-                  进程
-                </button>
-                <button
-                  className={`sm-tab${activeTab === "resources" ? " active" : ""}`}
-                  onClick={() => setActiveTab("resources")}
-                >
-                  资源
-                </button>
-                <button
-                  className={`sm-tab${activeTab === "filesystems" ? " active" : ""}`}
-                  onClick={() => setActiveTab("filesystems")}
-                >
-                  文件系统
-                </button>
-                <button
-                  className={`sm-tab${activeTab === "stats" ? " active" : ""}`}
-                  onClick={() => setActiveTab("stats")}
-                >
-                  统计
-                </button>
-              </div>
-              <button className="sm-menu-btn" title="菜单">⋮</button>
-            </div>
-
             {activeTab === "processes" && (
           <div className="sm-processes">
+            {/* 列头点击排序（对齐 FileManager）：同列翻转方向，异列取默认方向 */}
             <div className="sm-process-header">
-              <span className="sm-ph-pid" onClick={() => setProcessSort("pid")}>
-                PID {processSort === "pid" && "▼"}
-              </span>
-              <span className="sm-ph-name">进程名称</span>
-              <span className="sm-ph-user">用户</span>
-              <span className="sm-ph-cpu" onClick={() => setProcessSort("cpu")}>
-                CPU {processSort === "cpu" && "▼"}
-              </span>
-              <span className="sm-ph-mem" onClick={() => setProcessSort("mem")}>
-                内存 {processSort === "mem" && "▼"}
-              </span>
-              <span className="sm-ph-state">状态</span>
-            </div>
-            <div className="sm-process-list">
-              {sortedProcesses().map((proc) => (
-                <div
-                  key={proc.pid}
-                  className={`sm-process-row${selectedPid === proc.pid ? " selected" : ""}`}
-                  onClick={() => setSelectedPid(proc.pid)}
+              {PROCESS_COLUMNS.map((col) => (
+                <span
+                  key={col.key}
+                  className={`${col.cellClass}${processSort.key === col.key ? " sorted" : ""}`}
+                  onClick={() => setProcessSort((prev) => toggleProcessSort(prev, col.key))}
                 >
-                  <span className="sm-pr-pid">{proc.pid}</span>
-                  <span className="sm-pr-name">{proc.name}</span>
-                  <span className="sm-pr-user">{proc.user}</span>
-                  <span className="sm-pr-cpu">{formatPercentSafe(proc.cpu_percent, isOffline)}</span>
-                  <span className="sm-pr-mem">{formatPercentSafe(proc.mem_percent, isOffline)}</span>
-                  <span className="sm-pr-state">{proc.state}</span>
-                </div>
+                  {col.labelKey ? t(col.labelKey) : col.label}
+                  {processSort.key === col.key && (
+                    <SymbolicIcon
+                      name={processSort.dir === "asc" ? "chevron-up" : "chevron-down"}
+                      size={12}
+                      className="sm-sort-indicator"
+                    />
+                  )}
+                </span>
               ))}
             </div>
+            <div className="sm-process-list">
+              {procSupported === false ? (
+                <div style={{ padding: '20px 0', color: 'var(--quirel-text-disabled)', textAlign: 'center' }}>
+                  {t('monitor.processUnsupported')}
+                </div>
+              ) : procError ? (
+                <div style={{ padding: '20px 0', color: 'var(--quirel-text-error, var(--quirel-text-secondary))', textAlign: 'center' }}>
+                  {procError}
+                </div>
+              ) : (
+                sortedProcesses.map((proc) => (
+                  <div key={proc.pid} className="sm-process-row">
+                    <span className="sm-pr-pid">{proc.pid}</span>
+                    <span className="sm-pr-name">{proc.name}</span>
+                    <span className="sm-pr-user">{proc.user}</span>
+                    <span className="sm-pr-cpu">{formatPercentSafe(proc.cpu_percent, isOffline)}</span>
+                    <span className="sm-pr-mem">{formatPercentSafe(proc.mem_percent, isOffline)}</span>
+                    <span className="sm-pr-state">{proc.state}</span>
+                  </div>
+                ))
+              )}
+            </div>
             <div className="sm-process-footer">
-              <span>共 {processes.length} 个进程</span>
+              <span>{t('monitor.processCount', { count: processes.length })}</span>
             </div>
           </div>
         )}
@@ -423,18 +497,18 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
             {/* CPU & Memory Section */}
             <div className="sm-res-section">
               <div className="sm-res-card">
-                <div className="sm-res-title">CPU 历史 (最近120秒)</div>
+                <div className="sm-res-title">{t('monitor.cpuHistory')}</div>
                 <div className="sm-res-chart">
                   <MiniChart data={cpuHistory} color="#3584e4" height={60} max={100} />
                 </div>
                 <div className="sm-res-stats">
                   <span className="sm-res-value">{formatPercentSafe(metrics.cpu_percent, isOffline)}</span>
-                  <span className="sm-res-label">当前使用率</span>
+                  <span className="sm-res-label">{t('monitor.currentUsage')}</span>
                 </div>
               </div>
 
               <div className="sm-res-card">
-                <div className="sm-res-title">内存历史 (最近120秒)</div>
+                <div className="sm-res-title">{t('monitor.memHistory')}</div>
                 <div className="sm-res-chart">
                   <MiniChart data={memHistory} color="#33d17a" height={60} max={100} />
                 </div>
@@ -448,7 +522,7 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
             <div className="sm-res-section">
               <div className="sm-res-bar-card">
                 <div className="sm-bar-header">
-                  <span className="sm-bar-title">内存</span>
+                  <span className="sm-bar-title">{t('monitor.mem')}</span>
                   <span className="sm-bar-value">{formatPercentSafe(
                     metrics.mem_total_bytes > 0 ? (metrics.mem_used_bytes / metrics.mem_total_bytes) * 100 : 0,
                     isOffline
@@ -471,37 +545,41 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
 
               <div className="sm-res-bar-card">
                 <div className="sm-bar-header">
-                  <span className="sm-bar-title">交换</span>
-                  <span className="sm-bar-value">{formatPercentSafe(0, isOffline)}</span>
+                  <span className="sm-bar-title">{t('monitor.swap')}</span>
+                  <span className="sm-bar-value">{swap.value}</span>
                 </div>
                 <div className="sm-bar-track">
-                  <div className="sm-bar-fill" style={{ width: '0%', background: "#e8a416", opacity: isOffline ? 0.3 : 1 }} />
+                  <div className="sm-bar-fill" style={{
+                    width: `${swap.widthPercent}%`,
+                    background: "#e8a416",
+                    opacity: isOffline ? 0.3 : 1,
+                  }} />
                 </div>
                 <div className="sm-bar-detail">
-                  {formatBytesSafe(metrics.swap_used_bytes, isOffline)} / —
+                  {swap.detail}
                 </div>
               </div>
             </div>
 
             <div className="sm-res-section">
               <div className="sm-res-card sm-res-card-wide">
-                <div className="sm-res-title">网络</div>
+                <div className="sm-res-title">{t('monitor.network')}</div>
                 <div className="sm-network-stats">
                   <div className="sm-net-item">
                     <span className="sm-net-icon">↓</span>
-                    <span className="sm-net-label">接收</span>
+                    <span className="sm-net-label">{t('monitor.rx')}</span>
                     <span className="sm-net-value">{formatSpeedSafe(networkRxSpeed, isOffline)}</span>
                   </div>
                   <div className="sm-net-item">
                     <span className="sm-net-icon">↑</span>
-                    <span className="sm-net-label">发送</span>
+                    <span className="sm-net-label">{t('monitor.tx')}</span>
                     <span className="sm-net-value">{formatSpeedSafe(networkTxSpeed, isOffline)}</span>
                   </div>
                 </div>
               </div>
 
               <div className="sm-res-card">
-                <div className="sm-res-title">运行时间</div>
+                <div className="sm-res-title">{t('monitor.uptime')}</div>
                 <div className="sm-res-stats sm-res-stats-center">
                   <span className="sm-res-value sm-res-value-large">{formatUptimeSafe(metrics.uptime_secs, isOffline)}</span>
                 </div>
@@ -509,14 +587,14 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
             </div>
 
             <div className="sm-res-section sm-res-disks">
-              <div className="sm-res-title-section">磁盘用量</div>
+              <div className="sm-res-title-section">{t('monitor.diskUsage')}</div>
               {isOffline ? (
                 <div style={{ padding: '16px 0', color: 'var(--quirel-text-disabled)', textAlign: 'center' }}>
-                  无数据（未连接）
+                  {t('monitor.noData')}
                 </div>
               ) : metrics.disks.length === 0 ? (
                 <div style={{ padding: '16px 0', color: 'var(--quirel-text-secondary)', textAlign: 'center' }}>
-                  暂无磁盘信息
+                  {t('monitor.noDisks')}
                 </div>
               ) : (
                 metrics.disks.map((disk) => {
@@ -550,39 +628,32 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
         {activeTab === "filesystems" && (
           <div className="sm-filesystems">
             <div className="sm-fs-header">
-              <span className="sm-fs-device">设备</span>
-              <span className="sm-fs-dir">目录</span>
-              <span className="sm-fs-type">类型</span>
-              <span className="sm-fs-total">总大小</span>
-              <span className="sm-fs-used">已用</span>
-              <span className="sm-fs-avail">可用</span>
+              <span className="sm-fs-device">{t('monitor.colDevice')}</span>
+              <span className="sm-fs-dir">{t('monitor.colDir')}</span>
+              <span className="sm-fs-type">{t('monitor.colType')}</span>
+              <span className="sm-fs-total">{t('monitor.colTotal')}</span>
+              <span className="sm-fs-used">{t('monitor.colUsed')}</span>
+              <span className="sm-fs-avail">{t('monitor.colAvail')}</span>
             </div>
             <div className="sm-fs-list">
-              {isOffline ? (
+              {mounts.length === 0 ? (
                 <div className="sm-fs-row" style={{ justifyContent: 'center', color: 'var(--quirel-text-disabled)', padding: '20px 0' }}>
-                  无数据（未连接）
+                  {t('monitor.noDisks')}
                 </div>
               ) : (
-              <>
-              {metrics.disks.map((disk) => (
-                <div key={disk.mount_point} className="sm-fs-row">
-                  <span className="sm-fs-device">/dev/sda{metrics.disks.indexOf(disk) + 1}</span>
-                  <span className="sm-fs-dir">{disk.mount_point}</span>
-                  <span className="sm-fs-type">ext4</span>
-                  <span className="sm-fs-total">{formatBytes(disk.total_bytes)}</span>
-                  <span className="sm-fs-used">{formatBytes(disk.used_bytes)}</span>
-                  <span className="sm-fs-avail">{formatBytes(disk.total_bytes - disk.used_bytes)}</span>
-                </div>
-              ))}
-              <div className="sm-fs-row">
-                <span className="sm-fs-device">tmpfs</span>
-                <span className="sm-fs-dir">/tmp</span>
-                <span className="sm-fs-type">tmpfs</span>
-                <span className="sm-fs-total">4 GB</span>
-                <span className="sm-fs-used">128 MB</span>
-                <span className="sm-fs-avail">3.9 GB</span>
-              </div>
-              </>
+                mounts.map((m) => {
+                  const row = toFsRow(m);
+                  return (
+                    <div key={`${row.device}-${row.dir}`} className="sm-fs-row">
+                      <span className="sm-fs-device">{row.device}</span>
+                      <span className="sm-fs-dir">{row.dir}</span>
+                      <span className="sm-fs-type">{row.type}</span>
+                      <span className="sm-fs-total">{row.total}</span>
+                      <span className="sm-fs-used">{row.used}</span>
+                      <span className="sm-fs-avail">{row.avail}</span>
+                    </div>
+                  );
+                })
               )}
             </div>
           </div>

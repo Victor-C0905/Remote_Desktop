@@ -156,6 +156,17 @@ pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &U
             }
         }
 
+        // 进程列表查询（任何已认证用户；能力串 "processes" 由客户端门控）
+        Payload::GetProcesses {} => {
+            tracing::info!("进程列表查询: uid={}", session.uid);
+            Envelope::new(
+                envelope.request_id,
+                Payload::ProcessListResponse {
+                    processes: crate::collectors::processes::list(),
+                },
+            )
+        }
+
         // 统计查询请求
         Payload::GetStats { stats_type } => {
             tracing::info!("统计查询请求: stats_type={}, uid={}", stats_type, session.uid);
@@ -374,6 +385,7 @@ fn collect_metrics() -> Result<MetricsSnapshot, String> {
         mem_used_bytes: mem_used,
         mem_total_bytes: mem_total,
         swap_used_bytes: sys.used_swap(),
+        swap_total_bytes: sys.total_swap(),
         disks,
         network_rx_bytes: network_rx,
         network_tx_bytes: network_tx,

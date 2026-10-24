@@ -3,6 +3,7 @@
 // - ConnectionErrorState：status=error 时的完整错误态（图标/标题/消息/建议/对比提示/重试）
 // - ReconnectingState：status=reconnecting 时的轻量自动重连指示
 
+import { useTranslation } from "react-i18next";
 import { SymbolicIcon } from "./symbolic";
 import "./ConnectionState.css";
 
@@ -22,6 +23,7 @@ export interface ConnectionErrorStateProps {
 export function ConnectionErrorState({
   title, message, action, hint, detail, onRetry, onOpenSettings,
 }: ConnectionErrorStateProps) {
+  const { t } = useTranslation();
   return (
     <div className="cs-error">
       <SymbolicIcon name="network-offline" size={48} className="cs-error-icon" />
@@ -39,10 +41,10 @@ export function ConnectionErrorState({
       <div className="cs-error-buttons">
         <button className="cs-btn-primary" onClick={onRetry}>
           <SymbolicIcon name="view-refresh" size={14} />
-          重试
+          {t("common.retry")}
         </button>
         {onOpenSettings && (
-          <button className="cs-btn-ghost" onClick={onOpenSettings}>查看服务器</button>
+          <button className="cs-btn-ghost" onClick={onOpenSettings}>{t("connection.viewServers")}</button>
         )}
       </div>
     </div>
@@ -54,10 +56,11 @@ export interface ReconnectingStateProps {
 }
 
 export function ReconnectingState({ serverName }: ReconnectingStateProps) {
+  const { t } = useTranslation();
   return (
     <div className="cs-reconnecting">
       <SymbolicIcon name="view-refresh" size={16} className="cs-reconnecting-icon" />
-      <span>{serverName ? `正在重新连接到 ${serverName}…` : "正在重新连接…"}</span>
+      <span>{serverName ? t("connection.reconnectingTo", { name: serverName }) : t("connection.reconnecting")}</span>
     </div>
   );
 }

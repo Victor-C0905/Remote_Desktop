@@ -203,18 +203,10 @@
   background: var(--dock-text-color, #ffffff);
   /* 简化光晕: 只用一层柔和的发光 */
   box-shadow: 0 0 3px var(--dock-text-color, #ffffff);
-  animation: pulse 2s ease-in-out infinite;
-}
-
-@keyframes pulse {
-  0%, 100% {
-    opacity: 1;
-    transform: translateX(-50%) scale(1);
-  }
-  50% {
-    opacity: 0.7;
-    transform: translateX(-50%) scale(0.9);
-  }
+  /* 静态圆点：原 2s 无限 pulse 动画是全应用唯一无条件常驻帧源——
+     compositor 被迫以满帧率（高刷屏 165fps）持续产帧，透明窗口下每帧
+     还要做全窗 DWM 混合，是空闲 GPU 占用的大头（rAF 实测 2s 332 帧满帧，
+     毛玻璃/WebGL 全部修复后仍高 GPU 的根因）。动画移除后静止页面零产帧 */
 }
 
 .dock-item.running .icon::after {
@@ -441,4 +433,23 @@
 
 .app-placeholder .placeholder-text {
   font-size: var(--font-body);
+}
+
+/* ─── 浏览器模式提示横幅（无 Tauri 运行时时显示）────────── */
+.browser-mode-banner {
+  position: fixed;
+  top: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 60vw;
+  padding: 6px 16px;
+  border-radius: var(--radius-lg);
+  background: rgba(120, 78, 20, 0.85);
+  color: #ffe9c2;
+  font-size: var(--font-caption, 12px);
+  line-height: 1.5;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
+  z-index: 45; /* 高于非激活窗口(20)，低于 TopBar(50) */
+  pointer-events: none; /* 纯提示，不拦截任何交互 */
 }

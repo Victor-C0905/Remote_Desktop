@@ -1,5 +1,5 @@
 // src/apps/Terminal.test.tsx
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { TerminalApp } from './Terminal';
 
@@ -28,20 +28,22 @@ vi.mock('../context/ServerManager', () => ({
 describe('TerminalApp', () => {
   it('renders terminal app', () => {
     render(<TerminalApp windowId="test-window-1" />);
-    // 新建标签按钮：内容为 "+"，提示文字「新建标签」（对齐当前 UI）
-    expect(screen.getByTitle('新建标签')).toBeInTheDocument();
+    // 新建页签按钮：提示文字「新建页签」（ChromeTabStrip 行级附件位）
+    expect(screen.getByTitle('新建页签')).toBeInTheDocument();
   });
 
   it('renders header bar', () => {
     render(<TerminalApp windowId="test-window-2" />);
-    expect(screen.getByRole('button', { name: '搜索' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '设置' })).toBeInTheDocument();
+    // 搜索/设置收纳进 ⌄ 更多操作菜单（Windows Terminal 式低频收纳）
+    fireEvent.click(screen.getByTitle('更多操作'));
+    expect(screen.getByRole('menuitemcheckbox', { name: '搜索' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitemcheckbox', { name: '设置' })).toBeInTheDocument();
   });
 
   it('renders tab bar', () => {
     render(<TerminalApp windowId="test-window-3" />);
-    // 未连接服务器时 tab label 为「本地演示」（activeServer?.name || '本地演示'）
-    expect(screen.getByText('本地演示')).toBeInTheDocument();
+    // 页签标题不显示服务器名，用自增序号区分会话；首个 tab 为「终端 1」
+    expect(screen.getByText('终端 1')).toBeInTheDocument();
   });
 
   it('renders terminal container', () => {

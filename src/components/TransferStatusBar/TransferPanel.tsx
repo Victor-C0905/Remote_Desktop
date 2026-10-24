@@ -9,6 +9,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { useTranslation } from 'react-i18next';
 import { TransferTask } from '../../hooks/useTransferProgress';
 import { useServersStore } from '../../stores/serversStore';
 import { groupTransfersByServer } from './transferGrouping';
@@ -59,6 +60,7 @@ interface TransferPanelProps {
 }
 
 export function TransferPanel({ transfers, onRemoveTask, onClose, statusbarRef }: TransferPanelProps) {
+  const { t } = useTranslation();
   const panelRef = useRef<HTMLDivElement>(null);
 
   /**
@@ -209,7 +211,7 @@ export function TransferPanel({ transfers, onRemoveTask, onClose, statusbarRef }
       ref={panelRef}
       className="transfer-panel"
       role="dialog"
-      aria-label="传输任务列表"
+      aria-label={t('transfer.panel.listAria')}
       onClick={(e) => e.stopPropagation()} // 阻止事件冒泡，防止触发父元素的 onClick
     >
       {/* 任务列表（按服务器分组，当前服务器组展开，其他折叠） */}
@@ -219,7 +221,7 @@ export function TransferPanel({ transfers, onRemoveTask, onClose, statusbarRef }
             <div className="tp-empty-icon">
               <DownloadIcon />
             </div>
-            <p className="tp-empty-text">暂无传输任务</p>
+            <p className="tp-empty-text">{t('transfer.panel.empty')}</p>
           </div>
         ) : (
           groups.map((group) => {
@@ -230,7 +232,7 @@ export function TransferPanel({ transfers, onRemoveTask, onClose, statusbarRef }
                   className="tp-group-header"
                   onClick={() => toggleGroup(group.serverId)}
                   aria-expanded={expanded}
-                  aria-label={`${group.serverName} 的传输任务（${group.summary}）`}
+                  aria-label={t('transfer.panel.groupAria', { name: group.serverName, summary: group.summary })}
                 >
                   <span className={`tp-group-dot${group.isCurrent ? ' active' : ''}`} />
                   <span className="tp-group-name">{group.serverName}</span>
@@ -262,25 +264,25 @@ export function TransferPanel({ transfers, onRemoveTask, onClose, statusbarRef }
         <div className="tp-stats">
           {totalSize > 0 && (
             <span className="tp-stat-item">
-              <span className="tp-stat-label">总大小:</span>
+              <span className="tp-stat-label">{t('transfer.panel.totalSize')}</span>
               <span className="tp-stat-value">{formatFileSize(totalSize)}</span>
             </span>
           )}
           {activeSpeed > 0 && (
             <span className="tp-stat-item">
-              <span className="tp-stat-label">速度:</span>
+              <span className="tp-stat-label">{t('transfer.panel.speed')}</span>
               <span className="tp-stat-value">{formatSpeed(activeSpeed)}</span>
             </span>
           )}
           {activeCount > 0 && (
             <span className="tp-stat-item">
-              <span className="tp-stat-label">活动:</span>
+              <span className="tp-stat-label">{t('transfer.panel.active')}</span>
               <span className="tp-stat-value">{activeCount}</span>
             </span>
           )}
           {pausedCount > 0 && (
             <span className="tp-stat-item">
-              <span className="tp-stat-label">暂停:</span>
+              <span className="tp-stat-label">{t('transfer.panel.paused')}</span>
               <span className="tp-stat-value">{pausedCount}</span>
             </span>
           )}
@@ -292,27 +294,27 @@ export function TransferPanel({ transfers, onRemoveTask, onClose, statusbarRef }
             <button
               className="tp-action-btn pause"
               onClick={handlePauseAll}
-              aria-label="暂停所有活动任务"
+              aria-label={t('transfer.panel.pauseAll')}
             >
-              全部暂停
+              {t('transfer.panel.pauseAllBtn')}
             </button>
           )}
           {pausedCount > 0 && (
             <button
               className="tp-action-btn resume"
               onClick={handleResumeAll}
-              aria-label="继续所有已暂停任务"
+              aria-label={t('transfer.panel.resumeAll')}
             >
-              全部继续
+              {t('transfer.panel.resumeAllBtn')}
             </button>
           )}
           {activeCount > 0 && (
             <button
               className="tp-action-btn cancel"
               onClick={handleCancelAll}
-              aria-label="取消所有活动任务"
+              aria-label={t('transfer.panel.cancelAll')}
             >
-              全部取消
+              {t('transfer.panel.cancelAllBtn')}
             </button>
           )}
         </div>

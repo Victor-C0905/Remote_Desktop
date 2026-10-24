@@ -63,6 +63,9 @@ function globalStateEqual(a: GlobalState, b: GlobalState): boolean {
  * ⚠️ 幂等：数据未变时返回同一缓存引用，避免 useSyncExternalStore 无限循环
  */
 function getGlobalStateSnapshot(manager: WindowManager): GlobalState {
+  // ⚠️ windowList 保持创建顺序（Map 插入序），绝不在此排序——
+  // 排序会翻转 Desktop children 数组，React 重排 DOM 触发窗口内容重载。
+  // MRU 层叠由 per-window 快照的 zRank（激活栈内排名）驱动内联 zIndex 表达。
   const windows = manager.getAll();
   const activeWindow = manager.getActive();
 
@@ -102,6 +105,15 @@ export function WindowManagerProvider({ children }: { children: ReactNode }) {
     return new WindowManager(registry);
   }, [registry]);
 
+  // 初始化事件桥接：将 Manager 事件路由到 per-window 通知
+  // ⚠️ 必须独立于 hydration 初始化——桥是纯前端事件路由，不依赖存储。
+  //    若放入 boot() 等待 hydration 之后，无 Tauri 环境（纯浏览器 dev）下
+  //    hydration 失败挂起 → 桥永不初始化 → window:moved/maximized/minimized
+  //    等事件无法通知 useWindowState → 拖拽/最大化/最小化在 UI 层全部失效。
+  useEffect(() => {
+    initWindowEventBridge(manager as WindowManager);
+  }, [manager]);
+
   // 加载持久化窗口（受用户设置控制：关闭则每次启动干净桌面）
   // mount-only：只在启动时读一次设置值；运行时切换开关只影响 save（save 内动态读取），
   // 若把设置值放进依赖会导致切换开关时重复 load() → 窗口重复恢复。
@@ -111,15 +123,18 @@ export function WindowManagerProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
     const boot = async () => {
       if (!useSettingsStore.persist.hasHydrated()) {
-        await new Promise<void>((resolve) =>
-          useSettingsStore.persist.onFinishHydration(() => resolve())
-        );
+        // 超时兜底：无 Tauri 环境（纯浏览器 dev）下 Tauri Store 不可用，
+        // hydration 可能永不完成，不能让窗口恢复逻辑永久挂起
+        await Promise.race([
+          new Promise<void>((resolve) =>
+            useSettingsStore.persist.onFinishHydration(() => resolve())
+          ),
+          new Promise<void>((resolve) => setTimeout(resolve, 3000)),
+        ]);
       }
       if (cancelled) return;
       if (!useSettingsStore.getState().restoreWindowsOnStartup) return;
       manager.load();
-      // 初始化事件桥接：将 Manager 事件路由到 per-window 通知
-      initWindowEventBridge(manager as WindowManager);
     };
     boot();
     return () => { cancelled = true; };
@@ -219,7 +234,9 @@ interface WindowInstanceState {
   minimized: boolean;
   maximized: boolean;
   isActive: boolean;
-  activatedAt: number;
+  // ✅ MRU 层叠：本窗口在激活栈中的排名（0=最旧，栈顶=最近激活）。
+  // 栈变化会改变相关窗口的排名 → 快照变化 → 订阅窗口重渲染更新 zIndex。
+  zRank: number;
 }
 
 /**
@@ -240,7 +257,7 @@ function windowStateEqual(a: WindowInstanceState, b: WindowInstanceState): boole
     a.minimized === b.minimized &&
     a.maximized === b.maximized &&
     a.isActive === b.isActive &&
-    a.activatedAt === b.activatedAt;
+    a.zRank === b.zRank;
 }
 
 /** 默认窗口状态（窗口不存在时的回退值） */
@@ -250,7 +267,7 @@ const DEFAULT_WINDOW_STATE: WindowInstanceState = {
   minimized: false,
   maximized: false,
   isActive: false,
-  activatedAt: 0,
+  zRank: 0,
 };
 
 /**
@@ -271,7 +288,9 @@ function getWindowStateSnapshot(windowId: string, manager: WindowManager): Windo
     minimized: win.minimized,
     maximized: win.maximized,
     isActive: win.id === activeWindowId,
-    activatedAt: win.activatedAt,
+    // ✅ MRU 层叠：激活栈内排名（indexOf 不可能为 -1——窗口存在必在栈中，
+    //   但防御 clamp 到 0）
+    zRank: Math.max(0, manager.activationOrder.indexOf(win.id)),
   };
 
   const cached = windowStateCaches.get(windowId);
@@ -290,13 +309,16 @@ function getWindowStateSnapshot(windowId: string, manager: WindowManager): Windo
  * 窗口状态 Hook：按 windowId 分片订阅
  * 只在对应窗口状态变化时重渲染
  * 其他窗口的拖动/调整大小不影响此 Hook 的订阅者
+ *
+ * ⚠️ Rules of Hooks：不得在 useSyncExternalStore 之前提前 return。
+ *    窗口从 manager Map 消失的瞬间（关闭窗口/会话恢复重建窗口对象），
+ *    若此处提前 return 会少调用一个 hook，React 抛
+ *    「Rendered fewer hooks than expected」→ 无 ErrorBoundary 时整树
+ *    卸载重建 → 所有窗口内容丢失（终端会话重建、编辑器输入清空）。
+ *    窗口不存在时由快照回退值兜底（见 getWindowStateSnapshot）。
  */
-export function useWindowState(windowId: string): WindowInstanceState | null {
+export function useWindowState(windowId: string): WindowInstanceState {
   const { manager } = useWindowManager();
-
-  // 检查窗口是否存在
-  const win = manager.getById(windowId);
-  if (!win) return null;
 
   return useSyncExternalStore(
     // subscribe: 注册指定窗口的状态监听器
@@ -309,7 +331,7 @@ export function useWindowState(windowId: string): WindowInstanceState | null {
         windowStateListeners.get(windowId)?.delete(callback);
       };
     },
-    // getSnapshot: 返回当前窗口状态快照（幂等）
+    // getSnapshot: 返回当前窗口状态快照（幂等，窗口不存在时回退缓存/默认值）
     () => getWindowStateSnapshot(windowId, manager as WindowManager),
     // getServerSnapshot: SSR 兼容
     () => windowStateCaches.get(windowId) ?? DEFAULT_WINDOW_STATE
@@ -352,8 +374,16 @@ export function initWindowEventBridge(manager: WindowManager) {
 
   LIST_EVENTS.forEach(eventType => {
     manager.on(eventType, (event: WindowEvent) => {
-      // 聚焦事件：同时通知旧窗口和新窗口（isActive 变化）
-      if (eventType === 'window:focused') {
+      // ✅ 影响激活栈（MRU 层叠）或激活归属的事件：通知所有窗口。
+      // focused/restored 把窗口移到栈顶、closed 从栈中移除，会改变其他窗口的
+      // zRank（层叠排名）；created 直接改写 activeWindowId（WindowManager.create
+      // 不走 focus()），旧激活窗口的 isActive true→false 必须传播，否则其
+      // useWindowState 快照停在缓存旧值——浏览器 webview 失活隐藏失效，
+      // 网页铺在新窗口上（airspace 下唯一让位通路就是这条可见性链）
+      if (eventType === 'window:focused' ||
+          eventType === 'window:created' ||
+          eventType === 'window:restored' ||
+          eventType === 'window:closed') {
         windowStateListeners.forEach((_, wId) => {
           notifyWindowStateChange(wId);
         });

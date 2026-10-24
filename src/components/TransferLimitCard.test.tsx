@@ -125,7 +125,8 @@ describe("TransferLimitCard · 上传大小限制设置", () => {
     });
     render(<TransferLimitCard serverId="s1" />);
     await waitFor(() => {
-      expect(screen.getByText("Error: 连接已断开")).toBeTruthy();
+      // formatUnknownError 对 Error 对象取 message（不再带 "Error: " 前缀）
+      expect(screen.getByText("连接已断开")).toBeTruthy();
     });
     expect(screen.getByRole("spinbutton")).toBeDisabled();
     expect(screen.getByRole("button", { name: "应用" })).toBeDisabled();

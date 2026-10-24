@@ -1,0 +1,193 @@
+/* ============================================================
+   Dialog — 应用内模态弹窗统一样式
+   视觉基准与 FileManager 属性对话框（fm-properties-dialog）一致：
+   遮罩 rgba(0,0,0,0.4) + z-app-modal 层级；
+   卡片 card-bg / border / radius-md / shadow-popup
+   ============================================================ */
+
+.dg-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: var(--z-app-modal); /* Layer 70: 应用内部模态对话框遮罩 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dg-card {
+  position: relative;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  background: var(--quirel-card-bg);
+  border: 1px solid var(--quirel-border-color);
+  border-radius: var(--radius-md);
+  padding: 20px;
+  box-shadow: var(--shadow-popup);
+}
+
+/* ── 标题与消息 ─────────────────────────────────────────── */
+.dg-title {
+  font-size: calc(var(--font-body) + 2px);
+  font-weight: 600;
+  color: var(--quirel-text-primary);
+  margin-bottom: 8px;
+}
+
+/* 图标头部（ConfirmDialog）：与属性对话框 pd-header（icon+name）同构 */
+.dg-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.dg-header-icon {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+/* 危险询问（删除等）：语义令牌随主题走，与 Settings st-conn-error 同源 */
+.dg-header-icon-danger {
+  color: var(--quirel-danger-fg);
+  background: var(--quirel-danger-bg);
+  border: 1px solid var(--quirel-danger-border);
+}
+
+/* 普通询问：accent 弱底圆标 */
+.dg-header-icon-default {
+  color: var(--quirel-accent-bg);
+  background: color-mix(in srgb, var(--quirel-accent-bg) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--quirel-accent-bg) 25%, transparent);
+}
+
+.dg-header-title {
+  font-size: 14pt;
+  font-weight: 600;
+  color: var(--quirel-text-primary);
+  word-break: break-word;
+}
+
+.dg-message {
+  font-size: var(--font-body);
+  color: var(--quirel-text-primary);
+  line-height: 1.5;
+  white-space: pre-wrap;   /* 消息内 \n 换行生效 */
+  word-break: break-word;  /* 长文件名/路径不撑破卡片 */
+  margin-bottom: 16px;
+}
+
+/* 主问句后接补充说明时收紧间距（ConfirmDialog 的 message+detail 结构） */
+.dg-message-compact {
+  margin-bottom: 4px;
+}
+
+/* 消息内强调片段（文件名等）：粗体突出 */
+.dg-emphasis {
+  font-weight: 700;
+  word-break: break-all;
+}
+
+/* 补充说明（警示语等）：小字弱化，与主问句分层 */
+.dg-detail {
+  font-size: var(--font-small);
+  color: var(--quirel-text-secondary);
+  line-height: 1.5;
+  margin-bottom: 16px;
+}
+
+/* ── 操作按钮区 ─────────────────────────────────────────── */
+.dg-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+/* 幽灵按钮（取消等次要操作）：平时透明底细边框，hover 底色浮出。
+   padding 与主操作按钮一致，保证并排等高 */
+.dg-btn {
+  padding: 8px 16px;
+  background: transparent;
+  border: 1px solid var(--quirel-border-color);
+  border-radius: var(--radius-sm);
+  color: var(--quirel-text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--font-body);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.dg-btn:hover {
+  background: var(--quirel-hover-bg);
+}
+
+/* 列表式全宽选项按钮（ExtractDialog 的两选项堆叠场景） */
+.dg-btn-block {
+  display: block;
+  width: 100%;
+  text-align: left;
+}
+
+.dg-btn-block + .dg-btn-block {
+  margin-top: 8px;
+}
+
+/* 主操作（确认/保存）：accent 实心无边框 */
+.dg-btn-primary {
+  padding: 8px 16px;
+  background: var(--quirel-accent-bg);
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--quirel-accent-fg);
+  font-family: var(--font-ui);
+  font-size: var(--font-body);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.dg-btn-primary:hover {
+  background: var(--quirel-accent-hover);
+}
+
+/* 表单校验不通过时禁用（重命名字节超限/空名等场景） */
+.dg-btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── 弹窗内表单（SaveDialog 的路径输入等）───────────────── */
+.dg-field-label {
+  display: block;
+  font-size: calc(var(--font-body) - 1px);
+  color: var(--quirel-text-secondary);
+  margin-bottom: 6px;
+}
+
+.dg-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  background: var(--quirel-window-bg);
+  border: 1px solid var(--quirel-border-color);
+  border-radius: var(--radius-sm);
+  color: var(--quirel-text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--font-body);
+  outline: none;
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+.dg-input:focus {
+  border-color: var(--quirel-accent-bg);
+}

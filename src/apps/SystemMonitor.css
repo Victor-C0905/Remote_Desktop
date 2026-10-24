@@ -10,30 +10,23 @@
   background: var(--quirel-window-bg);
 }
 
-/* ── Header Bar ──────────────────────────────────────── */
-.sm-headerbar {
-  height: var(--headerbar-height);
-  background: var(--quirel-headerbar-bg);
-  border-bottom: 1px solid var(--quirel-border-color);
-  display: flex;
-  align-items: center;
-  padding: 0 12px;
-  gap: 6px;
-  flex-shrink: 0;
-}
+/* ── 应用内顶栏（共享 AppTopbar：菜单栏 + 视图页签）────── */
+/* 顶条本体样式由 AppTopbar.module.css 提供；此处仅页签条适配 */
 
 .sm-tabs {
   display: flex;
-  gap: 6px;  /* ✅ 修改：从 2px 改为 6px */
-  overflow-x: auto;  /* ✅ 新增：横向滚动支持 */
-  overflow-y: hidden;  /* ✅ 新增：禁止纵向滚动 */
-  scrollbar-width: thin;  /* ✅ 新增：细滚动条 */
-  scrollbar-color: var(--quirel-border-color) transparent;  /* ✅ 新增：滚动条颜色 */
+  gap: 4px;
+  min-width: 0; /* 允许在窄窗口下收缩，启用横向滚动 */
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--quirel-border-color) transparent;
 }
 
 .sm-tab {
-  padding: 6px 16px;
-  font-size: var(--font-body);
+  padding: 4px 12px;
+  font-family: var(--font-ui);
+  font-size: var(--font-small);
   font-weight: 600;
   color: var(--quirel-text-secondary);
   background: none;
@@ -41,9 +34,8 @@
   border-radius: var(--radius-xs);
   cursor: pointer;
   transition: all var(--duration-fast) var(--ease-out);
-  flex-shrink: 0;  /* ✅ 新增：禁止收缩 */
-  min-width: 80px;  /* ✅ 新增：固定最小宽度 */
-  white-space: nowrap;  /* ✅ 新增：禁止换行 */
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .sm-tab:hover {
@@ -72,29 +64,6 @@
 
 .sm-tabs::-webkit-scrollbar-thumb:hover {
   background: rgba(0,0,0,0.2);
-}
-
-.sm-headerbar-spacer {
-  flex: 1;
-}
-
-.sm-menu-btn {
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: none;
-  border: none;
-  border-radius: var(--radius-xs);
-  color: var(--quirel-text-secondary);
-  font-size: 18px;
-  cursor: pointer;
-  transition: background var(--duration-fast) var(--ease-out);
-}
-
-.sm-menu-btn:hover {
-  background: var(--quirel-border-color);
 }
 
 /* ── Content Area ────────────────────────────────────── */
@@ -128,12 +97,28 @@
 }
 
 .sm-process-header span {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   cursor: pointer;
   user-select: none;
+  border-radius: var(--radius-xs);
+  transition: color var(--duration-fast) var(--ease-out);
 }
 
 .sm-process-header span:hover {
   color: var(--quirel-text-primary);
+}
+
+/* 当前排序列：文字转主色 + 方向 chevron（与 FileManager 列头排序同款处理） */
+.sm-process-header span.sorted {
+  color: var(--quirel-text-primary);
+}
+
+/* 排序方向指示（升序向上 / 降序向下，同 FileManager fm-sort-indicator） */
+.sm-process-header .sm-sort-indicator {
+  flex-shrink: 0;
+  opacity: 0.9;
 }
 
 .sm-process-list {

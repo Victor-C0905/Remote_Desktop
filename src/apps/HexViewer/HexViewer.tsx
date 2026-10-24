@@ -7,8 +7,10 @@
  */
 
 import { useState, useEffect, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { createLogger } from '../../utils/logger';
+import { formatUnknownError } from '../../types/errors';
 import './HexViewer.css';
 
 const log = createLogger('HexViewer');
@@ -77,6 +79,7 @@ function base64ToBytes(b64: string): Uint8Array {
 }
 
 export function HexViewer({ preloadData }: HexViewerProps) {
+  const { t } = useTranslation();
   const [lines, setLines] = useState<HexLine[]>([]);
   const [fileSize, setFileSize] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -87,7 +90,7 @@ export function HexViewer({ preloadData }: HexViewerProps) {
 
   useEffect(() => {
     if (!path || !serverId) {
-      setError('未指定文件或未连接服务器');
+      setError(t('hex.notSpecified'));
       setLoading(false);
       return;
     }
@@ -105,21 +108,21 @@ export function HexViewer({ preloadData }: HexViewerProps) {
       } catch (err) {
         if (cancelled) return;
         log.error('读取文件失败:', err);
-        setError(`无法读取文件: ${err}`);
+        setError(t('hex.loadFailed', { message: formatUnknownError(err) }));
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
 
     return () => { cancelled = true; };
-  }, [path, serverId]);
+  }, [path, serverId, t]);
 
   // 文件超出展示范围的提示
   const truncated = useMemo(() => fileSize > MAX_BYTES, [fileSize]);
 
   return (
     <div className="hv-root">
-      {loading && <div className="hv-status">加载中…</div>}
+      {loading && <div className="hv-status">{t('common.loading')}</div>}
       {error && (
         <div className="hv-error">
           <p>{error}</p>
@@ -130,7 +133,7 @@ export function HexViewer({ preloadData }: HexViewerProps) {
         <>
           <div className="hv-toolbar">
             <span className="hv-filename" title={path}>{path?.split('/').pop()}</span>
-            <span className="hv-size">{fileSize.toLocaleString()} 字节</span>
+            <span className="hv-size">{t('hex.bytes', { count: fileSize.toLocaleString() })}</span>
           </div>
           <div className="hv-content">
             {lines.map((line) => (
@@ -142,7 +145,7 @@ export function HexViewer({ preloadData }: HexViewerProps) {
             ))}
             {truncated && (
               <div className="hv-truncated">
-                … 仅显示前 {MAX_BYTES / 1024} KB（共 {fileSize.toLocaleString()} 字节）
+                {t('hex.truncated', { shown: MAX_BYTES / 1024, total: fileSize.toLocaleString() })}
               </div>
             )}
           </div>

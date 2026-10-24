@@ -4,6 +4,7 @@
 //       连发替换内容并重置计时，期间错过的条目累计为「+N」
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { useNotificationStore } from "../stores/notificationStore";
 import type { AppNotification, NotificationUrgency } from "../stores/notificationStore";
 import { SymbolicIcon } from "../components/symbolic";
@@ -22,6 +23,7 @@ function urgencyIcon(urgency: NotificationUrgency) {
 }
 
 export function ArrivalToast({ onOpen }: { onOpen: () => void }) {
+  const { t } = useTranslation();
   const notifications = useNotificationStore((s) => s.notifications);
   const [current, setCurrent] = useState<AppNotification | null>(null);
   const [missed, setMissed] = useState(0);
@@ -78,9 +80,12 @@ export function ArrivalToast({ onOpen }: { onOpen: () => void }) {
 
   if (!visible || !current) return null;
 
+  // data-browser-overlay：浏览器 webview 子窗口让位标记（child HWND 无法被
+  // DOM z-index 遮挡），BrowserApp 检测到即隐藏 webview 让位
   return (
     <div
       className={`at-toast${leaving ? " at-toast-leaving" : ""}`}
+      data-browser-overlay
       role="status"
       onClick={() => {
         dismiss();
@@ -107,7 +112,7 @@ export function ArrivalToast({ onOpen }: { onOpen: () => void }) {
       {missed > 0 && <span className="at-missed">+{missed}</span>}
       <button
         className="at-close"
-        aria-label="关闭预览"
+        aria-label={t('preview.closeAria')}
         onClick={(e) => {
           e.stopPropagation();
           dismiss();

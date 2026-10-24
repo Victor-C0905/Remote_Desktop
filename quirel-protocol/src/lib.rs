@@ -21,5 +21,5 @@ pub use stats::{
 };
 pub use subscription::SubscriptionType;
 pub use types::{
-    DiffType, DiskInfo, FileDiff, FileEntry, MetricsSnapshot, MountInfo,
+    DiffType, DiskInfo, FileDiff, FileEntry, MetricsSnapshot, MountInfo, ProcessEntry,
 };
