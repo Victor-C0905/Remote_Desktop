@@ -19,11 +19,15 @@ export interface SettingsState {
   themeId: ThemeId;
   accentColorId: AccentColorId | null;
 
-  // 远程浏览默认浏览器（"auto" 自动探测，或浏览器 id / 自定义路径）
-  browserId: string;
+  // 内置浏览器：后台标签睡眠超时（分钟；0 = 永不睡眠）
+  browserSleepMinutes: number;
 
   // 远程浏览 SOCKS5 固定端口（断线重连后浏览器无需重开的前提）
   browserProxyPort: number;
+
+  // 系统浏览器打开网页时使用的浏览器（auto/edge/chrome/firefox/自定义 exe 路径；
+  // 与旧版浏览器功能对齐，Rust 端 proxy_list_browsers 枚举候选）
+  browserId: string;
 
   // 启动时恢复上次窗口（桌面会话恢复）
   restoreWindowsOnStartup: boolean;
@@ -49,11 +53,14 @@ export interface SettingsActions {
   setThemeId: (themeId: ThemeId) => void;
   setAccentColorId: (accentColorId: AccentColorId | null) => void;
 
-  // 远程浏览默认浏览器
-  setBrowserId: (browserId: string) => void;
+  // 内置浏览器：后台标签睡眠超时
+  setBrowserSleepMinutes: (minutes: number) => void;
 
   // 远程浏览 SOCKS5 固定端口
   setBrowserProxyPort: (port: number) => void;
+
+  // 系统浏览器选择（auto/edge/chrome/firefox/自定义 exe 路径）
+  setBrowserId: (browserId: string) => void;
 
   // 启动时恢复上次窗口
   setRestoreWindowsOnStartup: (enabled: boolean) => void;
@@ -80,11 +87,14 @@ const DEFAULT_SETTINGS: SettingsState = {
   themeId: "paper", // 默认主题
   accentColorId: "paperAccent", // 纸张主题默认选中的强调色（绿色）
 
-  // 远程浏览默认浏览器：自动探测
-  browserId: "auto",
+  // 后台标签睡眠超时（对齐 Edge sleeping tabs 的默认量级）
+  browserSleepMinutes: 120,
 
   // SOCKS5 固定端口（SOCKS 惯用端口；被占用时可在设置中更换）
   browserProxyPort: 1080,
+
+  // 系统浏览器选择：auto = 按候选顺序自动探测（Edge → Chrome → Firefox）
+  browserId: "auto",
 
   // 启动时恢复上次窗口（默认开，保留桌面会话恢复行为）
   restoreWindowsOnStartup: true,
@@ -140,12 +150,16 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
         set({ accentColorId });
       },
 
-      setBrowserId: (browserId) => {
-        set({ browserId });
+      setBrowserSleepMinutes: (minutes) => {
+        set({ browserSleepMinutes: minutes });
       },
 
       setBrowserProxyPort: (port) => {
         set({ browserProxyPort: port });
+      },
+
+      setBrowserId: (browserId) => {
+        set({ browserId });
       },
 
       setRestoreWindowsOnStartup: (enabled) => {

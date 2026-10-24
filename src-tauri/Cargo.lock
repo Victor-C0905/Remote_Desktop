@@ -3356,6 +3356,7 @@ dependencies = [
  "quirel-protocol",
  "rsa",
  "rustls",
+ "rustls-native-certs",
  "serde",
  "serde_json",
  "sha2",
@@ -3374,6 +3375,8 @@ dependencies = [
  "tracing-log",
  "tracing-subscriber",
  "uuid",
+ "webview2-com",
+ "windows",
 ]
 
 [[package]]

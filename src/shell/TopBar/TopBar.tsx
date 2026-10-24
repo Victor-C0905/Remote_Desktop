@@ -1,5 +1,7 @@
-import { memo } from "react";
+import { memo, useCallback } from "react";
 import { useTranslation } from "react-i18next";
+import type { MouseEvent as ReactMouseEvent } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useServerManager, getStatusColor } from "../../context/ServerManager";
 import { formatBytesSafe, formatPercentSafe } from "../../utils/offlineDefaults";
 import { NotificationBadge } from "../NotificationCenter";
@@ -45,8 +47,19 @@ export const TopBar = memo(function TopBar({
   // 回退到 reconnecting 状态的服务器，保持状态指示可见
   const statusServer = activeServer || servers.find((s) => s.status === "reconnecting") || null;
 
+  // OS 窗口拖拽：invoke 单命令 start_os_drag，全屏态由 Rust 单点裁决
+  // （拖拽允许性与全屏状态同在 fullscreen 模块，无前端状态/事件链时序盲区）。
+  const onBarMouseDown = useCallback(async (e: ReactMouseEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    // 子控件（按钮/输入框）不触发拖拽（对齐原 drag-region 的 target 属性语义）
+    if ((e.target as HTMLElement).closest("button, a, input, [data-no-drag]")) return;
+    await invoke("start_os_drag").catch((err) =>
+      console.warn("[TopBar] 拖拽请求失败:", err)
+    );
+  }, []);
+
   return (
-    <div className={styles.topBar} data-tauri-drag-region>
+    <div className={styles.topBar} onMouseDown={onBarMouseDown}>
       <button
         className={styles.activitiesBtn}
         onClick={onActivitiesClick}

@@ -13,6 +13,20 @@ import {
 } from './aeroSnap';
 import styles from './WindowShell.module.css';
 
+/**
+ * 窗口拖拽状态广播事件：拖拽时 DOM 走 transform 即时位移，而 child-HWND 类
+ * 内容（浏览器 webview）的 bounds 经 gBCR→invoke→runtime→SetBounds 链路更新
+ * （百毫秒级滞后），不隐藏会"画面与窗口分离"。监听方（BrowserApp）按
+ * detail.windowId 过滤，拖拽期间自行隐藏 webview。
+ */
+export const WINDOW_DRAG_EVENT = 'quirel-window-drag';
+
+function broadcastWindowDrag(windowId: string, dragging: boolean) {
+  window.dispatchEvent(
+    new CustomEvent(WINDOW_DRAG_EVENT, { detail: { windowId, dragging } }),
+  );
+}
+
 export interface WindowShellProps {
   // 窗口属性 (由 Desktop 提供)
   windowId: string;
@@ -120,6 +134,7 @@ export function WindowShell({
   //    mousedown 只记录起点,由 mousemove 检测到拖动(超过 3px 阈值)后才执行 tear-off。
   const mousedownPosRef = useRef({ x: 0, y: 0 });  // mousedown 的 client 坐标(阈值判断)
   const tornOffRef = useRef(false);               // 当前拖拽是否已执行 tear-off
+  const dragBroadcastRef = useRef(false);         // 本次拖拽是否已广播"拖拽开始"（首次实际移动才广播）
 
   // ── Resize 状态 ──────────────────────────────────────
   const [isResizing, setIsResizing] = useState(false);
@@ -182,6 +197,13 @@ export function WindowShell({
     if (!isDragging) return;
 
     const handleMouseMove = (e: MouseEvent) => {
+      // 首次实际移动才广播"拖拽开始"：mousedown 即广播会让点击标题栏
+      // （未移动）也触发 webview 隐藏→显示一轮 IPC，造成无谓闪隐
+      if (!dragBroadcastRef.current) {
+        dragBroadcastRef.current = true;
+        broadcastWindowDrag(windowId, true);
+      }
+
       // ✅ Aero Snap tear-off 时机(对齐 Windows):
       //    只有真正拖动(mousemove 超过 3px 阈值)才从 maximized/snap 状态撕下还原,
       //    单纯点击标题栏(未移动)不还原,窗口保持 snap/maximize 状态。
@@ -363,6 +385,10 @@ export function WindowShell({
         }
 
         setIsDragging(false);
+        if (dragBroadcastRef.current) {
+          dragBroadcastRef.current = false;
+          broadcastWindowDrag(windowId, false);
+        }
         return;  // 不走普通拖拽结束逻辑
       }
 
@@ -375,6 +401,10 @@ export function WindowShell({
 
       // 拖拽结束时，更新 state（触发一次重渲染）
       setIsDragging(false);
+      if (dragBroadcastRef.current) {
+        dragBroadcastRef.current = false;
+        broadcastWindowDrag(windowId, false);
+      }
 
       // ✅ 统一状态管理：同步位置到 Desktop
       if (onPositionChange) {
@@ -396,7 +426,7 @@ export function WindowShell({
         rafIdRef.current = null;
       }
     };
-  }, [isDragging, size, position, snapZone, preMaximizeState, preSnapState, isOpening, onSnap, onMaximize, onUnsnap, onPositionChange, onSizeChange]); // ✅ tear-off 在 mousemove 使用 position/snapZone/preState,变化时需重绑定
+  }, [isDragging, size, position, snapZone, preMaximizeState, preSnapState, isOpening, onSnap, onMaximize, onUnsnap, onPositionChange, onSizeChange, windowId]); // ✅ tear-off 在 mousemove 使用 position/snapZone/preState,变化时需重绑定;windowId 用于拖拽广播
 
   // ── Resize 开始 ──────────────────────────────────────
   // ✅ 最大化状态下禁用 resize

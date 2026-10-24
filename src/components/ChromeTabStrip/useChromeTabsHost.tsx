@@ -18,8 +18,10 @@
  *   绝不触碰 props 数组；
  * - 同步按 id 增删/搬移 DOM 元素（缺失则 addTab、位置不对则 insertBefore），
  *   把 DOM 顺序强制对齐 React 数组，任何错位都会被下一轮同步纠正；
- * - 引擎拖拽中（isDragging）只更新既有元素的标题/脏标记等元数据，
- *   结构性增删/搬移推迟到 dragEnd 之后补做，避免与拖拽动画打架。
+ *   既有元素的标题/脏标记等元数据经 updateTab 回写（React 状态变化必须
+ *   落到引擎 DOM，否则页签标题停留在建签时的值）；
+ * - 引擎拖拽中（isDragging）跳过结构性增删/搬移（推迟到 dragEnd 后补做，
+ *   避免与拖拽动画打架），元数据回写不受限。
  */
 
 import { useCallback, useEffect, useRef } from 'react';
@@ -86,6 +88,13 @@ export function useChromeTabsHost(
           el = engine.addTab({ ...tab, active: false }, { background: true });
           byId.set(tab.id, el);
           structural = true;
+        } else {
+          // 既有元素元数据回写（标题/脏标记）：此前 sync 只做结构对齐，从不
+          // 更新已存在元素的标题——页面导航后 DocumentTitleChanged →
+          // page-state → React 已更新，但引擎 DOM 标题停留在建页签时的值，
+          // 表象即「tab 标题与网站不同步」。updateTab 只写标题/favicon 文本
+          // 与类名、不触碰结构，拖拽中（isDragging）调用也安全
+          engine.updateTab(el, tab);
         }
         if (el !== content.children[index]) {
           content.insertBefore(el, content.children[index] ?? null);

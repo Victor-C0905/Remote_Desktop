@@ -12,7 +12,11 @@ export type SymbolicIconName =
   | "bell" | "bell-outline"
   | "pan-up" | "pan-down"
   | "funnel"
-  | "chevron-up" | "chevron-down";
+  | "chevron-up" | "chevron-down"
+  | "go-previous" | "go-next" | "go-home" | "tab-new"
+  | "external-link"
+  | "system-search"
+  | "emblem-system" | "view-private";
 
 /** 图标内容（16×16 网格，几何近似 Adwaita symbolic 造型） */
 const ICONS: Record<SymbolicIconName, ReactNode> = {
@@ -105,6 +109,59 @@ const ICONS: Record<SymbolicIconName, ReactNode> = {
   "chevron-down": (<>
     <path d="M3.5 6 L8 10.5 L12.5 6"
       fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+  </>),
+  // 实心左箭头（浏览后退）
+  "go-previous": (
+    <path d="M10.5 2.5 4 8l6.5 5.5V2.5Z" fill="currentColor" />
+  ),
+  // 实心右箭头（浏览前进）
+  "go-next": (
+    <path d="M5.5 2.5 12 8l-6.5 5.5V2.5Z" fill="currentColor" />
+  ),
+  // 小房子（返回首页；Adwaita go-home 简化造型：坡顶 + 房身 + 门）
+  "go-home": (
+    <>
+      <path d="M2.6 8.3 8 3.2l5.4 5.1" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M4.1 7.6 V13 a0.7 0.7 0 0 0 0.7 0.7 h6.4 a0.7 0.7 0 0 0 0.7 -0.7 V7.6" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+      <path d="M6.7 13.7 V9.9 h2.6 v3.8" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+    </>
+  ),
+  // 新建标签页（窗口轮廓 + 加号）
+  "tab-new": (
+    <>
+      <path d="M2 3.5C2 2.7 2.7 2 3.5 2h9c.8 0 1.5.7 1.5 1.5v9c0 .8-.7 1.5-1.5 1.5h-9C2.7 14 2 13.3 2 12.5v-9Z" fill="none" stroke="currentColor" strokeWidth="1.2" />
+      <path d="M8 5v6M5 8h6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </>
+  ),
+  // 齿轮（设置入口；中环 + 8 齿刻线的简化造型）
+  "emblem-system": (<>
+    <circle cx="8" cy="8" r="2.1" fill="none" stroke="currentColor" strokeWidth="1.5" />
+    <path
+      d="M8 1.6v2.1M8 12.3v2.1M1.6 8h2.1M12.3 8h2.1M3.5 3.5l1.5 1.5M11 11l1.5 1.5M12.5 3.5 11 5M5 11l-1.5 1.5"
+      stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"
+    />
+  </>),
+  // 无痕浏览（帽檐 + 双圆眼镜；Adwaita view-private 简化造型）
+  "view-private": (<>
+    <path d="M3.2 6 C3.2 4.2 5.3 2.8 8 2.8 s4.8 1.4 4.8 3.2" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    <path d="M2.4 7.2 h11.2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    <circle cx="5.1" cy="10.4" r="1.9" fill="none" stroke="currentColor" strokeWidth="1.4" />
+    <circle cx="10.9" cy="10.4" r="1.9" fill="none" stroke="currentColor" strokeWidth="1.4" />
+    <path d="M7 10.4 h2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+  </>),
+  // 外部打开（方框缺右上角 + 箭头跳出；Adwaita external-link 简化造型）
+  "external-link": (<>
+    <path
+      d="M13 8.8 v2.9 a1.3 1.3 0 0 1 -1.3 1.3 H4.3 A1.3 1.3 0 0 1 3 11.7 V4.3 A1.3 1.3 0 0 1 4.3 3 H7.2"
+      fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"
+    />
+    <path d="M9.6 2.5 h3.9 V6.4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    <path d="M13.1 2.9 L7.9 8.1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+  </>),
+  // 搜索（放大镜；联想下拉模板项用；Adwaita magnifying-glass 简化造型）
+  "system-search": (<>
+    <circle cx="6.9" cy="6.9" r="3.9" fill="none" stroke="currentColor" strokeWidth="1.5" />
+    <path d="M9.9 9.9 L13.5 13.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
   </>),
 };
 

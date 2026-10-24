@@ -45,12 +45,18 @@ pub mod codes {
     // ── 远程浏览代理（proxy/）──
     pub const PROXY_PORT_CONFLICT: &str = "proxy_port_conflict"; // 固定端口被其他服务器的浏览会话占用
     pub const PROXY_LISTEN_FAILED: &str = "proxy_listen_failed"; // 本地 SOCKS5 监听启动失败
+    // 以下为外部浏览器方案（browser.rs）退役后遗留：错误码规范只增不删，保留占位
     pub const PROXY_BROWSER_NOT_FOUND: &str = "proxy_browser_not_found"; // 自动探测未找到可用浏览器
     pub const PROXY_BROWSER_NOT_INSTALLED: &str = "proxy_browser_not_installed"; // 所选浏览器未安装
     pub const PROXY_BROWSER_PATH_INVALID: &str = "proxy_browser_path_invalid"; // 自定义浏览器路径无效
     pub const PROXY_BROWSER_SPAWN_FAILED: &str = "proxy_browser_spawn_failed"; // 浏览器进程启动失败或立即退出
     pub const PROXY_BROWSER_IN_USE: &str = "proxy_browser_in_use"; // 浏览器正被其他会话使用
     pub const PROXY_CLEANUP_FAILED: &str = "proxy_cleanup_failed"; // 残留浏览器进程清理失败
+
+    // ── 内置浏览器（proxy/browser_window.rs）──
+    pub const PROXY_BROWSER_ENV_FAILED: &str = "proxy_browser_env_failed"; // WebView2 环境创建失败
+    pub const PROXY_BROWSER_WINDOW_FAILED: &str = "proxy_browser_window_failed"; // 浏览器窗口/webview 创建失败
+    pub const PROXY_BROWSER_WINDOW_CLOSED: &str = "proxy_browser_window_closed"; // 浏览器窗口已关闭
 }
 
 /// 结构化错误：invoke reject 时序列化为 { code, params?, detail? }。

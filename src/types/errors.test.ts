@@ -206,7 +206,9 @@ describe("操作错误词典（zh/en 结构一致 + code 全覆盖）", () => {
       "terminal_session_not_found",
       "proxy_port_conflict", "proxy_listen_failed", "proxy_browser_not_found",
       "proxy_browser_not_installed", "proxy_browser_path_invalid",
-      "proxy_browser_spawn_failed", "proxy_browser_in_use", "proxy_cleanup_failed",
+      "proxy_browser_spawn_failed", "proxy_browser_in_use",
+      "proxy_browser_env_failed", "proxy_browser_window_failed", "proxy_browser_window_closed",
+      "proxy_cleanup_failed",
     ];
     for (const code of snakeCodes) {
       const text = formatOpError({ code, params: {}, detail: undefined });

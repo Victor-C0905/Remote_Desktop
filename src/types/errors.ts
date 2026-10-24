@@ -197,6 +197,9 @@ const OP_ERROR_KEY_MAP: Record<string, string> = {
   proxy_browser_path_invalid: "op.proxyBrowserPathInvalid",
   proxy_browser_spawn_failed: "op.proxyBrowserSpawnFailed",
   proxy_browser_in_use: "op.proxyBrowserInUse",
+  proxy_browser_env_failed: "op.proxyBrowserEnvFailed",
+  proxy_browser_window_failed: "op.proxyBrowserWindowFailed",
+  proxy_browser_window_closed: "op.proxyBrowserWindowClosed",
   proxy_cleanup_failed: "op.proxyCleanupFailed",
 };
 

@@ -12,6 +12,8 @@ const ALL_NAMES = [
   "pan-up", "pan-down",
   "funnel",
   "chevron-up", "chevron-down",
+  "go-previous", "go-next", "tab-new",
+  "external-link",
 ] as const;
 
 describe("SymbolicIcon", () => {
