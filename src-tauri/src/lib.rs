@@ -656,11 +656,12 @@ pub fn run() {
         .setup(|app| {
             // 初始化日志系统（必须在所有其他操作之前）
             init_logging(app);
-            // 启动横幅：版本 + 构建模式 + 系统信息，用于从日志快速识别客户端版本
+            // 启动横幅：版本 + 构建模式 + git 构建信息 + 系统信息，用于从日志快速识别客户端版本
             tracing::info!(
-                "[App] Quirel 客户端启动: version={} build={} os={}",
+                "[App] Quirel 客户端启动: version={} build={} git={} os={}",
                 env!("CARGO_PKG_VERSION"),
                 if cfg!(debug_assertions) { "debug" } else { "release" },
+                env!("QUIREL_BUILD_INFO"),
                 std::env::consts::OS,
             );
 

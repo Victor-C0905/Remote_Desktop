@@ -21,5 +21,24 @@ fn main() {
     println!("cargo:rerun-if-changed=icons/Square150x150Logo.png");
     println!("cargo:rerun-if-changed=icons/Square284x284Logo.png");
     println!("cargo:rerun-if-changed=icons/Square310x310Logo.png");
-    println!("cargo:rerun-if-changed=icons/StoreLogo.png");
+    println!("cargo:rerun-if-changed=icons/Square89x89Logo.png");
+
+    // 构建信息（分支@git describe）：区分测试构建，与版本号无关（AGENTS.md 第 5 节）
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    let describe = git(&["describe", "--always", "--dirty"]).unwrap_or_else(|| "unknown".to_string());
+    let build_info = match git(&["rev-parse", "--abbrev-ref", "HEAD"]) {
+        Some(b) => format!("{b}@{describe}"),
+        None => describe,
+    };
+    println!("cargo:rustc-env=QUIREL_BUILD_INFO={build_info}");
+    println!("cargo:rerun-if-changed=../.git/HEAD");
+    println!("cargo:rerun-if-changed=../.git/refs/heads");
 }
