@@ -459,3 +459,10 @@
   font-size: 12px;
   color: var(--quirel-text-disabled);
 }
+
+/* 初始化失败占位（xterm 挂载点内）：必须走样式类——release 的 CSP 拦内联 style */
+.terminal-init-failed {
+  color: #ff4444;
+  padding: 12px;
+  font-family: monospace;
+}
