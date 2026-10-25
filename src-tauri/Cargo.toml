@@ -75,7 +75,7 @@ webview2-com = "0.39"
 # Threading=CreateEventW/SetEvent（主循环唤醒事件）、Security=CreateEventW 的
 # SECURITY_ATTRIBUTES 参数类型（MsgWait 系列在 WindowsAndMessaging，依赖图已含）
 # 版本与 tauri 2.12 的传递依赖对齐（0.62），错位会双份编译（二进制 +5~15MB）
-windows = { version = "0.62", features = ["Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_UI_HiDpi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_System_Threading", "Win32_System_Com", "Win32_Foundation", "Win32_Security"] }
+windows = { version = "0.62", features = ["Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_UI_HiDpi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_System_Threading", "Win32_System_Com", "Win32_System_Console", "Win32_Foundation", "Win32_Security"] }
 
 [profile.release]
 opt-level = 3          # 最高优化等级
