@@ -19,10 +19,12 @@ export type IconThemeKind = 'classic' | 'paper';
 
 /* 渐变 defs：每色两档 + 纸底渐变；stop 引 CSS 变量随主题换装。
    folder/paper 供全出血文件夹前板与白纸形使用——曾长期被引用却未定义，
-   按 SVG 规范按 fill:none 渲染（文件夹只剩页签、纸身透明），务必与引用成对维护 */
+   按 SVG 规范按 fill:none 渲染（文件夹只剩页签、纸身透明），务必与引用成对维护。
+   stop 必须用 stop-color 属性而非 style="…"：release 的 CSP 会被 Tauri 追加
+   nonce/hash，'unsafe-inline' 随之失效，style 属性整条被拦 → stop-color 回落黑色 */
 const G = (id: string, a: string, b: string) =>
   `<linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1">` +
-  `<stop offset="0" style="stop-color:var(${a})"/><stop offset="1" style="stop-color:var(${b})"/></linearGradient>`;
+  `<stop offset="0" stop-color="var(${a})"/><stop offset="1" stop-color="var(${b})"/></linearGradient>`;
 const DEFS =
   '<defs>' +
   ['blue', 'green', 'orange', 'purple', 'red', 'yellow', 'brown', 'gray', 'folder', 'paper']
