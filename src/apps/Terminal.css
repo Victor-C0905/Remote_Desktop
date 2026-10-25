@@ -114,9 +114,34 @@
   font-family: var(--font-ui);
 }
 
+/* 滑块与设置页同款（填充段由受控值内联 --fill 驱动） */
 .terminal-settings-slider {
   flex: 1;
   margin: 0 8px;
+  height: 6px;
+  appearance: none;
+  background: linear-gradient(
+    to right,
+    var(--quirel-accent-bg) var(--fill, 0%),
+    var(--quirel-slider-track-bg) var(--fill, 0%)
+  );
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+}
+
+.terminal-settings-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  background: var(--quirel-slider-thumb-bg);
+  border: 2px solid var(--quirel-card-bg);
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.28);
+  cursor: pointer;
+}
+
+.terminal-settings-slider:active::-webkit-slider-thumb {
+  transform: scale(1.15);
 }
 
 .terminal-settings-value {
@@ -126,7 +151,38 @@
 }
 
 .terminal-settings-checkbox {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
   margin-left: 8px;
+  background: var(--quirel-card-bg);
+  border: 1.5px solid var(--quirel-border-color);
+  border-radius: 4px;
+  cursor: pointer;
+  display: inline-grid;
+  place-content: center;
+  transition: background-color var(--duration-fast) var(--ease-out),
+              border-color var(--duration-fast) var(--ease-out);
+}
+
+.terminal-settings-checkbox::before {
+  content: '';
+  width: 10px;
+  height: 10px;
+  background: var(--quirel-accent-fg);
+  clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 80% 0%, 43% 62%);
+  transform: scale(0);
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+.terminal-settings-checkbox:checked {
+  background: var(--quirel-accent-bg);
+  border-color: var(--quirel-accent-bg);
+}
+
+.terminal-settings-checkbox:checked::before {
+  transform: scale(1);
 }
 
 .terminal-settings-close-button {
@@ -389,7 +445,9 @@
 }
 
 .terminal-empty .empty-icon {
-  font-size: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .terminal-empty .empty-text {

@@ -24,7 +24,7 @@ export interface MountInfo {
 }
 
 export interface SidebarItem {
-  icon: string;
+  icon: import('../components/AppIcon').AppIconName;
   /** 预置书签用词典 key（渲染处 t()，P7）；动态标签（挂载点）用 label */
   labelKey?: string;
   label?: string;
@@ -76,18 +76,18 @@ function buildSidebarSections(
       {
         titleKey: "fileManager.location",
         items: [
-          { icon: "🏠", labelKey: "fileManager.home", path: homeDir, type: "bookmark" },
-          { icon: "📄", labelKey: "fileManager.documents", path: `${homeDir}/Documents`, type: "bookmark" },
-          { icon: "⬇️", labelKey: "fileManager.downloads", path: `${homeDir}/Downloads`, type: "bookmark" },
-          { icon: "🖼️", labelKey: "fileManager.pictures", path: `${homeDir}/Pictures`, type: "bookmark" },
-          { icon: "🎵", labelKey: "fileManager.music", path: `${homeDir}/Music`, type: "bookmark" },
-          { icon: "🎬", labelKey: "fileManager.videos", path: `${homeDir}/Videos`, type: "bookmark" },
+          { icon: "home", labelKey: "fileManager.home", path: homeDir, type: "bookmark" },
+          { icon: "documents", labelKey: "fileManager.documents", path: `${homeDir}/Documents`, type: "bookmark" },
+          { icon: "download", labelKey: "fileManager.downloads", path: `${homeDir}/Downloads`, type: "bookmark" },
+          { icon: "pictures", labelKey: "fileManager.pictures", path: `${homeDir}/Pictures`, type: "bookmark" },
+          { icon: "music", labelKey: "fileManager.music", path: `${homeDir}/Music`, type: "bookmark" },
+          { icon: "videos", labelKey: "fileManager.videos", path: `${homeDir}/Videos`, type: "bookmark" },
         ],
       },
       {
         titleKey: "fileManager.devices",
         items: mounts.map((m) => ({
-          icon: "💾",
+          icon: "disk",
           label: m.mount_point,
           path: m.mount_point,
           type: "mount" as const,
@@ -95,7 +95,7 @@ function buildSidebarSections(
       },
       {
         titleKey: "fileManager.otherLocations",
-        items: [{ icon: "🌐", labelKey: "fileManager.network", path: "/network", type: "network" as const }],
+        items: [{ icon: "network", labelKey: "fileManager.network", path: "/network", type: "network" as const }],
       },
     ];
   }
@@ -105,17 +105,17 @@ function buildSidebarSections(
     {
       titleKey: "fileManager.location",
       items: [
-        { icon: "🏠", labelKey: "fileManager.home", path: "/home", type: "bookmark" as const },
-        { icon: "📄", labelKey: "fileManager.documents", path: "/home/Documents", type: "bookmark" as const },
-        { icon: "⬇️", labelKey: "fileManager.downloads", path: "/home/Downloads", type: "bookmark" as const },
-        { icon: "🖼️", labelKey: "fileManager.pictures", path: "/home/Pictures", type: "bookmark" as const },
-        { icon: "🎵", labelKey: "fileManager.music", path: "/home/Music", type: "bookmark" as const },
-        { icon: "🎬", labelKey: "fileManager.videos", path: "/home/Videos", type: "bookmark" as const },
+        { icon: "home", labelKey: "fileManager.home", path: "/home", type: "bookmark" as const },
+        { icon: "documents", labelKey: "fileManager.documents", path: "/home/Documents", type: "bookmark" as const },
+        { icon: "download", labelKey: "fileManager.downloads", path: "/home/Downloads", type: "bookmark" as const },
+        { icon: "pictures", labelKey: "fileManager.pictures", path: "/home/Pictures", type: "bookmark" as const },
+        { icon: "music", labelKey: "fileManager.music", path: "/home/Music", type: "bookmark" as const },
+        { icon: "videos", labelKey: "fileManager.videos", path: "/home/Videos", type: "bookmark" as const },
       ],
     },
     {
       titleKey: "fileManager.otherLocations",
-      items: [{ icon: "🌐", labelKey: "fileManager.network", path: "/network", type: "network" as const }],
+      items: [{ icon: "network", labelKey: "fileManager.network", path: "/network", type: "network" as const }],
     },
   ];
 }

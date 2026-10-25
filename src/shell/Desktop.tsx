@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, memo, useRef } from "react";
 import { useTranslation } from "react-i18next";
+import { AppBadge } from "../components/AppBadge";
 import { NotificationCenter } from "./NotificationCenter";
 import { ArrivalToast } from "./ArrivalToast";
 import { TopBar } from "./TopBar/TopBar";
@@ -7,6 +8,7 @@ import { useGlobalShortcuts, createAppShortcuts } from "../hooks/useGlobalShortc
 import { ServerManagerProvider, useServerManager } from "../context/ServerManager";
 
 import { WallpaperProvider, useWallpaper, getWallpaperStyle } from "../context/WallpaperContext";
+import { useWallpaperStore } from "../stores/wallpaperStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useNotificationStore } from "../stores/notificationStore";
 import { useTheme } from "../hooks/useTheme";
@@ -177,6 +179,7 @@ function DesktopContent() {
 
   const { activeServer } = useServerManager();
   const { wallpaper } = useWallpaper();
+  const wallpaperObjectUrl = useWallpaperStore((s) => s.objectUrl);
   const { manager } = useWindowManager();
 
   // ✅ Dock ref - 用于对比色计算
@@ -317,7 +320,7 @@ function DesktopContent() {
   useGlobalShortcuts(shortcuts);
 
   return (
-    <div className="shell" style={getWallpaperStyle(wallpaper)}>
+    <div className="shell" style={getWallpaperStyle(wallpaper, wallpaperObjectUrl)}>
       {/* 浏览器模式提示：无 Tauri 运行时时连接/存储功能不可用 */}
       {!isTauri() && (
         <div className="browser-mode-banner" role="status">
@@ -344,7 +347,7 @@ function DesktopContent() {
               className="desktop-icon"
               onDoubleClick={() => createApp(app.id)}
             >
-              <div className="icon">{app.icon}</div>
+              <div className="icon"><AppBadge app={app.id} size={44} /></div>
               <div className="label">{t(app.desktopLabelKey ?? app.titleKey)}</div>
             </div>
           ))}
@@ -379,7 +382,7 @@ function DesktopContent() {
                   className={`dock-item${isOpen ? " running" : ""}`}
                   onClick={() => openApp(app.id)}
                 >
-                  <div className="icon">{app.icon}</div>
+                  <div className="icon"><AppBadge app={app.id} size={34} /></div>
                   <div className="label">{t(app.dockLabelKey ?? app.titleKey)}</div>
                   {isOpen && <div className="dock-indicator" />}
                 </div>
@@ -409,7 +412,7 @@ function DesktopContent() {
                 className="overview-app"
                 onClick={() => createApp(app.id)}
               >
-                <div className="icon">{app.icon}</div>
+                <div className="icon"><AppBadge app={app.id} size={48} /></div>
                 <div className="label">{t(app.desktopLabelKey ?? app.titleKey)}</div>
               </div>
             ))}

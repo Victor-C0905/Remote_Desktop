@@ -29,7 +29,7 @@ export function initWindowRegistry(registry: WindowRegistry): void {
   registry.register({
     id: 'terminal',
     titleKey: 'apps.terminal.title',
-    icon: '🖥️',
+    icon: 'terminal',
     defaultSize: { width: 850, height: 550 },
     minSize: { width: 600, height: 400 },
     allowMultipleInstances: true,
@@ -42,7 +42,7 @@ export function initWindowRegistry(registry: WindowRegistry): void {
   registry.register({
     id: 'files',
     titleKey: 'apps.files.title',
-    icon: '📁',
+    icon: 'files',
     defaultSize: { width: 900, height: 650 },
     minSize: { width: 600, height: 400 },
     allowMultipleInstances: false,
@@ -55,7 +55,7 @@ export function initWindowRegistry(registry: WindowRegistry): void {
   registry.register({
     id: 'monitor',
     titleKey: 'apps.monitor.title',
-    icon: '📊',
+    icon: 'monitor',
     defaultSize: { width: 900, height: 650 },
     minSize: { width: 600, height: 400 },
     allowMultipleInstances: false,
@@ -66,7 +66,7 @@ export function initWindowRegistry(registry: WindowRegistry): void {
   registry.register({
     id: 'editor',
     titleKey: 'apps.editor.title',
-    icon: '📝',
+    icon: 'editor',
     defaultSize: { width: 900, height: 600 },
     minSize: { width: 600, height: 400 },
     allowMultipleInstances: true,
@@ -77,7 +77,7 @@ export function initWindowRegistry(registry: WindowRegistry): void {
   registry.register({
     id: 'settings',
     titleKey: 'apps.settings.title',
-    icon: '⚙️',
+    icon: 'settings',
     defaultSize: { width: 700, height: 550 },
     minSize: { width: 500, height: 400 },
     allowMultipleInstances: false,
@@ -88,7 +88,7 @@ export function initWindowRegistry(registry: WindowRegistry): void {
   registry.register({
     id: 'browser',
     titleKey: 'apps.browser.title',
-    icon: '🌐',
+    icon: 'browser',
     defaultSize: { width: 1000, height: 700 },
     minSize: { width: 640, height: 440 },
     allowMultipleInstances: false,
@@ -101,7 +101,7 @@ export function initWindowRegistry(registry: WindowRegistry): void {
   registry.register({
     id: 'image-viewer',
     titleKey: 'apps.imageViewer.title',
-    icon: '🖼️',
+    icon: 'image',
     defaultSize: { width: 800, height: 600 },
     minSize: { width: 400, height: 300 },
     allowMultipleInstances: true,
@@ -114,7 +114,7 @@ export function initWindowRegistry(registry: WindowRegistry): void {
   registry.register({
     id: 'hex-viewer',
     titleKey: 'apps.hexViewer.title',
-    icon: '🔢',
+    icon: 'hex',
     defaultSize: { width: 800, height: 550 },
     minSize: { width: 500, height: 350 },
     allowMultipleInstances: true,
@@ -127,7 +127,7 @@ export function initWindowRegistry(registry: WindowRegistry): void {
   registry.register({
     id: 'pdf-viewer',
     titleKey: 'apps.pdfViewer.title',
-    icon: '📄',
+    icon: 'pdf',
     defaultSize: { width: 900, height: 700 },
     minSize: { width: 500, height: 400 },
     allowMultipleInstances: true,
@@ -140,7 +140,7 @@ export function initWindowRegistry(registry: WindowRegistry): void {
   registry.register({
     id: 'archive-viewer',
     titleKey: 'apps.archiveViewer.title',
-    icon: '📦',
+    icon: 'archive',
     defaultSize: { width: 760, height: 560 },
     minSize: { width: 420, height: 320 },
     allowMultipleInstances: true,

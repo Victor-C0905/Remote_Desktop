@@ -10,5 +10,7 @@ export default {
     ],
     'type-empty': [2, 'never'],
     'subject-empty': [2, 'never'],
+    // 中文项目关闭大小写判定：英文产品名（AppIcon 等）会被误判为 sentence-case
+    'subject-case': [0],
   },
 };

@@ -55,26 +55,10 @@
   justify-content: center;
   height: 120px;
   color: var(--quirel-text-secondary);
-  font-size: 10pt;
+  font-size: 13.5px;
 }
 
-/* 滚动条样式 */
-.tp-list::-webkit-scrollbar {
-  width: 8px;
-}
-
-.tp-list::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.tp-list::-webkit-scrollbar-thumb {
-  background: var(--quirel-border-color);
-  border-radius: 4px;
-}
-
-.tp-list::-webkit-scrollbar-thumb:hover {
-  background: var(--quirel-text-secondary);
-}
+/* 滚动条统一走全局 scrollbar.css（原 8px 本地覆盖与全局 6px 并存） */
 
 /* ── 空状态提示 ───────────────────────────────────────────── */
 
@@ -138,7 +122,7 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 9pt;
+  font-size: 12px;
 }
 
 .tp-stat-label {
@@ -148,6 +132,7 @@
 .tp-stat-value {
   color: var(--quirel-text-primary);
   font-weight: 500;
+  font-variant-numeric: tabular-nums;
 }
 
 .tp-stat-value.success {
@@ -172,11 +157,11 @@
 
 .tp-action-btn {
   padding: 4px 12px;
-  font-size: 9pt;
+  font-size: 12px;
   border: none;
   border-radius: 4px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease;
   font-weight: 500;
 }
 
@@ -242,12 +227,12 @@
 
   .tp-stats {
     gap: 8px;
-    font-size: 8pt;
+    font-size: 11px;
   }
 
   .tp-action-btn {
     padding: 3px 8px;
-    font-size: 8pt;
+    font-size: 11px;
   }
 }
 

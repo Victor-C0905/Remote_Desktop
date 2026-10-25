@@ -35,14 +35,14 @@
 .windowShellActive {
   /* ✅ 活动窗口: Layer 30(最上层) */
   z-index: var(--z-window-active);
-  /* 活动窗口: 更深的阴影 */
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  /* 活动窗口: 更深的阴影（令牌化，勿写散值） */
+  box-shadow: var(--shadow-window-active);
 }
 
 .windowShellDragging {
   /* 拖拽时的视觉反馈 */
   opacity: 0.95;
-  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.25);
+  box-shadow: var(--shadow-window-drag);
   cursor: move;
   transition: none;
 }
@@ -58,6 +58,18 @@
   z-index: var(--z-window-inactive);
   /* 非活动窗口: 较浅的阴影 */
   box-shadow: var(--shadow-popup);
+}
+
+/* ── 非活动窗口的焦点表达（GNOME 式降级）──────────────────
+   多窗口并开时一眼辨焦点：标题栏毛玻璃降透明度 + 标题退次级色。
+   不用 filter（会在祖先上建立 backdrop root，破坏 headerbar 的
+   backdrop-filter 壁纸采样），只调颜色变量。 */
+.windowShellNotActive .windowHeaderBar {
+  background: rgba(var(--quirel-headerbar-bg-rgb), 0.55);
+}
+
+.windowShellNotActive .windowTitle {
+  color: var(--quirel-text-secondary);
 }
 
 .windowShellMaximized {
@@ -232,6 +244,8 @@
   border: 1px solid rgba(0, 120, 212, 0.8);
   border-radius: 4px;
   z-index: var(--z-snap-preview);  /* ✅ 高于所有窗口 */
+  /* 例外保留 transition:all——预览框跟鼠标切换 zone 动画的就是
+     left/top/width/height 布局属性本身，白名单化会让它瞬移 */
   transition: all 120ms ease-out;   /* ✅ 预览框自身切换 zone 时也有平滑感 */
   box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.4) inset;
 }

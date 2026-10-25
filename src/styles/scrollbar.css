@@ -1,12 +1,12 @@
 /* ============================================================
    Scrollbar 全局样式 — Quirel Client
-   从 adwaita.css 提取，确保桌面系统统一滚动条样式
+   胶囊形 overlay 风格：平时半透明沉底，hover 加深浮现；
+   任何局部滚动条样式一律走这里，禁止组件内自定义覆盖
    ============================================================ */
 
-/* ── Scrollbar (Adwaita Style) ───────────────────────────── */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 9px;
+  height: 9px;
 }
 
 ::-webkit-scrollbar-track {
@@ -14,10 +14,25 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--quirel-border-color);
+  /* 半透明胶囊 + 透明留边：视觉宽度 ~5px，hover 变实 */
+  background: color-mix(in srgb, var(--quirel-text-secondary, #77767b) 38%, transparent);
   border-radius: var(--radius-pill);
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(0,0,0,0.3);
+  background: color-mix(in srgb, var(--quirel-text-secondary, #77767b) 62%, transparent);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Firefox 同款 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--quirel-text-secondary, #77767b) 38%, transparent) transparent;
 }

@@ -532,7 +532,7 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
                   <div
                     className="sm-bar-fill"
                     style={{
-                      width: isOffline ? '0%' : `${(metrics.mem_used_bytes / Math.max(metrics.mem_total_bytes, 1)) * 100}%`,
+                      transform: `scaleX(${isOffline ? 0 : (metrics.mem_used_bytes / Math.max(metrics.mem_total_bytes, 1))})`,
                       background: "#33d17a",
                       opacity: isOffline ? 0.3 : 1,
                     }}
@@ -550,7 +550,7 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
                 </div>
                 <div className="sm-bar-track">
                   <div className="sm-bar-fill" style={{
-                    width: `${swap.widthPercent}%`,
+                    transform: `scaleX(${swap.widthPercent / 100})`,
                     background: "#e8a416",
                     opacity: isOffline ? 0.3 : 1,
                   }} />
@@ -609,7 +609,7 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
                         <div
                           className="sm-bar-fill"
                           style={{
-                            width: `${percent}%`,
+                            transform: `scaleX(${percent / 100})`,
                             background: percent > 80 ? "#e01b24" : percent > 60 ? "#e8a416" : "#3584e4",
                           }}
                         />

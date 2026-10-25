@@ -87,6 +87,9 @@
 }
 
 .fm-toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 28px;
   height: 28px;
   display: flex;
@@ -252,9 +255,10 @@
 }
 
 .fm-sidebar .fm-sidebar-item .fm-si-icon {
-  font-size: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 20px;
-  text-align: center;
 }
 
 .fm-sidebar .fm-sidebar-item .fm-si-label {
@@ -516,7 +520,8 @@
 }
 
 .fm-list .fm-list-row .fm-file-name .fm-fn-icon {
-  font-size: 18px;
+  display: inline-flex;
+  align-items: center;
   flex-shrink: 0;
 }
 
@@ -596,7 +601,9 @@
 }
 
 .fm-grid .fm-grid-item .fm-gi-icon {
-  font-size: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .fm-grid .fm-grid-item .fm-gi-label {
@@ -662,9 +669,11 @@
 }
 
 .fm-context-menu .fm-ctx-item .fm-ctx-icon {
-  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 20px;
-  text-align: center;
+  color: var(--quirel-text-secondary);
 }
 
 .fm-context-menu .fm-ctx-separator {
@@ -777,8 +786,10 @@
 }
 
 .fm-empty .fm-empty-icon {
-  font-size: 48px;
-  opacity: 0.5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.85;
 }
 
 .fm-empty .fm-empty-text {
@@ -842,11 +853,12 @@
 }
 
 .pd-icon {
-  font-size: 32px;
+  display: inline-flex;
+  align-items: center;
 }
 
 .pd-name {
-  font-size: 14pt;
+  font-size: 19px;
   font-weight: 600;
   color: var(--quirel-text-primary);
   word-break: break-all;
@@ -977,7 +989,7 @@
   border-radius: 999px;
   font-size: var(--font-small);
   cursor: pointer;
-  transition: all var(--duration-fast) var(--ease-out);
+  transition: background-color var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out), opacity var(--duration-fast) var(--ease-out);
 }
 
 .pd-preset-btn:hover:not(:disabled) {
@@ -1054,7 +1066,7 @@
 }
 
 .pd-perm-octal-value {
-  font-size: 16pt;
+  font-size: 21px;
   font-weight: 600;
   color: var(--quirel-text-primary);
   font-variant-numeric: tabular-nums;
@@ -1150,7 +1162,7 @@
   border-radius: var(--radius-xs);
   cursor: pointer;
   font-size: var(--font-body);
-  transition: all var(--duration-fast) var(--ease-out);
+  transition: background-color var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out), opacity var(--duration-fast) var(--ease-out);
 }
 
 .pd-btn:hover:not(:disabled) {
@@ -1281,7 +1293,7 @@
 }
 
 .fm-offline .offline-title {
-  font-size: 15pt;
+  font-size: 20px;
   font-weight: 700;
   color: var(--quirel-text-primary);
 }
@@ -1324,7 +1336,7 @@
   border: 1px solid var(--quirel-border-color);
   border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: all 150ms var(--ease-out);
+  transition: background-color 150ms var(--ease-out), color 150ms var(--ease-out), border-color 150ms var(--ease-out), box-shadow 150ms var(--ease-out), transform 150ms var(--ease-out), opacity 150ms var(--ease-out);
   text-align: left;
 }
 
@@ -1449,7 +1461,8 @@
 
 /* 建议项图标 */
 .fm-suggestion-icon {
-  font-size: 16px;
+  display: inline-flex;
+  align-items: center;
 }
 
 /* 建议项文本 */
@@ -1484,7 +1497,7 @@
 
 /* 标题 */
 .ed-title {
-  font-size: 14pt;
+  font-size: 19px;
   font-weight: 600;
   color: var(--quirel-text-primary);
   margin-bottom: 12px;
@@ -1529,7 +1542,7 @@
   border-radius: var(--radius-xs);
   cursor: pointer;
   font-size: var(--font-body);
-  transition: all var(--duration-fast) var(--ease-out);
+  transition: background-color var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out), opacity var(--duration-fast) var(--ease-out);
 }
 
 .ed-btn:hover {

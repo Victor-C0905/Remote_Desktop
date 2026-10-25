@@ -487,7 +487,7 @@ unsafe fn subscribe_page_events(
             move |webview, _| {
                 let Some(webview) = webview else { return Ok(()) };
                 let mut title = PWSTR::null();
-                webview.DocumentTitle(&mut title)?;
+                webview.DocumentTitle(core::ptr::addr_of_mut!(title))?;
                 let _ = tx.send(HostCommand::EvTitle { tab_id, title: take_pwstr(title) });
                 Ok(())
             }
@@ -501,7 +501,7 @@ unsafe fn subscribe_page_events(
             move |webview, _| {
                 let Some(webview) = webview else { return Ok(()) };
                 let mut uri = PWSTR::null();
-                webview.Source(&mut uri)?;
+                webview.Source(core::ptr::addr_of_mut!(uri))?;
                 let _ = tx.send(HostCommand::EvSource { tab_id, url: take_pwstr(uri) });
                 Ok(())
             }

@@ -19,6 +19,9 @@ export interface SettingsState {
   themeId: ThemeId;
   accentColorId: AccentColorId | null;
 
+  // 图标主题（应用徽章风格，见 components/AppBadge.tsx）
+  iconTheme: "classic" | "paper";
+
   // 内置浏览器：后台标签睡眠超时（分钟；0 = 永不睡眠）
   browserSleepMinutes: number;
 
@@ -53,6 +56,9 @@ export interface SettingsActions {
   setThemeId: (themeId: ThemeId) => void;
   setAccentColorId: (accentColorId: AccentColorId | null) => void;
 
+  // 图标主题切换
+  setIconTheme: (iconTheme: "classic" | "paper") => void;
+
   // 内置浏览器：后台标签睡眠超时
   setBrowserSleepMinutes: (minutes: number) => void;
 
@@ -80,12 +86,13 @@ const DEFAULT_SETTINGS: SettingsState = {
   // 现有设置
   theme: "light",
   accentColor: "#15aa70",   // 纸张主题默认强调色 - RGB(21,170,112)
-  fontSize: 10,
+  fontSize: 14,             // 基准字号（px，写入 --font-body；title=+1 / small=-1.5）
   terminalFontSize: 13,
 
   // 新增主题设置
   themeId: "paper", // 默认主题
   accentColorId: "paperAccent", // 纸张主题默认选中的强调色（绿色）
+  iconTheme: "classic", // 图标徽章：GNOME 经典彩色（另一档 paper 白卡）
 
   // 后台标签睡眠超时（对齐 Edge sleeping tabs 的默认量级）
   browserSleepMinutes: 120,
@@ -131,10 +138,11 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
 
       setFontSize: (size) => {
         set({ fontSize: size });
-        // 同步更新 CSS 变量
-        document.documentElement.style.setProperty("--font-body", `${size}pt`);
-        document.documentElement.style.setProperty("--font-title", `${size + 1}pt`);
-        document.documentElement.style.setProperty("--font-small", `${size - 1}pt`);
+        // 同步更新 CSS 变量（px 尺度；原 pt 覆写与 px 令牌体系冲突）
+        const root = document.documentElement;
+        root.style.setProperty("--font-body", `${size}px`);
+        root.style.setProperty("--font-title", `${size + 1}px`);
+        root.style.setProperty("--font-small", `${size - 1.5}px`);
       },
 
       setTerminalFontSize: (size) => {
@@ -148,6 +156,12 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
 
       setAccentColorId: (accentColorId) => {
         set({ accentColorId });
+      },
+
+      setIconTheme: (iconTheme) => {
+        set({ iconTheme });
+        // 内容图标（AppIcon CSS 变量）与徽章（AppBadge 订阅）同步换装
+        document.documentElement.setAttribute("data-icon-theme", iconTheme);
       },
 
       setBrowserSleepMinutes: (minutes) => {
@@ -194,14 +208,22 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
             state.themeId = 'paper';
           }
 
+          // 字号迁移：旧版存的是 pt 值（10/11/12），令牌改 px 后按视觉最近值换算
+          if (state.fontSize < 12) {
+            state.fontSize = state.fontSize <= 10 ? 14 : 15;
+          }
+
           // 应用主题颜色到CSS变量
           applyThemeColors(state.themeId, state.accentColorId);
 
-          // 字体大小
+          // 字体大小（px 尺度）
           const root = document.documentElement;
-          root.style.setProperty("--font-body", `${state.fontSize}pt`);
-          root.style.setProperty("--font-title", `${state.fontSize + 1}pt`);
-          root.style.setProperty("--font-small", `${state.fontSize - 1}pt`);
+          root.style.setProperty("--font-body", `${state.fontSize}px`);
+          root.style.setProperty("--font-title", `${state.fontSize + 1}px`);
+          root.style.setProperty("--font-small", `${state.fontSize - 1.5}px`);
+
+          // 图标主题（内容图标 CSS 变量色板；缺失按 classic 处理）
+          root.setAttribute("data-icon-theme", state.iconTheme || "classic");
 
           // 毛玻璃效果开关（在 applyThemeColors 之后设置：关闭态用
           // !important 覆盖主题 inline 写入的透明玻璃变量；属性缺失按关闭处理）

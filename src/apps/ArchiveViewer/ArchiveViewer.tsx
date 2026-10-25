@@ -8,6 +8,7 @@
  */
 
 import { useCallback, useMemo, useState } from 'react';
+import { AppIcon } from '../../components/AppIcon';
 import { useTranslation } from 'react-i18next';
 import { classifyArchive } from './commands';
 import { useArchiveListing } from './hooks/useArchiveListing';
@@ -48,7 +49,7 @@ export function ArchiveViewer({ preloadData }: ArchiveViewerProps) {
   return (
     <div className="archive-viewer">
       <div className="av-toolbar">
-        <span className="av-name">📦 {fileName}</span>
+        <span className="av-name"><AppIcon name="package" size={15} /> {fileName}</span>
         {tree.length > 0 && (
           <span className="av-meta">{t('archive.fileCount', { count: stats.files, size: fmtSize(stats.total) })}</span>
         )}

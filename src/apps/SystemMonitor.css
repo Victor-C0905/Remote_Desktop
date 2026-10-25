@@ -33,7 +33,7 @@
   border: none;
   border-radius: var(--radius-xs);
   cursor: pointer;
-  transition: all var(--duration-fast) var(--ease-out);
+  transition: background-color var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out), opacity var(--duration-fast) var(--ease-out);
   flex-shrink: 0;
   white-space: nowrap;
 }
@@ -48,23 +48,7 @@
   color: var(--quirel-accent-fg);
 }
 
-/* ✅ 新增：WebKit 滚动条样式 */
-.sm-tabs::-webkit-scrollbar {
-  height: 4px;
-}
-
-.sm-tabs::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.sm-tabs::-webkit-scrollbar-thumb {
-  background: var(--quirel-border-color);
-  border-radius: var(--radius-pill);
-}
-
-.sm-tabs::-webkit-scrollbar-thumb:hover {
-  background: rgba(0,0,0,0.2);
-}
+/* 滚动条统一走全局 scrollbar.css（原 4px 本地覆盖与全局 6px 并存） */
 
 /* ── Content Area ────────────────────────────────────── */
 .sm-content {
@@ -202,9 +186,10 @@
 
 .sm-res-card {
   flex: 1;
-  background: var(--quirel-view-bg);
+  background: var(--quirel-card-bg);
   border: 1px solid var(--quirel-border-color);
   border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-card);
   padding: 12px;
   display: flex;
   flex-direction: column;
@@ -253,14 +238,14 @@
 }
 
 .sm-res-value {
-  font-size: 14pt;
+  font-size: 19px;
   font-weight: 600;
   color: var(--quirel-text-primary);
   font-variant-numeric: tabular-nums;
 }
 
 .sm-res-value-large {
-  font-size: 18pt;
+  font-size: 24px;
 }
 
 .sm-res-label {
@@ -308,8 +293,11 @@
 
 .sm-bar-fill {
   height: 100%;
+  width: 100%;
+  transform-origin: left center;
   border-radius: var(--radius-pill);
-  transition: width 0.5s var(--ease-out);
+  /* scaleX 而非 width：合成器线程动画，实时流不触发布局重排 */
+  transition: transform 0.5s var(--ease-out);
 }
 
 .sm-bar-detail {
@@ -453,7 +441,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 13pt;
+  font-size: 17px;
   font-weight: 700;
   color: var(--quirel-text-primary);
   background: var(--quirel-card-bg);

@@ -5,6 +5,7 @@ import { createLogger } from "../utils/logger";
 import { ServerConfig, AuthMethod, StructuredError } from "../types/server";
 import { getErrorInfo, parseConnectError } from "../types/errors";
 import i18n from "../i18n";
+import { hasSecrets, secretsSet, secretsDelete, stripSecrets, hydrateCredentials, isKeyringReady } from "../utils/credentials";
 
 const log = createLogger('ServersStore');
 
@@ -62,16 +63,24 @@ export const useServersStore = create<ServersState & ServersActions>()(
             ...server.auth,
           },
         };
+        // 凭据进系统凭据库（keyring），servers.bin 只留非敏感字段
+        if (hasSecrets(newServer.auth)) {
+          void secretsSet(newServer.id, newServer.auth);
+        }
         set({ servers: [...get().servers, newServer] });
       },
 
       removeServer: (id) => {
+        void secretsDelete(id);
         const servers = get().servers.filter((s) => s.id !== id);
         const activeServerId = get().activeServerId === id ? null : get().activeServerId;
         set({ servers, activeServerId });
       },
 
       updateServer: (id, updates) => {
+        if (updates.auth && hasSecrets(updates.auth)) {
+          void secretsSet(id, updates.auth);
+        }
         set({
           servers: get().servers.map((s) =>
             s.id === id ? { ...s, ...updates } : s
@@ -121,7 +130,14 @@ export const useServersStore = create<ServersState & ServersActions>()(
     {
       name: "quirel-servers",
       storage: createJSONStorage(() => serversStorage),
-      // 加载时重置所有服务器状态为 disconnected
+      // 落盘前剥离凭据——但仅在 keyring 确认可写之后（isKeyringReady 门控）：
+      // 迁移期写入失败时保留明文落盘，防止凭据两头落空直接蒸发
+      partialize: (state) => ({
+        servers: state.servers.map((s) => (isKeyringReady() ? stripSecrets(s) : s)),
+        activeServerId: state.activeServerId,
+      }),
+      // 加载时重置所有服务器状态为 disconnected；随后从 keyring 装配凭据
+      //（含旧版明文凭据的一次性迁移：写入 keyring 并从 state 剥离）
       onRehydrateStorage: () => {
         log.debug("onRehydrateStorage 开始");
         return (state) => {
@@ -135,6 +151,13 @@ export const useServersStore = create<ServersState & ServersActions>()(
             }));
             state.activeServerId = null;
             log.debug("重置后，activeServerId:", state.activeServerId);
+
+            // keyring 装配 + 旧明文迁移（异步，不阻塞启动）
+            void hydrateCredentials(state.servers).then((merged) => {
+              useServersStore.setState({
+                servers: merged.map((s) => ({ ...s, status: "disconnected" as const, error: undefined })),
+              });
+            });
           }
         };
       },
