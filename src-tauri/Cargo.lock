@@ -3352,7 +3352,7 @@ dependencies = [
 
 [[package]]
 name = "quirel"
-version = "0.3.0-beta.1"
+version = "0.3.0-beta.2"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -3393,7 +3393,7 @@ dependencies = [
 
 [[package]]
 name = "quirel-protocol"
-version = "0.3.0-beta.1"
+version = "0.3.0-beta.2"
 dependencies = [
  "serde",
  "serde_json",
