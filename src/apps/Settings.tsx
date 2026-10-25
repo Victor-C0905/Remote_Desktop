@@ -1,8 +1,13 @@
 import { useState, useEffect } from "react";
+import { AppIcon } from '../components/AppIcon';
+import { ConfirmDialog } from '../components/Dialog/ConfirmDialog';
+import { secretsDeleteAll, getKeyringHealth } from '../utils/credentials';
+import { useServersStore } from '../stores/serversStore';
+import { AppBadge } from '../components/AppBadge';
 import { invoke } from "@tauri-apps/api/core";
 import { useServerManager, formatLastConnected, getStatusColor } from "../context/ServerManager";
-import { useWallpaper, getPresetWallpaperName, getWallpaperStyle } from "../context/WallpaperContext";
-import { PRESET_WALLPAPERS } from "../stores/wallpaperStore";
+import { useWallpaper, getWallpaperStyle } from "../context/WallpaperContext";
+import { useWallpaperStore, BUILTIN_WALLPAPERS } from "../stores/wallpaperStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import { themes, accentColors } from "../config/themes";
 import { ThemeId } from "../config/themes";
@@ -28,20 +33,20 @@ type SettingsSection = "connection" | "appearance" | "keyboard" | "files" | "ter
 
 interface SidebarItem {
   id: SettingsSection;
-  icon: string;
+  icon: import('../components/AppIcon').AppIconName;
   labelKey: string;
 }
 
 const SIDEBAR_ITEMS: SidebarItem[] = [
-  { id: "connection", icon: "🔗", labelKey: "settings.section.connection" },
-  { id: "appearance", icon: "🎨", labelKey: "settings.section.appearance" },
-  { id: "keyboard", icon: "⌨️", labelKey: "settings.section.keyboard" },
-  { id: "files", icon: "📁", labelKey: "settings.section.files" },
-  { id: "terminal", icon: "🖥️", labelKey: "settings.section.terminal" },
-  { id: "browser", icon: "🌐", labelKey: "settings.section.browser" },
-  { id: "notifications", icon: "🔔", labelKey: "settings.section.notifications" },
-  { id: "stats", icon: "📊", labelKey: "settings.section.stats" },
-  { id: "about", icon: "ℹ️", labelKey: "settings.section.about" },
+  { id: "connection", icon: "connection", labelKey: "settings.section.connection" },
+  { id: "appearance", icon: "appearance", labelKey: "settings.section.appearance" },
+  { id: "keyboard", icon: "keyboard", labelKey: "settings.section.keyboard" },
+  { id: "files", icon: "files", labelKey: "settings.section.files" },
+  { id: "terminal", icon: "terminal", labelKey: "settings.section.terminal" },
+  { id: "browser", icon: "browser", labelKey: "settings.section.browser" },
+  { id: "notifications", icon: "notifications", labelKey: "settings.section.notifications" },
+  { id: "stats", icon: "stats", labelKey: "settings.section.stats" },
+  { id: "about", icon: "about", labelKey: "settings.section.about" },
 ];
 
 /* ── Add Server Modal ───────────────────────────────── */
@@ -72,6 +77,16 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (name && host) {
+      // 安全前置拦截：本表单含持久化凭据，系统凭据库不可用时阻止提交
+      // （凭据唯一持久化形态是 OS 凭据库——不允许静默降级明文保存）
+      const health = getKeyringHealth();
+      const hasCredential =
+        (authMethod === AuthMethod.PASSWORD && password) ||
+        (authMethod === AuthMethod.PUBKEY && (privateKeyFile || passphrase));
+      if (hasCredential && health.status === "unavailable") {
+        setFormError(t("settings.keyringUnavailableError"));
+        return;
+      }
       // 构建认证配置对象
       const auth = {
         method: authMethod,
@@ -267,6 +282,11 @@ interface EditServerModalProps {
 
 function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalProps) {
   const { t } = useTranslation();
+  // 凭据状态/回退取 store 实时值而非打开时快照：keyring 装配是异步的，
+  // 快照可能早于装配（显示"未配置"且回退空值清空凭据）
+  const liveAuth = useServersStore(
+    (st) => st.servers.find((x) => x.id === server?.id)?.auth
+  );
   const [name, setName] = useState("");
   const [host, setHost] = useState("");
   const [port, setPort] = useState(8443);
@@ -290,9 +310,12 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
       if (server.auth) {
         setAuthMethod(server.auth.method || AuthMethod.PASSWORD);
         setUsername(server.auth.username || "");
-        setPassword(server.auth.password || "");
-        setPrivateKeyFile(server.auth.privateKey || "");
-        setPassphrase(server.auth.passphrase || "");
+        // 凭据三字段（密码/私钥/口令）不回显原值：编辑语义为"留空 = 保留"，
+        // 提交时以 server 原值兜底——避免空串覆盖原凭据导致静默清空
+        // （此前每次编辑服务器都会把私钥/密码抹掉）
+        setPassword("");
+        setPrivateKeyFile("");
+        setPassphrase("");
       }
     }
   }, [server]);
@@ -302,14 +325,27 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (name && host) {
-      // 构建认证配置对象
+      // 安全前置拦截：本表单含持久化凭据，系统凭据库不可用时阻止提交
+      // （凭据唯一持久化形态是 OS 凭据库——不允许静默降级明文保存）
+      const health = getKeyringHealth();
+      const hasCredential =
+        (authMethod === AuthMethod.PASSWORD && password) ||
+        (authMethod === AuthMethod.PUBKEY && (privateKeyFile || passphrase));
+      if (hasCredential && health.status === "unavailable") {
+        setFormError(t("settings.keyringUnavailableError"));
+        return;
+      }
+      // 构建认证配置对象——凭据留空时回退 server 原值（保留语义，防空串清空）
+      const prevAuth = liveAuth ?? server.auth ?? {};
       const auth = {
         method: authMethod,
         username,
-        ...(authMethod === AuthMethod.PASSWORD && { password }),
+        ...(authMethod === AuthMethod.PASSWORD && {
+          password: password || prevAuth.password,
+        }),
         ...(authMethod === AuthMethod.PUBKEY && {
-          privateKey: privateKeyFile,
-          ...(passphrase && { passphrase }), // 只在密码非空时才添加
+          privateKey: privateKeyFile || prevAuth.privateKey,
+          passphrase: passphrase || prevAuth.passphrase,
         }),
       };
 
@@ -426,7 +462,7 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
                 className="st-form-input"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder={t("settings.passwordPlaceholder")}
+                placeholder={liveAuth?.password ? t("settings.keepUnchangedPlaceholder") : t("settings.passwordPlaceholder")}
               />
             </div>
           )}
@@ -442,6 +478,10 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
                   onChange={handlePrivateKeySelect}
                   accept=".pem,.key,id_rsa,id_ed25519,id_ecdsa,id_dsa"
                 />
+                {/* 凭据编辑语义：不回显原值；显示"已配置"状态，留空/不重选 = 保留原值 */}
+                {liveAuth?.privateKey && !privateKeyFile && (
+                  <span className="st-form-hint st-key-configured">{t("settings.keyConfigured")}</span>
+                )}
                 <span className="st-form-hint">
                   {t("settings.privateKeyHint1")}<br/>
                   {t("settings.privateKeyHint2")}<br/>
@@ -460,8 +500,11 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
                   className="st-form-input"
                   value={passphrase}
                   onChange={(e) => setPassphrase(e.target.value)}
-                  placeholder={t("settings.passphrasePlaceholder")}
+                  placeholder={liveAuth?.passphrase ? t("settings.keepUnchangedPlaceholder") : t("settings.passphrasePlaceholder")}
                 />
+              {liveAuth?.passphrase && !passphrase && (
+                <span className="st-form-hint st-key-configured">{t("settings.passphraseConfigured")}</span>
+              )}
               </div>
             </>
           )}
@@ -483,6 +526,7 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
   // 窗口系统集成（未来可能需要使用 windowState）
   // const windowState = useWindowState(windowId);
   const [activeSection, setActiveSection] = useState<SettingsSection>("connection");
+  const [wipeConfirmOpen, setWipeConfirmOpen] = useState(false);
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingServer, setEditingServer] = useState<{ id: string; name: string; host: string; port: number; auth?: any } | null>(null);
@@ -555,10 +599,22 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
 
   const {
     wallpaper,
-    setPresetWallpaper,
+    setBuiltinWallpaper,
     importWallpaper,
-    clearWallpaper,
   } = useWallpaper();
+  const setCachedWallpaper = useWallpaperStore((s) => s.setCachedWallpaper);
+  const loadCachedWallpaper = useWallpaperStore((s) => s.loadCachedWallpaper);
+  const wallpaperObjectUrl = useWallpaperStore((s) => s.objectUrl);
+
+  // 磁盘上的图片缓存路径（有则显示"使用我的图片"恢复入口；切换预设后图片仍在磁盘）
+  const [cachedWallpaperPath, setCachedWallpaperPath] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    invoke<string | null>("wallpaper_cache_current")
+      .then((p) => { if (alive) setCachedWallpaperPath(p); })
+      .catch(() => { /* 非 Tauri 环境忽略 */ });
+    return () => { alive = false; };
+  }, [wallpaper.type]);
 
   // 使用 Zustand settingsStore
   const {
@@ -570,6 +626,8 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
     setThemeId,
     accentColorId,
     setAccentColorId,
+    iconTheme,
+    setIconTheme,
   } = useSettingsStore();
 
   // 主题已由 Desktop.tsx 全局应用，此处不再重复调用
@@ -761,7 +819,7 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                           onClick={(e) => { e.stopPropagation(); handleRemove(server.id); }}
                           title={t("settings.deleteTip")}
                         >
-                          🗑️
+                          <AppIcon name="trash" size={16} />
                         </button>
                       </div>
                     </div>
@@ -845,6 +903,59 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
               </div>
             </div>
 
+            {/* 图标主题：预览卡为动态实况——各自强制渲染本主题的
+                徽章阵容 + 文件类型图标（容器 data-icon-theme 覆盖 --ic-* 变量），
+                并跟随当前 UI 亮暗（data-icon-scheme 全局） */}
+            <div className="st-card">
+              <div className="st-card-header text-title">{t("settings.iconThemeTitle")}</div>
+              <div className="st-accent-options">
+                <div
+                  className={`st-accent-option ${iconTheme === "classic" ? "selected" : ""}`}
+                  onClick={() => setIconTheme("classic")}
+                >
+                  <div className="st-icon-theme-preview" data-icon-theme="classic">
+                    <div className="st-itp-row">
+                      <AppBadge app="terminal" size={30} theme="classic" />
+                      <AppBadge app="files" size={30} theme="classic" />
+                      <AppBadge app="monitor" size={30} theme="classic" />
+                      <AppBadge app="editor" size={30} theme="classic" />
+                    </div>
+                    <div className="st-itp-row st-itp-files">
+                      <AppIcon name="folder" size={18} iconTheme="classic" />
+                      <AppIcon name="file-code" size={18} iconTheme="classic" />
+                      <AppIcon name="file-image" size={18} iconTheme="classic" />
+                      <AppIcon name="file-archive" size={18} iconTheme="classic" />
+                      <AppIcon name="database" size={18} iconTheme="classic" />
+                      <AppIcon name="file-text" size={18} iconTheme="classic" />
+                    </div>
+                  </div>
+                  <div className="st-accent-name">{t("settings.iconThemeClassic")}</div>
+                </div>
+                <div
+                  className={`st-accent-option ${iconTheme === "paper" ? "selected" : ""}`}
+                  onClick={() => setIconTheme("paper")}
+                >
+                  <div className="st-icon-theme-preview" data-icon-theme="paper">
+                    <div className="st-itp-row">
+                      <AppBadge app="terminal" size={30} theme="paper" />
+                      <AppBadge app="files" size={30} theme="paper" />
+                      <AppBadge app="monitor" size={30} theme="paper" />
+                      <AppBadge app="editor" size={30} theme="paper" />
+                    </div>
+                    <div className="st-itp-row st-itp-files">
+                      <AppIcon name="folder" size={18} iconTheme="paper" />
+                      <AppIcon name="file-code" size={18} iconTheme="paper" />
+                      <AppIcon name="file-image" size={18} iconTheme="paper" />
+                      <AppIcon name="file-archive" size={18} iconTheme="paper" />
+                      <AppIcon name="database" size={18} iconTheme="paper" />
+                      <AppIcon name="file-text" size={18} iconTheme="paper" />
+                    </div>
+                  </div>
+                  <div className="st-accent-name">{t("settings.iconThemePaper")}</div>
+                </div>
+              </div>
+            </div>
+
             {/* 强调色选择（仅当主题支持可选强调色时显示） */}
             {currentTheme.accentColorOptions && (
               <div className="st-card">
@@ -876,13 +987,14 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                 <span className="st-slider-label text-body">{t("settings.uiFont")}</span>
                 <input
                   type="range"
-                  min="8"
-                  max="14"
+                  min="12"
+                  max="17"
                   value={fontSize}
                   onChange={(e) => setFontSize(parseInt(e.target.value))}
                   className="st-slider"
+                  style={{ "--fill": `${((fontSize - 12) / 5) * 100}%` } as React.CSSProperties}
                 />
-                <span className="st-slider-value">{fontSize}pt</span>
+                <span className="st-slider-value">{fontSize}px</span>
               </div>
               <div className="st-slider-row">
                 <span className="st-slider-label text-body">{t("settings.terminalFont")}</span>
@@ -893,46 +1005,54 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                   value={terminalFontSize}
                   onChange={(e) => setTerminalFontSize(parseInt(e.target.value))}
                   className="st-slider"
+                  style={{ "--fill": `${((terminalFontSize - 10) / 6) * 100}%` } as React.CSSProperties}
                 />
-                <span className="st-slider-value">{terminalFontSize}pt</span>
+                <span className="st-slider-value">{terminalFontSize}px</span>
               </div>
             </div>
 
-            {/* 壁纸 */}
+            {/* 壁纸：多张内置主题图 + 用户上传缓存位，可来回切换 */}
             <div className="st-card">
               <div className="st-card-header text-title">{t("settings.wallpaperTitle")}</div>
               <div className="st-wallpaper-grid">
-                {Object.keys(PRESET_WALLPAPERS).map(presetId => (
+                {BUILTIN_WALLPAPERS.map((w) => (
                   <button
-                    key={presetId}
-                    className={`st-wallpaper-btn ${wallpaper.type === "preset" && wallpaper.presetId === presetId ? "selected" : ""}`}
-                    style={{ background: PRESET_WALLPAPERS[presetId] }}
-                    onClick={() => setPresetWallpaper(presetId)}
-                    title={getPresetWallpaperName(presetId)}
-                  >
-                    <span className="st-wallpaper-label">{getPresetWallpaperName(presetId)}</span>
-                  </button>
+                    key={w.id}
+                    className={`st-wallpaper-thumb ${wallpaper.type === "builtin" && wallpaper.builtinId === w.id ? "selected" : ""}`}
+                    style={{ backgroundImage: `url(${w.url})` }}
+                    onClick={() => setBuiltinWallpaper(w.id)}
+                    title={t(w.nameKey)}
+                  />
                 ))}
+                {cachedWallpaperPath && (
+                  <button
+                    className={`st-wallpaper-thumb st-wallpaper-thumb-custom ${wallpaper.type === "cached" ? "selected" : ""}`}
+                    onClick={() => {
+                      setCachedWallpaper(cachedWallpaperPath);
+                      void loadCachedWallpaper();
+                    }}
+                    title={t("settings.customWallpaperLabel")}
+                  >
+                    <AppIcon name="pictures" size={20} />
+                  </button>
+                )}
+              </div>
+              <div className="st-wallpaper-preview">
+                <div
+                  className="st-wallpaper-preview-img"
+                  style={getWallpaperStyle(wallpaper, wallpaperObjectUrl)}
+                />
+                <span className="st-wallpaper-preview-label">
+                  {wallpaper.type === "builtin"
+                    ? t(BUILTIN_WALLPAPERS.find((w) => w.id === wallpaper.builtinId)?.nameKey ?? BUILTIN_WALLPAPERS[0].nameKey)
+                    : t("settings.customWallpaperLabel")}
+                </span>
               </div>
               <div className="st-wallpaper-actions">
                 <button className="st-btn st-btn-primary" onClick={importWallpaper}>
                   {t("settings.importWallpaperBtn")}
                 </button>
-                {wallpaper.type === "custom" && (
-                  <button className="st-btn" onClick={clearWallpaper}>
-                    {t("settings.resetWallpaperBtn")}
-                  </button>
-                )}
               </div>
-              {wallpaper.type === "custom" && wallpaper.customPath && (
-                <div className="st-wallpaper-preview">
-                  <div
-                    className="st-wallpaper-preview-img"
-                    style={getWallpaperStyle(wallpaper)}
-                  />
-                  <span className="st-wallpaper-preview-label">{t("settings.customWallpaperLabel")}</span>
-                </div>
-              )}
             </div>
             {/* 启动行为：桌面会话恢复开关（关闭后每次启动为干净桌面） */}
             <div className="st-card">
@@ -1266,6 +1386,19 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                 </div>
               </div>
             </div>
+
+            {/* 数据与隐私：完全清除本地数据（凭据库 → 数据目录 → 临时文件） */}
+            <div className="st-card">
+              <div className="st-card-header text-title">{t("settings.dataPrivacyTitle")}</div>
+              <div className="st-option-row">
+                <span className="st-option-label text-body" style={{ maxWidth: 420 }}>
+                  {t("settings.dataPrivacyDesc")}
+                </span>
+                <button className="st-btn st-danger-btn" onClick={() => setWipeConfirmOpen(true)}>
+                  {t("settings.wipeAllDataBtn")}
+                </button>
+              </div>
+            </div>
           </div>
         );
 
@@ -1286,7 +1419,7 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
               className={`st-sidebar-item ${activeSection === item.id ? "active" : ""}`}
               onClick={() => setActiveSection(item.id)}
             >
-              <span className="st-sb-icon">{item.icon}</span>
+              <span className="st-sb-icon"><AppIcon name={item.icon} size={16} /></span>
               <span className="st-sb-label text-label">{t(item.labelKey)}</span>
             </div>
           ))}
@@ -1297,6 +1430,26 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
           {renderSection()}
         </div>
       </div>
+
+      {/* 完全清除确认：先删系统凭据库，再触发重启清除数据目录 */}
+      {wipeConfirmOpen && (
+        <ConfirmDialog
+          title={t("settings.wipeConfirmTitle")}
+          message={t("settings.wipeConfirmMessage")}
+          detail={t("settings.wipeConfirmDetail")}
+          confirmLabel={t("settings.wipeAllDataBtn")}
+          danger
+          onConfirm={async () => {
+            setWipeConfirmOpen(false);
+            // 1) 系统凭据库不随数据目录删除，须先行清理
+            const ids = useServersStore.getState().servers.map((s) => s.id);
+            await secretsDeleteAll(ids);
+            // 2) 写清除标记 → 新进程启动时执行清除 → 本进程退出
+            await invoke("wipe_all_data");
+          }}
+          onCancel={() => setWipeConfirmOpen(false)}
+        />
+      )}
     </div>
   );
 }

@@ -66,6 +66,9 @@ export function applyThemeColors(
     const colors = theme.lightColors; // dark主题的lightColors已包含暗色配置
     const root = document.documentElement;
 
+    // 图标色板联动：图标跟随 UI 亮暗换挡（variables.css --ic-* 覆盖组依据）
+    root.setAttribute('data-icon-scheme', themeId === 'dark' ? 'dark' : 'light');
+
     // 设置基础颜色变量（quirel前缀）
     root.style.setProperty('--quirel-window-bg', colors.windowBg);
     root.style.setProperty('--quirel-view-bg', colors.viewBg);

@@ -3,6 +3,7 @@
 // 支持远程 PTY 连接（通过 QUIC Stream）和本地演示模式
 // 集成窗口系统：每个窗口实例独立状态，支持多窗口运行
 import React, { useEffect, useRef, useState } from 'react';
+import { AppIcon } from '../components/AppIcon';
 import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
@@ -1166,7 +1167,7 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
         ))}
         {tabs.length === 0 && (
           <div className="terminal-empty">
-            <div className="empty-icon">🖥️</div>
+            <div className="empty-icon"><AppIcon name="terminal" size={48} /></div>
             <div className="empty-text">{t('terminal.emptyText')}</div>
             <div className="empty-hint">{t('terminal.emptyHint')}</div>
           </div>
@@ -1212,6 +1213,7 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
               max={24}
               value={fontSize}
               onChange={(e) => setFontSize(Number(e.target.value))}
+              style={{ "--fill": `${((fontSize - 10) / 14) * 100}%` } as React.CSSProperties}
             />
             <span className="terminal-settings-value">{fontSize}</span>
           </label>

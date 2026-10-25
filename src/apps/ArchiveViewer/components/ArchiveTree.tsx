@@ -5,6 +5,7 @@
  */
 
 import { fmtSize } from '../utils/format';
+import { AppIcon } from '../../../components/AppIcon';
 import type { ArchiveTreeNode } from '../tree';
 
 interface TreeProps {
@@ -28,7 +29,7 @@ export function ArchiveTree({ nodes, depth, expanded, extractingPath, onToggleDi
             style={{ paddingLeft: 8 + depth * 16 }}
             onDoubleClick={() => (n.isDir ? onToggleDir(n) : onOpenFile(n))}
           >
-            <span className="av-icon">{n.isDir ? (expanded.has(n.path) ? '📂' : '📁') : '📄'}</span>
+            <span className="av-icon"><AppIcon name={n.isDir ? (expanded.has(n.path) ? 'folder-open' : 'folder') : 'file'} size={15} /></span>
             <span className="av-row-name">{n.name}</span>
             <span className="av-row-size">{n.isDir ? '' : fmtSize(n.size)}</span>
           </div>

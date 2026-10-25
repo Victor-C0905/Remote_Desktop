@@ -376,7 +376,7 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
         >
           <div
             className={getProgressClass()}
-            style={{ width: `${task.progress}%` }}
+            style={{ transform: `scaleX(${task.progress / 100})` }}
           />
         </div>
         <span className="tc-percent">{Math.round(task.progress)}%</span>

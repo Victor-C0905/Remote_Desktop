@@ -15,6 +15,7 @@ import {
 import { createLogger } from '../../utils/logger';
 import { getWindowsStorage } from '../../utils/storage';
 import type { SnapZone } from '../../components/window-shell/aeroSnap';
+import { computeSnapRect } from '../../components/window-shell/aeroSnap';
 
 const log = createLogger('WindowManager');
 
@@ -337,6 +338,62 @@ export class WindowManager implements IWindowManager {
    * ✅ Snap 窗口(半屏/四分之一屏,非 maximize)
    * 保存当前位置/尺寸,应用目标 rect
    */
+  /**
+   * ✅ 主窗口（viewport）尺寸变化后的全量窗口自适应：
+   * - maximized：重新铺满新工作区（maximized 的实现是 bounds=工作区尺寸，
+   *   viewport 变化后不重设会残留旧尺寸/溢出）
+   * - snap：按 snapZone 在新工作区重算几何（computeSnapRect）
+   * - 普通窗口：clamp 位置保证最小可见区（与恢复会话时的约束逻辑一致）
+   */
+  handleViewportResize(): void {
+    const vw = window.innerWidth;
+    const vh = window.innerHeight - 32; // 工作区高度（扣除 TopBar，与 createApp 同款）
+    const MIN_VISIBLE = 100;
+
+    this.windows.getAll().forEach(win => {
+      if (win.minimized) return;
+
+      if (win.maximized) {
+        win.setPosition({ x: 0, y: 0 });
+        win.setSize({ width: vw, height: vh });
+        this.eventBus.emit({ type: 'window:resized', windowId: win.id, timestamp: Date.now() });
+        return;
+      }
+
+      const zone = win.snapZone;
+      if (zone) {
+        // 'top' zone 即最大化通道，正常不会同时存在于非 maximized 窗口；
+        // 其余 zone 按新工作区重算半屏/四分之一屏几何
+        const rect = computeSnapRect(zone, { width: vw, height: vh });
+        win.setPosition({ x: rect.x, y: rect.y });
+        win.setSize({ width: rect.width, height: rect.height });
+        this.eventBus.emit({ type: 'window:resized', windowId: win.id, timestamp: Date.now() });
+        return;
+      }
+
+      // 普通窗口：尺寸收缩 + 位置 clamp。
+      // 尺寸：超过新工作区则收缩（不高于应用注册的 minSize 下限）；
+      // 放大方向不跟随——保留用户设定的窗口尺寸（桌面系统惯例）。
+      const app = this.getApp(win.appId);
+      const minW = app?.minSize.width ?? 400;
+      const minH = app?.minSize.height ?? 300;
+      const { x, y } = win.position;
+      const { width, height } = win.size;
+      const newW = Math.max(minW, Math.min(width, vw));
+      const newH = Math.max(minH, Math.min(height, vh));
+      if (newW !== width || newH !== height) {
+        win.setSize({ width: newW, height: newH });
+        this.eventBus.emit({ type: 'window:resized', windowId: win.id, timestamp: Date.now() });
+      }
+      const nx = Math.max(-(newW - MIN_VISIBLE), Math.min(x, vw - MIN_VISIBLE));
+      const ny = Math.max(0, Math.min(y, vh - MIN_VISIBLE));
+      if (nx !== x || ny !== y) {
+        win.setPosition({ x: nx, y: ny });
+        this.eventBus.emit({ type: 'window:moved', windowId: win.id, timestamp: Date.now() });
+      }
+    });
+  }
+
   snap(windowId: string, zone: SnapZone, rect: { x: number; y: number; width: number; height: number }): void {
     const window = this.windows.get(windowId);
     if (!window) return;

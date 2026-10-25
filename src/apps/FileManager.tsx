@@ -11,6 +11,7 @@ import { TransferStatusBar } from "../components/TransferStatusBar";
 import { createLogger } from '../utils/logger';
 import { openRemoteFile } from './openRemoteFile';
 import { FOLDER_ICON, getFileIconForName } from './fileIcons';
+import { AppIcon, type AppIconName } from '../components/AppIcon';
 import { parsePermissions, matrixToOctal, octalToPermString } from './permissions';
 import type { PermMatrix } from './permissions';
 import { sortFileEntries, DEFAULT_SORT, DEFAULT_COLUMN_WIDTHS, clampColumnWidth, buildGridTemplate, filterByColumnFilters, toggleBucket, DEFAULT_COLUMN_FILTERS, SIZE_BUCKETS, MTIME_BUCKETS, NAME_BUCKETS, typeKeyOf, typeKeyLabel, listFileTypeBuckets } from './fileTable';
@@ -52,7 +53,7 @@ interface MountInfo {
 
 // 侧边栏项（labelKey: 预置书签词典 key，渲染处 t()；label: 动态标签如挂载点）
 interface SidebarItem {
-  icon: string;
+  icon: import('../components/AppIcon').AppIconName;
   labelKey?: string;
   label?: string;
   path: string;
@@ -68,7 +69,7 @@ interface SidebarSection {
 
 /* ── Icon Map（已提取至 ./fileIcons，与 TextEditor 共用） ── */
 
-function getFileIcon(entry: FileEntry): string {
+function getFileIcon(entry: FileEntry): AppIconName {
   if (entry.is_dir) return FOLDER_ICON;
   return getFileIconForName(entry.name);
 }
@@ -641,18 +642,18 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         {
           title: t("fileManager.location"),
           items: [
-            { icon: "🏠", label: t("fileManager.home"), path: homeDir, type: "bookmark" },
-            { icon: "📄", label: t("fileManager.documents"), path: `${homeDir}/Documents`, type: "bookmark" },
-            { icon: "⬇️", label: t("fileManager.downloads"), path: `${homeDir}/Downloads`, type: "bookmark" },
-            { icon: "🖼️", label: t("fileManager.pictures"), path: `${homeDir}/Pictures`, type: "bookmark" },
-            { icon: "🎵", label: t("fileManager.music"), path: `${homeDir}/Music`, type: "bookmark" },
-            { icon: "🎬", label: t("fileManager.videos"), path: `${homeDir}/Videos`, type: "bookmark" },
+            { icon: "home", label: t("fileManager.home"), path: homeDir, type: "bookmark" },
+            { icon: "documents", label: t("fileManager.documents"), path: `${homeDir}/Documents`, type: "bookmark" },
+            { icon: "download", label: t("fileManager.downloads"), path: `${homeDir}/Downloads`, type: "bookmark" },
+            { icon: "pictures", label: t("fileManager.pictures"), path: `${homeDir}/Pictures`, type: "bookmark" },
+            { icon: "music", label: t("fileManager.music"), path: `${homeDir}/Music`, type: "bookmark" },
+            { icon: "videos", label: t("fileManager.videos"), path: `${homeDir}/Videos`, type: "bookmark" },
           ]
         },
         {
           title: t("fileManager.devices"),
           items: mounts.map(m => ({
-            icon: "💾",
+            icon: "disk",
             label: m.mount_point,
             path: m.mount_point,
             type: "mount"
@@ -661,7 +662,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         {
           title: t("fileManager.otherLocations"),
           items: [
-            { icon: "🌐", label: t("fileManager.network"), path: "/network", type: "network" }
+            { icon: "network", label: t("fileManager.network"), path: "/network", type: "network" }
           ]
         }
       ];
@@ -673,18 +674,18 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         {
           title: t("fileManager.location"),
           items: [
-            { icon: "🏠", label: t("fileManager.home"), path: "/home", type: "bookmark" },
-            { icon: "📄", label: t("fileManager.documents"), path: "/home/Documents", type: "bookmark" },
-            { icon: "⬇️", label: t("fileManager.downloads"), path: "/home/Downloads", type: "bookmark" },
-            { icon: "🖼️", label: t("fileManager.pictures"), path: "/home/Pictures", type: "bookmark" },
-            { icon: "🎵", label: t("fileManager.music"), path: "/home/Music", type: "bookmark" },
-            { icon: "🎬", label: t("fileManager.videos"), path: "/home/Videos", type: "bookmark" },
+            { icon: "home", label: t("fileManager.home"), path: "/home", type: "bookmark" },
+            { icon: "documents", label: t("fileManager.documents"), path: "/home/Documents", type: "bookmark" },
+            { icon: "download", label: t("fileManager.downloads"), path: "/home/Downloads", type: "bookmark" },
+            { icon: "pictures", label: t("fileManager.pictures"), path: "/home/Pictures", type: "bookmark" },
+            { icon: "music", label: t("fileManager.music"), path: "/home/Music", type: "bookmark" },
+            { icon: "videos", label: t("fileManager.videos"), path: "/home/Videos", type: "bookmark" },
           ]
         },
         {
           title: t("fileManager.otherLocations"),
           items: [
-            { icon: "🌐", label: t("fileManager.network"), path: "/network", type: "network" }
+            { icon: "network", label: t("fileManager.network"), path: "/network", type: "network" }
           ]
         },
       ];
@@ -1717,7 +1718,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                     className={`fm-sidebar-item${currentPath === item.path ? " fm-sidebar-item-active" : ""}`}
                     onClick={() => navigateTo(item.path)}
                   >
-                    <span className="fm-si-icon">{item.icon}</span>
+                    <span className="fm-si-icon"><AppIcon name={item.icon} size={16} /></span>
                     <span className="fm-si-label">{item.labelKey ? t(item.labelKey) : item.label}</span>
                   </div>
                 ))}
@@ -1798,7 +1799,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                       }}
                       onMouseEnter={() => setSelectedSuggestionIdx(idx)}
                     >
-                      <span className="fm-suggestion-icon">📁</span>
+                      <span className="fm-suggestion-icon"><AppIcon name="folder" size={14} /></span>
                       <span className="fm-suggestion-text">{suggestion}</span>
                     </div>
                   ))}
@@ -1813,8 +1814,8 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                 onClick={handleMkdir}
                 title={t("fileManager.newFolder")}
                 disabled={!activeServerId}
-              >📁+</button>
-              <button className="fm-toolbar-btn" title={t("fileManager.search")}>🔍</button>
+              ><AppIcon name="folder-plus" size={15} /></button>
+              <button className="fm-toolbar-btn" title={t("fileManager.search")}><AppIcon name="search" size={15} /></button>
             </div>
 
             {/* View Toggle */}
@@ -1880,7 +1881,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
             </div>
           ) : error ? (
             <div className="fm-empty">
-              <div className="fm-empty-icon">⚠️</div>
+              <div className="fm-empty-icon"><AppIcon name="about" size={40} /></div>
               <div className="fm-empty-text">{error}</div>
             </div>
           ) : entries.length === 0 ? (
@@ -1889,7 +1890,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
               onContextMenu={handleEmptyContextMenu}
               onClick={handleEmptyClick}
             >
-              <div className="fm-empty-icon">{permissionDenied ? "🔒" : "📂"}</div>
+              <div className="fm-empty-icon"><AppIcon name={permissionDenied ? "lock" : "folder-open"} size={40} /></div>
               <div className="fm-empty-text">{permissionDenied ? t("fileManager.noPermission") : t("fileManager.emptyDir")}</div>
             </div>
           ) : visibleEntries.length === 0 ? (
@@ -1901,7 +1902,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
               onContextMenu={handleEmptyContextMenu}
               onClick={handleEmptyClick}
             >
-              <div className="fm-empty-icon">🔍</div>
+              <div className="fm-empty-icon"><AppIcon name="search" size={40} /></div>
               <div className="fm-empty-text">{t("fileManager.noFilterMatch")}</div>
             </div>
           ) : viewMode === "list" ? (
@@ -2000,7 +2001,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                     onContextMenu={(e) => handleContextMenu(e, entry, idx)}
                   >
                     <div className="fm-file-name">
-                      <span className="fm-fn-icon">{getFileIcon(entry)}</span>
+                      <span className="fm-fn-icon"><AppIcon name={getFileIcon(entry)} size={16} /></span>
                       {editingEntry?.name === entry.name ? (
                         <input
                           type="text"
@@ -2063,7 +2064,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                   }}
                   onContextMenu={(e) => handleContextMenu(e, entry, idx)}
                 >
-                  <div className="fm-gi-icon">{getFileIcon(entry)}</div>
+                  <div className="fm-gi-icon"><AppIcon name={getFileIcon(entry)} size={36} /></div>
                   {editingEntry?.name === entry.name ? (
                     <input
                       type="text"
@@ -2149,17 +2150,17 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
             // 文件/文件夹菜单
             <>
               <div className="fm-ctx-item" onClick={() => { handleOpen(contextMenu.entry!); setContextMenu(null); }}>
-                <span className="fm-ctx-icon">📂</span> {t("fileManager.ctxOpen")}
+                <span className="fm-ctx-icon"><AppIcon name="folder-open" size={14} /></span> {t("fileManager.ctxOpen")}
               </div>
 
               {/* 脚本运行（仅 .sh 文件）：双击=编辑器查看（方案 1），运行收右键显式入口 */}
               {!contextMenu.entry!.is_dir && contextMenu.entry!.name.toLowerCase().endsWith('.sh') && (
                 <>
                   <div className="fm-ctx-item" onClick={() => { runScriptInTerminal(contextMenu.entry!, false); setContextMenu(null); }}>
-                    <span className="fm-ctx-icon">▶️</span> {t("fileManager.ctxRunInTerminal")}
+                    <span className="fm-ctx-icon"><AppIcon name="terminal" size={14} /></span> {t("fileManager.ctxRunInTerminal")}
                   </div>
                   <div className="fm-ctx-item" onClick={() => { runScriptInTerminal(contextMenu.entry!, true); setContextMenu(null); }}>
-                    <span className="fm-ctx-icon">🛡️</span> {t("fileManager.ctxRunWithSudo")}
+                    <span className="fm-ctx-icon"><AppIcon name="lock" size={14} /></span> {t("fileManager.ctxRunWithSudo")}
                   </div>
                 </>
               )}
@@ -2168,10 +2169,10 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
 
               {/* 文件操作 */}
               <div className="fm-ctx-item" onClick={() => { handleRename(contextMenu.entry!); setContextMenu(null); }}>
-                <span className="fm-ctx-icon">✏️</span> {t("fileManager.ctxRename")}
+                <span className="fm-ctx-icon"><AppIcon name="editor" size={14} /></span> {t("fileManager.ctxRename")}
               </div>
               <div className="fm-ctx-item" onClick={() => { setDeleteTarget(contextMenu.entry!); setContextMenu(null); }}>
-                <span className="fm-ctx-icon">🗑️</span> {t("fileManager.ctxDelete")}
+                <span className="fm-ctx-icon"><AppIcon name="trash" size={14} /></span> {t("fileManager.ctxDelete")}
               </div>
 
               <div className="fm-ctx-separator" />
@@ -2186,7 +2187,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                 navigator.clipboard.writeText(path);
                 setContextMenu(null);
               }}>
-                <span className="fm-ctx-icon">📋</span> {t("fileManager.ctxCopyPath")}
+                <span className="fm-ctx-icon"><AppIcon name="file-text" size={14} /></span> {t("fileManager.ctxCopyPath")}
               </div>
 
               {/* 下载功能（仅文件） */}
@@ -2194,13 +2195,13 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                 <div className="fm-ctx-item" onClick={() => {
                   handleDownload(contextMenu.entry!);
                 }}>
-                  <span className="fm-ctx-icon">⬇️</span> {t("fileManager.ctxDownload")}
+                  <span className="fm-ctx-icon"><AppIcon name="file-archive" size={14} /></span> {t("fileManager.ctxDownload")}
                 </div>
               )}
 
               <div className="fm-ctx-separator" />
               <div className="fm-ctx-item" onClick={() => { showProperties(contextMenu.entry!); setContextMenu(null); }}>
-                <span className="fm-ctx-icon">ℹ️</span> {t("fileManager.ctxProperties")}
+                <span className="fm-ctx-icon"><AppIcon name="about" size={14} /></span> {t("fileManager.ctxProperties")}
               </div>
             </>
           )}
@@ -2209,19 +2210,19 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
             // 空白区域菜单
             <>
               <div className="fm-ctx-item" onClick={handleRefresh}>
-                <span className="fm-ctx-icon">🔄</span> {t("fileManager.ctxRefresh")}
+                <span className="fm-ctx-icon"><AppIcon name="monitor" size={14} /></span> {t("fileManager.ctxRefresh")}
               </div>
               <div className="fm-ctx-separator" />
               <div className="fm-ctx-item" onClick={handleNewFolder}>
-                <span className="fm-ctx-icon">📁</span> {t("fileManager.newFolder")}
+                <span className="fm-ctx-icon"><AppIcon name="folder-plus" size={14} /></span> {t("fileManager.newFolder")}
               </div>
               <div className="fm-ctx-item" onClick={handleNewFile}>
-                <span className="fm-ctx-icon">📄</span> {t("fileManager.ctxNewFile")}
+                <span className="fm-ctx-icon"><AppIcon name="file" size={14} /></span> {t("fileManager.ctxNewFile")}
               </div>
 
               {/* 上传功能 */}
               <div className="fm-ctx-item" onClick={handleUpload}>
-                <span className="fm-ctx-icon">⬆️</span> {t("fileManager.ctxUpload")}
+                <span className="fm-ctx-icon"><AppIcon name="file-code" size={14} /></span> {t("fileManager.ctxUpload")}
               </div>
             </>
           )}
@@ -2358,7 +2359,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         }}>
           <div className="fm-properties-dialog">
             <div className="pd-header">
-              <span className="pd-icon">{getFileIcon(propertiesEntry)}</span>
+              <span className="pd-icon"><AppIcon name={getFileIcon(propertiesEntry)} size={28} /></span>
               <span className="pd-name">{propertiesEntry.name}</span>
             </div>
 

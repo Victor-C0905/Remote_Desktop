@@ -21,6 +21,10 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
+# 服务器凭据的 OS 级存储（Windows Credential Manager 等），替代明文 JSON
+keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native"] }
+# 凭据信封加密（AES-GCM）；与 rustls/quinn 的传递依赖同版本，无双编译
+ring = "0.17"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = "0.4"
@@ -64,12 +68,14 @@ sha2 = "0.10"
 # 版本锁定说明：wry 0.55.1 引入 webview2-com 0.38，必须复用同版本，
 # 版本错位会导致 windows crate 双份编译（二进制 +5~15MB）
 [target.'cfg(windows)'.dependencies]
-webview2-com = "0.38"
+# 与 tauri 2.12 / wry 的 webview2-com 0.39 保持同版本（错位会双份编译 windows crate）
+webview2-com = "0.39"
 # features 显式声明本项目直接用到的 Win32 面（其余由依赖图聚合提供）：
 # Gdi=CreateRoundRectRgn、HiDpi=GetDpiForWindow（webview 圆角 region）、
 # Threading=CreateEventW/SetEvent（主循环唤醒事件）、Security=CreateEventW 的
 # SECURITY_ATTRIBUTES 参数类型（MsgWait 系列在 WindowsAndMessaging，依赖图已含）
-windows = { version = "0.61", features = ["Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_UI_HiDpi", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_Security"] }
+# 版本与 tauri 2.12 的传递依赖对齐（0.62），错位会双份编译（二进制 +5~15MB）
+windows = { version = "0.62", features = ["Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_UI_HiDpi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_System_Threading", "Win32_System_Com", "Win32_Foundation", "Win32_Security"] }
 
 [profile.release]
 opt-level = 3          # 最高优化等级

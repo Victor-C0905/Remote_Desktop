@@ -122,7 +122,11 @@ function generateDiff(oldLines: string[], newLines: string[], lcs: string[]): Fi
     if (newIdx < newLines.length && (lcsIdx >= lcs.length || newLines[newIdx] !== lcs[lcsIdx])) {
       diffs.push({
         type: 'insert',
-        line: newIdx + 1, // 行号从 1 开始
+        // 行号必须基于【旧文本】坐标（应用端在旧数组上操作）：
+        // 插入点 = 当前未处理的旧行之前。此前误用新文件坐标 newIdx+1，
+        // 全选替换（新文件远长于旧文件）时行号暴涨，导致 agent 越界
+        // panic（"Worker 路由失败: response dropped"）与内容错位
+        line: oldIdx + 1,
         new: newLines[newIdx],
       });
       newIdx++;
@@ -193,17 +197,28 @@ export function convertToTauriFormat(diffs: FileChange[]): TauriFileDiff[] {
 export function applyDiff(oldContent: string, diffs: FileChange[]): string {
   const lines = oldContent.split('\n');
 
-  // 按行号排序（从大到小，避免索引错位）
-  const sortedDiffs = [...diffs].sort((a, b) => b.line - a.line);
+  // 应用规则（与 agent 端 apply_diff 协同）：
+  // 1) 所有行号基于【原始旧文件】坐标，统一按行号降序应用
+  // 2) 行号相同的连续 insert 段按生成序逆序应用（依序头插，最终顺序与生成序一致）
+  // 3) 行号钳制：0 视为 1；insert 越界钳到末尾
+  const sorted = [...diffs].sort((a, b) => b.line - a.line); // 稳定排序保留生成序
 
-  // 应用差异
-  for (const diff of sortedDiffs) {
-    const lineIdx = diff.line - 1; // 转为 0-based 索引
+  // 相同行号的连续 insert 段 → 逆序
+  for (let i = 0; i < sorted.length; ) {
+    let j = i;
+    while (j < sorted.length && sorted[j].line === sorted[i].line && sorted[j].type === 'insert') j++;
+    if (j > i + 1) sorted.splice(i, j - i, ...sorted.slice(i, j).reverse());
+    i = j > i ? j : i + 1;
+  }
+
+  for (const diff of sorted) {
+    const lineIdx = Math.max(0, diff.line - 1);
 
     switch (diff.type) {
       case 'insert':
         if (diff.new) {
-          lines.splice(lineIdx, 0, diff.new);
+          const idx = Math.min(lineIdx, lines.length);
+          lines.splice(idx, 0, diff.new);
         }
         break;
 

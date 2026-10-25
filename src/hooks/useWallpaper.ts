@@ -6,12 +6,11 @@ import { useWallpaperStore, getWallpaperStyle } from "../stores/wallpaperStore";
  * 壁纸 Hook - 简化版，直接使用 Zustand store
  */
 export function useWallpaper() {
-  const { wallpaper, setPresetWallpaper, setCustomWallpaper, clearWallpaper } = useWallpaperStore();
-  
+  const { wallpaper, setCustomWallpaper, clearWallpaper, objectUrl } = useWallpaperStore();
+
   return {
     wallpaper,
-    wallpaperStyle: getWallpaperStyle(wallpaper),
-    setPresetWallpaper,
+    wallpaperStyle: getWallpaperStyle(wallpaper, objectUrl),
     setCustomWallpaper,
     clearWallpaper,
   };

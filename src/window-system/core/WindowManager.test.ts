@@ -11,7 +11,7 @@ function makeRegistry() {
   registry.register({
     id: 'test-app',
     titleKey: 'apps.terminal.title',
-    icon: '',
+    icon: 'file',
     defaultSize: { width: 800, height: 600 },
     minSize: { width: 400, height: 300 },
     allowMultipleInstances: false,

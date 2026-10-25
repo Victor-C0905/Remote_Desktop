@@ -172,6 +172,21 @@ export function WindowManagerProvider({ children }: { children: ReactNode }) {
     };
   }, [manager]);
 
+  // 主窗口（viewport）resize → 全量窗口自适应（maximized 铺满 / snap 重算 /
+  // 普通窗口 clamp），防抖 120ms 等拖动稳定
+  useEffect(() => {
+    let timer: number | undefined;
+    const onResize = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => manager.handleViewportResize(), 120);
+    };
+    window.addEventListener('resize', onResize);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      window.clearTimeout(timer);
+    };
+  }, [manager]);
+
   return (
     <WindowManagerContext.Provider value={{ manager }}>
       {children}

@@ -98,7 +98,7 @@ export function TransferStatusBar() {
 
         {/* 空进度条（保持视觉一致性） */}
         <div className="tsb-progress-mini">
-          <div className="tsb-progress-fill tsb-progress-empty" style={{ width: '0%' }} />
+          <div className="tsb-progress-fill tsb-progress-empty" style={{ transform: 'scaleX(0)' }} />
         </div>
 
         {/* 占位百分比 */}
@@ -174,7 +174,7 @@ export function TransferStatusBar() {
       >
         <div
           className="tsb-progress-fill"
-          style={{ width: `${totalProgress}%` }}
+          style={{ transform: `scaleX(${totalProgress / 100})` }}
         />
       </div>
 

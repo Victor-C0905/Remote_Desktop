@@ -11,6 +11,34 @@
   user-select: none;
 }
 
+/* ── 按钮全局手感与焦点可见性 ─────────────────────────────
+   按压位移是 GNOME/Adwaita 的标准按压反馈；焦点环统一 2px 强调色，
+   只在键盘导航（:focus-visible）时出现，不干扰鼠标点击。 */
+button {
+  transition: background-color var(--duration-fast) var(--ease-out),
+              color var(--duration-fast) var(--ease-out),
+              border-color var(--duration-fast) var(--ease-out),
+              box-shadow var(--duration-fast) var(--ease-out);
+}
+button:active {
+  transform: translateY(0.5px);
+}
+button:focus-visible {
+  outline: 2px solid var(--quirel-border-focus);
+  outline-offset: 1px;
+}
+@media (prefers-reduced-motion: reduce) {
+  button { transition: none; }
+  button:active { transform: none; }
+}
+
+/* 全局禁选的例外：输入控件与可编辑区域必须可选可复制。
+   全局 none 的代价是错误消息/PID/路径无法复制——对管理员是高频动作，
+   数据与消息区域在各自组件 CSS 中同样放开（通知正文/对话框/表格数值）。 */
+input, textarea, [contenteditable="true"] {
+  user-select: text;
+}
+
 html, body, #root {
   width: 100%;
   height: 100%;
@@ -34,6 +62,15 @@ html, body, #root {
    终端输出缓冲与光标闪烁闸门在 Terminal.tsx 内处理 */
 html.os-minimized,
 html.os-minimized * {
+  animation-play-state: paused !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* ✅ resize 闪屏闸门：窗口尺寸调整期间降级渲染（main.tsx 挂 .resizing）
+   ——暂停动画与毛玻璃采样，降低 resize 每帧的合成开销 */
+html.resizing,
+html.resizing * {
   animation-play-state: paused !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;

@@ -8,6 +8,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
 pub mod errors;
 mod connection;
+mod credentials;
 mod fullscreen;
 mod proxy;
 mod terminal;
@@ -532,6 +533,98 @@ fn read_file_text(path: String) -> Result<String, String> {
     fs::read_to_string(&path).map_err(|e| format!("读取文件失败: {}", e))
 }
 
+/// 壁纸缓存：把用户选中的图片复制为应用数据目录下的单一缓存文件
+/// （wallpaper/wallpaper.cache.<ext>），返回缓存绝对路径。
+/// 前端用 convertFileSrc() 经 asset 协议直接加载——避免 base64 dataURL
+/// 整串过 IPC + CSS 二次解码的慢路径（见 wallpaperStore.ts）。
+#[tauri::command]
+fn wallpaper_cache_write(source_path: String, app: tauri::AppHandle) -> Result<String, String> {
+    use std::path::Path;
+
+    const ALLOWED_EXT: [&str; 4] = ["png", "jpg", "jpeg", "webp"];
+    const MAX_WALLPAPER_BYTES: u64 = 32 * 1_048_576;
+
+    let src = Path::new(&source_path);
+    let ext = src
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    if !ALLOWED_EXT.contains(&ext.as_str()) {
+        return Err(format!("不支持的图片格式 '.{}'（允许: png/jpg/jpeg/webp）", ext));
+    }
+
+    let metadata = fs::metadata(src).map_err(|e| format!("无法访问 '{}': {}", source_path, e))?;
+    if metadata.len() > MAX_WALLPAPER_BYTES {
+        return Err(format!("图片太大 ({}MB)，上限 32MB", metadata.len() / 1_048_576));
+    }
+
+    let cache_dir = app
+        .path()
+        .app_data_dir()
+        .map(|p| p.join("wallpaper"))
+        .map_err(|e| format!("无法定位应用数据目录: {}", e))?;
+    fs::create_dir_all(&cache_dir).map_err(|e| format!("创建缓存目录失败: {}", e))?;
+
+    // 清掉旧缓存（无论扩展名是否变化，保证"只有一张"）
+    if let Ok(entries) = fs::read_dir(&cache_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("wallpaper.cache.") {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
+
+    let dest = cache_dir.join(format!("wallpaper.cache.{}", ext));
+    fs::copy(src, &dest).map_err(|e| format!("复制壁纸失败: {}", e))?;
+    let result = dest.to_string_lossy().to_string();
+    tracing::info!("[Wallpaper] 缓存已更新: {}", result);
+    Ok(result)
+}
+
+/// 查询当前磁盘上的壁纸缓存路径（wallpaper/wallpaper.cache.*）。
+/// 供设置页显示"使用我的图片"恢复入口——切换预设后图片仍在磁盘，
+/// 只是缺少回到 cached 状态的 UI 通道。
+#[tauri::command]
+fn wallpaper_cache_current(app: tauri::AppHandle) -> Option<String> {
+    let cache_dir = app
+        .path()
+        .app_data_dir()
+        .map(|p| p.join("wallpaper"))
+        .ok()?;
+    let entries = fs::read_dir(&cache_dir).ok()?;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with("wallpaper.cache.") {
+            return Some(entry.path().to_string_lossy().to_string());
+        }
+    }
+    None
+}
+
+/// 读取壁纸缓存文件并返回 base64。前端转 blob URL 渲染——
+/// 不依赖 asset 协议（其在部分环境下拦截器未注册，ERR_CONNECTION_REFUSED），
+/// 本机 IPC 一次性传几 MB 约几十毫秒，仅在启动/导入时调用。
+#[tauri::command]
+fn wallpaper_read_cached(app: tauri::AppHandle) -> Result<String, String> {
+    use base64::Engine as _;
+    let cache_dir = app
+        .path()
+        .app_data_dir()
+        .map(|p| p.join("wallpaper"))
+        .map_err(|e| format!("无法定位应用数据目录: {}", e))?;
+    let entries = fs::read_dir(&cache_dir).map_err(|e| format!("读取缓存目录失败: {}", e))?;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with("wallpaper.cache.") {
+            let data = fs::read(entry.path()).map_err(|e| format!("读取壁纸缓存失败: {}", e))?;
+            return Ok(base64::engine::general_purpose::STANDARD.encode(data));
+        }
+    }
+    Err("没有壁纸缓存".to_string())
+}
+
 #[tauri::command]
 async fn prepare_shutdown(_app: tauri::AppHandle) -> Result<(), String> {
     tracing::info!("[Frontend] 收到关闭通知");
@@ -590,7 +683,124 @@ fn ensure_dev_server_or_exit() {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// 应用标识（数据目录名）：early_maintenance 在无 AppHandle 阶段手工定位目录
+const APP_IDENTIFIER: &str = "com.quirel.app";
+
+fn data_dir_roaming() -> Option<std::path::PathBuf> {
+    #[cfg(windows)]
+    {
+        std::env::var("APPDATA").ok().map(|d| std::path::Path::new(&d).join(APP_IDENTIFIER))
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::var("XDG_DATA_HOME")
+            .ok()
+            .map(std::path::PathBuf::from)
+            .or_else(|| std::env::var("HOME").ok().map(|h| std::path::Path::new(&h).join(".local/share")))
+            .map(|base| base.join(APP_IDENTIFIER))
+    }
+}
+
+fn data_dir_local() -> Option<std::path::PathBuf> {
+    #[cfg(windows)]
+    {
+        std::env::var("LOCALAPPDATA").ok().map(|d| std::path::Path::new(&d).join(APP_IDENTIFIER))
+    }
+    #[cfg(not(windows))]
+    {
+        data_dir_roaming()
+    }
+}
+
+fn wipe_flag_path() -> std::path::PathBuf {
+    std::env::temp_dir().join("quirel-pending-wipe")
+}
+
+/// 启动早期维护（webview 创建前执行，文件无锁）：
+/// 1) 删除数据目录中 WebView 升级残留的 *.bak 死数据（实测曾滞留 547MB）
+/// 2) 检测 pending-wipe 标记 → 等待旧进程退出 → 清空全部本地数据目录
+fn early_maintenance() {
+    // 1) .bak 残留清理
+    if let Some(local) = data_dir_local() {
+        if let Ok(entries) = fs::read_dir(&local) {
+            for e in entries.flatten() {
+                let name = e.file_name().to_string_lossy().to_string();
+                if name.ends_with(".bak") {
+                    let _ = fs::remove_dir_all(e.path());
+                    tracing::info!("[Maintenance] 已清理 WebView 残留: {}", name);
+                }
+            }
+        }
+    }
+
+    // 2) pending-wipe（用户在应用内触发的完全清除，延迟到重启后执行——
+    //    运行中的 webview/浏览器数据目录被自身锁定，进程外删除才干净）
+    let flag = wipe_flag_path();
+    if flag.exists() {
+        tracing::info!("[Wipe] 检测到完全清除标记，等待旧进程释放文件锁…");
+        let targets: Vec<std::path::PathBuf> = [
+            data_dir_roaming(),
+            data_dir_local(),
+            Some(std::env::temp_dir().join("quirel-view")),
+            Some(std::env::temp_dir().join("quirel-test-browser-settings")),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+
+        for attempt in 1..=6 {
+            let mut all_ok = true;
+            for t in &targets {
+                if t.exists() && fs::remove_dir_all(t).is_err() {
+                    all_ok = false;
+                }
+            }
+            if all_ok {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(700));
+            tracing::info!("[Wipe] 文件仍被占用，重试 {}…", attempt);
+        }
+        let _ = fs::remove_file(&flag);
+        tracing::info!("[Wipe] 本地数据已完全清除（凭据库由前端先行删除）");
+    }
+}
+
+/// 前端 boot 完成（hydration 门控 + 首帧渲染）后显示主窗口。
+/// 与创建时的 visible(false) 配对，消除启动期的白屏/默认壁纸闪现。
+#[tauri::command]
+fn show_main_window(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(w) = app.get_webview_window("main") {
+        w.show().map_err(|e| format!("显示窗口失败: {}", e))?;
+    }
+    Ok(())
+}
+
+/// 应用内「清除所有本地数据」：写标记 → 拉起新进程（其启动时执行清除）→ 退出当前进程。
+/// 注意系统凭据库（Credential Manager）不随数据目录删除——前端须先按 serverId
+/// 逐个调用 credential_delete_all。
+#[tauri::command]
+fn wipe_all_data(app: tauri::AppHandle) -> Result<(), String> {
+    use std::io::Write;
+    let flag = wipe_flag_path();
+    let mut f = fs::File::create(&flag).map_err(|e| format!("无法创建清除标记: {}", e))?;
+    f.write_all(b"pending").map_err(|e| format!("无法写入清除标记: {}", e))?;
+
+    // 拉起新实例执行清除，随后退出自身
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    std::process::Command::new(exe)
+        .spawn()
+        .map_err(|e| format!("无法重启应用: {}", e))?;
+    app.exit(0);
+    Ok(())
+}
+
 pub fn run() {
+    // 启动早期维护（任何窗口/webview 创建前，文件未被锁定）：
+    // 1) WebView 升级残留的 *.bak 死数据自动清理
+    // 2) pending-wipe：上一次「清除所有本地数据」的延迟执行（见 wipe_all_data）
+    early_maintenance();
+
     // debug 启动守卫：debug 版前端页面来自 devUrl（vite localhost:1420），
     // dev 会话结束后单独运行 exe 时页面加载失败——transparent 窗口完全透明、
     // 零报错，表象即「窗口打不开」（2026-10-23 复发实证）。创建任何窗口前
@@ -654,6 +864,97 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            // 主窗口改由代码创建（tauri.conf.json 的 windows 已置空）：
+            // - visible(false)：页面/首帧就绪前不显示，消除启动闪现（A3）
+            // - no_redirection_bitmap（tauri 2.12 新 API）：绕开透明窗口的
+            //   重定向位图合成路径，根治 resize 白闪
+            #[cfg(target_os = "windows")]
+            let builder = tauri::WebviewWindowBuilder::new(
+                app,
+                "main",
+                tauri::WebviewUrl::default(),
+            )
+            .title("Quirel")
+            .inner_size(1024.0, 768.0)
+            .min_inner_size(800.0, 600.0)
+            .resizable(true)
+            .fullscreen(false)
+            // 实验 D：有边框 + 非透明（标准系统窗口合成路径，DWM 直接管理），
+            // 验证「透明/无边框是 resize 透明闪的根源」。确认后实验 E：
+            // decorations(false)+transparent(false)——主窗口是全屏桌面（壁纸
+            // 铺满 webview），不透明理论上零视觉损失。
+            .decorations(true)
+            .transparent(false)
+            .visible(false);
+
+            #[cfg(not(target_os = "windows"))]
+            let builder = tauri::WebviewWindowBuilder::new(
+                app,
+                "main",
+                tauri::WebviewUrl::default(),
+            )
+            .title("Quirel")
+            .inner_size(1024.0, 768.0)
+            .min_inner_size(800.0, 600.0)
+            .resizable(true)
+            .fullscreen(false)
+            .decorations(false)
+            .transparent(true)
+            .visible(false);
+
+            let main_window = builder.build().map_err(|e| {
+                tracing::error!("[Window] 主窗口创建失败: {}", e);
+                e
+            })?;
+
+            // 实验 F+G：resize 防闪三件套（Win32 教科书组合）。
+            // 1) 主窗口 subclass 拦 WM_ERASEBKGND（不擦背景，DWM 拉伸旧内容）
+            // 2) 窗口类背景刷置 NULL（系统层不再有刷子可擦）
+            // 3) 对全部子窗口（WebView2 宿主链）装同样拦截——残余黑闪来自
+            //    WebView2 子窗口自己的擦除
+            #[cfg(target_os = "windows")]
+            {
+                use windows::core::BOOL;
+                use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+                use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
+                use windows::Win32::UI::WindowsAndMessaging::{
+                    EnumChildWindows, SetClassLongPtrW, GCLP_HBRBACKGROUND,
+                };
+
+                const SUBCLASS_ID: usize = 0x5152_4c;
+
+                unsafe extern "system" fn no_erase_proc(
+                    hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM,
+                    _id: usize, _data: usize,
+                ) -> LRESULT {
+                    const WM_ERASEBKGND: u32 = 0x0014;
+                    if msg == WM_ERASEBKGND {
+                        return LRESULT(1); // 声称已擦（实际不擦）
+                    }
+                    unsafe { DefSubclassProc(hwnd, msg, wp, lp) }
+                }
+
+                unsafe extern "system" fn enum_child_proc(hwnd: HWND, _lparam: LPARAM) -> BOOL {
+                    unsafe {
+                        SetWindowSubclass(hwnd, Some(no_erase_proc), SUBCLASS_ID, 0);
+                    }
+                    BOOL(1) // 继续枚举
+                }
+
+                let hwnd = main_window.hwnd().map_err(|e| format!("获取 HWND 失败: {}", e))?;
+                unsafe {
+                    // 1) 主窗口拦截
+                    if !SetWindowSubclass(hwnd, Some(no_erase_proc), SUBCLASS_ID, 0).as_bool() {
+                        tracing::error!("[Window] 主窗口 subclass 安装失败");
+                    }
+                    // 2) 类背景刷置 NULL
+                    SetClassLongPtrW(hwnd, GCLP_HBRBACKGROUND, 0);
+                    // 3) 子窗口链（WebView2 宿主）全量拦截
+                    let _ = EnumChildWindows(Some(hwnd), Some(enum_child_proc), LPARAM(0));
+                }
+                tracing::info!("[Window] 防闪三件套已安装（主窗口+类刷+子窗口链）");
+            }
+
             // 初始化日志系统（必须在所有其他操作之前）
             init_logging(app);
             // 启动横幅：版本 + 构建模式 + git 构建信息 + 系统信息，用于从日志快速识别客户端版本
@@ -682,6 +983,16 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             read_dir, stat_file, read_file_text,
+            wallpaper_cache_write,
+            wallpaper_cache_current,
+            wallpaper_read_cached,
+            credentials::credential_set,
+            credentials::credential_get,
+            credentials::credential_delete,
+            credentials::credential_delete_all,
+            credentials::credential_probe,
+            wipe_all_data,
+            show_main_window,
             prepare_shutdown,
             fullscreen::toggle_fullscreen,
             fullscreen::is_fullscreen,

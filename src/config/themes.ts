@@ -195,22 +195,22 @@ export const themes: Record<ThemeId, Theme> = {
     descriptionKey: 'themes.paper.description',
     lightColors: {
       windowBg: '#fafafa',           // 柔和白
-      viewBg: '#faf5f3',             // 内容区（最浅）- RGB(250,245,243)
-      cardBg: '#faf5f3',             // 卡片背景（最浅）
-      cardHover: '#ebe5d9',          // 卡片悬停（较深）- 中暖灰 RGB(235,229,217)
+      viewBg: '#f5efe6',             // 内容区（暖纸，比卡片深一档 → 层次来源）
+      cardBg: '#fefcf8',             // 卡片（暖纸白：近白但带纸的温度，非纯白）
+      cardHover: '#f7f2e9',          // 卡片悬停（暖一档回沉）
       headerbarBg: '#f5f0e6',        // HeaderBar（中等）- 暖灰 RGB(245,240,230)
       sidebarBg: '#f5f0e6',          // 侧边栏（中等）- 暖灰 RGB(245,240,230)
       sidebarBorder: '#d5d0c4',      // 边框（最深）- 深暖灰 RGB(213,208,196)
-      accentBg: '#15aa70',           // 默认强调色 - 绿色 RGB(21,170,112)
-      accentHover: '#129864',        // 悬停状态
-      accentActive: '#0f8658',       // 活动状态
+      accentBg: '#0f8658',           // text-safe 绿：白字对比度 4.5:1（原 #15aa70 仅 3.0:1）
+      accentHover: '#0d7a50',        // 悬停状态
+      accentActive: '#0b6a45',       // 活动状态
       sliderTrackBg: '#d5d0c4',      // 深暖灰滑条轨道
-      sliderThumbBg: '#15aa70',      // 绿色滑块
-      sliderActiveBg: '#129864',     // 活动状态
+      sliderThumbBg: '#0f8658',      // text-safe 绿滑块
+      sliderActiveBg: '#0d7a50',     // 活动状态
       textPrimary: 'rgba(0, 0, 0, 0.87)',
       textSecondary: 'rgba(0, 0, 0, 0.60)',
       textDisabled: 'rgba(0, 0, 0, 0.38)',
-      borderColor: 'rgba(0, 0, 0, 0.15)',
+      borderColor: '#d5d0c4',        // 实色暖灰边框（原 rgba(0,0,0,0.15) 与实色并存）
       // 圆点色板（暖纸张）：与米色暖背景和谐的暖调三色
       dotCriticalHi: '#ff9c9c',        // 高光
       dotCriticalMid: '#e01b24',       // 主色
@@ -267,8 +267,8 @@ export const themes: Record<ThemeId, Theme> = {
     lightColors: {
       windowBg: '#fafafa',           // 柔和白
       viewBg: '#f5f5f5',             // 内容区 - 中性浅灰
-      cardBg: '#f5f5f5',             // 卡片 - 中性浅灰
-      cardHover: '#e8e8e8',          // 悬停 - 中性灰
+      cardBg: '#ffffff',             // 卡片 - 白（浮起一档）
+      cardHover: '#f5f5f5',          // 悬停 - 回落浅灰
       headerbarBg: '#e8e8e8',        // HeaderBar - 中性灰
       sidebarBg: '#e8e8e8',          // 侧边栏 - 中性灰
       sidebarBorder: '#d0d0d0',      // 边框 - 中性深灰
@@ -281,7 +281,7 @@ export const themes: Record<ThemeId, Theme> = {
       textPrimary: 'rgba(0, 0, 0, 0.87)',
       textSecondary: 'rgba(0, 0, 0, 0.60)',
       textDisabled: 'rgba(0, 0, 0, 0.38)',
-      borderColor: 'rgba(0, 0, 0, 0.15)',
+      borderColor: '#d0d0d0',        // 实色中性边框
       // 圆点色板（中性）：Adwaita 官方三色，与中性灰背景和谐
       dotCriticalHi: '#ff9c9c',
       dotCriticalMid: '#e01b24',
@@ -409,9 +409,9 @@ export const accentColors: Record<AccentColorId, { light: string; dark: string }
     dark: '#62a0ea',                // 暗色模式
   },
 
-  // 纸张主题默认强调色 - 温暖的绿色
+  // 纸张主题默认强调色 - 温暖的绿色（text-safe 档，白字 4.5:1）
   paperAccent: {
-    light: '#15aa70',               // RGB(21,170,112) - 亮色模式
+    light: '#0f8658',
     dark: '#4ec9b0',                // 暗色模式
   },
 

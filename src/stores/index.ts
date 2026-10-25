@@ -6,10 +6,5 @@ export type { SettingsState, SettingsActions } from "./settingsStore";
 export { useServersStore, formatLastConnected, getStatusColor, getStatusIcon } from "./serversStore";
 export type { ServerConfig, ServersState, ServersActions } from "./serversStore";
 
-export { 
-  useWallpaperStore, 
-  PRESET_WALLPAPERS, 
-  getWallpaperStyle, 
-  getPresetWallpaperName 
-} from "./wallpaperStore";
+export { useWallpaperStore, getWallpaperStyle } from "./wallpaperStore";
 export type { WallpaperConfig, WallpaperState, WallpaperActions } from "./wallpaperStore";
