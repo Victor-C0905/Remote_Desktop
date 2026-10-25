@@ -481,7 +481,7 @@ function TerminalInstance({
       // depsKey 复位，避免下次 setup 把残缺终端误判为可保活
       depsKeyRef.current = null;
       teardownNow();
-      container.innerHTML = `<div style="color:#ff4444;padding:12px;font-family:monospace;">${i18n.t('terminal.initFailedHtml', { error: formatUnknownError(err) })}</div>`;
+      container.innerHTML = `<div class="terminal-init-failed">${i18n.t('terminal.initFailedHtml', { error: formatUnknownError(err) })}</div>`;
     }
   }, [activeServerId, activeServerName, activeServerHost, activeServerPort]);
 
