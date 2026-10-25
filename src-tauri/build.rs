@@ -33,7 +33,9 @@ fn main() {
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
             .filter(|s| !s.is_empty())
     };
-    let describe = git(&["describe", "--always", "--dirty"]).unwrap_or_else(|| "unknown".to_string());
+    // --tags：release 脚本打的是轻量 tag，不带 --tags 时 describe 只认注解 tag，
+    // 正式发版后构建信息仍指向旧注解 tag 基点
+    let describe = git(&["describe", "--always", "--dirty", "--tags"]).unwrap_or_else(|| "unknown".to_string());
     let build_info = match git(&["rev-parse", "--abbrev-ref", "HEAD"]) {
         Some(b) => format!("{b}@{describe}"),
         None => describe,
