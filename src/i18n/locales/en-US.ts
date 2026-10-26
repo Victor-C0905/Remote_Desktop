@@ -214,7 +214,7 @@ const enUS: TranslationSchema = {
     accentWarmBlue: 'Warm blue',
     accentGreen: 'Green',
     iconThemeTitle: 'Icon theme',
-    iconThemeClassic: 'GNOME Classic',
+    iconThemeClassic: 'Classic',
     iconThemePaper: 'Paper Ink',
     fontSizeTitle: 'Font size',
     uiFont: 'Interface font',
