@@ -217,7 +217,7 @@ const zhCN = {
     accentWarmBlue: '暖蓝色',
     accentGreen: '绿色',
     iconThemeTitle: '图标主题',
-    iconThemeClassic: 'GNOME 经典',
+    iconThemeClassic: '经典',
     iconThemePaper: '纸墨',
     fontSizeTitle: '字体大小',
     uiFont: '界面字体',
