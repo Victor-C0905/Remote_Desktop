@@ -15,6 +15,15 @@ mod terminal;
 mod transfer;
 mod ui_logging;
 
+/* ── 展示版本号 ───────────────────────────────────────────── */
+
+/// 展示用版本号：debug 构建（cargo tauri dev）自动追加 -dev 后缀，与正式构建一眼区分。
+/// 仅展示层注入，Cargo.toml 版本与产物命名不变（AGENTS 第 5 节：不为区分构建改版本文件）
+#[cfg(debug_assertions)]
+pub const APP_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "-dev");
+#[cfg(not(debug_assertions))]
+pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /* ── 日志系统初始化 ───────────────────────────────────────── */
 
 /// 初始化客户端日志系统
@@ -1220,7 +1229,7 @@ pub fn run() {
             // 启动横幅：版本 + 构建模式 + git 构建信息 + 系统信息，用于从日志快速识别客户端版本
             tracing::info!(
                 "[App] Quirel 客户端启动: version={} build={} git={} os={}",
-                env!("CARGO_PKG_VERSION"),
+                APP_VERSION,
                 if cfg!(debug_assertions) { "debug" } else { "release" },
                 env!("QUIREL_BUILD_INFO"),
                 std::env::consts::OS,
@@ -1264,6 +1273,7 @@ pub fn run() {
             fullscreen::start_os_drag,
             ui_logging::log_write,
             ui_logging::get_app_version,
+            ui_logging::get_build_info,
             pty::spawn_terminal,
             pty::terminal_write,
             pty::terminal_read,

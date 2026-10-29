@@ -540,6 +540,8 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
 
   // 版本号：从 Rust 端读取（编译期单一来源 Cargo.toml），不再前端硬编码
   const [appVersion, setAppVersion] = useState("");
+  // 构建标识：分支@git describe（与版本号双轨，区分每次开发/测试构建，见 AGENTS.md §5）
+  const [buildInfo, setBuildInfo] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -556,6 +558,9 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
     invoke<string>("get_app_version")
       .then((v) => { if (!cancelled) setAppVersion(v); })
       .catch((e) => log.error("获取版本号失败:", e));
+    invoke<string>("get_build_info")
+      .then((v) => { if (!cancelled) setBuildInfo(v); })
+      .catch((e) => log.error("获取构建信息失败:", e));
     return () => { cancelled = true; };
   }, []);
 
@@ -1372,6 +1377,7 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
               </div>
               <div className="st-about-name">Quirel</div>
               <div className="st-about-version">{t("settings.aboutVersion", { version: appVersion || "…" })}</div>
+              <div className="st-about-build">{t("settings.aboutBuild", { build: buildInfo || "…" })}</div>
               <div className="st-about-desc">
                 {t("settings.aboutDesc")}
               </div>

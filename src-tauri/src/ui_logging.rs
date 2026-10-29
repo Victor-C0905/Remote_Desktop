@@ -30,8 +30,16 @@ pub async fn log_write(level: String, module: String, message: String, data: Vec
     }
 }
 
-/// 返回客户端版本号（编译期常量，来源 Cargo.toml）
+/// 返回客户端版本号（编译期常量，来源 Cargo.toml；debug 构建追加 -dev 后缀）
 #[tauri::command]
 pub fn get_app_version() -> &'static str {
-    env!("CARGO_PKG_VERSION")
+    crate::APP_VERSION
+}
+
+/// 返回构建标识（编译期注入：分支@git describe，见 build.rs 与 AGENTS.md §5）
+///
+/// 与版本号双轨：版本号仅在 release 时变，构建标识区分每次开发/测试构建。
+#[tauri::command]
+pub fn get_build_info() -> &'static str {
+    env!("QUIREL_BUILD_INFO")
 }

@@ -10,7 +10,12 @@ use quireld::{config, cert, event_bus, subscription, audit, server};
 #[cfg(unix)]
 use quireld::manager::Manager;
 
-/// 完整版本标识：包版本 + git 构建信息（由 build.rs 注入），例如 "0.3.0-beta.1 (dev-68-gbb44bf9)"
+/// 完整版本标识：包版本 + git 构建信息（由 build.rs 注入），例如 "0.3.0-beta.1 (fix-xxx-gbb44bf9)"
+/// debug 构建（cargo build 未开 release）版本自动追加 -dev 后缀，仅展示层，不改版本文件
+#[cfg(debug_assertions)]
+const QUIREL_VERSION: &str =
+    concat!(env!("CARGO_PKG_VERSION"), "-dev (", env!("QUIREL_BUILD_INFO"), ")");
+#[cfg(not(debug_assertions))]
 const QUIREL_VERSION: &str =
     concat!(env!("CARGO_PKG_VERSION"), " (", env!("QUIREL_BUILD_INFO"), ")");
 

@@ -287,6 +287,7 @@ const enUS: TranslationSchema = {
     statsNotConnectedTitle: 'Not connected to a server',
     statsConnectFirst: 'Connect to a server on the "Connection" page first to view statistics.',
     aboutVersion: 'Version {{version}}',
+    aboutBuild: 'Build {{build}}',
     aboutDesc: 'A remote Linux server control client built on the Adwaita design system',
     aboutTechQuic: 'QUIC transport',
     aboutTechDesign: 'Adwaita design',
