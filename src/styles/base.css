@@ -47,7 +47,9 @@ html, body, #root {
   font-family: var(--font-ui);
   font-size: var(--font-body);
   color: var(--quirel-text-primary);
-  background: var(--quirel-window-bg);
+  /* fallback 中性深色：变量未定义时的首屏兜底（原 index.html 内联 style 的
+     职责，已迁移至此——内联 style 会触发 Tauri 的 CSP nonce 注入，见 index.html） */
+  background: var(--quirel-window-bg, #1e1e1e);
 }
 
 /* ✅ 关键修复：确保应用容器不阻止滚动 */

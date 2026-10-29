@@ -9,15 +9,13 @@
     "frontendDist": "../dist"
   },
   "app": {
+    "windows": [],
     "security": {
       "assetProtocol": {
         "enable": true,
         "scope": ["$APPDATA/wallpaper/**"]
-      }
-    },
-    "windows": [],
-    "security": {
-      "csp": "default-src 'self'; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' ws://localhost:1420; worker-src 'self' blob:; object-src 'none'"
+      },
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data: blob: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' ipc: http://ipc.localhost ws://localhost:1420; worker-src 'self' blob:; object-src 'none'"
     }
   },
   "bundle": {
