@@ -5,10 +5,10 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Quirel</title>
-    <style>
-      /* 门控挂载前的首屏兜底：中性深色，亮暗主题到达都不突兀 */
-      html, body { background: #1e1e1e; }
-    </style>
+    <!-- ⚠️ 禁止在此添加内联 <style>/<script>：Tauri 构建时会为其生成 nonce/hash
+         写入 CSP，导致 style-src 的 'unsafe-inline' 失效，运行时注入的样式
+         （CodeMirror/xterm 主题等）全部被拦（release 编辑区透明 bug 根因）。
+         首屏兜底背景由 base.css 的 html,body 规则承担（link 阻塞渲染，无白闪） -->
   </head>
 
   <body>
