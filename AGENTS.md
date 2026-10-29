@@ -50,6 +50,10 @@ Quirel — 远程 Linux 服务器控制客户端。仓库含三个自研组件�
 - 发版流程：dev 合入 main → main 上执行 release 脚本
   （改版本 → 提交 `chore(release)` → tag `vX.Y.Z` 打在该提交上）
   → `npm run tauri build`（构建命令零版本参数）。
+- 发版收尾：release 脚本打 tag 后自动将 main 合回 dev（fast-forward
+  更新 dev 引用，不切分支、不产生合并提交；dev 与 main 分叉时脚本不
+  做自动处理，仅提示手动合并），让版本提交与 tag 回流；此后 dev 的
+  git describe 基点即对齐最近发布，开发构建的 -dev.N 计数以此为准。
 - 版本号格式：语义化版本，可选预发布后缀（`0.3.0-beta` / `-beta.1`）。
   升版基准：feature 合入升次版本；fix 合入升修订号；破坏性改动升次版本（0.x 阶段）。
 - 发版节奏：beta 测试版按需发布（预发布序号递增 `beta.N`），正式版在累计
@@ -75,6 +79,13 @@ Quirel — 远程 Linux 服务器控制客户端。仓库含三个自研组件�
 - 开发构建通过构建信息区分：构建时自动注入 `git describe`
   （分支 + commit + dirty 标记），在 `--version` 与启动日志中展示；
   禁止为了区分构建而手改版本号。
+- debug 构建（`cargo tauri dev` / 未开 release 的 cargo 构建）的展示版本
+  编译期自动追加 `-dev` 后缀（客户端启动日志 / `--version` / 关于页与
+  quireld `--version` 一致生效）；仅展示层注入，不改任何版本文件。
+- 非发版安装包用 `npm run build:dev` 构建：脚本按 `git describe`
+  计算后缀，经 `tauri build --config` 临时覆盖产物命名为
+  `<版本>-dev.N-g<sha>[-dirty]`，不写任何版本文件；HEAD 精确等于
+  tag 时不加后缀（等同正式构建）。
 - 开发环境升级 quirel / quireld 以 commit / 产物文件名为准，不做版本号比较。
 
 ## 6. 窗口坏帧红线（最大化/缩放闪黑根治体系）

@@ -7,7 +7,7 @@ fn print_version() {
     // 版本号编译期读取（AGENTS 第 4 节版本号硬编码禁令）；构建信息由 build.rs 注入
     println!(
         "quirel {} ({})",
-        env!("CARGO_PKG_VERSION"),
+        quirel_lib::APP_VERSION,
         env!("QUIREL_BUILD_INFO")
     );
     let _ = std::io::stdout().flush();

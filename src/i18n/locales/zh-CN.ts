@@ -297,6 +297,7 @@ const zhCN = {
     statsConnectFirst: '请先在"连接"页面连接到服务器，然后才能查看统计数据。',
     // 关于分区
     aboutVersion: '版本 {{version}}',
+    aboutBuild: '构建 {{build}}',
     aboutDesc: '基于 Adwaita 设计系统的远程 Linux 服务器控制客户端',
     aboutTechQuic: 'QUIC 传输',
     aboutTechDesign: 'Adwaita 设计',

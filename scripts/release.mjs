@@ -149,6 +149,17 @@ try {
   die('git 提交/打 tag 失败：' + e.message);
 }
 
+// ---------- 发版收尾：自动将 main 合回 dev（fast-forward，不切分支） ----------
+// dev 是 main 祖先时（标准流程：dev 先并入 main 再打 release 提交）直接快进；
+// 分叉时绝不冒险移动 dev，交还用户手动处理。此后 dev 的 describe 基点即对齐本次发布。
+try {
+  sh('git fetch . main:dev');
+  console.log('✓ 已自动合回 dev（fast-forward），dev 的版本基点对齐本次发布');
+} catch {
+  console.warn('⚠ 未能自动合回 dev：dev 存在 main 未包含的提交（发版前未合干净？）。');
+  console.warn('  请手动执行：git checkout dev && git merge main && git checkout main');
+}
+
 console.log('\n──────── 发版完成 ────────');
 console.log(`提交：chore(release): ${target.raw}`);
 console.log(`tag：v${target.raw}（已打在该发版提交上）`);

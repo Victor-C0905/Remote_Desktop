@@ -655,6 +655,13 @@
 }
 
 .st-about-version {
+  margin-bottom: 4px;
+}
+
+/* 构建标识行（分支@git describe）：比版本号低一级，弱化显示 */
+.st-about-build {
+  font-size: var(--font-small);
+  color: var(--quirel-text-secondary);
   margin-bottom: 12px;
 }
 
