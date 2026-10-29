@@ -10,6 +10,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useTranslation } from 'react-i18next';
+import { SymbolicIcon } from '../symbolic';
 import { TransferTask } from '../../hooks/useTransferProgress';
 import { useServersStore } from '../../stores/serversStore';
 import { groupTransfersByServer } from './transferGrouping';
@@ -35,20 +36,6 @@ function formatSpeed(bytesPerSecond: number): string {
   const k = 1024;
   const i = Math.floor(Math.log(bytesPerSecond) / Math.log(k));
   return `${(bytesPerSecond / Math.pow(k, i)).toFixed(1)} ${units[i]}`;
-}
-
-// ── 内联 SVG 图标组件（Adwaita 风格）────────────────────────────
-
-/**
- * 下载图标（向下箭头）
- * 来源：Adwaita go-down-symbolic.svg
- */
-function DownloadIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-      <path d="M8 12l-4-4h2.5V4h3v4H12z" />
-    </svg>
-  );
 }
 
 interface TransferPanelProps {
@@ -219,7 +206,7 @@ export function TransferPanel({ transfers, onRemoveTask, onClose, statusbarRef }
         {groups.length === 0 ? (
           <div className="tp-empty" role="status" aria-live="polite">
             <div className="tp-empty-icon">
-              <DownloadIcon />
+              <SymbolicIcon name="go-down" size={16} />
             </div>
             <p className="tp-empty-text">{t('transfer.panel.empty')}</p>
           </div>

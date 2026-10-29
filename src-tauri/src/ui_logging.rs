@@ -10,8 +10,11 @@
 ///
 /// 前端 logger.ts 对 info/warn/error 调用本命令（fire-and-forget），
 /// 使 UI 层问题与 Rust 层日志在同一份 client.log 中按时间线交错，便于排查。
+///
+/// async：同步 command 会在主线程执行，而热路径（如窗口拖动时逐帧的 bounds
+/// 上报日志）每帧都可能触发本命令，必须挪到异步运行时，避免与合成/布局争抢。
 #[tauri::command]
-pub fn log_write(level: String, module: String, message: String, data: Vec<String>) {
+pub async fn log_write(level: String, module: String, message: String, data: Vec<String>) {
     // 附加数据拼为单行（前端已做截断与序列化）
     let extra = if data.is_empty() {
         String::new()

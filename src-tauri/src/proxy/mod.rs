@@ -106,6 +106,18 @@ pub fn suspend_session(app: &AppHandle, server_id: &str) {
     }
 }
 
+/// 壁纸背景色变更时同步全部存活浏览器 webview（set_window_background_color
+/// 调用）：逐会话转发 SyncBackgroundColor，无存活 host 的会话静默跳过。
+pub(crate) fn sync_browser_background_colors(app: &AppHandle) {
+    let sessions: State<ProxySessionManager> = app.state();
+    let guard = sessions.sessions.lock().unwrap();
+    for sess in guard.values() {
+        if let Some(host) = sess.host.lock().unwrap().as_ref() {
+            host.sync_background_color();
+        }
+    }
+}
+
 /// App 退出时清理全部代理会话（RunEvent::Exit 调用）：
 /// 遍历清理，避免浏览器子进程残留指向已死的代理端口。
 pub fn cleanup_all_sessions(app: &AppHandle) {

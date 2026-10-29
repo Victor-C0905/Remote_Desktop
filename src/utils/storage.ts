@@ -35,7 +35,8 @@ export async function createTauriStorage(storePath: string): Promise<TauriStorag
           ? JSON.stringify(value) 
           : null;
       } catch (e) {
-        log.warn(`Failed to get "${name}" from ${storePath}:`, e);
+        // 读失败意味着设置/数据将静默回退默认值，必须 error 级才不会淹没在 debug 噪音里
+        log.error(`Failed to get "${name}" from ${storePath}:`, e);
         return null;
       }
     },

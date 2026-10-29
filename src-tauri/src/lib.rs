@@ -533,6 +533,19 @@ fn read_file_text(path: String) -> Result<String, String> {
     fs::read_to_string(&path).map_err(|e| format!("读取文件失败: {}", e))
 }
 
+/// 清空 wallpaper.cache.* 旧缓存并返回新缓存文件目标路径（保证"只有一张"）
+fn wallpaper_cache_dest(cache_dir: &std::path::Path, ext: &str) -> std::path::PathBuf {
+    if let Ok(entries) = fs::read_dir(cache_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("wallpaper.cache.") {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
+    cache_dir.join(format!("wallpaper.cache.{}", ext))
+}
+
 /// 壁纸缓存：把用户选中的图片复制为应用数据目录下的单一缓存文件
 /// （wallpaper/wallpaper.cache.<ext>），返回缓存绝对路径。
 /// 前端用 convertFileSrc() 经 asset 协议直接加载——避免 base64 dataURL
@@ -566,21 +579,53 @@ fn wallpaper_cache_write(source_path: String, app: tauri::AppHandle) -> Result<S
         .map_err(|e| format!("无法定位应用数据目录: {}", e))?;
     fs::create_dir_all(&cache_dir).map_err(|e| format!("创建缓存目录失败: {}", e))?;
 
-    // 清掉旧缓存（无论扩展名是否变化，保证"只有一张"）
-    if let Ok(entries) = fs::read_dir(&cache_dir) {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with("wallpaper.cache.") {
-                let _ = fs::remove_file(entry.path());
-            }
-        }
-    }
-
-    let dest = cache_dir.join(format!("wallpaper.cache.{}", ext));
+    let dest = wallpaper_cache_dest(&cache_dir, &ext);
     fs::copy(src, &dest).map_err(|e| format!("复制壁纸失败: {}", e))?;
     let result = dest.to_string_lossy().to_string();
     tracing::info!("[Wallpaper] 缓存已更新: {}", result);
     Ok(result)
+}
+
+/// 旧方案 dataURL 壁纸迁移落盘：前端 zustand persist 曾把导入壁纸整串 base64
+/// 存进 settings.bin（单图可达 5MB，任意设置变更触发 persist 都全量重写）。
+/// 本命令解码 dataURL 写为缓存文件并返回路径，前端随即改存 cachedPath——
+/// 与 wallpaper_cache_write 同语义（清旧缓存、单一文件），来源是内存字节而非源文件。
+#[tauri::command]
+fn wallpaper_cache_write_data(data_url: String, app: tauri::AppHandle) -> Result<String, String> {
+    // data:image/<ext>;base64,<payload>，仅接受与导入一致的位图格式
+    let rest = data_url
+        .strip_prefix("data:image/")
+        .ok_or_else(|| "不是 image dataURL".to_string())?;
+    let (ext, payload) = rest
+        .split_once(";base64,")
+        .ok_or_else(|| "dataURL 缺少 base64 段".to_string())?;
+    let ext = match ext {
+        "png" => "png",
+        "jpg" | "jpeg" => "jpeg",
+        "webp" => "webp",
+        other => return Err(format!("不支持的图片格式 '.{}'（允许: png/jpg/webp）", other)),
+    };
+
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(payload)
+        .map_err(|e| format!("base64 解码失败: {}", e))?;
+    const MAX_WALLPAPER_BYTES: usize = 32 * 1_048_576;
+    if bytes.len() > MAX_WALLPAPER_BYTES {
+        return Err(format!("图片太大 ({}MB)，上限 32MB", bytes.len() / 1_048_576));
+    }
+
+    let cache_dir = app
+        .path()
+        .app_data_dir()
+        .map(|p| p.join("wallpaper"))
+        .map_err(|e| format!("无法定位应用数据目录: {}", e))?;
+    fs::create_dir_all(&cache_dir).map_err(|e| format!("创建缓存目录失败: {}", e))?;
+
+    let dest = wallpaper_cache_dest(&cache_dir, ext);
+    fs::write(&dest, &bytes).map_err(|e| format!("写入壁纸缓存失败: {}", e))?;
+    tracing::info!("[Wallpaper] dataURL 已迁移落盘: {}", dest.to_string_lossy());
+    Ok(dest.to_string_lossy().to_string())
 }
 
 /// 查询当前磁盘上的壁纸缓存路径（wallpaper/wallpaper.cache.*）。
@@ -776,6 +821,78 @@ fn show_main_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+// ── 主窗口窗口控制命令（TopBar 窗口控制菜单专用）──────────────
+// 无边框模式下系统标题栏不再存在，最小化/最大化/关闭由 TopBar 的
+// ToolbarMenu 菜单发起，经这三个命令作用于主窗口。图标态随
+// app-maximize-changed 事件同步（Resized 段探测，与最小化闸门同路径）。
+
+// 实验 G：主窗口暴露区填充色（COLORREF 0x00BBGGRR）。最大化/缩放时窗口
+// 背衬面新增区域在 WebView2 新帧栅格化完成前是坏帧——「不擦+NULL 刷」
+// 方案（实验 F+G 三件套）下显示为纯黑，高刷屏上被 DWM 采成 2~5 个连续
+// 黑帧（60Hz 常被动画掩蔽，165Hz 必然可见；实测时长 13~55ms 与刷新率
+// 无关）。改为以当前壁纸平均色填充：坏帧从「闪黑」变成与壁纸几乎不可
+// 分的色差。初值 = 默认壁纸 dusk 平均色，前端经 set_window_background_color
+// 随壁纸同步。no_erase_proc 主窗口分支消费。
+static WINDOW_BG_COLORREF: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0x8A57_A3); // dusk rgb(163,87,138)
+
+/// 同步主窗口背景色为当前壁纸平均色（前端壁纸变更/加载时调用）。
+/// 两层同时生效：主窗口 WM_ERASEBKGND 暴露区填充（WINDOW_BG_COLORREF）+
+/// WebView2 DefaultBackgroundColor（子窗口已覆盖但新帧未栅格化的区域）。
+/// 同时联动浏览器页面 webview（webview2-com 直建，独立于主 UI webview）：
+/// 创建时经 create_controller 取当前色，壁纸运行时变更经此命令对存活
+/// webview 补发——否则其默认白底在最大化/缩放时闪白（坏帧同源）。
+#[tauri::command]
+fn set_window_background_color(
+    app: tauri::AppHandle,
+    r: u8,
+    g: u8,
+    b: u8,
+) -> Result<(), String> {
+    use std::sync::atomic::Ordering;
+    WINDOW_BG_COLORREF.store(
+        r as u32 | (g as u32) << 8 | (b as u32) << 16,
+        Ordering::Relaxed,
+    );
+    if let Some(w) = app.get_webview_window("main") {
+        w.set_background_color(Some(tauri::utils::config::Color(r, g, b, 255)))
+            .map_err(|e| format!("设置窗口背景色失败: {}", e))?;
+    }
+    crate::proxy::sync_browser_background_colors(&app);
+    Ok(())
+}
+
+/// 最小化主窗口
+#[tauri::command]
+fn window_minimize(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(w) = app.get_webview_window("main") {
+        w.minimize().map_err(|e| format!("最小化失败: {}", e))?;
+    }
+    Ok(())
+}
+
+/// 最大化/还原切换（按当前状态取反，供菜单单项使用）
+#[tauri::command]
+fn window_toggle_maximize(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(w) = app.get_webview_window("main") {
+        if w.is_maximized().unwrap_or(false) {
+            w.unmaximize().map_err(|e| format!("还原失败: {}", e))?;
+        } else {
+            w.maximize().map_err(|e| format!("最大化失败: {}", e))?;
+        }
+    }
+    Ok(())
+}
+
+/// 关闭主窗口（最终退出经 RunEvent::ExitRequested 的 cleanup_all_sessions）
+#[tauri::command]
+fn window_close(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(w) = app.get_webview_window("main") {
+        w.close().map_err(|e| format!("关闭失败: {}", e))?;
+    }
+    Ok(())
+}
+
 /// 应用内「清除所有本地数据」：写标记 → 拉起新进程（其启动时执行清除）→ 退出当前进程。
 /// 注意系统凭据库（Credential Manager）不随数据目录删除——前端须先按 serverId
 /// 逐个调用 credential_delete_all。
@@ -832,6 +949,18 @@ pub fn run() {
                 if LAST_MINIMIZED.swap(minimized, Ordering::Relaxed) != minimized {
                     let _ = window.emit("app-minimize-changed", minimized);
                 }
+                // 最大化状态翻转同步：TopBar 窗口控制菜单的「最大化/还原」
+                // 图标与文案依赖此事件（与最小化闸门同路径、同去重模式）
+                static LAST_MAXIMIZED: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                let maximized = window.is_maximized().unwrap_or(false);
+                if LAST_MAXIMIZED.swap(maximized, Ordering::Relaxed) != maximized {
+                    let _ = window.emit("app-maximize-changed", maximized);
+                }
+                // 注意：浏览器 webview 的窗口 resize 跟随不走此事件——
+                // 前端 ResizeObserver 直测上报是唯一真源（曾试过 runtime 端
+                // 「客户区−边距」外推直通，因浏览器卡片是有 CSS 过渡动画的
+                // 自有几何浮动窗口、边距不恒定而回退，见 docs/PROGRESS.md）
             }
             // 全屏物理锁死：任何来源的窗口移动/变形（系统 NC 通道绕过前端
             // 与命令层）在事件回调里立即拉回锁定 rect。用 FullscreenState
@@ -879,13 +1008,21 @@ pub fn run() {
             .min_inner_size(800.0, 600.0)
             .resizable(true)
             .fullscreen(false)
-            // 实验 D：有边框 + 非透明（标准系统窗口合成路径，DWM 直接管理），
-            // 验证「透明/无边框是 resize 透明闪的根源」。确认后实验 E：
-            // decorations(false)+transparent(false)——主窗口是全屏桌面（壁纸
-            // 铺满 webview），不透明理论上零视觉损失。
-            .decorations(true)
+            // 实验 E（定稿）：无边框 + 非透明——TopBar 即标题栏（自绘窗口控制
+            // 菜单），壁纸铺满 webview 一体到底；不透明窗口走标准 DWM 合成
+            // 路径，无 resize 透明闪。resize 命中区由下方 NCHITTEST 子类提供，
+            // 窗口圆角由 DWMWA_WINDOW_CORNER_PREFERENCE 提供（含 DWM 阴影）。
+            .decorations(false)
             .transparent(false)
-            .visible(false);
+            .visible(false)
+            // additional_browser_args 是替换语义 → 必须显式补回 wry 默认的
+            // disable-features（与 webview_host.rs 同规则）；debug 构建追加
+            // CDP 远程调试口，供诊断「DOM 与可见像素脱节」类渲染问题
+            .additional_browser_args(if cfg!(debug_assertions) {
+                "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port=9222"
+            } else {
+                "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection"
+            });
 
             #[cfg(not(target_os = "windows"))]
             let builder = tauri::WebviewWindowBuilder::new(
@@ -908,28 +1045,51 @@ pub fn run() {
             })?;
 
             // 实验 F+G：resize 防闪三件套（Win32 教科书组合）。
-            // 1) 主窗口 subclass 拦 WM_ERASEBKGND（不擦背景，DWM 拉伸旧内容）
+            // 1) 主窗口 subclass 拦 WM_ERASEBKGND：实验 F 原样「声称已擦不擦」
+            //    时，最大化放大的背衬面新增区域是坏帧且无刷子可擦 → 纯黑
+            //    （探针实测高刷屏 2~5 帧，见 debug-maximize-black-flash.md）。
+            //    改为以壁纸平均色填充暴露区（data=1 区分），坏帧不再是黑。
             // 2) 窗口类背景刷置 NULL（系统层不再有刷子可擦）
-            // 3) 对全部子窗口（WebView2 宿主链）装同样拦截——残余黑闪来自
-            //    WebView2 子窗口自己的擦除
+            // 3) 对全部子窗口（WebView2 宿主链）装同样拦截——但维持「不擦」：
+            //    WebView2 子窗口背景由 Chromium 自管，填充会在内容上叠色
             #[cfg(target_os = "windows")]
             {
                 use windows::core::BOOL;
-                use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+                use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
+                use windows::Win32::Graphics::Gdi::{
+                    CreateSolidBrush, DeleteObject, FillRect, HDC,
+                };
                 use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
                 use windows::Win32::UI::WindowsAndMessaging::{
-                    EnumChildWindows, SetClassLongPtrW, GCLP_HBRBACKGROUND,
+                    EnumChildWindows, GetClientRect, SetClassLongPtrW, GCLP_HBRBACKGROUND,
                 };
 
                 const SUBCLASS_ID: usize = 0x5152_4c;
 
                 unsafe extern "system" fn no_erase_proc(
                     hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM,
-                    _id: usize, _data: usize,
+                    _id: usize, data: usize,
                 ) -> LRESULT {
                     const WM_ERASEBKGND: u32 = 0x0014;
                     if msg == WM_ERASEBKGND {
-                        return LRESULT(1); // 声称已擦（实际不擦）
+                        // 主窗口（data=1）：壁纸平均色填充暴露区。FillRect 受
+                        // DC 裁剪区约束只真正画无效像素，稳态 resize 零开销；
+                        // 填充色与最终内容近似，视觉上无擦除闪。
+                        if data == 1 {
+                            let hdc = HDC(wp.0 as *mut _);
+                            let mut rc = RECT::default();
+                            if unsafe { GetClientRect(hwnd, &mut rc) }.is_ok() {
+                                let brush = unsafe { CreateSolidBrush(COLORREF(
+                                    WINDOW_BG_COLORREF
+                                        .load(std::sync::atomic::Ordering::Relaxed),
+                                )) };
+                                unsafe {
+                                    FillRect(hdc, &rc, brush);
+                                    let _ = DeleteObject(brush.into());
+                                }
+                            }
+                        }
+                        return LRESULT(1);
                     }
                     unsafe { DefSubclassProc(hwnd, msg, wp, lp) }
                 }
@@ -943,16 +1103,115 @@ pub fn run() {
 
                 let hwnd = main_window.hwnd().map_err(|e| format!("获取 HWND 失败: {}", e))?;
                 unsafe {
-                    // 1) 主窗口拦截
-                    if !SetWindowSubclass(hwnd, Some(no_erase_proc), SUBCLASS_ID, 0).as_bool() {
+                    // 1) 主窗口拦截（data=1：填充暴露区）
+                    if !SetWindowSubclass(hwnd, Some(no_erase_proc), SUBCLASS_ID, 1).as_bool() {
                         tracing::error!("[Window] 主窗口 subclass 安装失败");
                     }
                     // 2) 类背景刷置 NULL
                     SetClassLongPtrW(hwnd, GCLP_HBRBACKGROUND, 0);
-                    // 3) 子窗口链（WebView2 宿主）全量拦截
+                    // 3) 子窗口链（WebView2 宿主）全量拦截（data=0：不擦）
                     let _ = EnumChildWindows(Some(hwnd), Some(enum_child_proc), LPARAM(0));
                 }
-                tracing::info!("[Window] 防闪三件套已安装（主窗口+类刷+子窗口链）");
+                // WebView2 层兜底：子窗口已覆盖但新帧未栅格化的区域以
+                // DefaultBackgroundColor 呈现，同步为默认壁纸色（前端随壁纸更新）
+                let _ = main_window.set_background_color(Some(tauri::utils::config::Color(
+                    0xa3, 0x57, 0x8a, 255,
+                )));
+                tracing::info!("[Window] 防闪三件套已安装（主窗口填色+类刷+子窗口链拦截）");
+            }
+
+            // 实验 E 配套：无边框窗口的 resize 命中区与系统圆角。
+            // 1) WM_NCHITTEST 子类：decorations(false) 后 tao 不再提供 NC 手柄，
+            //    在 HTCLIENT 区把边缘 8 逻辑 px（含四角）改判为边框命中，其余
+            //    放行；与 no_erase_proc 用不同 SUBCLASS_ID 共存（comctl 子类链）。
+            // 2) DWMWA_WINDOW_CORNER_PREFERENCE = ROUND：Win11 系统圆角，
+            //    DWM 阴影随附，无需自绘。
+            #[cfg(target_os = "windows")]
+            {
+                use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+                use windows::Win32::Graphics::Dwm::{
+                    DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWM_WINDOW_CORNER_PREFERENCE,
+                };
+                use windows::Win32::UI::HiDpi::GetDpiForWindow;
+                use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
+                use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
+
+                const SUBCLASS_ID_RESIZE: usize = 0x5152_4d;
+
+                // Win32 边框命中码（HTLEFT..HTBOTTOMRIGHT）
+                const HTLEFT: i32 = 10;
+                const HTRIGHT: i32 = 11;
+                const HTTOP: i32 = 12;
+                const HTTOPLEFT: i32 = 13;
+                const HTTOPRIGHT: i32 = 14;
+                const HTBOTTOM: i32 = 15;
+                const HTBOTTOMLEFT: i32 = 16;
+                const HTBOTTOMRIGHT: i32 = 17;
+                const HTCLIENT: i32 = 1;
+
+                unsafe extern "system" fn resize_hit_proc(
+                    hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM,
+                    _id: usize, _data: usize,
+                ) -> LRESULT {
+                    const WM_NCHITTEST: u32 = 0x0084;
+                    if msg == WM_NCHITTEST {
+                        let hit = unsafe { DefSubclassProc(hwnd, msg, wp, lp) };
+                        if hit.0 == HTCLIENT as isize {
+                            // lParam：屏幕物理坐标（低/高 16 位，有符号）
+                            let pt = POINT {
+                                x: (lp.0 as i16) as i32,
+                                y: ((lp.0 >> 16) as i16) as i32,
+                            };
+                            let mut rc = RECT::default();
+                            if unsafe { GetWindowRect(hwnd, &mut rc) }.is_ok() {
+                                // 8 逻辑 px → 物理 px（随 DPI 缩放，最低保 4）
+                                let dpi = unsafe { GetDpiForWindow(hwnd) };
+                                let border = ((dpi as i32 * 8 / 96).max(4)) as i32;
+                                let x = pt.x - rc.left;
+                                let y = pt.y - rc.top;
+                                let w = rc.right - rc.left;
+                                let h = rc.bottom - rc.top;
+                                let (l, r) = (x < border, x >= w - border);
+                                let (t, b) = (y < border, y >= h - border);
+                                let code = match (l, r, t, b) {
+                                    (true, _, true, _) => HTTOPLEFT,
+                                    (_, true, true, _) => HTTOPRIGHT,
+                                    (true, _, _, true) => HTBOTTOMLEFT,
+                                    (_, true, _, true) => HTBOTTOMRIGHT,
+                                    (true, _, _, _) => HTLEFT,
+                                    (_, true, _, _) => HTRIGHT,
+                                    (_, _, true, _) => HTTOP,
+                                    (_, _, _, true) => HTBOTTOM,
+                                    _ => HTCLIENT,
+                                };
+                                if code != HTCLIENT {
+                                    return LRESULT(code as isize);
+                                }
+                            }
+                        }
+                        return hit;
+                    }
+                    unsafe { DefSubclassProc(hwnd, msg, wp, lp) }
+                }
+
+                let hwnd = main_window.hwnd().map_err(|e| format!("获取 HWND 失败: {}", e))?;
+                unsafe {
+                    if !SetWindowSubclass(hwnd, Some(resize_hit_proc), SUBCLASS_ID_RESIZE, 0).as_bool() {
+                        tracing::error!("[Window] resize 命中区 subclass 安装失败");
+                    }
+                    // Win11 系统圆角（失败仅降级为直角，不阻塞启动）
+                    let pref: DWM_WINDOW_CORNER_PREFERENCE = DWM_WINDOW_CORNER_PREFERENCE(2); // DWMWCP_ROUND
+                    let hr = DwmSetWindowAttribute(
+                        hwnd,
+                        DWMWA_WINDOW_CORNER_PREFERENCE,
+                        &pref as *const _ as *const std::ffi::c_void,
+                        std::mem::size_of::<i32>() as u32,
+                    );
+                    if hr.is_err() {
+                        tracing::warn!("[Window] DWM 圆角设置失败（Win10 及以下将显示直角）");
+                    }
+                }
+                tracing::info!("[Window] 无边框配套已安装（resize 命中区 + DWM 圆角）");
             }
 
             // 初始化日志系统（必须在所有其他操作之前）
@@ -984,6 +1243,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             read_dir, stat_file, read_file_text,
             wallpaper_cache_write,
+            wallpaper_cache_write_data,
             wallpaper_cache_current,
             wallpaper_read_cached,
             credentials::credential_set,
@@ -993,6 +1253,10 @@ pub fn run() {
             credentials::credential_probe,
             wipe_all_data,
             show_main_window,
+            window_minimize,
+            window_toggle_maximize,
+            window_close,
+            set_window_background_color,
             prepare_shutdown,
             fullscreen::toggle_fullscreen,
             fullscreen::is_fullscreen,
@@ -1008,6 +1272,7 @@ pub fn run() {
             connection::remote_ping,
             connection::remote_send,
             connection::remote_read_dir,
+            connection::remote_search, // 文件管理器搜索（宿主侧受限遍历，复用 ReadDir 权限模型）
             connection::remote_get_current_user,
             connection::remote_get_mounts,
             connection::remote_get_path_suggestions,

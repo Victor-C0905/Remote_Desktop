@@ -1,10 +1,12 @@
-import { memo, useCallback } from "react";
+import { memo, useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useServerManager, getStatusColor } from "../../context/ServerManager";
 import { formatBytesSafe, formatPercentSafe } from "../../utils/offlineDefaults";
 import { NotificationBadge } from "../NotificationCenter";
+import { ToolbarMenu, type MenuEntry } from "../../components/ToolbarMenu/ToolbarMenu";
 import { SymbolicIcon } from "../../components/symbolic";
 import styles from "./TopBar.module.css";
 
@@ -46,6 +48,68 @@ export const TopBar = memo(function TopBar({
   // 网络断开自动重连期间 activeServerId 已清空（activeServer 为 null），
   // 回退到 reconnecting 状态的服务器，保持状态指示可见
   const statusServer = activeServer || servers.find((s) => s.status === "reconnecting") || null;
+
+  // 最大化状态：由 Rust Resized 段探测（app-maximize-changed），驱动
+  // 窗口控制菜单「最大化/还原」的图标与文案切换（与最小化闸门同路径）
+  const [maximized, setMaximized] = useState(false);
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    listen<boolean>("app-maximize-changed", (e) => setMaximized(e.payload))
+      .then((f) => {
+        if (disposed) f();
+        else unlisten = f;
+      });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  // 全屏状态：toggle_fullscreen 完成时发出（F11 与网页全屏联动同源），
+  // 驱动菜单项「进入全屏/退出全屏」的图标与文案切换
+  const [fullscreen, setFullscreen] = useState(false);
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    listen<boolean>("fullscreen://changed", (e) => setFullscreen(e.payload))
+      .then((f) => {
+        if (disposed) f();
+        else unlisten = f;
+      });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  // 窗口控制菜单：无边框模式下系统标题栏不再存在，最小化/最大化/关闭
+  // 经独立命令作用于主窗口；全屏复用既有 toggle_fullscreen（F11 同源）
+  const windowMenu: MenuEntry[] = [
+    {
+      label: fullscreen ? t("topbar.exitFullscreen") : t("topbar.enterFullscreen"),
+      shortcut: "F11",
+      icon: <SymbolicIcon name={fullscreen ? "view-restore" : "view-fullscreen"} size={16} />,
+      onClick: () => void invoke("toggle_fullscreen").catch(() => {}),
+    },
+    {
+      label: t("topbar.minimize"),
+      icon: <SymbolicIcon name="window-minimize" size={16} />,
+      onClick: () => void invoke("window_minimize").catch(() => {}),
+    },
+    {
+      label: maximized ? t("topbar.restore") : t("topbar.maximize"),
+      icon: <SymbolicIcon name={maximized ? "window-restore" : "window-maximize"} size={16} />,
+      onClick: () => void invoke("window_toggle_maximize").catch(() => {}),
+    },
+    { separator: true },
+    {
+      label: t("topbar.close"),
+      icon: <SymbolicIcon name="window-close" size={16} />,
+      danger: true,
+      onClick: () => void invoke("window_close").catch(() => {}),
+    },
+  ];
 
   // OS 窗口拖拽：invoke 单命令 start_os_drag，全屏态由 Rust 单点裁决
   // （拖拽允许性与全屏状态同在 fullscreen 模块，无前端状态/事件链时序盲区）。
@@ -105,6 +169,11 @@ export const TopBar = memo(function TopBar({
           criticalCount={criticalNotifications}
         />
       </button>
+
+      {/* 窗口控制菜单（无边框模式：最小化/最大化/关闭 + 全屏，⌄ 触发按钮
+          为 SVG mask 几何居中，与通知铃同基线；按钮自身不触发拖拽——
+          onBarMouseDown 已排除 button 元素） */}
+      <ToolbarMenu title={t('topbar.windowControls')} icon="⌄" items={windowMenu} />
     </div>
   );
 });

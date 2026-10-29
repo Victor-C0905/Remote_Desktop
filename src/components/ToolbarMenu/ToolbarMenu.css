@@ -124,6 +124,26 @@
   font-weight: 700;
 }
 
+/* 图标列（窗口控制菜单等）：symbolic 图标占位，颜色跟随菜单项文字色 */
+.tbm-item.has-icon .tbm-item-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  color: inherit;
+}
+
+/* 破坏性动作项（窗口控制菜单的关闭）：悬停转 libadwaita destructive 红，
+   与连接指示断开色（#e01b24）同一破坏语义 */
+.tbm-item.danger:hover:not(:disabled) {
+  background: #e01b24;
+  color: #fff;
+}
+
+.tbm-item.danger:hover:not(:disabled) .tbm-item-shortcut {
+  color: rgba(255, 255, 255, 0.75);
+}
+
 /* 勾选项文案用 accent 强调当前开启状态 */
 .tbm-item.checked .tbm-item-label {
   color: var(--quirel-accent-bg);

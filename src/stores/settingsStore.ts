@@ -41,6 +41,9 @@ export interface SettingsState {
   // 文件管理器列表列宽（用户拖拽调节后持久化；name 为 null 表示名称列弹性默认态）
   fileManagerColumns: ColumnWidths;
 
+  // 文件管理器搜索下钻层数（0 = 仅当前目录一层；>0 = 当前目录 + N 层子树）
+  fileManagerSearchDepth: number;
+
   // 界面语言（持久化；启动时 onRehydrateStorage 应用到 i18next）
   locale: Locale;
 }
@@ -77,6 +80,9 @@ export interface SettingsActions {
   // 文件管理器列宽（拖拽结束时提交一次，避免拖动过程频繁写盘）
   setFileManagerColumns: (widths: ColumnWidths) => void;
 
+  // 文件管理器搜索下钻层数
+  setFileManagerSearchDepth: (depth: number) => void;
+
   setLocale: (locale: Locale) => void;
 }
 
@@ -111,6 +117,9 @@ const DEFAULT_SETTINGS: SettingsState = {
 
   // 文件管理器列宽默认值（与 CSS 历史列宽一致，名称列弹性）
   fileManagerColumns: DEFAULT_COLUMN_WIDTHS,
+
+  // 搜索默认仅当前目录一层（与上次行为一致，老用户升级零感知）
+  fileManagerSearchDepth: 0,
 
   // 界面语言默认 zh-CN 与当前应用语言一致，老用户升级零感知
   locale: "zh-CN",
@@ -160,8 +169,6 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
 
       setIconTheme: (iconTheme) => {
         set({ iconTheme });
-        // 内容图标（AppIcon CSS 变量）与徽章（AppBadge 订阅）同步换装
-        document.documentElement.setAttribute("data-icon-theme", iconTheme);
       },
 
       setBrowserSleepMinutes: (minutes) => {
@@ -189,6 +196,10 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
 
       setFileManagerColumns: (widths) => {
         set({ fileManagerColumns: widths });
+      },
+
+      setFileManagerSearchDepth: (depth) => {
+        set({ fileManagerSearchDepth: depth });
       },
 
       setLocale: (locale) => {
@@ -222,8 +233,7 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
           root.style.setProperty("--font-title", `${state.fontSize + 1}px`);
           root.style.setProperty("--font-small", `${state.fontSize - 1.5}px`);
 
-          // 图标主题（内容图标 CSS 变量色板；缺失按 classic 处理）
-          root.setAttribute("data-icon-theme", state.iconTheme || "classic");
+          // 图标主题 DOM 镜像已收敛到底部订阅点（rehydrate 的 merge set 会触发）
 
           // 毛玻璃效果开关（在 applyThemeColors 之后设置：关闭态用
           // !important 覆盖主题 inline 写入的透明玻璃变量；属性缺失按关闭处理）
@@ -236,3 +246,17 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
     }
   )
 );
+
+/* ── iconTheme → DOM 单点镜像 ──────────────────────────────
+   图标体系是双真相源：SVG 结构跟 store.iconTheme 走，颜色变量跟根元素
+   data-icon-theme 属性走。同步若散在 setIconTheme/rehydrate 各处，任何
+   路径失灵（HMR 重建 store 后 rehydrate 静默失败、未来新增 mutation）
+   都会串档——classic 结构套上 paper 色板，磁贴渲染成「淡彩平涂 + 彩边 +
+   深色图形」（设置侧栏曾整排如此）。这里统一镜像：模块加载立即对齐一次
+   （DOM 可能残留上一代 store 的值且无 set 事件可比对），之后订阅增量同步 */
+const mirrorIconTheme = (iconTheme: string) =>
+  document.documentElement.setAttribute("data-icon-theme", iconTheme);
+mirrorIconTheme(useSettingsStore.getState().iconTheme);
+useSettingsStore.subscribe((state, prev) => {
+  if (state.iconTheme !== prev.iconTheme) mirrorIconTheme(state.iconTheme);
+});

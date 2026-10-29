@@ -7,7 +7,7 @@
  * - paper「纸张」：白卡徽章 + 深一档本色图形（放大 8%）+ 细边
  *   （与 UI 白卡层级同族，深浅壁纸上都干净）
  *
- * 文件类型 / 动作小图标不走这里——那层用 AppIcon（lucide 单色线），
+ * 文件类型 / 动作小图标不走这里——那层用 AppIcon（双档主题化内容图标），
  * 两层各司其职（GNOME 的 app icon 与 symbolic icon 也是两层体系）。
  */
 import { useSettingsStore } from '../stores/settingsStore';
@@ -50,7 +50,16 @@ const GLYPHS: Record<BadgeAppId, string> = {
   'archive-viewer': '<rect x="14" y="17" width="20" height="18" rx="2.5" fill="currentColor"/><path d="M14 23h20" stroke="#ffffff66" stroke-width="1.6"/><path d="M21 27h6v3.5h-6z" fill="#ffffff" opacity="0.9"/>',
 };
 
+/** 已告警过的未知 appId（每会话一次，避免渲染刷屏） */
+const warnedUnknownApps = new Set<string>();
+
 export function appBadgeSvg(appId: string, theme: AppBadgeTheme): string {
+  if (!(appId in APP_COLORS) && !warnedUnknownApps.has(appId)) {
+    // 漏注册告警：新应用必须同步在 APP_COLORS/GLYPHS 登记，否则桌面/Dock/概览
+    // 会静默回退显示 Files 徽章（无报错、无类型错误、无测试失败，只能靠这里暴露）
+    warnedUnknownApps.add(appId);
+    console.warn(`[AppBadge] 未注册的应用徽章 "${appId}"，已回退为 files——请在 APP_COLORS/GLYPHS 登记`);
+  }
   const id = (appId in APP_COLORS ? appId : 'files') as BadgeAppId;
   const colors = APP_COLORS[id];
   const glyph = GLYPHS[id];

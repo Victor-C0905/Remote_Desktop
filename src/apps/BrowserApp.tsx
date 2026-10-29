@@ -21,7 +21,7 @@ import { AppLayout } from "../components/app-shell/AppLayout";
 import { ChromeTabStrip } from "../components/ChromeTabStrip/ChromeTabStrip";
 import { WINDOW_DRAG_EVENT } from "../components/window-shell/WindowShell";
 import { useOpenApp } from "../window-system/hooks/useOpenApp";
-import { useWindowState } from "../window-system/WindowManagerContext";
+import { useWindowManager, useWindowState } from "../window-system/WindowManagerContext";
 import { useBrowserTabs } from "./browser/useBrowserTabs";
 import { useBrowserBounds, insetWebviewRect } from "./browser/useBrowserBounds";
 import { BrowserNavbar, type BrowserSettings } from "./browser/BrowserNavbar";
@@ -89,6 +89,8 @@ export function BrowserApp({ windowId }: BrowserAppProps) {
 
   // 窗口状态：激活态同步 webview 可见性；几何变化触发 bounds 上报
   const win = useWindowState(windowId);
+  // 窗口管理器：最后一个页签关闭时经此关闭窗口（与终端/编辑器同语义）
+  const { manager } = useWindowManager();
   const contentRef = useRef<HTMLDivElement>(null);
 
   // 拖拽中隐藏 webview：拖拽时 DOM 走 transform 即时位移，而 webview bounds
@@ -305,8 +307,15 @@ export function BrowserApp({ windowId }: BrowserAppProps) {
     if (serverId) invoke("browser_create_tab", { serverId, url: null }).catch((e) => log.error("新建标签失败:", e));
   }, [serverId]);
   const closeTab = useCallback((id: string) => {
+    // 最后一个页签关闭 → 关闭窗口（与终端/编辑器同语义）：直接走窗口关闭
+    // 路径，cleanup 统一销毁 webview + Environment（代理监听保留），不再发
+    // close_tab 避免 Rust 侧空 book 残留
+    if (tabs.length <= 1) {
+      manager.close(windowId);
+      return;
+    }
     if (serverId) invoke("browser_close_tab", { serverId, tabId: Number(id) }).catch(() => {});
-  }, [serverId]);
+  }, [serverId, tabs.length, manager, windowId]);
   const focusTab = useCallback((id: string) => {
     if (serverId) invoke("browser_focus_tab", { serverId, tabId: Number(id) }).catch(() => {});
   }, [serverId]);

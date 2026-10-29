@@ -12,6 +12,7 @@ import i18n from '../../i18n';
 import { formatTaskError } from '../../types/errors';
 import { TransferTask } from '../../hooks/useTransferProgress';
 import { useServerManager } from '../../context/ServerManager';
+import { SymbolicIcon } from '../symbolic';
 import { useServersStore } from '../../stores/serversStore';
 import { useNotificationStore } from '../../stores/notificationStore';
 import { createLogger } from '../../utils/logger';
@@ -80,93 +81,6 @@ function formatEta(seconds: number): string {
   const h = Math.floor(seconds / 3600);
   const m = Math.ceil((seconds % 3600) / 60);
   return m > 0 ? i18n.t('transfer.eta.hours', { h, m }) : i18n.t('transfer.eta.hoursOnly', { h });
-}
-
-// ── 内联 SVG 图标组件（Adwaita 风格）────────────────────────────
-
-/**
- * 下载图标（向下箭头）
- * 来源：Adwaita go-down-symbolic.svg
- */
-function DownloadIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-      <path d="M8 12l-4-4h2.5V4h3v4H12z" />
-    </svg>
-  );
-}
-
-/**
- * 上传图标（向上箭头）
- * 来源：Adwaita go-up-symbolic.svg
- */
-function UploadIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-      <path d="M8 4l4 4H9.5v4h-3V8H4z" />
-    </svg>
-  );
-}
-
-/**
- * 暂停图标
- * 来源：Adwaita media-playback-pause-symbolic.svg
- */
-function PauseIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
-      <rect x="2" y="2" width="3" height="8" />
-      <rect x="7" y="2" width="3" height="8" />
-    </svg>
-  );
-}
-
-/**
- * 继续图标（播放）
- * 来源：Adwaita media-playback-start-symbolic.svg
- */
-function PlayIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
-      <path d="M3 2v8l7-4z" />
-    </svg>
-  );
-}
-
-/**
- * 关闭图标
- * 来源：Adwaita window-close-symbolic.svg
- */
-function CloseIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
-      <path d="M2.5 2L6 5.5 9.5 2l1 1L7 6l3.5 3.5-1 1L6 7l-3.5 3.5-1-1L5 6 1.5 2.5z" />
-    </svg>
-  );
-}
-
-/**
- * 打开文件图标
- * 来源：Adwaita folder-open-symbolic.svg
- */
-function FolderOpenIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
-      <path d="M1 2h4l1 1h4v1H2v5l1-3h8l-1.5 4H1z" />
-    </svg>
-  );
-}
-
-/**
- * 重试图标
- * 来源：Adwaita view-refresh-symbolic.svg
- */
-function RefreshIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
-      <path d="M8.5 1v2.5l1.5-1.5c-.8-.8-1.9-1.2-3-1-2.1.2-3.7 2-3.5 4.1s2 3.7 4.1 3.5c1.5-.1 2.7-1.1 3.2-2.5h1.1c-.6 2.2-2.6 3.8-4.9 3.5-2.6-.3-4.5-2.7-4.2-5.3S5.4.5 8 1c.5.1 1 .3 1.5.6L11 .5V1h-2.5z" />
-    </svg>
-  );
 }
 
 // ── TaskCard 组件 ─────────────────────────────────────────────
@@ -351,7 +265,7 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
     >
       {/* 区域 1：方向图标（垂直居中，跨两行） */}
       <span className="tc-icon">
-        {task.direction === 'upload' ? <UploadIcon /> : <DownloadIcon />}
+        {task.direction === 'upload' ? <SymbolicIcon name="go-up" size={16} /> : <SymbolicIcon name="go-down" size={16} />}
       </span>
 
       {/* 区域 2a：文件信息（第一行：文件名 + 大小） */}
@@ -409,7 +323,7 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
               aria-label={t('transfer.btn.pauseAria')}
               title={t('transfer.btn.pause')}
             >
-              <PauseIcon />
+              <SymbolicIcon name="media-pause" size={12} />
             </button>
             <button
               className="tc-action-btn"
@@ -417,7 +331,7 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
               aria-label={t('transfer.btn.closeTaskAria')}
               title={t('transfer.btn.close')}
             >
-              <CloseIcon />
+              <SymbolicIcon name="window-close" size={12} />
             </button>
           </>
         )}
@@ -431,7 +345,7 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
               aria-label={t('transfer.btn.resumeAria')}
               title={t('transfer.btn.resume')}
             >
-              <PlayIcon />
+              <SymbolicIcon name="media-play" size={12} />
             </button>
             <button
               className="tc-action-btn"
@@ -439,7 +353,7 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
               aria-label={t('transfer.btn.closeTaskAria')}
               title={t('transfer.btn.close')}
             >
-              <CloseIcon />
+              <SymbolicIcon name="window-close" size={12} />
             </button>
           </>
         )}
@@ -453,7 +367,7 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
               aria-label={t('transfer.btn.openFile')}
               title={t('transfer.btn.openFile')}
             >
-              <FolderOpenIcon />
+              <SymbolicIcon name="folder-open" size={12} />
             </button>
             <button
               className="tc-action-btn"
@@ -461,7 +375,7 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
               aria-label={t('transfer.btn.closeTaskAria')}
               title={t('transfer.btn.close')}
             >
-              <CloseIcon />
+              <SymbolicIcon name="window-close" size={12} />
             </button>
           </>
         )}
@@ -475,7 +389,7 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
               aria-label={t('transfer.btn.retryAria')}
               title={t('transfer.btn.retry')}
             >
-              <RefreshIcon />
+              <SymbolicIcon name="view-refresh" size={12} />
             </button>
             <button
               className="tc-action-btn"
@@ -483,7 +397,7 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
               aria-label={t('transfer.btn.closeTaskAria')}
               title={t('transfer.btn.close')}
             >
-              <CloseIcon />
+              <SymbolicIcon name="window-close" size={12} />
             </button>
           </>
         )}
@@ -497,7 +411,7 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
               aria-label={t('transfer.btn.restart')}
               title={t('transfer.btn.restart')}
             >
-              <RefreshIcon />
+              <SymbolicIcon name="view-refresh" size={12} />
             </button>
             <button
               className="tc-action-btn"
@@ -505,7 +419,7 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
               aria-label={t('transfer.btn.closeTaskAria')}
               title={t('transfer.btn.close')}
             >
-              <CloseIcon />
+              <SymbolicIcon name="window-close" size={12} />
             </button>
           </>
         )}
@@ -519,7 +433,7 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
               aria-label={t('transfer.btn.switchRetry')}
               title={t('transfer.btn.switchRetry')}
             >
-              <RefreshIcon />
+              <SymbolicIcon name="view-refresh" size={12} />
             </button>
             <button
               className="tc-action-btn"
@@ -527,7 +441,7 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
               aria-label={t('transfer.btn.closeTaskAria')}
               title={t('transfer.btn.close')}
             >
-              <CloseIcon />
+              <SymbolicIcon name="window-close" size={12} />
             </button>
           </>
         )}
@@ -540,7 +454,7 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
             aria-label={t('transfer.btn.closeTaskAria')}
             title={t('transfer.btn.close')}
           >
-            <CloseIcon />
+            <SymbolicIcon name="window-close" size={12} />
           </button>
         )}
       </div>
