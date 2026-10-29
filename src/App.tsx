@@ -14,6 +14,11 @@ const log = createLogger('App');
 
 function App() {
   useEffect(() => {
+    // 孤儿浏览器窗口回收：主 webview 整页刷新（dev HMR / 调试器刷新 / 渲染进程
+    // 崩溃恢复）后，DOM 层浏览器窗口随前端重置消失，Rust 侧宿主线程与 WebView2
+    // 子窗口仍在（悬浮且无法移动/关闭）。挂载时统一回收；正常启动为 no-op。
+    invoke('browser_close_all_windows').catch((e) => log.error('孤儿浏览器窗口回收失败:', e));
+
     const handleBeforeUnload = (_e: BeforeUnloadEvent) => {
       // 通知后端准备关闭
       invoke('prepare_shutdown').catch((e) => log.error('prepare_shutdown 调用失败:', e));

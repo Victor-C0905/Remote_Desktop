@@ -16,7 +16,6 @@ interface StorageInitializerProps {
  */
 export function StorageInitializer({ children }: StorageInitializerProps) {
   const [initialized, setInitialized] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const initializeStorage = async () => {
@@ -33,7 +32,6 @@ export function StorageInitializer({ children }: StorageInitializerProps) {
         setInitialized(true);
       } catch (e) {
         log.error('存储预加载失败:', e);
-        setError(e instanceof Error ? e.message : String(e));
         // 即使失败也继续渲染，使用默认值
         setInitialized(true);
       }
@@ -42,11 +40,8 @@ export function StorageInitializer({ children }: StorageInitializerProps) {
     initializeStorage();
   }, []);
 
-  if (error) {
-    log.warn('存储加载出错，使用默认值:', error);
-  }
-
   // 等待存储初始化完成后再渲染
+  // （预加载失败已在上方 catch 以 error 级记录，渲染体不再重复打 warn）
   // 这样 Zustand persist 中间件就能正确读取数据
   if (!initialized) {
     return null; // 或者显示加载界面

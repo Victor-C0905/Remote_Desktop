@@ -3,6 +3,7 @@ import { persist, createJSONStorage } from "zustand/middleware";
 import { settingsStorage } from "../utils/storage";
 import { createLogger } from "../utils/logger";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+import { isTauri } from "../utils/environment";
 
 /**
  * 缓存文件路径 → asset 协议 URL。
@@ -71,6 +72,20 @@ export function builtinWallpaperUrl(id?: string): string {
   return BUILTIN_WALLPAPERS.find((w) => w.id === id)?.url ?? BUILTIN_WALLPAPERS[0].url;
 }
 
+/** 壁纸当前生效的图像 URL（渲染与窗口背景色同步共用同一取值口径） */
+export function wallpaperImageUrl(
+  wallpaper: WallpaperConfig,
+  objectUrl?: string | null,
+): string | null {
+  if (wallpaper.type === "cached" && wallpaper.cachedPath) {
+    return objectUrl ?? wallpaperAssetUrl(wallpaper.cachedPath);
+  }
+  if (wallpaper.type === "custom" && wallpaper.customPath) {
+    return wallpaper.customPath;
+  }
+  return builtinWallpaperUrl(wallpaper.builtinId);
+}
+
 /* ── Default Wallpaper ───────────────────────────────── */
 
 const DEFAULT_WALLPAPER: WallpaperConfig = {
@@ -115,7 +130,8 @@ export const useWallpaperStore = create<WallpaperState & WallpaperActions>()(
           set({ objectUrl: url });
           log.info("壁纸 blob 已加载");
         } catch (e) {
-          log.warn("壁纸缓存读取失败:", e);
+          // 读失败将回退默认壁纸，与 storage 读失败同级，升 error 便于定位
+          log.error("壁纸缓存读取失败:", e);
         }
       },
 
@@ -137,6 +153,8 @@ export const useWallpaperStore = create<WallpaperState & WallpaperActions>()(
               (state.wallpaper.type === "builtin" && !state.wallpaper.builtinId)) {
             state.wallpaper = DEFAULT_WALLPAPER;
           }
+          // 旧版 dataURL 壁纸迁移（异步，见函数注释）
+          void migrateLegacyDataUrlWallpaper();
           log.debug("Rehydrated:", state.wallpaper);
         }
       },
@@ -147,6 +165,28 @@ export const useWallpaperStore = create<WallpaperState & WallpaperActions>()(
 /** 释放旧 blob URL（会话内换壁纸时防内存滞留） */
 function revokeObjectUrl(url: string | null) {
   if (url) URL.revokeObjectURL(url);
+}
+
+/* 旧方案 dataURL 迁移（P0：settings.bin 膨胀 5MB）：
+   旧版导入把图片整串 base64 存进 customPath 并持久化——单图可达 5MB，
+   任意设置变更触发 persist 都全量重写 settings.bin，启动 rehydrate 也要
+   parse 这串数据。落盘为缓存文件后改存 cachedPath（setCachedWallpaper
+   触发 persist 自动覆写旧结构）；失败保持原状下次启动重试，期间 dataURL
+   分支照常渲染，不产生可见中断。导出仅供测试 */
+export async function migrateLegacyDataUrlWallpaper(): Promise<void> {
+  if (!isTauri()) return; // 浏览器调试模式无 Rust 侧，dataURL 是唯一载体
+  const w = useWallpaperStore.getState().wallpaper;
+  if (w.type !== "custom" || !w.customPath?.startsWith("data:image/")) return;
+  try {
+    const cachedPath = await invoke<string>("wallpaper_cache_write_data", {
+      dataUrl: w.customPath,
+    });
+    useWallpaperStore.getState().setCachedWallpaper(cachedPath);
+    await useWallpaperStore.getState().loadCachedWallpaper();
+    log.info("旧版 dataURL 壁纸已迁移为缓存文件");
+  } catch (e) {
+    log.error("dataURL 壁纸迁移失败（保持原状，下次启动重试）:", e);
+  }
 }
 
 /* ── Utility Functions ──────────────────────────────── */
@@ -163,15 +203,8 @@ export function getWallpaperStyle(
     backgroundColor: "#241f28",
   } as React.CSSProperties;
 
-  if (wallpaper.type === "cached" && wallpaper.cachedPath) {
-    // 渲染优先级：会话 blob URL（保证可用）→ asset 协议 URL（回退）
-    return { ...base, backgroundImage: `url(${objectUrl ?? wallpaperAssetUrl(wallpaper.cachedPath)})` };
-  }
-
-  if (wallpaper.type === "custom" && wallpaper.customPath) {
-    return { ...base, backgroundImage: `url(${wallpaper.customPath})` };
-  }
-
-  // builtin（默认）/ 未知：内置图随安装包分发，webview 同源直接加载
-  return { ...base, backgroundImage: `url(${builtinWallpaperUrl(wallpaper.builtinId)})` };
+  const url = wallpaperImageUrl(wallpaper, objectUrl);
+  /* cached 类型理论上 url 恒非空（cachedPath 缺失时退回 builtin），
+     url 全空仅剩防御分支 */
+  return url ? { ...base, backgroundImage: `url(${url})` } : base;
 }

@@ -4,7 +4,8 @@
  * - **开发模式**：输出所有级别（debug/info/warn/error），带颜色
  * - **生产模式**：console 仅输出 warn 和 error，静默 debug/info
  * - **落盘（测试版）**：info/warn/error 通过 Tauri 命令 `log_write` 透传到
- *   Rust tracing，与后端日志同写一份 client.log，按时间线交错，便于排查
+ *   Rust tracing，与后端日志同写一份 client.log，按时间线交错，便于排查；
+ *   落盘侧按（级别|模块|内容）做 1s 节流合并，防止热路径刷爆 IPC 与日志文件
  *
  * @example
  * ```ts
@@ -86,6 +87,44 @@ function persist(level: 'info' | 'warn' | 'error', module: string, message: stri
   }
 }
 
+/** 落盘节流窗口：窗口内同（级别|模块|内容）只落盘一条，结束时补记合并数。
+ *  console 输出不受影响（开发期保持全量实时），仅约束落盘频率，
+ *  防止热路径（逐帧回调、轮询）里的 info/warn/error 无上限刷 IPC 与 client.log。 */
+const THROTTLE_WINDOW_MS = 1000;
+
+interface ThrottleEntry {
+  /** 窗口内累计条数（含首条） */
+  count: number;
+  timer: ReturnType<typeof setTimeout>;
+}
+const throttleMap = new Map<string, ThrottleEntry>();
+
+function persistThrottled(
+  level: 'info' | 'warn' | 'error',
+  module: string,
+  message: string,
+  args: unknown[],
+): void {
+  const data = args.map(serializeArg);
+  const key = `${level}\u0000${module}\u0000${message}\u0000${data.join('\u0001')}`;
+  const entry = throttleMap.get(key);
+  if (entry) {
+    // 窗口内重复内容：静默累计，首条已落盘
+    entry.count += 1;
+    return;
+  }
+  const timer = setTimeout(() => {
+    const e = throttleMap.get(key);
+    throttleMap.delete(key);
+    if (e && e.count > 1) {
+      // 窗口结束补记一条汇总（直接走 persist，不再进节流）
+      persist(level, module, `${message}（落盘节流：窗口内同内容共 ${e.count} 条，已合并）`, []);
+    }
+  }, THROTTLE_WINDOW_MS);
+  throttleMap.set(key, { count: 1, timer });
+  persist(level, module, message, data);
+}
+
 export interface Logger {
   debug(message: string, ...args: unknown[]): void;
   info(message: string, ...args: unknown[]): void;
@@ -99,36 +138,39 @@ export interface Logger {
  * @param module - 模块/组件名（如 'FileManager', 'Terminal'）
  */
 export function createLogger(module: string): Logger {
-  const prefix = `[${timestamp()}][${module}]`;
+  const tag = `[${module}]`;
+  // 时间戳必须每条现算：若把 prefix 固化在创建期，同一 logger 的所有日志
+  // 会共享模块加载时刻，client.log 时间线失真（历史 bug，勿回退）
+  const line = (message: string) => `[${timestamp()}]${tag} ${message}`;
 
   return {
     debug(message: string, ...args: unknown[]) {
       if (MIN_LEVEL <= LogLevel.Debug) {
-        console.debug(`${prefix} ${message}`, ...args);
+        console.debug(line(message), ...args);
       }
     },
     info(message: string, ...args: unknown[]) {
       if (MIN_LEVEL <= LogLevel.Info) {
-        console.info(`${prefix} ${message}`, ...args);
+        console.info(line(message), ...args);
       }
       if (FILE_LEVEL <= LogLevel.Info) {
-        persist('info', module, message, args);
+        persistThrottled('info', module, message, args);
       }
     },
     warn(message: string, ...args: unknown[]) {
       if (MIN_LEVEL <= LogLevel.Warn) {
-        console.warn(`${prefix} ${message}`, ...args);
+        console.warn(line(message), ...args);
       }
       if (FILE_LEVEL <= LogLevel.Warn) {
-        persist('warn', module, message, args);
+        persistThrottled('warn', module, message, args);
       }
     },
     error(message: string, ...args: unknown[]) {
       if (MIN_LEVEL <= LogLevel.Error) {
-        console.error(`${prefix} ${message}`, ...args);
+        console.error(line(message), ...args);
       }
       if (FILE_LEVEL <= LogLevel.Error) {
-        persist('error', module, message, args);
+        persistThrottled('error', module, message, args);
       }
     },
   };

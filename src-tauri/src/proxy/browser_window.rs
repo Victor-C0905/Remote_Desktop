@@ -13,8 +13,9 @@ use super::browser_settings::{BrowserSettings, SearchEngine};
 use webview2_com::Microsoft::Web::WebView2::Win32::*;
 use webview2_com::take_pwstr;
 use webview2_com::{
-    DocumentTitleChangedEventHandler, NavigationCompletedEventHandler,
-    NavigationStartingEventHandler, NewWindowRequestedEventHandler, SourceChangedEventHandler,
+    ContainsFullScreenElementChangedEventHandler, DocumentTitleChangedEventHandler,
+    NavigationCompletedEventHandler, NavigationStartingEventHandler,
+    NewWindowRequestedEventHandler, SourceChangedEventHandler,
 };
 use windows::core::PWSTR;
 use windows::Win32::Foundation::RECT;
@@ -44,7 +45,8 @@ pub struct TabInfo {
 /// runtime 需要对某 tab 执行的动作（TabBook 决策输出，runtime 执行）
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TabAction {
-    /// 重建 webview 并导航到 url
+    /// 重建 webview 并导航到 url（预留：睡眠 tab 的唤醒路径，当前扫描只产 Destroy）
+    #[allow(dead_code)]
     Wake(u64),
     /// 销毁 webview（睡眠/关闭前清理）
     Destroy(u64),
@@ -171,6 +173,8 @@ impl TabBook {
         if let Some(meta) = self.meta_mut(id) { meta.url = url; }
     }
 
+    /// 标记加载态（预留：EvNavStart/EvNavDone 接入 tab 状态展示时启用）
+    #[allow(dead_code)]
     pub(crate) fn set_loading(&mut self, id: u64, loading: bool) {
         if let Some(meta) = self.meta_mut(id) { meta.loading = loading; }
     }
@@ -294,6 +298,9 @@ pub(crate) enum HostCommand {
     RefreshTabs,
     /// 默认搜索引擎变更（设置持久化后由 browser_set_settings 转发，运行中即时生效）
     SetSearchEngine { engine: SearchEngine },
+    /// 壁纸背景色变更：对全部存活 webview 重设 DefaultBackgroundColor
+    /// （create_controller 只带创建时刻的色值，壁纸运行时切换需补发）
+    SyncBackgroundColor,
     ScanSleep,
     CloseAll { reply: Option<Reply<()>> },
     // ── COM 事件回流 ──
@@ -301,12 +308,19 @@ pub(crate) enum HostCommand {
     EvNavDone { tab_id: u64 },
     EvTitle { tab_id: u64, title: String },
     EvSource { tab_id: u64, url: String },
-    EvNewWindow { tab_id: u64, url: String },
+    EvNewWindow { #[allow(dead_code)] tab_id: u64, url: String },
+    /// 网页全屏态变更（Fullscreen API：视频/游戏铺满请求）
+    EvFullscreen { tab_id: u64, fullscreen: bool },
+    /// 主线程完成全屏切换后的回流：客户区就位，重新铺满 webview
+    ResyncBounds,
 }
 
 /// 跨线程句柄：tauri command 的唯一入口
 pub struct BrowserWindowHost {
+    /// 预留字段：代理会话标识/端口（browser:// 状态页与诊断接口接入时读取）
+    #[allow(dead_code)]
     server_id: String,
+    #[allow(dead_code)]
     proxy_port: u16,
     cmd_tx: CmdSender,
 }
@@ -331,6 +345,14 @@ impl BrowserWindowHost {
         }
     }
 
+    /// 壁纸背景色变更转发（set_window_background_color 调用）：对全部存活
+    /// webview 重设 DefaultBackgroundColor。fire-and-forget：通道已断时静默。
+    pub(crate) fn sync_background_color(&self) {
+        if let Err(e) = self.cmd_tx.send(HostCommand::SyncBackgroundColor) {
+            tracing::warn!("[Browser] SyncBackgroundColor 指令发送失败（runtime 已退出）: err={e}");
+        }
+    }
+
     /// 异步等待 CloseAll 完成（显式关闭路径用；Drop 路径用 fire-and-forget）
     pub async fn close_all(&self) -> Result<(), crate::errors::AppError> {
         let (tx, rx) = tokio::sync::oneshot::channel();
@@ -350,10 +372,13 @@ impl BrowserWindowHost {
         }
     }
 
+    /// 预留访问器：browser:// 诊断/状态展示接入时启用
+    #[allow(dead_code)]
     pub(crate) fn server_id(&self) -> &str {
         &self.server_id
     }
 
+    #[allow(dead_code)]
     pub(crate) fn proxy_port(&self) -> u16 {
         self.proxy_port
     }
@@ -406,6 +431,9 @@ struct RuntimeState {
     rect: RECT,
     /// 窗口激活态（false 时全部 webview 隐藏）
     window_visible: bool,
+    /// 网页全屏态（激活 webview 内 Fullscreen API 激活中）：true 时主窗口
+    /// OS 全屏 + webview 铺满客户区 + 前端 bounds 上报被屏蔽
+    page_fullscreen: bool,
     cmd_tx: CmdSender,
 }
 
@@ -449,6 +477,71 @@ impl RuntimeState {
         webview_host::navigate(&wv, url)?;
         self.webviews.insert(tab_id, wv);
         Ok(())
+    }
+
+    /// 按当前网页全屏态应用 bounds：全屏 → 主窗口客户区 + 无圆角 region；
+    /// 常规 → 卡片 bounds + 圆角 region。所有 set_bounds 应用路径统一走此入口，
+    /// 防止全屏期间任何路径（失活重显等）把 webview 拉回卡片矩形。
+    fn sync_bounds(&self, wv: &WebviewHandle) {
+        if self.page_fullscreen {
+            // 全屏期铺满主窗口客户区（borderless 全屏建立后客户区=监视器矩形；
+            // 全屏建立前是过渡帧，全屏完成后 ResyncBounds 再同步一次铺满）
+            if let Some(rc) = webview_host::client_rect(self.ctx.parent_hwnd.0) {
+                webview_host::set_fullscreen_bounds(wv, rc);
+                return;
+            }
+            tracing::error!("[Browser] 全屏 bounds 同步失败（主窗口客户区不可得）");
+            return;
+        }
+        webview_host::set_bounds(wv, self.rect);
+    }
+
+    /// 网页全屏 ↔ 主窗口 OS 全屏联动。
+    ///
+    /// 全屏操作必须异步派发到主线程：runtime STA 线程若同步等待 dispatcher
+    /// 回执，主线程 set_fullscreen 的 SetWindowPos 会向 webview 子窗口（runtime
+    /// STA 线程所有）跨线程 SendMessage——STA 阻塞中不泵消息则 SendMessage
+    /// 挂起，主线程 SetWindowPos 无法返回，双向互等死锁（主窗口未响应 +
+    /// 全屏流程中断的根因）。异步派发后 STA 回到主循环继续泵消息，链条通畅。
+    ///
+    /// 复用 F11 全屏机制（fullscreen.rs）：任务栏隐藏、移动拦截、DWM 过渡
+    /// 禁用、焦点归还均已内建。主线程切换完成后回发 ResyncBounds：此时客户区
+    /// 已按全屏尺寸就位，webview 重新铺满；焦点同步二次归还网页（toggle 内部
+    /// 的焦点还原发生在派发之后，会把键盘焦点抢回主 UI——不归还则 Esc 无法
+    /// 退出网页全屏）。
+    fn apply_page_fullscreen(&mut self, fullscreen: bool) {
+        if self.page_fullscreen == fullscreen {
+            return; // 幂等：重复事件防御
+        }
+        self.page_fullscreen = fullscreen;
+        let app = self.ctx.app.clone();
+        let tx = self.ctx.cmd_tx.clone();
+        let handle = app.clone();
+        if let Err(e) = handle.run_on_main_thread(move || {
+            if let Err(e) = crate::fullscreen::ensure_fullscreen(&app, fullscreen) {
+                tracing::error!("[Browser] 网页全屏联动主窗口失败: want={fullscreen} err={e}");
+            }
+            // 主线程切换完成后同步 bounds（客户区已按全屏尺寸就位）
+            let _ = tx.send(HostCommand::ResyncBounds);
+        }) {
+            tracing::error!("[Browser] 派发全屏操作到主线程失败: {e}");
+            return;
+        }
+        if let Some((_, wv)) = self.target(None) {
+            self.sync_bounds(wv);
+        }
+        tracing::info!("[Browser] 网页全屏联动派发: fullscreen={fullscreen} tab={:?}", self.book.active_id());
+    }
+
+    /// 主窗口全屏切换完成后的回流同步：bounds 铺满客户区 + 焦点归还网页
+    fn resync_after_fullscreen(&mut self) {
+        if let Some((_, wv)) = self.target(None) {
+            self.sync_bounds(wv);
+            if self.page_fullscreen {
+                webview_host::move_focus(wv);
+            }
+        }
+        tracing::info!("[Browser] 全屏回流同步完成: fullscreen={} tab={:?}", self.page_fullscreen, self.book.active_id());
     }
 }
 
@@ -525,6 +618,22 @@ unsafe fn subscribe_page_events(
         })),
         &mut 0i64,
     ).map_err(|e| format!("订阅 NewWindowRequested 失败: {e}"))?;
+
+    // 网页全屏（Fullscreen API）：windowed hosting 下 WebView2 只把内容
+    // 撑满 controller 自身 bounds，铺满屏幕的主窗口联动由 host 处理
+    wv.webview.add_ContainsFullScreenElementChanged(
+        &ContainsFullScreenElementChangedEventHandler::create(Box::new({
+            let tx = tx.clone();
+            move |webview, _| {
+                let Some(webview) = webview else { return Ok(()) };
+                let mut on = windows::core::BOOL::default();
+                webview.ContainsFullScreenElement(&mut on)?;
+                let _ = tx.send(HostCommand::EvFullscreen { tab_id, fullscreen: on.as_bool() });
+                Ok(())
+            }
+        })),
+        &mut 0i64,
+    ).map_err(|e| format!("订阅 ContainsFullScreenElementChanged 失败: {e}"))?;
 
     Ok(())
 }
@@ -616,6 +725,11 @@ impl RuntimeState {
                 let _ = reply.send(Ok(()));
             }
             HostCommand::SetBounds { x, y, w, h } => {
+                // 网页全屏中：前端上报的是 DOM 卡片布局（已失效），忽略——
+                // 退出全屏后窗口尺寸变化会触发前端重新上报
+                if self.page_fullscreen {
+                    return;
+                }
                 self.rect = RECT { left: x, top: y, right: x + w, bottom: y + h };
                 // info 级：bounds 是否到达并应用是"webview 不铺满/占位常显"
                 // 问题的关键证据链一环（与 SetVisible 同理，此前不可观测）
@@ -650,12 +764,13 @@ impl RuntimeState {
                 self.window_visible = visible;
                 if let Some(id) = self.book.active_id() {
                     if let Some(wv) = self.webviews.get(&id) {
-                        // 显示前先按最近记录的 rect 归位：bounds 与可见性是两条
-                        // IPC，可见性先到时 webview 会在旧位置闪现再跳到新位置
-                        // （拖拽松手"画面原地闪过再补偿"的根因）；先归位再显示，
-                        // 保证出现即最新 bounds。SetBounds 幂等，重复应用无害
+                        // 显示前先按当前态归位（常规=卡片 bounds / 全屏=监视器
+                        // 矩形）：bounds 与可见性是两条 IPC，可见性先到时
+                        // webview 会在旧位置闪现再跳到新位置（拖拽松手"画面
+                        // 原地闪过再补偿"的根因）；先归位再显示，保证出现即
+                        // 最新 bounds。SetBounds 幂等，重复应用无害
                         if visible {
-                            webview_host::set_bounds(wv, self.rect);
+                            self.sync_bounds(wv);
                         }
                         webview_host::set_visible(wv, visible);
                     }
@@ -667,6 +782,13 @@ impl RuntimeState {
             HostCommand::SetSearchEngine { engine } => {
                 tracing::info!("[Browser] 默认搜索引擎切换: {:?} → {:?}", self.search_engine, engine);
                 self.search_engine = engine;
+            }
+            HostCommand::SyncBackgroundColor => {
+                // 壁纸变更 → 存活 webview 全量重设 DefaultBackgroundColor
+                // （含隐藏 tab；COM 属性幂等，重复设置无害）
+                for wv in self.webviews.values() {
+                    webview_host::apply_default_background(wv);
+                }
             }
             HostCommand::ScanSleep => {
                 for action in self.book.scan_sleep(std::time::Instant::now(), self.ctx.sleep_timeout) {
@@ -705,6 +827,14 @@ impl RuntimeState {
             HostCommand::EvNewWindow { tab_id: _, url } => {
                 let _ = self.do_create_tab(&normalize_url(&url, self.search_engine), true);
             }
+            HostCommand::EvFullscreen { tab_id, fullscreen } => {
+                // 仅激活 tab 处理（点击视频必然在激活 tab；防御后台 tab 的
+                // 迟到事件在非激活时刻触发联动）
+                if self.book.active_id() == Some(tab_id) {
+                    self.apply_page_fullscreen(fullscreen);
+                }
+            }
+            HostCommand::ResyncBounds => self.resync_after_fullscreen(),
         }
     }
 
@@ -812,7 +942,7 @@ impl RuntimeState {
             }
         }
         if let Some(wv) = self.webviews.get(&tab_id) {
-            webview_host::set_bounds(wv, self.rect);
+            self.sync_bounds(wv);
             webview_host::set_visible(wv, self.window_visible);
             webview_host::move_focus(wv);
         }
@@ -828,7 +958,7 @@ impl RuntimeState {
             // 激活转移后的新激活 webview 显示并铺满
             if let Some(id) = self.book.active_id() {
                 if let Some(wv) = self.webviews.get(&id) {
-                    webview_host::set_bounds(wv, self.rect);
+                    self.sync_bounds(wv);
                     webview_host::set_visible(wv, self.window_visible);
                 }
             }
@@ -837,6 +967,20 @@ impl RuntimeState {
     }
 
     fn do_close_all(&mut self) {
+        // 全屏中关窗（连接断开/会话关闭路径）：退出主窗口全屏——必须异步派发
+        // 主线程（同 apply_page_fullscreen：同步等待会经 SetWindowPos 跨线程
+        // SendMessage 与 STA 泵消息互等死锁）；主线程闭包持有 AppHandle，
+        // runtime 线程退出不影响其执行
+        if self.page_fullscreen {
+            self.page_fullscreen = false;
+            let app = self.ctx.app.clone();
+            let handle = app.clone();
+            let _ = handle.run_on_main_thread(move || {
+                if let Err(e) = crate::fullscreen::ensure_fullscreen(&app, false) {
+                    tracing::warn!("[Browser] 关窗退出网页全屏失败: {e}");
+                }
+            });
+        }
         for (_, wv) in self.webviews.drain() {
             webview_host::destroy(&wv);
         }
@@ -909,6 +1053,7 @@ pub(crate) fn runtime_main(
             bottom: INITIAL_TAB_SIZE_PX.1,
         },
         window_visible: true,
+        page_fullscreen: false,
     };
 
     // 首个 tab（先克隆 URL：&mut self 调用不能同时借用 self.ctx.first_url）
@@ -1174,6 +1319,30 @@ pub async fn browser_close_window(server_id: String, app: AppHandle) -> Result<(
             .and_then(|s| s.host.lock().unwrap().take())
     };
     if let Some(host) = host {
+        // 视觉同步（隐藏先行）：DOM 窗口卸载先于本命令到达，若直接 close_all，
+        // 内容会在"chrome 已消失、COM 销毁未完成"的间隙里悬浮裸奔。SetVisible
+        // 与 CloseAll 走同一通道先进先出：隐藏亚毫秒落地，销毁随后异步完成，
+        // 用户观感为"整窗同帧消失"。
+        host.set_visible(false);
+        let _ = host.close_all().await;
+    }
+    Ok(())
+}
+
+/// 关闭全部会话的浏览器窗口（孤儿回收）。
+/// 主 webview 整页刷新（dev HMR / 调试器刷新 / 渲染进程崩溃恢复）后，DOM 层浏览器
+/// 窗口随前端重置消失，而 Rust 侧 host 线程与 WebView2 子窗口仍在——孤儿 webview
+/// 悬浮在桌面上且无 chrome 可操作。前端挂载时调用本命令统一回收；
+/// 正常启动时会话表为空，本命令为 no-op。
+#[tauri::command]
+pub async fn browser_close_all_windows(app: AppHandle) -> Result<(), String> {
+    // 先摘除全部 host 再逐个关闭：持锁期间不做 await（close_all 最长 3s）
+    let hosts: Vec<std::sync::Arc<BrowserWindowHost>> = {
+        let sessions: State<ProxySessionManager> = app.state();
+        let guard = sessions.sessions.lock().unwrap();
+        guard.values().filter_map(|s| s.host.lock().unwrap().take()).collect()
+    };
+    for host in hosts {
         let _ = host.close_all().await;
     }
     Ok(())

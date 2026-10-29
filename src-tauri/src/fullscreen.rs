@@ -86,7 +86,7 @@ fn install_move_block(hwnd: HWND) {
         return;
     }
     unsafe {
-        let orig = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, fullscreen_block_proc as usize as isize);
+        let orig = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, fullscreen_block_proc as *const () as usize as isize);
         ORIGINAL_WNDPROC.store(orig, Ordering::Relaxed);
         tracing::info!("[Fullscreen] WndProc 子类已安装: orig={orig:#x}");
     }
@@ -191,6 +191,23 @@ pub fn toggle_fullscreen(app: AppHandle, state: State<FullscreenState>) -> Resul
     Ok(now)
 }
 
+/// 网页全屏联动入口：确保主窗口处于 want 指定的全屏态（已处于则不动）。
+///
+/// toggle_fullscreen 的方向由当前状态取反决定——嵌套场景（F11 全屏中
+/// 网页进入全屏）直接 toggle 会方向反转；此函数按目标态收敛。
+/// 浏览器 runtime 线程在 ContainsFullScreenElementChanged 回流时调用。
+pub fn ensure_fullscreen(app: &AppHandle, want: bool) -> Result<(), String> {
+    let win = app
+        .get_webview_window("main")
+        .ok_or_else(|| "主窗口不存在".to_string())?;
+    let cur = win.is_fullscreen().map_err(|e| e.to_string())?;
+    if cur == want {
+        return Ok(());
+    }
+    let state = app.state::<FullscreenState>();
+    toggle_fullscreen(app.clone(), state).map(|_| ())
+}
+
 /// TopBar 拖拽的唯一入口：全屏态由自维护 FullscreenState 裁决。
 #[tauri::command]
 pub fn start_os_drag(app: AppHandle, state: State<FullscreenState>) -> Result<(), String> {
@@ -236,7 +253,7 @@ fn set_taskbars_visible(visible: bool) {
         let class = String::from_utf16_lossy(&buf[..n.min(buf.len())]);
         if class == "Shell_TrayWnd" || class == "Shell_SecondaryTrayWnd" {
             let cmd = SHOW_CMD.with(|c| c.get());
-            unsafe { ShowWindow(hwnd, SHOW_WINDOW_CMD(cmd)) };
+            unsafe { let _ = ShowWindow(hwnd, SHOW_WINDOW_CMD(cmd)); };
         }
         BOOL(1)
     }

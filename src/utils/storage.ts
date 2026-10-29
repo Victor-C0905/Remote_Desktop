@@ -35,7 +35,8 @@ export async function createTauriStorage(storePath: string): Promise<TauriStorag
           ? JSON.stringify(value) 
           : null;
       } catch (e) {
-        log.warn(`Failed to get "${name}" from ${storePath}:`, e);
+        // 读失败意味着设置/数据将静默回退默认值，必须 error 级才不会淹没在 debug 噪音里
+        log.error(`Failed to get "${name}" from ${storePath}:`, e);
         return null;
       }
     },
@@ -69,7 +70,6 @@ let _settingsStorage: TauriStorage | null = null;
 let _serversStorage: TauriStorage | null = null;
 let _secureStorage: TauriStorage | null = null;
 let _transfersStorage: TauriStorage | null = null;
-let _windowsStorage: TauriStorage | null = null;
 
 /**
  * 获取普通设置存储（主题、字体、壁纸等）
@@ -109,16 +109,6 @@ export async function getTransfersStorage(): Promise<TauriStorage> {
     _transfersStorage = await createTauriStorage("transfers.bin");
   }
   return _transfersStorage;
-}
-
-/**
- * 获取窗口布局存储（窗口位置、尺寸、层级）
- */
-export async function getWindowsStorage(): Promise<TauriStorage> {
-  if (!_windowsStorage) {
-    _windowsStorage = await createTauriStorage("windows.bin");
-  }
-  return _windowsStorage;
 }
 
 // 异步存储对象（用于 Zustand persist）
@@ -178,21 +168,6 @@ export const transfersStorage: TauriStorage = {
   },
   removeItem: async (name: string) => {
     const storage = await getTransfersStorage();
-    return storage.removeItem(name);
-  },
-};
-
-export const windowsStorage: TauriStorage = {
-  getItem: async (name: string) => {
-    const storage = await getWindowsStorage();
-    return storage.getItem(name);
-  },
-  setItem: async (name: string, value: string) => {
-    const storage = await getWindowsStorage();
-    return storage.setItem(name, value);
-  },
-  removeItem: async (name: string) => {
-    const storage = await getWindowsStorage();
     return storage.removeItem(name);
   },
 };

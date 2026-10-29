@@ -76,3 +76,19 @@ Quirel — 远程 Linux 服务器控制客户端。仓库含三个自研组件�
   （分支 + commit + dirty 标记），在 `--version` 与启动日志中展示；
   禁止为了区分构建而手改版本号。
 - 开发环境升级 quirel / quireld 以 commit / 产物文件名为准，不做版本号比较。
+
+## 6. 窗口坏帧红线（最大化/缩放闪黑根治体系）
+
+最大化/缩放时窗口暴露区在 WebView2 新帧就位前必然存在坏帧（13~55ms，与刷新率
+无关），现方案为「以当前壁纸平均色填充暴露区」（实验 G 定稿）。触碰以下任何
+一处，改动前必读 `docs/window-flash-rules.md`（根因链、已否定方案、回归方法
+均在其中），改完按其 §7 用探针回归：
+
+- `lib.rs` 窗口创建段 / 防闪三件套（no_erase_proc）/ NCHITTEST 子类 / Resized 段；
+- `fullscreen.rs` 全屏切换；壁纸系统（wallpaperStore / WallpaperContext）；
+- browser webview bounds（webview_host.rs / browser_window.rs）；
+- 升级 tauri / wry / tao 版本。
+
+硬红线（细节见上述文档 §5）：主窗口 WM_ERASEBKGND 必须以 `WINDOW_BG_COLORREF`
+填色、子窗口链必须维持「不擦」、壁纸变更必须经 `set_window_background_color`
+同步双层背景色、主窗口必须 `transparent(false)`。

@@ -210,6 +210,106 @@
   color: var(--quirel-text-disabled);
 }
 
+/* ── Search Box（地址栏右侧常驻小搜索框）── */
+/* 不替换面包屑：地址栏始终可见，搜索框固定宽紧随其后；无词时列表保持目录内容 */
+.fm-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  width: 190px;
+  height: 32px;
+  padding: 0 6px 0 10px;
+  background: var(--quirel-view-bg);
+  border: 1px solid var(--quirel-border-color);
+  border-radius: var(--radius-sm);
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+.fm-search-bar:focus-within {
+  border-color: var(--quirel-accent-bg);
+}
+
+.fm-search-icon {
+  display: inline-flex;
+  color: var(--quirel-text-secondary);
+  flex-shrink: 0;
+}
+
+.fm-search-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  outline: none;
+  font-family: var(--font-ui);
+  font-size: var(--font-body);
+  color: var(--quirel-text-primary);
+}
+
+.fm-search-input::placeholder {
+  color: var(--quirel-text-disabled);
+}
+
+.fm-search-input:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.fm-search-exit {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--quirel-text-secondary);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.fm-search-exit:hover {
+  background: var(--quirel-card-hover);
+  color: var(--quirel-text-primary);
+}
+
+/* 搜索范围触发钮（ToolbarMenu ⌄）：条内幽灵化，对齐 fm-search-exit 的
+   20px 方寸，避免 28px 带边框默认态撑高 32px 搜索栏/挤压输入框 */
+.fm-search-bar .tbm-trigger {
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+}
+
+.fm-search-bar .tbm-trigger:hover,
+.fm-search-bar .tbm-trigger.open {
+  background: var(--quirel-card-hover);
+}
+
+/* 搜索命中副标题：名称后的相对目录（Nautilus 样式，弱化不抢眼） */
+.fm-list .fm-list-row .fm-file-name .fm-fn-subdir {
+  flex-shrink: 0;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-left: 6px;
+  font-size: 12px;
+  color: var(--quirel-text-secondary);
+}
+
+/* 搜索触达上限提示（状态栏，警告色） */
+.fm-truncated-hint {
+  color: var(--quirel-warning-fg);
+  font-size: 12px;
+}
+
 /* ── Content Area ─────────────────────────────────────── */
 .fm-sidebar {
   /* ✅ 不设置width，由AppLayout的CSS变量 --app-sidebar-width 控制 */

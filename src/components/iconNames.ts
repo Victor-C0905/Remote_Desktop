@@ -15,6 +15,7 @@ export type AppIconName =
   // 文件类型
   | 'folder' | 'folder-open' | 'folder-plus' | 'file' | 'file-text' | 'file-code'
   | 'file-json' | 'file-image' | 'file-audio' | 'file-video' | 'file-archive'
+  | 'spreadsheet'
   | 'config' | 'database' | 'lock'
   // 动作
   | 'trash' | 'search' | 'package';

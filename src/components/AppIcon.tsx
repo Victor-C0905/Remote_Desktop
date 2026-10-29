@@ -7,7 +7,8 @@
  *   paper  「纸墨」：平涂淡彩磁贴 + 本色实边 + 深墨图形（暗色 UI 反转为暗卡浅墨）；
  *           文件类型为着色纸形直接落地（无磁贴），文件夹为双色调全出血轮廓
  * - 色彩全部引用 --ic-* 变量 + 渐变 defs，data-icon-theme / data-icon-scheme
- *   双维联动（variables.css）
+ *   双维联动（variables.css）；渐变 defs 普通实例不内嵌，统一挂全局 sprite
+ *   （ensureIconDefsSprite，body 直挂常驻渲染），forced 预览实例用后缀 id 内嵌
  * - 语义 key 对外暴露，底层图形可整体替换
  * - 24 视图等比缩放；14px（菜单）~ 48px（空状态）通用
  */
@@ -27,9 +28,13 @@ const G = (id: string, a: string, b: string) =>
   `<stop offset="0" stop-color="var(${a})"/><stop offset="1" stop-color="var(${b})"/></linearGradient>`;
 const DEFS =
   '<defs>' +
-  ['blue', 'green', 'orange', 'purple', 'red', 'yellow', 'brown', 'gray', 'folder', 'paper']
+  ['blue', 'green', 'teal', 'orange', 'purple', 'red', 'yellow', 'brown', 'gray', 'folder']
     .map((c) => G(`icg-${c}`, `--ic-${c}-light`, `--ic-${c}-surface`) + G(`icg-${c}d`, `--ic-${c}-surface`, `--ic-${c}-deep`))
     .join('') +
+  /* 纸底渐变：paper 色组的变量命名是 paper-1/2（浅→深纸色），不走 light/surface
+     通配模板——曾误生成为 --ic-paper-light/surface 的未定义引用，stop-color 按
+     规范回落黑色，classic 档所有白纸形（SHEET）渲染成黑纸（P0） */
+  G('icg-paper', '--ic-paper-1', '--ic-paper-2') +
   '</defs>';
 
 /* 徽章底：classic = 渐变方块 + 体积描边 + 内描边高光（与 AppBadge classic 同构）；
@@ -97,9 +102,12 @@ const makeIcons = (t: IconThemeKind): Record<AppIconName, string> => ({
     '<path d="M12 8.4v8.6M7 11h10" stroke="var(--ic-brown-surface)" stroke-width="1" opacity=".7"/>',
 
   /* ── 设置区块 ── */
+  // connection：45° 斜向双链环（保留历史 link 图标的倾角语义），blue = 网络与连接
   connection: B('blue', t) +
+    '<g transform="rotate(-45 12 12.2)">' +
     '<rect x="5.4" y="9.9" width="8.4" height="4.6" rx="2.3" fill="none" stroke="var(--ic-blue-ink)" stroke-width="1.7"/>' +
-    '<rect x="10.2" y="9.9" width="8.4" height="4.6" rx="2.3" fill="none" stroke="var(--ic-blue-ink)" stroke-width="1.7"/>',
+    '<rect x="10.2" y="9.9" width="8.4" height="4.6" rx="2.3" fill="none" stroke="var(--ic-blue-ink)" stroke-width="1.7"/>' +
+    '</g>',
   appearance: B('purple', t) +
     '<path d="M12 6.4a5.6 5.6 0 0 0 0 11.2c1 0 1.4-.7 1-1.4-.5-.9.1-1.7 1.1-1.7h1.2a2.4 2.4 0 0 0 2.3-2.5A5.6 5.6 0 0 0 12 6.4z" fill="var(--ic-purple-ink)"/>' +
     '<g fill="var(--ic-purple-surface)"><circle cx="9.6" cy="10.6" r="1"/><circle cx="12.4" cy="9" r="1"/><circle cx="14.8" cy="11.2" r="1"/></g>',
@@ -113,9 +121,10 @@ const makeIcons = (t: IconThemeKind): Record<AppIconName, string> => ({
     '<rect x="7.4" y="12.4" width="2.4" height="4.6" rx=".9" fill="var(--ic-green-ink)"/>' +
     '<rect x="10.8" y="9.8" width="2.4" height="7.2" rx=".9" fill="var(--ic-green-ink)"/>' +
     '<rect x="14.2" y="7.4" width="2.4" height="9.6" rx=".9" fill="var(--ic-green-ink)"/>',
-  about: B('blue', t) +
-    '<rect x="11.2" y="8.4" width="1.6" height="4.6" rx=".8" fill="var(--ic-blue-ink)"/>' +
-    '<circle cx="12" cy="15.2" r="1" fill="var(--ic-blue-ink)"/>',
+  // about→gray（proposals §3）：信息类归入文本/系统灰，blue 只留网络与连接
+  about: B('gray', t) +
+    '<rect x="11.2" y="8.4" width="1.6" height="4.6" rx=".8" fill="var(--ic-gray-ink)"/>' +
+    '<circle cx="12" cy="15.2" r="1" fill="var(--ic-gray-ink)"/>',
 
   /* ── 侧栏书签 ── */
   documents: B('gray', t) +
@@ -190,6 +199,15 @@ const makeIcons = (t: IconThemeKind): Record<AppIconName, string> => ({
       '<path d="M10.8 10.4c-.9.2-1.1.7-1.1 1.4s-.2 1.2-.7 1.2c.5 0 .7.4.7 1.1s.2 1.3 1.1 1.5M13.2 10.4c.9.2 1.1.7 1.1 1.4s.2 1.2.7 1.2c-.5 0-.7.4-.7 1.1s-.2 1.3-1.1 1.5" stroke="var(--ic-green-solid)" stroke-width="1.3" fill="none" stroke-linecap="round"/>'
     : sheetTinted('green') +
       '<path d="M10.8 10.4c-.9.2-1.1.7-1.1 1.4s-.2 1.2-.7 1.2c.5 0 .7.4.7 1.1s.2 1.3 1.1 1.5M13.2 10.4c.9.2 1.1.7 1.1 1.4s.2 1.2.7 1.2c-.5 0-.7.4-.7 1.1s-.2 1.3-1.1 1.5" stroke="var(--ic-green-ink)" stroke-width="1.3" fill="none" stroke-linecap="round"/>',
+  // 电子表格（.xlsx/.csv）：纸形 + 表格网格（表头带 + 两列三行），green 属
+  // 「成功/数据」色相域（proposals §3）
+  spreadsheet: t === 'classic'
+    ? B('green', t) + sheetTinted('green') +
+      '<rect x="9" y="10.6" width="6" height="1.2" fill="var(--ic-green-solid)"/>' +
+      '<g stroke="var(--ic-green-solid)" stroke-width="1.1" fill="none"><path d="M9 13h6M9 15h6M11.7 10.6v5.8M14.4 10.6v5.8"/></g>'
+    : sheetTinted('green') +
+      '<rect x="9" y="10.6" width="6" height="1.2" fill="var(--ic-green-ink)"/>' +
+      '<g stroke="var(--ic-green-ink)" stroke-width="1.1" fill="none"><path d="M9 13h6M9 15h6M11.7 10.6v5.8M14.4 10.6v5.8"/></g>',
   'file-image': t === 'classic'
     ? B('purple', t) + sheetTinted('purple') +
       '<path d="M8.6 15.4l2.2-2.7 1.6 1.8 1.1-1.4 2 2.3z" fill="var(--ic-purple-solid)"/>' +
@@ -198,17 +216,17 @@ const makeIcons = (t: IconThemeKind): Record<AppIconName, string> => ({
       '<path d="M8.6 15.4l2.2-2.7 1.6 1.8 1.1-1.4 2 2.3z" fill="var(--ic-purple-ink)"/>' +
       '<circle cx="13.6" cy="11.2" r="1" fill="var(--ic-purple-ink)"/>',
   'file-audio': t === 'classic'
-    ? B('blue', t) + sheetTinted('blue') +
-      '<circle cx="10.2" cy="14.4" r="1.4" fill="var(--ic-blue-solid)"/>' +
-      '<rect x="11.4" y="9.6" width="1.2" height="5" fill="var(--ic-blue-solid)"/>' +
-      '<path d="M12.6 9.6l2.8.9v1.4l-2.8-.9z" fill="var(--ic-blue-solid)"/>'
+    ? B('purple', t) + sheetTinted('purple') +
+      '<circle cx="10.2" cy="14.4" r="1.4" fill="var(--ic-purple-solid)"/>' +
+      '<rect x="11.4" y="9.6" width="1.2" height="5" fill="var(--ic-purple-solid)"/>' +
+      '<path d="M12.6 9.6l2.8.9v1.4l-2.8-.9z" fill="var(--ic-purple-solid)"/>'
     : sheetTinted('purple') +
       '<circle cx="10.2" cy="14.4" r="1.4" fill="var(--ic-purple-ink)"/>' +
       '<rect x="11.4" y="9.6" width="1.2" height="5" fill="var(--ic-purple-ink)"/>' +
       '<path d="M12.6 9.6l2.8.9v1.4l-2.8-.9z" fill="var(--ic-purple-ink)"/>',
   'file-video': t === 'classic'
-    ? B('blue', t) + sheetTinted('blue') +
-      '<path d="M10 11.2 14.6 13.4 10 15.6z" fill="var(--ic-blue-solid)"/>'
+    ? B('orange', t) + sheetTinted('orange') +
+      '<path d="M10 11.2 14.6 13.4 10 15.6z" fill="var(--ic-orange-solid)"/>'
     : sheetTinted('orange') +
       '<path d="M10 11.2 14.6 13.4 10 15.6z" fill="var(--ic-orange-ink)"/>',
   'file-archive': t === 'classic'
@@ -225,10 +243,12 @@ const makeIcons = (t: IconThemeKind): Record<AppIconName, string> => ({
     : sheetTinted('gray') +
       '<g transform="translate(12 13.6)"><circle r="1.5" fill="none" stroke="var(--ic-gray-ink)" stroke-width="1.1"/>' +
       '<g stroke="var(--ic-gray-ink)" stroke-width="1" stroke-linecap="round"><path d="M0-3v-.9"/><path d="M0 3v.9"/><path d="M-3 0h-.9"/><path d="M3 0h.9"/><path d="M-2.1-2.1l-.6-.6"/><path d="M2.1 2.1l.6.6"/><path d="M2.1-2.1l.6-.6"/><path d="M-2.1 2.1l-.6.6"/></g></g>',
-  database: B('blue', t) +
-    '<ellipse cx="12" cy="8.6" rx="4.4" ry="1.8" fill="var(--ic-blue-ink)"/>' +
-    '<path d="M7.6 8.6v6.8c0 1 2 1.8 4.4 1.8s4.4-.8 4.4-1.8V8.6z" fill="var(--ic-blue-ink)"/>' +
-    '<path d="M7.6 12c0 1 2 1.8 4.4 1.8s4.4-.8 4.4-1.8" stroke="var(--ic-blue-surface)" stroke-width="1" fill="none" opacity=".7"/>',
+  // database→teal（proposals §3 色相再平衡二期）：teal 独立色相与 blue（网络/
+  // 连接）、green（成功/监控）拉开距离，13 项 blue 过载收敛后数据库独占一档
+  database: B('teal', t) +
+    '<ellipse cx="12" cy="8.6" rx="4.4" ry="1.8" fill="var(--ic-teal-ink)"/>' +
+    '<path d="M7.6 8.6v6.8c0 1 2 1.8 4.4 1.8s4.4-.8 4.4-1.8V8.6z" fill="var(--ic-teal-ink)"/>' +
+    '<path d="M7.6 12c0 1 2 1.8 4.4 1.8s4.4-.8 4.4-1.8" stroke="var(--ic-teal-surface)" stroke-width="1" fill="none" opacity=".7"/>',
   lock: B('yellow', t) +
     '<path d="M9.4 10.4V9a2.6 2.6 0 0 1 5.2 0v1.4" stroke="var(--ic-yellow-ink)" stroke-width="1.6" fill="none"/>' +
     '<rect x="7.6" y="10.2" width="8.8" height="6.6" rx="1.5" fill="var(--ic-yellow-ink)"/>' +
@@ -236,20 +256,58 @@ const makeIcons = (t: IconThemeKind): Record<AppIconName, string> => ({
 
   /* ── 动作 ── */
   trash: B('red', t) +
-    '<rect x="7.2" y="8" width="1.6" height="1.4" rx=".6" fill="none"/>' +
     '<path d="M8.6 7.8V7a1 1 0 0 1 1-1h4.8a1 1 0 0 1 1 1v.8" stroke="var(--ic-red-ink)" stroke-width="1.4" fill="none"/>' +
     '<rect x="7.2" y="8" width="9.6" height="1.6" rx=".8" fill="var(--ic-red-ink)"/>' +
     '<path d="M8.6 10.2h6.8v4.9a1.6 1.6 0 0 1-1.6 1.6h-3.6a1.6 1.6 0 0 1-1.6-1.6z" fill="var(--ic-red-ink)"/>' +
     '<g stroke="var(--ic-red-surface)" stroke-width="1.1" stroke-linecap="round"><path d="M10.8 11.6v3.6"/><path d="M13.2 11.6v3.6"/></g>',
-  search: B('blue', t) +
-    '<circle cx="11" cy="11" r="4.2" fill="none" stroke="var(--ic-blue-ink)" stroke-width="1.8"/>' +
-    '<path d="M14.2 14.2 17.4 17.4" stroke="var(--ic-blue-ink)" stroke-width="2.1" stroke-linecap="round"/>',
+  // search→gray（proposals §3）：搜索属工具/系统动作，不占网络蓝
+  search: B('gray', t) +
+    '<circle cx="11" cy="11" r="4.2" fill="none" stroke="var(--ic-gray-ink)" stroke-width="1.8"/>' +
+    '<path d="M14.2 14.2 17.4 17.4" stroke="var(--ic-gray-ink)" stroke-width="2.1" stroke-linecap="round"/>',
 });
 
-/* 按档缓存：makeIcons 结果与主题一一对应，切档只重建一次 */
-const iconsCache: Partial<Record<IconThemeKind, Record<AppIconName, string>>> = {};
-function getIcons(t: IconThemeKind): Record<AppIconName, string> {
-  return (iconsCache[t] ??= makeIcons(t));
+/* 按档缓存：makeIcons 结果与主题一一对应，切档只重建一次。
+   forced（设置预览卡强制 iconTheme）实例的渐变 id 统一加「-<theme>」后缀：
+   渐变 id 全文档去重，url(#icg-x) 永远解析到文档中第一个同名 defs，且渐变
+   stop 的 var() 在 defs 所在实例的上下文求值——若强制 classic 的实例与全局
+   paper 实例共用 id，预览卡的渐变会拿到全局 paper 色板而串色。后缀让强制
+   实例的 defs 独立命名，其上下文必然是自己的预览卡容器 */
+const iconsCache: Record<string, Record<AppIconName, string>> = {};
+const defsCache: Record<string, string> = {};
+/** 渐变 id 整体后缀化：'icg-' 仅出现在 id="icg-*" 与 url(#icg-*) 两处，同步替换即保一致 */
+function getIcons(t: IconThemeKind, forced: boolean): Record<AppIconName, string> {
+  const key = forced ? `${t}!` : t;
+  return (iconsCache[key] ??=
+    forced
+      ? Object.fromEntries(
+          Object.entries(makeIcons(t)).map(([k, v]) => [k, v.replace(/icg-/g, `icg-${t}-`)])
+        ) as Record<AppIconName, string>
+      : makeIcons(t));
+}
+/** forced 预览实例的后缀 defs（普通实例的 defs 走全局 sprite，不取这里） */
+function getDefs(t: IconThemeKind): string {
+  return (defsCache[t] ??= DEFS.replace(/icg-/g, `icg-${t}-`));
+}
+
+/* 全局渐变 sprite：普通（非 forced）实例 defs 的唯一挂载点，body 直挂、
+   常驻渲染（position:absolute + 0 尺寸，不可被任何窗口容器 display:none）。
+   P0（2026-10-28）：defs 原本内嵌于每个实例，url(#icg-*) 全文档解析到树序
+   第一个同名 defs——它恰宿于最小化「文件」窗口的合成窗格内（_windowShell_
+   display:none），Chromium 无法从隐藏子树绘制 paint server，fill 等效 none，
+   全站 classic 磁贴透明（磁贴露出底下背景色，被误判为「paper 视觉」）。
+   sprite 收敛后全文档仅此一处非后缀 icg-* defs，解析目标恒为可绘节点 */
+function ensureIconDefsSprite(): void {
+  if (typeof document === "undefined") return;
+  // 每次按 id 查重而非模块级 flag：测试环境会在用例间重置 body，flag 会漏建；
+  // getElementById 为哈希查找，每次渲染调用开销可忽略。幂等兼容 HMR/StrictMode
+  if (document.getElementById("icon-defs-sprite")) return;
+  const sprite = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  sprite.id = "icon-defs-sprite";
+  sprite.setAttribute("aria-hidden", "true");
+  sprite.style.cssText = "position:absolute;width:0;height:0;overflow:hidden";
+  sprite.innerHTML = DEFS;
+  // prepend 至 body 首位：即使未来出现其他同名 defs，树序解析仍先命中 sprite
+  document.body.prepend(sprite);
 }
 
 export function AppIcon({
@@ -265,9 +323,14 @@ export function AppIcon({
   iconTheme?: IconThemeKind;
 }) {
   const storeTheme = useSettingsStore((s) => s.iconTheme);
+  const forced = iconTheme !== undefined;
   const theme = iconTheme ?? storeTheme;
-  const icons = getIcons(theme);
+  const icons = getIcons(theme, forced);
   const body = icons[name] ?? icons.file;
+  // 普通实例不内嵌 defs：引用统一解析到全局 sprite（ensureIconDefsSprite）；
+  // forced（预览卡）保留实例内后缀 defs——stop 的 var() 须在预览卡容器上下文求值
+  if (!forced) ensureIconDefsSprite();
+  const defs = forced ? getDefs(theme) : "";
   return (
     <svg
       width={size}
@@ -275,7 +338,7 @@ export function AppIcon({
       viewBox="0 0 24 24"
       className={className}
       aria-hidden="true"
-      dangerouslySetInnerHTML={{ __html: DEFS + body }}
+      dangerouslySetInnerHTML={{ __html: defs + body }}
     />
   );
 }

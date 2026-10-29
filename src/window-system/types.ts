@@ -7,18 +7,6 @@
 import { Window as AppWindow } from './core/Window';
 import type { SnapZone } from '../components/window-shell/aeroSnap';
 
-// Persistable window data (stored in Tauri Store)
-export interface PersistedWindowData {
-  id: string;
-  appId: string;
-  position: { x: number; y: number };
-  size: { width: number; height: number };
-  minimized: boolean;
-  layout: 'free' | 'snap' | 'split';
-  createdAt: number;
-  updatedAt: number;
-}
-
 // Window creation options
 export interface CreateWindowOptions {
   position?: { x: number; y: number };
@@ -46,8 +34,6 @@ export interface AppDefinition {
   id: string;
   /** 窗口标题的词典 key（文案在 i18n apps 域；渲染处 t()） */
   titleKey: string;
-  /** AppIcon 语义 key（见 components/AppIcon.tsx） */
-  icon: import('../components/AppIcon').AppIconName;
   defaultSize: { width: number; height: number };
   minSize: { width: number; height: number };
   allowMultipleInstances: boolean;
@@ -129,6 +115,4 @@ export interface IWindowManager {
   on(eventType: WindowEventType, handler: EventHandler): Unsubscribe;
   onAny(handler: () => void): Unsubscribe;
   emit(event: WindowEvent): void;
-  save(): void;
-  load(): void;
 }

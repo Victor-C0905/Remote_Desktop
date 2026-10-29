@@ -1,8 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { AppIcon } from '../components/AppIcon';
 import { ConfirmDialog } from '../components/Dialog/ConfirmDialog';
 import { secretsDeleteAll, getKeyringHealth } from '../utils/credentials';
 import { useServersStore } from '../stores/serversStore';
+import type { ServerConfig } from "../stores/serversStore";
 import { AppBadge } from '../components/AppBadge';
 import { invoke } from "@tauri-apps/api/core";
 import { useServerManager, formatLastConnected, getStatusColor } from "../context/ServerManager";
@@ -528,6 +529,8 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
   const [activeSection, setActiveSection] = useState<SettingsSection>("connection");
   const [wipeConfirmOpen, setWipeConfirmOpen] = useState(false);
   const [addModalOpen, setAddModalOpen] = useState(false);
+  // 删除确认弹窗目标（破坏性操作，走应用内 ConfirmDialog，初始焦点在"取消"上防回车误触）
+  const [removeConfirmServer, setRemoveConfirmServer] = useState<ServerConfig | null>(null);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingServer, setEditingServer] = useState<{ id: string; name: string; host: string; port: number; auth?: any } | null>(null);
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
@@ -571,8 +574,6 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
       .catch((e) => log.error("枚举系统浏览器失败:", e));
     return () => { cancelled = true; };
   }, []);
-  // 启动时恢复上次窗口（响应式读取，勾选即时生效）
-  const restoreWindowsOnStartup = useSettingsStore((s) => s.restoreWindowsOnStartup);
   // 毛玻璃效果开关（响应式读取，勾选即时生效）
   const frostedGlassEnabled = useSettingsStore((s) => s.frostedGlassEnabled);
   // 界面语言
@@ -589,7 +590,6 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
   const {
     servers,
     activeServer,
-    activeServerId,
     addServer,
     updateServer,
     removeServer,
@@ -667,10 +667,16 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
   // 回退到最近选择的服务器，保证"当前连接"卡片仍显示上下文与重连入口
   const cardServer = activeServer || servers.find((s) => s.id === selectedServerId) || null;
 
-  const handleRemove = (id: string) => {
-    if (confirm(t("settings.confirmRemove"))) {
-      removeServer(id);
-    }
+  // 服务器列表按最近连接时间降序展示；从未连接过的排在末尾（稳定排序保持添加顺序）
+  const sortedServers = useMemo(
+    () => [...servers].sort((a, b) => (b.lastConnected ?? 0) - (a.lastConnected ?? 0)),
+    [servers],
+  );
+  const selServer = sortedServers.find((s) => s.id === selectedServerId) || null;
+
+  // 删除入口仅负责唤起确认弹窗，真正的删除在用户确认后执行
+  const handleRemove = (server: ServerConfig) => {
+    setRemoveConfirmServer(server);
   };
 
   const renderSection = () => {
@@ -711,47 +717,58 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                      <span className="st-conn-placeholder">{t("settings.notConnected")}</span>}
                   </span>
                 </div>
-                {cardServer?.status === "connected" && (
-                  <div className="st-conn-row">
-                    <span className="st-conn-label text-label">{t("settings.connLatency")}</span>
-                    <span className="st-conn-value st-conn-value-latency">
-                      {/* 心跳 RTT 回传（每 5s 刷新）；连接瞬间显示握手 RTT，首个 5s 内由心跳接管 */}
-                      {cardServer.rttMs != null ? `${Math.round(cardServer.rttMs)} ms` : "—"}
-                    </span>
-                  </div>
-                )}
-                {(() => {
-                  if (!cardServer?.error) return null;
+                {/* 延迟行常驻渲染：连接建立时若才插入该行，卡片高度跳变挤压整窗；
+                    未连接/无 RTT 时显示占位符 */}
+                <div className="st-conn-row">
+                  <span className="st-conn-label text-label">{t("settings.connLatency")}</span>
+                  <span className="st-conn-value st-conn-value-latency">
+                    {/* 心跳 RTT 回传（每 5s 刷新）；连接瞬间显示握手 RTT，首个 5s 内由心跳接管 */}
+                    {cardServer?.status === "connected" && cardServer.rttMs != null
+                      ? `${Math.round(cardServer.rttMs)} ms`
+                      : "—"}
+                  </span>
+                </div>
+                {/* 错误覆盖层：绝对定位悬浮于信息行之上（错误态本无真实连接数据可看，
+                    覆盖占位行零损失），不参与文档流——卡片外框高度恒定不受其影响 */}
+                {cardServer?.error && (() => {
                   const ei = getServerErrorInfo(cardServer);
                   return (
                     <div className="st-conn-error">
-                      <SymbolicIcon name="dialog-error" size={14} className="st-conn-error-icon" />
-                      <div className="st-conn-error-body">
-                        <div className="st-conn-error-title">{ei.title}</div>
-                        <div className="st-conn-error-message">
-                          {ei.message}{ei.detail ? `（${ei.detail}）` : ""}
+                      <div className="st-conn-error-box">
+                        <SymbolicIcon name="dialog-error" size={14} className="st-conn-error-icon" />
+                        <div className="st-conn-error-body">
+                          <div className="st-conn-error-title">{ei.title}</div>
+                          <div className="st-conn-error-message">
+                            {ei.message}{ei.detail ? `（${ei.detail}）` : ""}
+                          </div>
+                          {ei.hint && <div className="st-conn-error-hint">{ei.hint}</div>}
                         </div>
-                        {ei.hint && <div className="st-conn-error-hint">{ei.hint}</div>}
                       </div>
                     </div>
                   );
                 })()}
               </div>
               <div className="st-card-actions">
-                {cardServer?.status === "connected" && (
-                  <button 
+                {/* 动作区常驻一枚按钮（断开连接 / 重试连接+连接 / 连接中…禁用），
+                    行高恒定，状态切换不再塌陷 */}
+                {cardServer?.status === "connected" ? (
+                  <button
                     className="st-btn st-btn-danger"
                     onClick={() => handleDisconnect(cardServer.id)}
                   >
                     {t("settings.disconnectBtn")}
                   </button>
-                )}
-                {cardServer && (cardServer.status === "error" || cardServer.status === "disconnected") && (
-                  <button 
+                ) : (
+                  <button
                     className="st-btn st-btn-primary"
-                    onClick={() => handleConnect(cardServer.id)}
+                    disabled={!cardServer || cardServer.status === "connecting" || cardServer.status === "reconnecting"}
+                    onClick={() => { if (cardServer) handleConnect(cardServer.id); }}
                   >
-                    {t("settings.retryConnectBtn")}
+                    {cardServer?.status === "connecting" || cardServer?.status === "reconnecting"
+                      ? t("settings.rowConnecting")
+                      : cardServer
+                        ? t("settings.retryConnectBtn")
+                        : t("settings.connectBtn")}
                   </button>
                 )}
               </div>
@@ -767,72 +784,89 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                     <span className="st-server-empty-hint text-caption">{t("settings.noServersHint")}</span>
                   </div>
                 ) : (
-                  servers.map(server => (
+                  sortedServers.map(server => (
                     <div
                       key={server.id}
-                      className={`st-server-item ${activeServerId === server.id ? "selected" : ""}`}
-                      onClick={() => handleOpenEditModal(server)}
+                      className={`st-server-item ${selectedServerId === server.id ? "selected" : ""}`}
+                      onClick={() => { setSelectedServerId(server.id); }}
+                      onDoubleClick={() => {
+                        // 双击 = 连接（单选无害，连接必须明确动作；已连接/进行中的行不响应）
+                        if (server.status === "disconnected" || server.status === "error") {
+                          handleConnect(server.id);
+                        }
+                      }}
                     >
                       <span
-                        className="st-server-status"
-                        style={{ background: getStatusColor(server.status) }}
+                        className={`st-server-status st-server-status-${server.status}`}
+                        title={
+                          server.status === "connected" ? t("settings.statusConnected") :
+                          server.status === "connecting" ? t("settings.statusConnecting") :
+                          server.status === "reconnecting" ? t("settings.statusReconnecting") :
+                          server.status === "error" ? t("settings.statusError") : undefined
+                        }
                       />
                       <span className="st-server-name">{server.name}</span>
                       <span className="st-server-host">{server.host}</span>
-                      <span className="st-server-time">{formatLastConnected(server.lastConnected)}</span>
+                      <span className="st-server-time" title={t("settings.lastConnectedTitle")}>
+                        {formatLastConnected(server.lastConnected)}
+                      </span>
                       <div className="st-server-actions">
-                        {server.status === "connected" ? (
-                          <button 
-                            className="st-server-action-btn st-server-action-connected"
-                            onClick={(e) => { e.stopPropagation(); handleDisconnect(server.id); }}
-                            title={t("settings.connectedTip")}
-                          >
-                            ✓
-                          </button>
-                        ) : server.status === "connecting" ? (
-                          <button 
-                            className="st-server-action-btn st-server-action-connecting"
-                            disabled
-                            title={t("settings.statusConnecting")}
-                          >
-                            ◷
-                          </button>
-                        ) : server.status === "reconnecting" ? (
-                          <button 
-                            className="st-server-action-btn st-server-action-connecting"
-                            disabled
-                            title={t("settings.reconnectingTip")}
-                          >
-                            ◷
-                          </button>
+                        {server.status === "connecting" || server.status === "reconnecting" ? (
+                          // 进行中：行内就地文字反馈，替代禁用时钟按钮
+                          <span className="st-server-connecting">{t("settings.rowConnecting")}</span>
                         ) : (
-                          <button 
-                            className="st-server-action-btn"
-                            onClick={(e) => { e.stopPropagation(); handleConnect(server.id); }}
-                            title={t("settings.connectTip")}
-                          >
-                            🔗
-                          </button>
+                          <>
+                            <button
+                              className="st-server-action-btn"
+                              onClick={(e) => { e.stopPropagation(); handleOpenEditModal(server); }}
+                              title={t("settings.editTip")}
+                            >
+                              <SymbolicIcon name="document-edit" size={16} />
+                            </button>
+                            <button
+                              className="st-server-action-btn st-server-action-danger"
+                              onClick={(e) => { e.stopPropagation(); handleRemove(server); }}
+                              title={t("settings.deleteTip")}
+                            >
+                              <AppIcon name="trash" size={16} />
+                            </button>
+                          </>
                         )}
-                        <button 
-                          className="st-server-action-btn st-server-action-danger"
-                          onClick={(e) => { e.stopPropagation(); handleRemove(server.id); }}
-                          title={t("settings.deleteTip")}
-                        >
-                          <AppIcon name="trash" size={16} />
-                        </button>
                       </div>
                     </div>
                   ))
                 )}
-              </div>
-              <div className="st-card-actions">
-                <button 
-                  className="st-btn st-btn-primary"
+                {/* 添加服务器 = 列表末尾的居中占位行（替代底部独立按钮） */}
+                <button
+                  type="button"
+                  className="st-server-add"
                   onClick={() => setAddModalOpen(true)}
                 >
+                  <span className="st-server-add-plus">+</span>
                   {t("settings.addServerBtn")}
                 </button>
+              </div>
+              <div className="st-card-actions">
+                {/* 动作区常驻一枚按钮（连接 / 连接中…禁用 / 断开连接），高度被按钮
+                    恒定撑住：connecting 态若整行不渲染，卡片高度塌陷会挤压下方布局 */}
+                {selServer?.status === "connected" ? (
+                  <button
+                    className="st-btn st-btn-danger"
+                    onClick={() => handleDisconnect(selServer.id)}
+                  >
+                    {t("settings.disconnectBtn")}
+                  </button>
+                ) : (
+                  <button
+                    className="st-btn st-btn-primary"
+                    disabled={!selServer || selServer.status === "connecting" || selServer.status === "reconnecting"}
+                    onClick={() => { if (selServer) handleConnect(selServer.id); }}
+                  >
+                    {selServer?.status === "connecting" || selServer?.status === "reconnecting"
+                      ? t("settings.rowConnecting")
+                      : t("settings.connectBtn")}
+                  </button>
+                )}
               </div>
             </div>
 
@@ -841,6 +875,21 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
               onClose={() => setAddModalOpen(false)}
               onAdd={handleAddServer}
             />
+
+            {removeConfirmServer && (
+              <ConfirmDialog
+                title={t("settings.deleteTip")}
+                message={t("settings.confirmRemove")}
+                highlight={removeConfirmServer.name}
+                danger
+                confirmLabel={t("settings.deleteTip")}
+                onConfirm={() => {
+                  removeServer(removeConfirmServer.id);
+                  setRemoveConfirmServer(null);
+                }}
+                onCancel={() => setRemoveConfirmServer(null)}
+              />
+            )}
 
             <EditServerModal
               isOpen={editModalOpen}
@@ -1054,22 +1103,6 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                 </button>
               </div>
             </div>
-            {/* 启动行为：桌面会话恢复开关（关闭后每次启动为干净桌面） */}
-            <div className="st-card">
-              <div className="st-card-header text-title">{t("settings.startupTitle")}</div>
-              <div className="st-option-row">
-                <span className="st-option-label text-body">{t("settings.restoreWindows")}</span>
-                <input
-                  type="checkbox"
-                  className="st-checkbox"
-                  checked={restoreWindowsOnStartup}
-                  onChange={(e) =>
-                    useSettingsStore.getState().setRestoreWindowsOnStartup(e.target.checked)
-                  }
-                />
-              </div>
-            </div>
-
             {/* 毛玻璃效果：backdrop-filter 采样壁纸模糊，GPU 常驻开销大，默认关闭 */}
             <div className="st-card">
               <div className="st-card-header text-title">{t("settings.frostedGlassTitle")}</div>
@@ -1179,23 +1212,6 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
               </div>
             </div>
 
-            <div className="st-card">
-              <div className="st-card-header text-title">{t("settings.colorSchemeTitle")}</div>
-              <div className="st-theme-toggle">
-                <button className="st-theme-btn active">
-                  <span className="st-theme-icon">⬛</span>
-                  <span className="st-theme-label">{t("settings.schemeDark")}</span>
-                </button>
-                <button className="st-theme-btn">
-                  <span className="st-theme-icon">⬜</span>
-                  <span className="st-theme-label">{t("settings.schemeLight")}</span>
-                </button>
-                <button className="st-theme-btn">
-                  <span className="st-theme-icon">🔲</span>
-                  <span className="st-theme-label">{t("settings.schemeWhite")}</span>
-                </button>
-              </div>
-            </div>
             <div className="st-card">
               <div className="st-card-header text-title">{t("settings.terminalOptionsTitle")}</div>
               <div className="st-option-row">

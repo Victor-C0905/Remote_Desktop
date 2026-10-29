@@ -5,7 +5,6 @@ import { WindowManager } from './core/WindowManager';
 import { WindowRegistry } from './core/WindowRegistry';
 import { IWindowManager, WindowEventType, WindowEvent } from './types';
 import { initWindowRegistry } from './init';
-import { useSettingsStore } from '../stores/settingsStore';
 
 // ─── 全局状态类型 ──────────────────────────────────────
 // 仅包含"窗口列表 + 激活窗口 ID"，用于 Dock/Overview 等低频消费
@@ -114,32 +113,6 @@ export function WindowManagerProvider({ children }: { children: ReactNode }) {
     initWindowEventBridge(manager as WindowManager);
   }, [manager]);
 
-  // 加载持久化窗口（受用户设置控制：关闭则每次启动干净桌面）
-  // mount-only：只在启动时读一次设置值；运行时切换开关只影响 save（save 内动态读取），
-  // 若把设置值放进依赖会导致切换开关时重复 load() → 窗口重复恢复。
-  // persist 后端是异步 Tauri Store，mount 时可能尚未 rehydrate → 显式等待，
-  // 否则用户关闭的开关可能被默认值 true 覆盖（设置失效）
-  useEffect(() => {
-    let cancelled = false;
-    const boot = async () => {
-      if (!useSettingsStore.persist.hasHydrated()) {
-        // 超时兜底：无 Tauri 环境（纯浏览器 dev）下 Tauri Store 不可用，
-        // hydration 可能永不完成，不能让窗口恢复逻辑永久挂起
-        await Promise.race([
-          new Promise<void>((resolve) =>
-            useSettingsStore.persist.onFinishHydration(() => resolve())
-          ),
-          new Promise<void>((resolve) => setTimeout(resolve, 3000)),
-        ]);
-      }
-      if (cancelled) return;
-      if (!useSettingsStore.getState().restoreWindowsOnStartup) return;
-      manager.load();
-    };
-    boot();
-    return () => { cancelled = true; };
-  }, [manager]);
-
   // 选择性事件监听：只在窗口列表变化时触发全局状态更新
   // 窗口拖动（moved）和调整大小（resized）不触发全局状态更新
   useEffect(() => {
@@ -159,16 +132,8 @@ export function WindowManagerProvider({ children }: { children: ReactNode }) {
       })
     );
 
-    // 保存事件也监听（受用户设置控制：关闭开关则不持久化，避免旧数据残留）
-    const saveUnsubscribe = manager.onAny(() => {
-      if (useSettingsStore.getState().restoreWindowsOnStartup) {
-        manager.save();
-      }
-    });
-
     return () => {
       unsubscribes.forEach(unsub => unsub());
-      saveUnsubscribe();
     };
   }, [manager]);
 
