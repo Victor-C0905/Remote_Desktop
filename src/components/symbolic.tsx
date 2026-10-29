@@ -10,7 +10,7 @@ export type SymbolicIconName =
   | "dialog-error" | "dialog-warning" | "dialog-information"
   | "view-refresh" | "network-offline"
   | "mail-unread" | "mailbox"
-  | "emblem-ok" | "clock" | "link" | "user-trash" | "window-close"
+  | "emblem-ok" | "clock" | "user-trash" | "window-close" | "document-edit"
   | "window-minimize" | "window-maximize" | "window-restore"
   | "view-fullscreen" | "view-restore"
   | "bell" | "bell-outline"
@@ -100,18 +100,19 @@ const ICONS: Record<SymbolicIconName, ReactNode> = {
       fill="currentColor"
     />
   ),
-  // 双链环（连接；动作类描边）
-  "link": (
-    <g fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M6.67 8.67a3.33 3.33 0 0 0 5.03.36l2-2a3.33 3.33 0 0 0-4.71-4.71l-1.15 1.14" />
-      <path d="M9.33 7.33a3.33 3.33 0 0 0-5.03-.36l-2 2a3.33 3.33 0 0 0 4.71 4.71l1.14-1.14" />
-    </g>
-  ),
   // 实心垃圾桶 + 镂空竖条
   "user-trash": (
     <path
       fillRule="evenodd"
       d="M6.1 2.6a1 1 0 0 1 1-1h1.8a1 1 0 0 1 1 1v.8h3.3a.9.9 0 0 1 .9.9v.7a.9.9 0 0 1-.9.9H2.8a.9.9 0 0 1-.9-.9v-.7a.9.9 0 0 1 .9-.9h3.3ZM4.2 6.4h7.6v7a1.6 1.6 0 0 1-1.6 1.6H5.8a1.6 1.6 0 0 1-1.6-1.6ZM6.7 8h1.4v4.6H6.7ZM7.9 8h1.4v4.6H7.9Z"
+      fill="currentColor"
+    />
+  ),
+  // 实心铅笔（编辑；斜置笔身 + 圆头笔帽）
+  "document-edit": (
+    <path
+      fillRule="evenodd"
+      d="M10.9 2.6a1.5 1.5 0 0 1 2.1 0l.4.4a1.5 1.5 0 0 1 0 2.1l-1 1-2.5-2.5 1-1ZM9 4.7l2.5 2.5-6.2 6.2-3 .8.8-3 5.9-6.5Z"
       fill="currentColor"
     />
   ),

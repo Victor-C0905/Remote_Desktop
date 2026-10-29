@@ -7,7 +7,7 @@ const ALL_NAMES = [
   "dialog-error", "dialog-warning", "dialog-information",
   "view-refresh", "network-offline",
   "mail-unread", "mailbox",
-  "emblem-ok", "clock", "link", "user-trash", "window-close",
+  "emblem-ok", "clock", "user-trash", "window-close", "document-edit",
   "bell", "bell-outline",
   "pan-up", "pan-down",
   "funnel",

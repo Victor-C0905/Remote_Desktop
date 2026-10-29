@@ -45,7 +45,8 @@ pub struct TabInfo {
 /// runtime 需要对某 tab 执行的动作（TabBook 决策输出，runtime 执行）
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TabAction {
-    /// 重建 webview 并导航到 url
+    /// 重建 webview 并导航到 url（预留：睡眠 tab 的唤醒路径，当前扫描只产 Destroy）
+    #[allow(dead_code)]
     Wake(u64),
     /// 销毁 webview（睡眠/关闭前清理）
     Destroy(u64),
@@ -172,6 +173,8 @@ impl TabBook {
         if let Some(meta) = self.meta_mut(id) { meta.url = url; }
     }
 
+    /// 标记加载态（预留：EvNavStart/EvNavDone 接入 tab 状态展示时启用）
+    #[allow(dead_code)]
     pub(crate) fn set_loading(&mut self, id: u64, loading: bool) {
         if let Some(meta) = self.meta_mut(id) { meta.loading = loading; }
     }
@@ -305,7 +308,7 @@ pub(crate) enum HostCommand {
     EvNavDone { tab_id: u64 },
     EvTitle { tab_id: u64, title: String },
     EvSource { tab_id: u64, url: String },
-    EvNewWindow { tab_id: u64, url: String },
+    EvNewWindow { #[allow(dead_code)] tab_id: u64, url: String },
     /// 网页全屏态变更（Fullscreen API：视频/游戏铺满请求）
     EvFullscreen { tab_id: u64, fullscreen: bool },
     /// 主线程完成全屏切换后的回流：客户区就位，重新铺满 webview
@@ -314,7 +317,10 @@ pub(crate) enum HostCommand {
 
 /// 跨线程句柄：tauri command 的唯一入口
 pub struct BrowserWindowHost {
+    /// 预留字段：代理会话标识/端口（browser:// 状态页与诊断接口接入时读取）
+    #[allow(dead_code)]
     server_id: String,
+    #[allow(dead_code)]
     proxy_port: u16,
     cmd_tx: CmdSender,
 }
@@ -366,10 +372,13 @@ impl BrowserWindowHost {
         }
     }
 
+    /// 预留访问器：browser:// 诊断/状态展示接入时启用
+    #[allow(dead_code)]
     pub(crate) fn server_id(&self) -> &str {
         &self.server_id
     }
 
+    #[allow(dead_code)]
     pub(crate) fn proxy_port(&self) -> u16 {
         self.proxy_port
     }
@@ -1310,6 +1319,30 @@ pub async fn browser_close_window(server_id: String, app: AppHandle) -> Result<(
             .and_then(|s| s.host.lock().unwrap().take())
     };
     if let Some(host) = host {
+        // 视觉同步（隐藏先行）：DOM 窗口卸载先于本命令到达，若直接 close_all，
+        // 内容会在"chrome 已消失、COM 销毁未完成"的间隙里悬浮裸奔。SetVisible
+        // 与 CloseAll 走同一通道先进先出：隐藏亚毫秒落地，销毁随后异步完成，
+        // 用户观感为"整窗同帧消失"。
+        host.set_visible(false);
+        let _ = host.close_all().await;
+    }
+    Ok(())
+}
+
+/// 关闭全部会话的浏览器窗口（孤儿回收）。
+/// 主 webview 整页刷新（dev HMR / 调试器刷新 / 渲染进程崩溃恢复）后，DOM 层浏览器
+/// 窗口随前端重置消失，而 Rust 侧 host 线程与 WebView2 子窗口仍在——孤儿 webview
+/// 悬浮在桌面上且无 chrome 可操作。前端挂载时调用本命令统一回收；
+/// 正常启动时会话表为空，本命令为 no-op。
+#[tauri::command]
+pub async fn browser_close_all_windows(app: AppHandle) -> Result<(), String> {
+    // 先摘除全部 host 再逐个关闭：持锁期间不做 await（close_all 最长 3s）
+    let hosts: Vec<std::sync::Arc<BrowserWindowHost>> = {
+        let sessions: State<ProxySessionManager> = app.state();
+        let guard = sessions.sessions.lock().unwrap();
+        guard.values().filter_map(|s| s.host.lock().unwrap().take()).collect()
+    };
+    for host in hosts {
         let _ = host.close_all().await;
     }
     Ok(())

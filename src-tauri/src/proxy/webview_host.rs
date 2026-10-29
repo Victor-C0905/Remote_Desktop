@@ -419,7 +419,8 @@ pub(crate) fn execute_script(wv: &WebviewHandle, script: &str) {
     }
 }
 
-/// 读取当前 URL
+/// 读取当前 URL（预留：地址栏/导航历史功能接入时启用）
+#[allow(dead_code)]
 pub(crate) fn current_url(wv: &WebviewHandle) -> Option<String> {
     unsafe {
         let mut uri = PWSTR::null();

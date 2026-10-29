@@ -32,9 +32,6 @@ export interface SettingsState {
   // 与旧版浏览器功能对齐，Rust 端 proxy_list_browsers 枚举候选）
   browserId: string;
 
-  // 启动时恢复上次窗口（桌面会话恢复）
-  restoreWindowsOnStartup: boolean;
-
   // 毛玻璃效果（backdrop-filter 采样壁纸模糊，GPU 常驻开销大，默认关闭）
   frostedGlassEnabled: boolean;
 
@@ -71,9 +68,6 @@ export interface SettingsActions {
   // 系统浏览器选择（auto/edge/chrome/firefox/自定义 exe 路径）
   setBrowserId: (browserId: string) => void;
 
-  // 启动时恢复上次窗口
-  setRestoreWindowsOnStartup: (enabled: boolean) => void;
-
   // 毛玻璃效果开关
   setFrostedGlassEnabled: (enabled: boolean) => void;
 
@@ -108,9 +102,6 @@ const DEFAULT_SETTINGS: SettingsState = {
 
   // 系统浏览器选择：auto = 按候选顺序自动探测（Edge → Chrome → Firefox）
   browserId: "auto",
-
-  // 启动时恢复上次窗口（默认开，保留桌面会话恢复行为）
-  restoreWindowsOnStartup: true,
 
   // 毛玻璃效果默认关闭（GPU 常驻开销大；开启后窗口 chrome 采样壁纸模糊）
   frostedGlassEnabled: false,
@@ -183,9 +174,6 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
         set({ browserId });
       },
 
-      setRestoreWindowsOnStartup: (enabled) => {
-        set({ restoreWindowsOnStartup: enabled });
-      },
 
       setFrostedGlassEnabled: (enabled) => {
         set({ frostedGlassEnabled: enabled });

@@ -142,11 +142,11 @@ export const TopBar = memo(function TopBar({
            statusServer?.status === "reconnecting" ? t('connection.status.reconnecting') :
            statusServer?.status === "error" ? t('connection.status.error') : t('connection.status.disconnected')}
         </span>
-        {statusServer && (
-          <span className={styles.serverName}>
-            {statusServer.name || statusServer.host}
-          </span>
-        )}
+        {/* 服务器名槽位常驻：连接瞬间才插入该字段会让按钮宽度跳变、
+            挤压顶栏布局；未连接时以占位符占位（宽度由 CSS 固定） */}
+        <span className={styles.serverName}>
+          {statusServer ? statusServer.name || statusServer.host : "—"}
+        </span>
       </div>
       <div className={styles.spacer} />
       

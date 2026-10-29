@@ -22,6 +22,7 @@ const ALL_NAMES: AppIconName[] = [
   "download", "disk",
   "folder", "folder-open", "folder-plus", "file", "file-text", "file-code",
   "file-json", "file-image", "file-audio", "file-video", "file-archive",
+  "spreadsheet",
   "config", "database", "lock",
   "trash", "search",
 ];

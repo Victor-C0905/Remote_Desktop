@@ -10,10 +10,8 @@ import {
   WindowEvent,
   WindowEventType,
   IWindowManager,
-  PersistedWindowData,
 } from '../types';
 import { createLogger } from '../../utils/logger';
-import { getWindowsStorage } from '../../utils/storage';
 import type { SnapZone } from '../../components/window-shell/aeroSnap';
 import { computeSnapRect } from '../../components/window-shell/aeroSnap';
 
@@ -21,7 +19,7 @@ const log = createLogger('WindowManager');
 
 /**
  * WindowManager - singleton orchestrator for window system
- * Manages window lifecycle, events, and persistence
+ * Manages window lifecycle and events
  */
 export class WindowManager implements IWindowManager {
   private windows: WindowCollection;
@@ -32,7 +30,6 @@ export class WindowManager implements IWindowManager {
   // focus=移除+压顶、create=压顶、close=移除——纯栈操作，
   // 不依赖时间戳，天然无同毫秒并列问题。
   private _activationOrder: string[] = [];
-  private saveTimer: ReturnType<typeof setTimeout> | null = null; // ✅ 修复：使用 ReturnType<typeof setTimeout> 代替 NodeJS.Timeout
 
   constructor(registry: WindowRegistry) {
     this.windows = new WindowCollection();
@@ -470,78 +467,5 @@ export class WindowManager implements IWindowManager {
    */
   emit(event: WindowEvent): void {
     this.eventBus.emit(event);
-  }
-
-  /**
-   * Save window states to Tauri Store (Rust-managed persistent storage)
-   * ✅ 优化：异步延迟执行，避免频繁写入和阻塞 UI
-   */
-  save(): void {
-    // ✅ 清除之前的定时器
-    if (this.saveTimer) {
-      clearTimeout(this.saveTimer);
-    }
-    
-    // ✅ 延迟 1 秒后执行 save（避免频繁写入）
-    this.saveTimer = setTimeout(() => {
-      try {
-        const data = this.windows.getAll().map(w => w.serialize());
-        // 异步写入 Tauri Store，不阻塞 UI
-        getWindowsStorage().then(storage => {
-          storage.setItem('quirel-windows', JSON.stringify(data));
-        }).catch(error => {
-          log.error('Failed to save window states:', error);
-        });
-      } catch (error) {
-        log.error('Failed to serialize window states:', error);
-      }
-      this.saveTimer = null;
-    }, 1000);
-  }
-
-  /**
-   * Load window states from Tauri Store (Rust-managed persistent storage)
-   * Applies boundary constraints to restored positions
-   */
-  async load(): Promise<void> {
-    try {
-      const storage = await getWindowsStorage();
-      const stored = await storage.getItem('quirel-windows');
-      if (!stored) return;
-
-      const data = JSON.parse(stored) as PersistedWindowData[];
-
-      // ── 边界约束逻辑（符合标准窗口设计）──────────────
-      const containerWidth = window.innerWidth;
-      const containerHeight = window.innerHeight - 32; // Subtract TopBar height
-      const minY = 0; // 无法超越 TopBar
-      const MIN_VISIBLE = 100; // 最小可见区域
-
-      data.forEach(windowData => {
-        const window = Window.deserialize(windowData);
-
-        // 应用边界约束（防止窗口恢复时超出屏幕边界）
-        const minX = -(windowData.size.width - MIN_VISIBLE);
-        const maxX = containerWidth - MIN_VISIBLE;
-        const maxY = containerHeight - MIN_VISIBLE;
-
-        const constrainedPosition = {
-          x: Math.max(minX, Math.min(windowData.position.x, maxX)),
-          y: Math.max(minY, Math.min(windowData.position.y, maxY)),
-        };
-
-        // 更新窗口位置（如果超出边界）
-        if (windowData.position.x !== constrainedPosition.x ||
-            windowData.position.y !== constrainedPosition.y) {
-          window.setPosition(constrainedPosition);
-        }
-
-        this.windows.add(window);
-        // ✅ 激活栈按恢复顺序重建（持久化顺序=创建顺序），初始层叠=创建序
-        this._activationOrder.push(window.id);
-      });
-    } catch (error) {
-      log.error('Failed to load window states', error);
-    }
   }
 }
