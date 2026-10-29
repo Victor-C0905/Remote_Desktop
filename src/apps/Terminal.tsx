@@ -18,6 +18,7 @@ import { ToolbarMenu } from '../components/ToolbarMenu/ToolbarMenu';
 import { ChromeTabStrip } from '../components/ChromeTabStrip/ChromeTabStrip';
 // import { useWindowState } from '../window-system/hooks/useWindowState'; // 未来集成时使用
 import { useWindowEvent } from '../window-system/hooks/useWindowEvent';
+import { useWindowManager } from '../window-system/WindowManagerContext';
 import { describeTerminalFailure, formatUnknownError } from '../types/errors';
 import { useTranslation } from 'react-i18next';
 import i18n from '../i18n';
@@ -481,7 +482,7 @@ function TerminalInstance({
       // depsKey 复位，避免下次 setup 把残缺终端误判为可保活
       depsKeyRef.current = null;
       teardownNow();
-      container.innerHTML = `<div style="color:#ff4444;padding:12px;font-family:monospace;">${i18n.t('terminal.initFailedHtml', { error: formatUnknownError(err) })}</div>`;
+      container.innerHTML = `<div class="terminal-init-failed">${i18n.t('terminal.initFailedHtml', { error: formatUnknownError(err) })}</div>`;
     }
   }, [activeServerId, activeServerName, activeServerHost, activeServerPort]);
 
@@ -786,6 +787,8 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
   // const windowState = useWindowState(windowId); // 未来集成时使用
   const { activeServer } = useServerManager();
   const activeServerId = activeServer?.id || null;
+  // 窗口管理器：最后一个页签关闭时经此关闭窗口（与 TextEditor 同语义）
+  const { manager } = useWindowManager();
 
   // ── 工作目录配置 ────────────────────────────────────────────────────
   // 优先使用 preloadData（从文件管理器打开），否则使用用户配置的默认路径
@@ -870,12 +873,19 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
   };
 
   // ── 关闭 tab ─────────────────────────────────────────────────
+  // 最后一个页签关闭 → 关闭窗口（与 TextEditor 同语义）：保持原 tabs 渲染
+  // 到窗口卸载，避免空页签条闪帧；会话随窗口卸载经 cleanup 关闭
   const handleCloseTab = (id: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     const remaining = tabs.filter((t) => t.id !== id);
+    if (remaining.length === tabs.length) return; // id 不存在（防御）：不动
+    if (remaining.length === 0) {
+      manager.close(windowId);
+      return;
+    }
     setTabs(remaining);
     if (activeTabId === id) {
-      setActiveTabId(remaining.length > 0 ? remaining[remaining.length - 1].id : null);
+      setActiveTabId(remaining[remaining.length - 1].id);
     }
   };
 

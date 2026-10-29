@@ -7,13 +7,20 @@ const ALL_NAMES = [
   "dialog-error", "dialog-warning", "dialog-information",
   "view-refresh", "network-offline",
   "mail-unread", "mailbox",
-  "emblem-ok", "user-trash", "window-close",
+  "emblem-ok", "clock", "user-trash", "window-close", "document-edit",
   "bell", "bell-outline",
   "pan-up", "pan-down",
   "funnel",
   "chevron-up", "chevron-down",
-  "go-previous", "go-next", "tab-new",
+  "go-previous", "go-next", "go-home", "tab-new",
+  "go-up", "go-down",
+  "media-play", "media-pause",
+  "folder-open",
   "external-link",
+  "system-search",
+  "emblem-system", "view-private",
+  "view-fullscreen", "view-restore",
+  "window-minimize", "window-maximize", "window-restore",
 ] as const;
 
 describe("SymbolicIcon", () => {

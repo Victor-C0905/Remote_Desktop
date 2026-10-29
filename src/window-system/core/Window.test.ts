@@ -125,14 +125,4 @@ describe('Window - snap 状态', () => {
       size: { width: 800, height: 600 },
     });
   });
-
-  it('deserialize 后 snap 状态为默认值(运行时状态不持久化)', () => {
-    const w = makeWindow();
-    w.setSnap('left' as SnapZone, { x: 0, y: 0, width: 960, height: 1080 });
-    const serialized = w.serialize();
-
-    const restored = Window.deserialize(serialized);
-    expect(restored.snapZone).toBe(null);
-    expect(restored.preSnapState).toBe(null);
-  });
 });

@@ -10,12 +10,17 @@ export type SymbolicIconName =
   | "dialog-error" | "dialog-warning" | "dialog-information"
   | "view-refresh" | "network-offline"
   | "mail-unread" | "mailbox"
-  | "emblem-ok" | "user-trash" | "window-close"
+  | "emblem-ok" | "clock" | "user-trash" | "window-close" | "document-edit"
+  | "window-minimize" | "window-maximize" | "window-restore"
+  | "view-fullscreen" | "view-restore"
   | "bell" | "bell-outline"
   | "pan-up" | "pan-down"
   | "funnel"
   | "chevron-up" | "chevron-down"
   | "go-previous" | "go-next" | "go-home" | "tab-new"
+  | "go-up" | "go-down"
+  | "media-play" | "media-pause"
+  | "folder-open"
   | "external-link"
   | "system-search"
   | "emblem-system" | "view-private";
@@ -87,6 +92,14 @@ const ICONS: Record<SymbolicIconName, ReactNode> = {
   "emblem-ok": (
     <path d="M3 8.6 L6.5 12 L13 4.6" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
   ),
+  // 实心钟面 + 镂空指针（连接中/等待）
+  "clock": (
+    <path
+      fillRule="evenodd"
+      d="M8 1.9a6.1 6.1 0 1 1 0 12.2A6.1 6.1 0 0 1 8 1.9Zm-.7 2.4h1.4v4l3 1.8-.7 1.2-3.7-2.2z"
+      fill="currentColor"
+    />
+  ),
   // 实心垃圾桶 + 镂空竖条
   "user-trash": (
     <path
@@ -95,9 +108,49 @@ const ICONS: Record<SymbolicIconName, ReactNode> = {
       fill="currentColor"
     />
   ),
+  // 实心铅笔（编辑；斜置笔身 + 圆头笔帽）
+  "document-edit": (
+    <path
+      fillRule="evenodd"
+      d="M10.9 2.6a1.5 1.5 0 0 1 2.1 0l.4.4a1.5 1.5 0 0 1 0 2.1l-1 1-2.5-2.5 1-1ZM9 4.7l2.5 2.5-6.2 6.2-3 .8.8-3 5.9-6.5Z"
+      fill="currentColor"
+    />
+  ),
   // X（窗口关闭）
   "window-close": (
     <path d="M4 4 L12 12 M12 4 L4 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+  ),
+  // 一横（窗口最小化；与 window-close 同线宽同端点）
+  "window-minimize": (
+    <path d="M3.5 8 H12.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+  ),
+  // 圆角方框（窗口最大化）
+  "window-maximize": (
+    <rect x="3.5" y="3.5" width="9" height="9" rx="1.2" fill="none" stroke="currentColor" strokeWidth="2" />
+  ),
+  // 双框·后框右上段悬空（窗口还原；两线不相交保持单色干净）
+  "window-restore": (
+    <>
+      <path d="M6.2 3.5 H10.6 A1.4 1.4 0 0 1 12 4.9 V9.3" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <rect x="3" y="5.5" width="7.5" height="7.5" rx="1.2" fill="none" stroke="currentColor" strokeWidth="2" />
+    </>
+  ),
+  // 四角外扩 L（进入全屏）
+  "view-fullscreen": (
+    <path
+      d="M6 3 H3 V6 M10 3 H13 V6 M13 10 V13 H10 M6 13 H3 V10"
+      fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+    />
+  ),
+  // 中心圆角框 + 四角收拢短线（退出全屏，与 view-fullscreen 成开合对偶）
+  "view-restore": (
+    <>
+      <rect x="6.1" y="6.1" width="3.8" height="3.8" rx="0.9" fill="none" stroke="currentColor" strokeWidth="2" />
+      <path
+        d="M4.3 4.3 L2.7 2.7 M11.7 4.3 L13.3 2.7 M4.3 11.7 L2.7 13.3 M11.7 11.7 L13.3 13.3"
+        stroke="currentColor" strokeWidth="2" strokeLinecap="round"
+      />
+    </>
   ),
   // 铃铛（实底剪影）
   "bell": (
@@ -145,9 +198,32 @@ const ICONS: Record<SymbolicIconName, ReactNode> = {
   "go-next": (
     <path d="M5.5 2.5 12 8l-6.5 5.5V2.5Z" fill="currentColor" />
   ),
+  // 实心上箭头（传输上传方向，Adwaita go-up）
+  "go-up": (
+    <path d="M8 4l4 4H9.5v4h-3V8H4z" fill="currentColor" />
+  ),
+  // 实心下箭头（传输下载方向，Adwaita go-down）
+  "go-down": (
+    <path d="M8 12l-4-4h2.5V4h3v4H12z" fill="currentColor" />
+  ),
+  // 实心播放三角（继续传输）
+  "media-play": (
+    <path d="M5.5 4.2v7.6L12.4 8z" fill="currentColor" />
+  ),
+  // 实心双竖条（暂停传输）
+  "media-pause": (
+    <g fill="currentColor">
+      <rect x="4.2" y="3.5" width="2.8" height="9" rx="0.7" />
+      <rect x="9" y="3.5" width="2.8" height="9" rx="0.7" />
+    </g>
+  ),
   // 实心小房子（返回首页）
   "go-home": (
     <path d="M8 2.6 14.6 8.6 h-2 v4.8 a0.8 0.8 0 0 1 -0.8 0.8 H4.2 a0.8 0.8 0 0 1 -0.8 -0.8 V8.6 h-2 Z" fill="currentColor" />
+  ),
+  // 实心打开文件夹（打开文件；12 网格 Adwaita 路径等比放大至 16）
+  "folder-open": (
+    <path d="M1.3 2.7h5.4l1.3 1.3h5.3v1.4H2.7v6.6l1.3-4h10.7l-2 5.4H1.3z" fill="currentColor" />
   ),
   // 实心标签页 + 镂空加号
   "tab-new": (

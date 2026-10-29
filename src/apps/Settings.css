@@ -218,6 +218,7 @@
 
 /* ── Connection Section ──────────────────────────────── */
 .st-current-connection {
+  position: relative; /* 错误覆盖层的定位锚点 */
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -322,6 +323,7 @@
   padding: 8px 12px;
   border-radius: var(--radius-xs);
   cursor: pointer;
+  user-select: none; /* 双击触发连接，禁止文本选区避免双击时选中行内文字 */
   transition: background var(--duration-fast) var(--ease-out);
   box-sizing: border-box; /* ✅ 新增：确保padding包含在宽度计算中 */
 }
@@ -335,17 +337,39 @@
   color: var(--quirel-accent-fg);
 }
 
+/* 状态点（类驱动，颜色与 getStatusColor 语义对齐）：
+   连接 = 实心绿 + 卡片底色外环（在选中行的 accent 底上仍清晰可辨）；
+   断开 = 空心环——实心/空心的前注意对比远强于绿/灰的色相差异；
+   进行中/错误沿用黄/橙/红实心 */
 .st-server-status {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #e01b24;
-  align-self: center; /* ✅ 新增：垂直居中 */
-  justify-self: center; /* ✅ 新增：水平居中，确保状态点在15px列中居中显示 */
+  box-sizing: border-box;
+  align-self: center; /* ✅ 垂直居中 */
+  justify-self: center; /* ✅ 水平居中，确保状态点在15px列中居中显示 */
 }
 
-.st-server-status.connected {
-  background: #33d17a;
+.st-server-status-connected {
+  background: var(--quirel-success-color);
+  box-shadow: 0 0 0 2px var(--quirel-card-bg);
+}
+
+.st-server-status-connecting {
+  background: var(--quirel-warning-color);
+}
+
+.st-server-status-reconnecting {
+  background: #ff7800;
+}
+
+.st-server-status-disconnected {
+  background: transparent;
+  border: 1.5px solid #9a9996;
+}
+
+.st-server-status-error {
+  background: var(--quirel-error-color);
 }
 
 .st-server-name {
@@ -381,44 +405,6 @@
 
 .st-server-item.selected .st-server-time {
   color: rgba(255, 255, 255, 0.75);
-}
-
-/* ── Theme Toggle ───────────────────────────────────── */
-.st-theme-toggle {
-  display: flex;
-  gap: 8px;
-}
-
-.st-theme-btn {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  padding: 12px 24px;
-  background: var(--quirel-card-bg);
-  border: 2px solid var(--quirel-border-color);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: background-color var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out), opacity var(--duration-fast) var(--ease-out);
-}
-
-.st-theme-btn:hover {
-  background: var(--quirel-card-hover);
-}
-
-.st-theme-btn.active {
-  border-color: var(--quirel-accent-bg);
-  background: var(--quirel-accent-bg);
-  color: var(--quirel-accent-fg);
-}
-
-.st-theme-icon {
-  font-size: 24px;
-}
-
-.st-theme-label {
-  font-size: var(--font-small);
-  white-space: nowrap;
 }
 
 /* ── Accent Colors ──────────────────────────────────── */
@@ -851,6 +837,25 @@
   margin-left: 4px;
   flex-shrink: 0; /* 按钮组不收缩 */
   align-self: center; /* ✅ 新增：垂直居中，与状态点和文本对齐 */
+  opacity: 0; /* 编辑/删除为低频动作，常态隐藏、hover/选中时浮现（配合"单击选中、双击连接"防误触） */
+  transition: opacity var(--duration-fast) var(--ease-out);
+}
+
+.st-server-item:hover .st-server-actions,
+.st-server-item.selected .st-server-actions {
+  opacity: 1;
+}
+
+/* 连接中/重连中：行内就地文字反馈（替代禁用时钟按钮）。
+   min-height 与动作按钮同盒高，避免按钮组换成文字时行高缩水、下方内容上移 */
+.st-server-connecting {
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--font-small);
+  color: var(--quirel-text-secondary);
+  white-space: nowrap;
+  align-self: center;
 }
 
 .st-server-action-btn {
@@ -882,33 +887,6 @@
   opacity: 0.4;
   cursor: not-allowed;
   transform: none;
-}
-
-/* 已连接状态 - 绿色背景 */
-.st-server-action-connected {
-  background: #33d17a;
-  opacity: 1;
-  color: #ffffff;
-  font-weight: bold;
-}
-
-.st-server-action-connected:hover {
-  background: #26a269;
-}
-
-/* 连接中状态 - 旋转动画 */
-.st-server-action-connecting {
-  animation: spin 1s linear infinite;
-  opacity: 0.8;
-}
-
-@keyframes spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 .st-server-action-danger:hover {
@@ -943,18 +921,67 @@
   color: var(--quirel-text-disabled);
 }
 
+/* 添加服务器占位行：虚线整行、内容居中，吸附在列表末尾（替代原底部独立按钮） */
+.st-server-add {
+  grid-column: 1 / -1; /* 占据整行 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 12px;
+  margin-top: 8px;
+  background: transparent;
+  border: 1px dashed var(--quirel-border-color);
+  border-radius: var(--radius-xs);
+  color: var(--quirel-text-secondary);
+  font-size: var(--font-body);
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+.st-server-add:hover {
+  background: var(--quirel-card-bg);
+  border-color: var(--quirel-accent-bg);
+  color: var(--quirel-text-primary);
+}
+
+.st-server-add-plus {
+  font-size: 16px;
+  line-height: 1;
+}
+
 /* ── Connection Error ───────────────────────────────── */
+/* 错误覆盖层：绝对定位铺满信息行区、不参与文档流——卡片外框高度恒定。
+   错误态本无真实连接数据可看（行内全是占位符），覆盖信息行零信息损失 */
 .st-conn-error {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--quirel-card-bg);
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+  animation: cs-fade-in 180ms var(--ease-out);
+}
+
+/* 错误内容框：原 danger 配色；超长错误内部滚动，绝不撑开外框 */
+.st-conn-error-box {
   display: flex;
   gap: 8px;
   align-items: flex-start;
+  max-height: 100%;
+  overflow: auto;
   font-size: var(--font-small);
   color: var(--quirel-danger-fg);
   background: var(--quirel-danger-bg);
   border: 1px solid var(--quirel-danger-border);
   padding: 8px 12px;
   border-radius: var(--radius-xs);
-  margin-top: 8px;
 }
 
 .st-conn-error-icon {

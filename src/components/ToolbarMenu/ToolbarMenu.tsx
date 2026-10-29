@@ -13,7 +13,7 @@
  * - 点击外部 / Esc / 点击菜单项后关闭
  */
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import './ToolbarMenu.css';
 
@@ -21,6 +21,12 @@ import './ToolbarMenu.css';
 export interface ToolbarMenuItem {
   /** 显示文案 */
   label: string;
+
+  /** 可选前导图标（ReactNode，通常传 SymbolicIcon）；带图标时不显示勾选列 */
+  icon?: ReactNode;
+
+  /** 破坏性动作项：悬停转 libadwaita destructive 红（如窗口控制菜单的关闭） */
+  danger?: boolean;
 
   /** 勾选状态（显示 ✓ 与高亮），不传则为普通动作项 */
   checked?: boolean;
@@ -74,11 +80,11 @@ function MenuPanel({ top, left, alignRight, items, onPick }: MenuPanelProps) {
             type="button"
             role="menuitemcheckbox"
             aria-checked={item.checked}
-            className={`tbm-item${item.checked ? ' checked' : ''}`}
+            className={`tbm-item${item.checked ? ' checked' : ''}${item.icon ? ' has-icon' : ''}${item.danger ? ' danger' : ''}`}
             disabled={item.disabled}
             onClick={() => onPick(item)}
           >
-            <span className="tbm-item-check">{item.checked ? '✓' : ''}</span>
+            <span className="tbm-item-check">{item.icon ?? (item.checked ? '✓' : '')}</span>
             <span className="tbm-item-label">{item.label}</span>
             {item.shortcut && <span className="tbm-item-shortcut">{item.shortcut}</span>}
           </button>
@@ -99,6 +105,9 @@ function useDismiss(open: boolean, onClose: () => void) {
       const target = e.target as Node;
       // 菜单面板渲染在 body 下，面板内点击不关闭（由菜单项 onClick 处理）
       if ((target as Element).closest?.('.tbm-menu')) return;
+      // 触发按钮点击不在此关闭：mousedown 先关、click 再 toggle 会把菜单
+      // 立刻重新打开（表现为「原地点击收不起来」），由 trigger 自身 toggle
+      if ((target as Element).closest?.('.tbm-trigger')) return;
       onClose();
     };
 

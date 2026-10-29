@@ -61,12 +61,13 @@ export function useBrowserBounds(
       const b = insetWebviewRect(r);
       // 面积为 0（最小化/隐藏）不上报，Rust 端保留旧 bounds
       if (b.width < 1 || b.height < 1) {
-        // 诊断：零面积跳过是"webview 停在初始 800×600"的候选原因（闭环后移除）
-        log.info(`跳过上报（面积 0）: ${Math.round(b.width)}x${Math.round(b.height)}`);
+        // 诊断：零面积跳过是"webview 停在初始 800×600"的候选原因。
+        // 必须维持 debug 级：本函数逐帧触发（RO/rAF），info 会把日志 IPC 变成逐帧开销
+        log.debug(`跳过上报（面积 0）: ${Math.round(b.width)}x${Math.round(b.height)}`);
         return;
       }
-      // 诊断：bounds 上报值（webview 不铺满/占位常显定位；闭环后可移除）
-      log.info(
+      // 诊断：bounds 上报值（webview 不铺满/占位常显定位）；同样因逐帧触发只用 debug
+      log.debug(
         `上报 bounds: ${Math.round(b.x)},${Math.round(b.y)} ` +
           `${Math.round(b.width)}x${Math.round(b.height)}`,
       );
@@ -84,7 +85,9 @@ export function useBrowserBounds(
     };
 
     schedule();
-    const ro = new ResizeObserver(schedule);
+    // RO 回调直测（不套 rAF）：RO 本身一帧最多一次批处理且在渲染前触发，
+    // 再套 rAF 白等一帧——最大化/缩放时省 16ms。geometry 路径保留 rAF 合并
+    const ro = new ResizeObserver(report);
     ro.observe(el);
     return () => {
       ro.disconnect();
