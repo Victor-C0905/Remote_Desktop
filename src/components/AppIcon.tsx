@@ -28,7 +28,7 @@ const G = (id: string, a: string, b: string) =>
   `<stop offset="0" stop-color="var(${a})"/><stop offset="1" stop-color="var(${b})"/></linearGradient>`;
 const DEFS =
   '<defs>' +
-  ['blue', 'green', 'orange', 'purple', 'red', 'yellow', 'brown', 'gray', 'folder']
+  ['blue', 'green', 'teal', 'orange', 'purple', 'red', 'yellow', 'brown', 'gray', 'folder']
     .map((c) => G(`icg-${c}`, `--ic-${c}-light`, `--ic-${c}-surface`) + G(`icg-${c}d`, `--ic-${c}-surface`, `--ic-${c}-deep`))
     .join('') +
   /* 纸底渐变：paper 色组的变量命名是 paper-1/2（浅→深纸色），不走 light/surface
@@ -102,9 +102,12 @@ const makeIcons = (t: IconThemeKind): Record<AppIconName, string> => ({
     '<path d="M12 8.4v8.6M7 11h10" stroke="var(--ic-brown-surface)" stroke-width="1" opacity=".7"/>',
 
   /* ── 设置区块 ── */
+  // connection：45° 斜向双链环（保留历史 link 图标的倾角语义），blue = 网络与连接
   connection: B('blue', t) +
+    '<g transform="rotate(-45 12 12.2)">' +
     '<rect x="5.4" y="9.9" width="8.4" height="4.6" rx="2.3" fill="none" stroke="var(--ic-blue-ink)" stroke-width="1.7"/>' +
-    '<rect x="10.2" y="9.9" width="8.4" height="4.6" rx="2.3" fill="none" stroke="var(--ic-blue-ink)" stroke-width="1.7"/>',
+    '<rect x="10.2" y="9.9" width="8.4" height="4.6" rx="2.3" fill="none" stroke="var(--ic-blue-ink)" stroke-width="1.7"/>' +
+    '</g>',
   appearance: B('purple', t) +
     '<path d="M12 6.4a5.6 5.6 0 0 0 0 11.2c1 0 1.4-.7 1-1.4-.5-.9.1-1.7 1.1-1.7h1.2a2.4 2.4 0 0 0 2.3-2.5A5.6 5.6 0 0 0 12 6.4z" fill="var(--ic-purple-ink)"/>' +
     '<g fill="var(--ic-purple-surface)"><circle cx="9.6" cy="10.6" r="1"/><circle cx="12.4" cy="9" r="1"/><circle cx="14.8" cy="11.2" r="1"/></g>',
@@ -118,9 +121,10 @@ const makeIcons = (t: IconThemeKind): Record<AppIconName, string> => ({
     '<rect x="7.4" y="12.4" width="2.4" height="4.6" rx=".9" fill="var(--ic-green-ink)"/>' +
     '<rect x="10.8" y="9.8" width="2.4" height="7.2" rx=".9" fill="var(--ic-green-ink)"/>' +
     '<rect x="14.2" y="7.4" width="2.4" height="9.6" rx=".9" fill="var(--ic-green-ink)"/>',
-  about: B('blue', t) +
-    '<rect x="11.2" y="8.4" width="1.6" height="4.6" rx=".8" fill="var(--ic-blue-ink)"/>' +
-    '<circle cx="12" cy="15.2" r="1" fill="var(--ic-blue-ink)"/>',
+  // about→gray（proposals §3）：信息类归入文本/系统灰，blue 只留网络与连接
+  about: B('gray', t) +
+    '<rect x="11.2" y="8.4" width="1.6" height="4.6" rx=".8" fill="var(--ic-gray-ink)"/>' +
+    '<circle cx="12" cy="15.2" r="1" fill="var(--ic-gray-ink)"/>',
 
   /* ── 侧栏书签 ── */
   documents: B('gray', t) +
@@ -195,6 +199,15 @@ const makeIcons = (t: IconThemeKind): Record<AppIconName, string> => ({
       '<path d="M10.8 10.4c-.9.2-1.1.7-1.1 1.4s-.2 1.2-.7 1.2c.5 0 .7.4.7 1.1s.2 1.3 1.1 1.5M13.2 10.4c.9.2 1.1.7 1.1 1.4s.2 1.2.7 1.2c-.5 0-.7.4-.7 1.1s-.2 1.3-1.1 1.5" stroke="var(--ic-green-solid)" stroke-width="1.3" fill="none" stroke-linecap="round"/>'
     : sheetTinted('green') +
       '<path d="M10.8 10.4c-.9.2-1.1.7-1.1 1.4s-.2 1.2-.7 1.2c.5 0 .7.4.7 1.1s.2 1.3 1.1 1.5M13.2 10.4c.9.2 1.1.7 1.1 1.4s.2 1.2.7 1.2c-.5 0-.7.4-.7 1.1s-.2 1.3-1.1 1.5" stroke="var(--ic-green-ink)" stroke-width="1.3" fill="none" stroke-linecap="round"/>',
+  // 电子表格（.xlsx/.csv）：纸形 + 表格网格（表头带 + 两列三行），green 属
+  // 「成功/数据」色相域（proposals §3）
+  spreadsheet: t === 'classic'
+    ? B('green', t) + sheetTinted('green') +
+      '<rect x="9" y="10.6" width="6" height="1.2" fill="var(--ic-green-solid)"/>' +
+      '<g stroke="var(--ic-green-solid)" stroke-width="1.1" fill="none"><path d="M9 13h6M9 15h6M11.7 10.6v5.8M14.4 10.6v5.8"/></g>'
+    : sheetTinted('green') +
+      '<rect x="9" y="10.6" width="6" height="1.2" fill="var(--ic-green-ink)"/>' +
+      '<g stroke="var(--ic-green-ink)" stroke-width="1.1" fill="none"><path d="M9 13h6M9 15h6M11.7 10.6v5.8M14.4 10.6v5.8"/></g>',
   'file-image': t === 'classic'
     ? B('purple', t) + sheetTinted('purple') +
       '<path d="M8.6 15.4l2.2-2.7 1.6 1.8 1.1-1.4 2 2.3z" fill="var(--ic-purple-solid)"/>' +
@@ -230,10 +243,12 @@ const makeIcons = (t: IconThemeKind): Record<AppIconName, string> => ({
     : sheetTinted('gray') +
       '<g transform="translate(12 13.6)"><circle r="1.5" fill="none" stroke="var(--ic-gray-ink)" stroke-width="1.1"/>' +
       '<g stroke="var(--ic-gray-ink)" stroke-width="1" stroke-linecap="round"><path d="M0-3v-.9"/><path d="M0 3v.9"/><path d="M-3 0h-.9"/><path d="M3 0h.9"/><path d="M-2.1-2.1l-.6-.6"/><path d="M2.1 2.1l.6.6"/><path d="M2.1-2.1l.6-.6"/><path d="M-2.1 2.1l-.6.6"/></g></g>',
-  database: B('blue', t) +
-    '<ellipse cx="12" cy="8.6" rx="4.4" ry="1.8" fill="var(--ic-blue-ink)"/>' +
-    '<path d="M7.6 8.6v6.8c0 1 2 1.8 4.4 1.8s4.4-.8 4.4-1.8V8.6z" fill="var(--ic-blue-ink)"/>' +
-    '<path d="M7.6 12c0 1 2 1.8 4.4 1.8s4.4-.8 4.4-1.8" stroke="var(--ic-blue-surface)" stroke-width="1" fill="none" opacity=".7"/>',
+  // database→teal（proposals §3 色相再平衡二期）：teal 独立色相与 blue（网络/
+  // 连接）、green（成功/监控）拉开距离，13 项 blue 过载收敛后数据库独占一档
+  database: B('teal', t) +
+    '<ellipse cx="12" cy="8.6" rx="4.4" ry="1.8" fill="var(--ic-teal-ink)"/>' +
+    '<path d="M7.6 8.6v6.8c0 1 2 1.8 4.4 1.8s4.4-.8 4.4-1.8V8.6z" fill="var(--ic-teal-ink)"/>' +
+    '<path d="M7.6 12c0 1 2 1.8 4.4 1.8s4.4-.8 4.4-1.8" stroke="var(--ic-teal-surface)" stroke-width="1" fill="none" opacity=".7"/>',
   lock: B('yellow', t) +
     '<path d="M9.4 10.4V9a2.6 2.6 0 0 1 5.2 0v1.4" stroke="var(--ic-yellow-ink)" stroke-width="1.6" fill="none"/>' +
     '<rect x="7.6" y="10.2" width="8.8" height="6.6" rx="1.5" fill="var(--ic-yellow-ink)"/>' +
@@ -245,9 +260,10 @@ const makeIcons = (t: IconThemeKind): Record<AppIconName, string> => ({
     '<rect x="7.2" y="8" width="9.6" height="1.6" rx=".8" fill="var(--ic-red-ink)"/>' +
     '<path d="M8.6 10.2h6.8v4.9a1.6 1.6 0 0 1-1.6 1.6h-3.6a1.6 1.6 0 0 1-1.6-1.6z" fill="var(--ic-red-ink)"/>' +
     '<g stroke="var(--ic-red-surface)" stroke-width="1.1" stroke-linecap="round"><path d="M10.8 11.6v3.6"/><path d="M13.2 11.6v3.6"/></g>',
-  search: B('blue', t) +
-    '<circle cx="11" cy="11" r="4.2" fill="none" stroke="var(--ic-blue-ink)" stroke-width="1.8"/>' +
-    '<path d="M14.2 14.2 17.4 17.4" stroke="var(--ic-blue-ink)" stroke-width="2.1" stroke-linecap="round"/>',
+  // search→gray（proposals §3）：搜索属工具/系统动作，不占网络蓝
+  search: B('gray', t) +
+    '<circle cx="11" cy="11" r="4.2" fill="none" stroke="var(--ic-gray-ink)" stroke-width="1.8"/>' +
+    '<path d="M14.2 14.2 17.4 17.4" stroke="var(--ic-gray-ink)" stroke-width="2.1" stroke-linecap="round"/>',
 });
 
 /* 按档缓存：makeIcons 结果与主题一一对应，切档只重建一次。

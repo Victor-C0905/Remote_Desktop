@@ -1096,7 +1096,8 @@ pub fn run() {
 
                 unsafe extern "system" fn enum_child_proc(hwnd: HWND, _lparam: LPARAM) -> BOOL {
                     unsafe {
-                        SetWindowSubclass(hwnd, Some(no_erase_proc), SUBCLASS_ID, 0);
+                        // 子窗口的 subclass 安装结果无恢复手段，BOOL 显式忽略
+                        let _ = SetWindowSubclass(hwnd, Some(no_erase_proc), SUBCLASS_ID, 0);
                     }
                     BOOL(1) // 继续枚举
                 }
@@ -1303,6 +1304,7 @@ pub fn run() {
             proxy::proxy_stop_session,
             proxy::proxy_session_status,
             proxy::browser_window::browser_close_window,
+            proxy::browser_window::browser_close_all_windows,
             proxy::browser_window::browser_navigate,
             proxy::browser_window::browser_back,
             proxy::browser_window::browser_forward,

@@ -72,9 +72,15 @@
   background: #e01b24;  /* ✅ 保留原有红色 */
 }
 
+/* 服务器名槽位：固定宽度（超长省略号截断），未连接时占位符占同一槽位，
+   保证连接/断开状态切换时连接指示器宽度恒定、顶栏不被挤压 */
 .serverName {
+  width: 96px;
   margin-left: 8px;
   opacity: 0.7;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .spacer {

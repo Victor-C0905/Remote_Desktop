@@ -211,10 +211,11 @@ const zhCN = {
     savedServers: '已保存的服务器',
     noServers: '暂无保存的服务器',
     noServersHint: '点击下方按钮添加',
-    connectedTip: '已连接 - 点击断开',
-    reconnectingTip: '自动重连中（最多 3 次、5 秒间隔）...',
-    connectTip: '连接',
     deleteTip: '删除',
+    connectBtn: '连接',
+    editTip: '编辑',
+    rowConnecting: '连接中…',
+    lastConnectedTitle: '上次连接',
     addServerBtn: '+ 添加服务器',
     confirmRemove: '确定要删除此服务器配置吗？',
     // 外观分区
@@ -235,8 +236,6 @@ const zhCN = {
     builtinWallpaperLabel: '默认壁纸',
     useCachedWallpaperBtn: '使用我的图片',
     customWallpaperLabel: '当前自定义壁纸',
-    startupTitle: '启动行为',
-    restoreWindows: '启动时恢复上次打开的窗口',
     frostedGlassTitle: '毛玻璃效果',
     frostedGlassLabel: '启用毛玻璃（窗口边框/侧栏采样壁纸模糊，有常驻 GPU 开销）',
     // 快捷键分区

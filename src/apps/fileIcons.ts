@@ -13,7 +13,7 @@ export const FOLDER_ICON: AppIconName = 'folder';
 export const FILE_ICONS: Record<string, AppIconName> = {
   ".txt": "file-text", ".md": "file-text", ".log": "file-text",
   ".doc": "file-text", ".docx": "file-text", ".rtf": "file-text", ".odt": "file-text",
-  ".csv": "file-text", ".xlsx": "file-text",
+  ".csv": "spreadsheet", ".xlsx": "spreadsheet",
   ".pdf": "pdf",
   ".json": "file-json",
   ".toml": "config", ".yaml": "config", ".yml": "config", ".conf": "config", ".ini": "config",

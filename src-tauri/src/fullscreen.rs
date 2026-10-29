@@ -86,7 +86,7 @@ fn install_move_block(hwnd: HWND) {
         return;
     }
     unsafe {
-        let orig = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, fullscreen_block_proc as usize as isize);
+        let orig = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, fullscreen_block_proc as *const () as usize as isize);
         ORIGINAL_WNDPROC.store(orig, Ordering::Relaxed);
         tracing::info!("[Fullscreen] WndProc 子类已安装: orig={orig:#x}");
     }
@@ -253,7 +253,7 @@ fn set_taskbars_visible(visible: bool) {
         let class = String::from_utf16_lossy(&buf[..n.min(buf.len())]);
         if class == "Shell_TrayWnd" || class == "Shell_SecondaryTrayWnd" {
             let cmd = SHOW_CMD.with(|c| c.get());
-            unsafe { ShowWindow(hwnd, SHOW_WINDOW_CMD(cmd)) };
+            unsafe { let _ = ShowWindow(hwnd, SHOW_WINDOW_CMD(cmd)); };
         }
         BOOL(1)
     }

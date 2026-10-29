@@ -191,6 +191,7 @@ html:not([data-frosted="on"]) {
 [data-icon-theme='classic'] {
   --ic-blue-light: #78b4f2;  --ic-blue-surface: #3584e4;  --ic-blue-deep: #1c62c9;  --ic-blue-ink: #ffffff;  --ic-blue-solid: #3584e4;
   --ic-green-light: #4fd394; --ic-green-surface: #26a269; --ic-green-deep: #1d8052; --ic-green-ink: #ffffff; --ic-green-solid: #26a269; --ic-green-cursor: #8ff0b4;
+  --ic-teal-light: #66d2d8;  --ic-teal-surface: #179299; --ic-teal-deep: #0d6e74; --ic-teal-ink: #ffffff; --ic-teal-solid: #179299;
   --ic-orange-light: #f28b41; --ic-orange-surface: #e66100; --ic-orange-deep: #b34e00; --ic-orange-ink: #ffffff; --ic-orange-solid: #e66100;
   --ic-purple-light: #b06cc4; --ic-purple-surface: #9141ac; --ic-purple-deep: #71308a; --ic-purple-ink: #ffffff; --ic-purple-solid: #9141ac;
   --ic-red-light: #ea4c52;   --ic-red-surface: #e01b24;   --ic-red-deep: #b0141b;   --ic-red-ink: #ffffff;   --ic-red-solid: #e01b24;
@@ -207,6 +208,7 @@ html:not([data-frosted="on"]) {
   /* 高对比淡彩徽章：底=本色 35% 混卡色（明显淡彩）、边=本色实色、图形=深本色 */
   --ic-blue-light: color-mix(in srgb, var(--ic-blue-solid) 20%, var(--quirel-card-bg)); --ic-blue-surface: color-mix(in srgb, var(--ic-blue-solid) 35%, var(--quirel-card-bg)); --ic-blue-deep: var(--ic-blue-solid); --ic-blue-ink: #1a5fb4; --ic-blue-solid: #1a5fb4;
   --ic-green-light: color-mix(in srgb, var(--ic-green-solid) 20%, var(--quirel-card-bg)); --ic-green-surface: color-mix(in srgb, var(--ic-green-solid) 35%, var(--quirel-card-bg)); --ic-green-deep: var(--ic-green-solid); --ic-green-ink: #0f8658; --ic-green-solid: #0f8658; --ic-green-cursor: #0f8658;
+  --ic-teal-light: color-mix(in srgb, var(--ic-teal-solid) 20%, var(--quirel-card-bg)); --ic-teal-surface: color-mix(in srgb, var(--ic-teal-solid) 35%, var(--quirel-card-bg)); --ic-teal-deep: var(--ic-teal-solid); --ic-teal-ink: #0f7f86; --ic-teal-solid: #0f7f86;
   --ic-orange-light: color-mix(in srgb, var(--ic-orange-solid) 20%, var(--quirel-card-bg)); --ic-orange-surface: color-mix(in srgb, var(--ic-orange-solid) 35%, var(--quirel-card-bg)); --ic-orange-deep: var(--ic-orange-solid); --ic-orange-ink: #a34a00; --ic-orange-solid: #a34a00;
   --ic-purple-light: color-mix(in srgb, var(--ic-purple-solid) 20%, var(--quirel-card-bg)); --ic-purple-surface: color-mix(in srgb, var(--ic-purple-solid) 35%, var(--quirel-card-bg)); --ic-purple-deep: var(--ic-purple-solid); --ic-purple-ink: #7d3891; --ic-purple-solid: #7d3891;
   --ic-red-light: color-mix(in srgb, var(--ic-red-solid) 20%, var(--quirel-card-bg)); --ic-red-surface: color-mix(in srgb, var(--ic-red-solid) 35%, var(--quirel-card-bg)); --ic-red-deep: var(--ic-red-solid); --ic-red-ink: #a5121a; --ic-red-solid: #a5121a;
@@ -222,6 +224,7 @@ html:not([data-frosted="on"]) {
 [data-icon-scheme='dark'] {
   --ic-blue-light: #99c1f1;   --ic-blue-surface: #62a0ea;  --ic-blue-deep: #3584e4;  --ic-blue-solid: #99c1f1;
   --ic-green-light: #8ff0b4;  --ic-green-surface: #33d17a; --ic-green-deep: #26a269; --ic-green-solid: #8ff0b4; --ic-green-cursor: #8ff0b4;
+  --ic-teal-light: #89e0e6;   --ic-teal-surface: #28b6c0;  --ic-teal-deep: #179299; --ic-teal-solid: #89e0e6;
   --ic-orange-light: #ffbe6f; --ic-orange-surface: #ff7800; --ic-orange-deep: #c65800; --ic-orange-solid: #ffa348;
   --ic-purple-light: #dc8add; --ic-purple-surface: #c061cb; --ic-purple-deep: #9141ac; --ic-purple-solid: #dc8add;
   --ic-red-light: #f9a1a5;    --ic-red-surface: #f66151;   --ic-red-deep: #c01c28;   --ic-red-solid: #f66151;
@@ -237,6 +240,7 @@ html:not([data-frosted="on"]) {
   /* 暗色高对比：底=浅亮本色 35% 混暗底（明显暗彩）、边=浅亮本色实色、图形=浅亮 */
   --ic-blue-light: color-mix(in srgb, var(--ic-blue-solid) 20%, var(--quirel-view-bg)); --ic-blue-surface: color-mix(in srgb, var(--ic-blue-solid) 35%, var(--quirel-view-bg)); --ic-blue-deep: var(--ic-blue-solid); --ic-blue-ink: #99c1f1; --ic-blue-solid: #99c1f1;
   --ic-green-light: color-mix(in srgb, var(--ic-green-solid) 20%, var(--quirel-view-bg)); --ic-green-surface: color-mix(in srgb, var(--ic-green-solid) 35%, var(--quirel-view-bg)); --ic-green-deep: var(--ic-green-solid); --ic-green-ink: #8ff0b4; --ic-green-solid: #8ff0b4; --ic-green-cursor: #8ff0b4;
+  --ic-teal-light: color-mix(in srgb, var(--ic-teal-solid) 20%, var(--quirel-view-bg)); --ic-teal-surface: color-mix(in srgb, var(--ic-teal-solid) 35%, var(--quirel-view-bg)); --ic-teal-deep: var(--ic-teal-solid); --ic-teal-ink: #89e0e6; --ic-teal-solid: #89e0e6;
   --ic-orange-light: color-mix(in srgb, var(--ic-orange-solid) 20%, var(--quirel-view-bg)); --ic-orange-surface: color-mix(in srgb, var(--ic-orange-solid) 35%, var(--quirel-view-bg)); --ic-orange-deep: var(--ic-orange-solid); --ic-orange-ink: #ffa348; --ic-orange-solid: #ffa348;
   --ic-purple-light: color-mix(in srgb, var(--ic-purple-solid) 20%, var(--quirel-view-bg)); --ic-purple-surface: color-mix(in srgb, var(--ic-purple-solid) 35%, var(--quirel-view-bg)); --ic-purple-deep: var(--ic-purple-solid); --ic-purple-ink: #dc8add; --ic-purple-solid: #dc8add;
   --ic-red-light: color-mix(in srgb, var(--ic-red-solid) 20%, var(--quirel-view-bg)); --ic-red-surface: color-mix(in srgb, var(--ic-red-solid) 35%, var(--quirel-view-bg)); --ic-red-deep: var(--ic-red-solid); --ic-red-ink: #f66151; --ic-red-solid: #f66151;

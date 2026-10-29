@@ -130,12 +130,15 @@
 
 - [ ] **用户**：push（`git push origin main dev v0.3.0-beta.2`，gitee 远端按需）+ 6 个分支改名归档。
 - [ ] **用户**：安装新 beta.2 包，验收设置 → 图标主题 classic 卡观感（琥珀文件夹/彩色磁贴/白纸身）。
-- [ ] 色相再平衡第二阶段（database→teal 新色相、search 归属等，见 proposals 文档 §3）。
+- [x] ~~色相再平衡第二阶段~~（2026-10-29 已落地：database→teal 新色组、
+      search/about 归灰、spreadsheet green；与 §3 的其余差集此前已合入）。
 - [x] ~~`AppIcon` DEFS 提为全局单例~~（2026-10-28 已落地：#icon-defs-sprite，
       顺带根治磁贴透明 P0，见「进行中」第 6 条）。
-- [ ] 新增 spreadsheet 图标（.xlsx/.csv 当前暂映射 file-text）。
+- [x] ~~新增 spreadsheet 图标~~（2026-10-29 已落地：green 网格纸形，.xlsx/.csv 已改映射）。
 - [ ] `tauri.conf.json` 的 bundle identifier `com.quirel.app` 以 `.app` 结尾，构建有警告（macOS 语义冲突）。
-- [ ] Rust 侧 9 个编译警告（browser_window.rs 死代码、fullscreen.rs 函数指针 casts 等），可顺手清理。
+- [x] ~~Rust 侧 9 个编译警告~~（2026-10-29 已清零：3 处机械修正（BOOL 显式
+      忽略 ×2、函数指针 `as *const ()` ×1）；6 处浏览器 tab/诊断预留代码按
+      reserved-features 惯例 `#[allow(dead_code)]` + 注释标注，未删除）。
 
 ## Agent 必读的技术坑（本会话实证）
 
