@@ -1,9 +1,9 @@
-import { createContext, useContext, useCallback, ReactNode } from "react";
+import { createContext, useContext, useCallback, useEffect, ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { isTauri } from "../utils/environment";
 import { useNotificationStore } from "../stores/notificationStore";
-import { useWallpaperStore, getWallpaperStyle } from "../stores/wallpaperStore";
+import { useWallpaperStore, getWallpaperStyle, wallpaperImageUrl } from "../stores/wallpaperStore";
 import type { WallpaperConfig } from "../stores/wallpaperStore";
 
 /* ── Types ─────────────────────────────────────────────── */
@@ -29,7 +29,49 @@ const WallpaperContext = createContext<WallpaperContextType | null>(null);
 
 export function WallpaperProvider({ children }: { children: ReactNode }) {
   // 使用 Zustand store
-  const { wallpaper, setBuiltinWallpaper, setCustomWallpaper, setCachedWallpaper, clearWallpaper } = useWallpaperStore();
+  const { wallpaper, objectUrl, setBuiltinWallpaper, setCustomWallpaper, setCachedWallpaper, clearWallpaper } = useWallpaperStore();
+
+  // 主窗口背景色同步：当前壁纸 64×64 平均色 → Rust（暴露区 WM_ERASEBKGND
+  // 填充 + WebView2 DefaultBackgroundColor）。最大化/缩放的坏帧窗口在
+  // WebView2 新帧就位前不可避免，以其内容主色填充后从「闪黑」退化为
+  // 与壁纸几乎不可分的色差（探针实测与方案见 debug-maximize-black-flash.md）。
+  // asset 协议图会污染 canvas（SecurityError），失败保持上次颜色。
+  useEffect(() => {
+    if (!isTauri()) return;
+    const url = wallpaperImageUrl(wallpaper, objectUrl);
+    if (!url) return;
+    let cancelled = false;
+    const img = new Image();
+    img.onload = () => {
+      if (cancelled) return;
+      try {
+        const N = 64;
+        const cv = document.createElement("canvas");
+        cv.width = N;
+        cv.height = N;
+        const ctx = cv.getContext("2d", { willReadFrequently: true });
+        if (!ctx) return;
+        ctx.drawImage(img, 0, 0, N, N);
+        const d = ctx.getImageData(0, 0, N, N).data;
+        let r = 0, g = 0, b = 0;
+        const n = d.length / 4;
+        for (let i = 0; i < d.length; i += 4) {
+          r += d[i]; g += d[i + 1]; b += d[i + 2];
+        }
+        invoke("set_window_background_color", {
+          r: Math.round(r / n),
+          g: Math.round(g / n),
+          b: Math.round(b / n),
+        }).catch(() => {});
+      } catch {
+        /* canvas 污染：保持上次颜色 */
+      }
+    };
+    img.src = url;
+    return () => {
+      cancelled = true;
+    };
+  }, [wallpaper, objectUrl]);
 
   const importWallpaper = useCallback(async () => {
     // Tauri 环境：dialog 拿绝对路径 → Rust 复制为单一缓存文件 → asset 协议加载。

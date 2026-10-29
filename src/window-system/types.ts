@@ -46,8 +46,6 @@ export interface AppDefinition {
   id: string;
   /** 窗口标题的词典 key（文案在 i18n apps 域；渲染处 t()） */
   titleKey: string;
-  /** AppIcon 语义 key（见 components/AppIcon.tsx） */
-  icon: import('../components/AppIcon').AppIconName;
   defaultSize: { width: number; height: number };
   minSize: { width: number; height: number };
   allowMultipleInstances: boolean;

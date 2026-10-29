@@ -17,6 +17,7 @@ import type { PermMatrix } from './permissions';
 import { sortFileEntries, DEFAULT_SORT, DEFAULT_COLUMN_WIDTHS, clampColumnWidth, buildGridTemplate, filterByColumnFilters, toggleBucket, DEFAULT_COLUMN_FILTERS, SIZE_BUCKETS, MTIME_BUCKETS, NAME_BUCKETS, typeKeyOf, typeKeyLabel, listFileTypeBuckets } from './fileTable';
 import type { SortKey, SortState, ColumnWidths, ColumnFilterState, SizeBucket, MtimeBucket, NameBucket } from './fileTable';
 import { SymbolicIcon } from "../components/symbolic";
+import { ToolbarMenu, type MenuEntry } from "../components/ToolbarMenu/ToolbarMenu";
 import { ConfirmDialog } from "../components/Dialog/ConfirmDialog";
 import { Dialog } from "../components/Dialog/Dialog";
 import { useTranslation } from "react-i18next";
@@ -27,6 +28,9 @@ import "./FileManager.css";
 
 const log = createLogger('FileManager');
 
+/** 搜索下钻层数档位（0 = 仅当前目录一层，不在选项内单列；Rust 侧 clamp_search_depth 在 8 截断） */
+const SEARCH_DEPTH_OPTIONS = [1, 2, 3, 5, 8];
+
 export interface FileEntry {
   name: string;
   is_dir: boolean;
@@ -35,11 +39,19 @@ export interface FileEntry {
   permissions: string;
   owner?: string;  // 所有者（旧版 Agent 不下发时为 undefined，显示回退 "—"）
   group?: string;  // 所属组（同上）
+  path?: string;   // 搜索命中自带完整路径（嵌套目录定位依据）；普通浏览为 undefined
 }
 
 interface ReadDirResponse {
   path: string;
   entries: FileEntry[];
+}
+
+/** remote_search 响应（Rust RemoteSearchResponse：FileEntry 展平 + path） */
+interface SearchResponse {
+  root: string;
+  results: FileEntry[];
+  truncated: boolean;
 }
 
 // 挂载点信息
@@ -152,6 +164,44 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   const [homeDir, setHomeDir] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("list");
 
+  // ── 文件搜索（地址栏右侧常驻小搜索框，前缀匹配；下钻层数经 ⌄ 菜单可调）──
+  // 匹配在 Rust 侧执行（remote_search：depth=0 单次 ReadDir 仅当前目录，
+  // depth>0 受限下钻；输入 a 只命中 a***），前端只负责防抖/过期丢弃/展示；
+  // 声明在 visibleEntries 之前（其 useMemo 以搜索结果为数据源）。
+  // 无独立「搜索模式」开关：查询词生效中即搜索视图（activeSearch），
+  // 无词时回落当前目录内容——不隐藏正在浏览的文件
+  const [searchInput, setSearchInput] = useState("");       // 输入框即时值
+  const [searchQuery, setSearchQuery] = useState("");       // 防抖后的生效查询词
+  const [searchResults, setSearchResults] = useState<FileEntry[] | null>(null); // null = 尚无结果
+  const [searching, setSearching] = useState(false);
+  const [searchTruncated, setSearchTruncated] = useState(false); // Rust 触达上限，结果可能不全
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const searchEpochRef = useRef(0);   // 丢弃过期响应（连打/换目录）
+  const [searchNonce, setSearchNonce] = useState(0); // 删除/重命名等操作后重跑搜索的触发器
+  const searchInputRef = useRef<HTMLInputElement>(null); // Ctrl+F 聚焦入口
+  /** 搜索下钻层数（持久化到设置存储；0 = 仅当前目录一层） */
+  const fileManagerSearchDepth = useSettingsStore(s => s.fileManagerSearchDepth);
+  const setFileManagerSearchDepth = useSettingsStore(s => s.setFileManagerSearchDepth);
+  /** 搜索视图判定：查询词生效中（替代旧 searchMode 布尔，对齐 Windows 行为） */
+  const activeSearch = searchQuery.length > 0;
+  // 搜索范围档位（⌄ 菜单）：0 = 仅当前目录；触发按钮 title 与输入框 placeholder
+  // 反映当前档位，占位文本零布局成本地告知范围
+  const searchScopeLabel = fileManagerSearchDepth > 0
+    ? t("fileManager.searchScopeDepth", { n: fileManagerSearchDepth })
+    : t("fileManager.searchScopeCurrent");
+  const searchScopeItems: MenuEntry[] = useMemo(() => [
+    {
+      label: t("fileManager.searchScopeCurrent"),
+      checked: fileManagerSearchDepth === 0,
+      onClick: () => setFileManagerSearchDepth(0),
+    },
+    ...SEARCH_DEPTH_OPTIONS.map((n) => ({
+      label: t("fileManager.searchScopeDepth", { n }),
+      checked: fileManagerSearchDepth === n,
+      onClick: () => setFileManagerSearchDepth(n),
+    })),
+  ], [t, fileManagerSearchDepth, setFileManagerSearchDepth]);
+
   // ── 列筛选（表头下拉菜单，Win11 Explorer 风格）────────────
   // 会话内状态不持久化：每次打开默认无筛选；名称/大小/时间/类型列可勾选组，
   // 勾选为并集（OR），多列 AND 叠加（目录/文件粗过滤由类型列 __dir 组承担，
@@ -160,12 +210,81 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   // 打开中的表头下拉菜单：锚点列 + 视口坐标（fixed 定位，portal 渲染）
   const [headerMenu, setHeaderMenu] = useState<{ key: SortKey; x: number; y: number } | null>(null);
 
-  // 显示列表 = 已排序的 entries 过「列筛选」；
-  // 渲染与键盘导航均以此为准（entries 保持全量，切换过滤/排序不重新加载目录）
+  // 显示列表 = 已排序的数据源过「列筛选」；数据源：搜索词生效中为命中结果
+  // （remote_search 返回后已按当前表头排序），否则为当前目录 entries——
+  // 无词时目录内容原样显示（对齐 Windows：搜索框不隐藏正在浏览的文件）
+  // （渲染与键盘导航均以此为准，切换过滤/排序不重新加载目录/不重跑搜索）
   const visibleEntries = useMemo(
-    () => filterByColumnFilters(entries, columnFilters),
-    [entries, columnFilters]
+    () => filterByColumnFilters(activeSearch ? (searchResults ?? []) : entries, columnFilters),
+    [activeSearch, searchResults, entries, columnFilters]
   );
+
+  // ── 文件搜索行为 ─────────────────────────────────────
+  // 输入防抖 300ms 才成为生效查询词；清空输入即回到目录浏览
+  useEffect(() => {
+    const timer = setTimeout(() => setSearchQuery(searchInput.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [searchInput]);
+
+  // 生效查询词变化/目录切换/下钻层数变化/操作后重跑：调 remote_search（epoch 丢弃过期响应）
+  useEffect(() => {
+    if (!searchQuery || !activeServerId) {
+      setSearchResults(null);
+      setSearchTruncated(false);
+      setSearchError(null);
+      return;
+    }
+    const epoch = ++searchEpochRef.current;
+    setSearching(true);
+    setSelectedIdx(null); // 数据源即将切换，清除悬空选中
+    invoke<SearchResponse>("remote_search", {
+      serverId: activeServerId,
+      root: currentPath,
+      query: searchQuery,
+      depth: fileManagerSearchDepth,
+    })
+      .then((resp) => {
+        if (epoch !== searchEpochRef.current) return; // 过期响应丢弃
+        setSearchResults(sortFileEntries(resp.results, sortStateRef.current));
+        setSearchTruncated(resp.truncated);
+        setSearchError(null);
+      })
+      .catch((e) => {
+        if (epoch !== searchEpochRef.current) return;
+        setSearchResults([]);
+        setSearchTruncated(false);
+        setSearchError(formatUnknownError(e));
+        log.error("搜索失败:", e);
+      })
+      .finally(() => {
+        if (epoch === searchEpochRef.current) setSearching(false);
+      });
+  }, [searchQuery, activeServerId, currentPath, searchNonce, fileManagerSearchDepth]);
+
+  /** 清空搜索：回到当前目录浏览；在途响应经 epoch 作废 */
+  const exitSearch = useCallback(() => {
+    searchEpochRef.current++;
+    setSearchInput("");
+    setSearchQuery("");
+    setSearchResults(null);
+    setSearching(false);
+    setSearchTruncated(false);
+    setSearchError(null);
+    setSelectedIdx(null);
+  }, []);
+
+  // Ctrl+F 聚焦搜索框（Windows Explorer 惯例）；离线无目标目录不启用
+  useEffect(() => {
+    if (isOffline) return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isOffline]);
 
   // ── 表头排序（点击翻转）────────────────────────────────
   // 会话内状态：目录加载与点击表头共用；目录优先规则见 fileTable.sortFileEntries
@@ -370,6 +489,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     setSortState(next);
     sortStateRef.current = next;  // 同步 ref，防连点时读到旧值
     setEntries(prevEntries => sortFileEntries(prevEntries, next));
+    setSearchResults(prev => (prev ? sortFileEntries(prev, next) : prev)); // 搜索视图同步重排
   }, []);
 
   /* ── 表头下拉菜单（列筛选，Win11 Explorer 风格）─────────── */
@@ -929,10 +1049,11 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
 
   const goBack = useCallback(() => {
     if (historyIdx > 0) {
+      exitSearch(); // 任何导航都离开搜索视图（Nautilus 语义：搜索绑定当前目录）
       setHistoryIdx(historyIdx - 1);
       loadDir(history[historyIdx - 1]);
     }
-  }, [history, historyIdx, loadDir]);
+  }, [history, historyIdx, loadDir, exitSearch]);
 
   const goUp = useCallback(() => {
     const parent = currentPath.split("/").slice(0, -1).join("/") || "/";
@@ -941,22 +1062,44 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
 
   const goForward = useCallback(() => {
     if (historyIdx < history.length - 1) {
+      exitSearch(); // 同 goBack：导航离开搜索视图
       setHistoryIdx(historyIdx + 1);
       loadDir(history[historyIdx + 1]);
     }
-  }, [history, historyIdx, loadDir]);
+  }, [history, historyIdx, loadDir, exitSearch]);
+
+  // ── 搜索命中路径工具 ──────────────────────────────────
+  /** 条目完整路径：搜索命中自带 path（嵌套目录定位依据）；普通浏览按当前目录拼装 */
+  const entryFullPath = useCallback((entry: FileEntry): string => {
+    if (entry.path) return entry.path;
+    return currentPath === "/" ? `/${entry.name}` : `${currentPath}/${entry.name}`;
+  }, [currentPath]);
+
+  /** 搜索命中的相对目录展示：path 去掉 root 前缀与末段名称（root 直下命中不显示） */
+  const hitDirLabel = useCallback((p: string): string => {
+    let rel = p;
+    if (currentPath !== "/" && p.startsWith(`${currentPath}/`)) rel = p.slice(currentPath.length + 1);
+    else if (p.startsWith("/")) rel = p.slice(1);
+    const idx = rel.lastIndexOf("/");
+    return idx === -1 ? "" : rel.slice(0, idx);
+  }, [currentPath]);
+
+  /** 变更操作后刷新：底层目录始终重载（退出搜索即见新数据）；
+   *  搜索词生效中同时重跑搜索（nonce 触发 effect） */
+  const refreshAfterMutation = useCallback(() => {
+    loadDir(currentPath);
+    setSearchNonce((n) => n + 1);
+  }, [loadDir, currentPath]);
 
   // Double-click entry
   // 双击/上下文菜单打开条目
   // 文件：经 FileOpener 网关探测格式后路由到对应应用（图片/PDF/文本/十六进制）
   const handleOpen = useCallback(async (entry: FileEntry) => {
-    const sep = "/";
-    const fullPath = currentPath === "/"
-      ? `${currentPath}${sep}${entry.name}`
-      : `${currentPath}${sep}${entry.name}`;
+    const fullPath = entryFullPath(entry);
 
-    // 目录：保持原有导航逻辑
+    // 目录：保持原有导航逻辑（搜索词生效中先清空，回到常规浏览）
     if (entry.is_dir) {
+      if (activeSearch) exitSearch();
       navigateTo(fullPath);
       return;
     }
@@ -974,7 +1117,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       log.error('打开失败:', outcome.message);
       pushNotification({ title: t("common.error"), body: t("fileManager.openFailed", { message: outcome.message }), source: t("fileManager.source"), urgency: "normal" });
     }
-  }, [currentPath, navigateTo, manager, activeServerId]);
+  }, [entryFullPath, activeSearch, exitSearch, navigateTo, manager, activeServerId]);
 
   // ── Properties Dialog ────────────────────────────────
   const showProperties = useCallback((entry: FileEntry) => {
@@ -1011,8 +1154,8 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     }
     const { modeChanged, ownerChanged } = permDirty;
     if (!modeChanged && !ownerChanged) return;  // 无更改（按钮已禁用，双保险）
-    // 完整路径拼法与 runScriptInTerminal 一致（"/" 根目录特判）
-    const fullPath = currentPath === '/' ? `/${propertiesEntry.name}` : `${currentPath}/${propertiesEntry.name}`;
+    // 完整路径：搜索命中自带 path，普通浏览按当前目录拼装
+    const fullPath = entryFullPath(propertiesEntry);
     setPermSaving(true);
     setPermError(null);
     try {
@@ -1036,14 +1179,14 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         if (!ok) { setPermError(t("fileManager.ownerChangeFailed")); return; }
       }
       setPropertiesEntry(null);
-      loadDir(currentPath);  // 成功：关闭对话框 + 刷新目录
+      refreshAfterMutation();  // 成功：关闭对话框 + 刷新视图（搜索模式重跑搜索）
     } catch (err) {
       log.error("应用属性失败:", err);
       setPermError(formatUnknownError(err));
     } finally {
       setPermSaving(false);
     }
-  }, [propertiesEntry, activeServerId, currentPath, permMatrix, permOwner, permGroup, permRecursive, permSaving, permDirty, loadDir, t]);
+  }, [propertiesEntry, activeServerId, entryFullPath, permMatrix, permOwner, permGroup, permRecursive, permSaving, permDirty, refreshAfterMutation, t]);
 
   // ── Script Run（右键菜单入口）：打开终端并注入命令 ────
   // 方案 1 设计：双击 .sh 一律编辑器查看；运行是显式意图（右键菜单选择），
@@ -1051,14 +1194,14 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   // sudo 运行时密码由 PTY 交互输入（NOPASSWD 环境则直接执行）
   const runScriptInTerminal = useCallback((entry: FileEntry, sudo: boolean) => {
     if (!activeServerId) return;
-    const fullPath = currentPath === '/' ? `/${entry.name}` : `${currentPath}/${entry.name}`;
+    const fullPath = entryFullPath(entry);
     const cmd = `${sudo ? 'sudo ' : ''}bash ${fullPath}`;
     const dir = fullPath.slice(0, fullPath.lastIndexOf('/')) || '/';
     manager.create('terminal', {
       serverId: activeServerId,
       preloadData: { workingDirectory: dir, initialCommand: cmd },
     });
-  }, [activeServerId, currentPath, manager]);
+  }, [activeServerId, entryFullPath, manager]);
 
   // ── File Operations ───────────────────────────────────
   const handleMkdir = useCallback(async () => {
@@ -1109,15 +1252,10 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       return;
     }
 
-    // 构建路径（Linux 格式）
-    const sep = "/";
-    const oldPath = currentPath === "/"
-      ? `${currentPath}${sep}${editingEntry.name}`
-      : `${currentPath}${sep}${editingEntry.name}`;
-
-    const newPath = currentPath === "/"
-      ? `${currentPath}${sep}${trimmedName}`
-      : `${currentPath}${sep}${trimmedName}`;
+    // 构建路径（Linux 格式）：搜索命中自带 path，普通浏览按当前目录拼装
+    const oldPath = entryFullPath(editingEntry);
+    const parentDir = oldPath.slice(0, oldPath.lastIndexOf("/")) || "/";
+    const newPath = parentDir === "/" ? `/${trimmedName}` : `${parentDir}/${trimmedName}`;
 
     log.debug("rename:", oldPath, "->", newPath);
 
@@ -1135,8 +1273,8 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         return;
       }
 
-      // 刷新当前目录
-      loadDir(currentPath);
+      // 刷新视图（搜索模式重跑搜索）
+      refreshAfterMutation();
     } catch (err) {
       log.error("rename 失败:", err);
       pushNotification({ title: t("common.error"), body: t("fileManager.renameFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
@@ -1145,7 +1283,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     // 清除编辑状态
     setEditingEntry(null);
     setEditingName("");
-  }, [editingEntry, editingName, currentPath, activeServerId, loadDir]);
+  }, [editingEntry, editingName, entryFullPath, activeServerId, refreshAfterMutation]);
 
   // 取消重命名（inline editing）
   const cancelRename = useCallback(() => {
@@ -1173,11 +1311,8 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
 
   // 执行删除（仅由 ConfirmDialog 确认回调调用）
   const doDelete = useCallback(async (entry: FileEntry) => {
-    // 构建路径（Linux 格式）
-    const sep = "/";
-    const path = currentPath === "/"
-      ? `${currentPath}${sep}${entry.name}`
-      : `${currentPath}${sep}${entry.name}`;
+    // 构建路径（Linux 格式）：搜索命中自带 path，普通浏览按当前目录拼装
+    const path = entryFullPath(entry);
 
     log.debug("delete:", path);
 
@@ -1189,19 +1324,19 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         return;
       }
 
-      // 刷新当前目录
-      loadDir(currentPath);
+      // 刷新视图（搜索模式重跑搜索）
+      refreshAfterMutation();
     } catch (err) {
       log.error("delete 失败:", err);
       pushNotification({ title: t("common.error"), body: t("fileManager.deleteFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
     }
-  }, [currentPath, activeServerId, loadDir]);
+  }, [entryFullPath, activeServerId, refreshAfterMutation]);
 
   // 刷新当前目录
   const handleRefresh = useCallback(() => {
     setContextMenu(null);
-    loadDir(currentPath);
-  }, [currentPath, loadDir]);
+    refreshAfterMutation();
+  }, [refreshAfterMutation]);
 
   // 新建文件夹
   const handleNewFolder = useCallback(async () => {
@@ -1526,10 +1661,8 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     }
 
     try {
-      // 构建远程文件路径
-      const remotePath = currentPath === "/"
-        ? `/${entry.name}`
-        : `${currentPath}/${entry.name}`;
+      // 构建远程文件路径（搜索命中自带 path，普通浏览按当前目录拼装）
+      const remotePath = entryFullPath(entry);
 
       log.info(`下载文件: ${remotePath}`);
 
@@ -1559,7 +1692,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       log.error('下载失败:', err);
       pushNotification({ title: t("common.error"), body: t("fileManager.downloadFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
     }
-  }, [activeServerId, currentPath]);
+  }, [activeServerId, entryFullPath]);
 
   // ── Context Menu ─────────────────────────────────────
   // 右键菜单锚点：鼠标右下方 +3 紧贴。
@@ -1633,6 +1766,11 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
 
   // ── Keyboard ─────────────────────────────────────────
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    // 焦点在任何输入框（常驻搜索框/路径编辑/重命名）时：按键由输入框自身
+    // 处理，不透传到目录键盘导航（否则 Backspace 删字会误触 goUp、
+    // Delete 会误删选中文件）
+    if (e.target instanceof HTMLInputElement) return;
+
     // 如果正在编辑路径，不处理任何全局键盘事件
     if (isEditingPath) return;
 
@@ -1687,10 +1825,31 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     };
   }, [currentPath, loadDir]);
 
-  // ── Stats ────────────────────────────────────────────
-  const dirCount = entries.filter(e => e.is_dir).length;
-  const fileCount = entries.filter(e => !e.is_dir).length;
-  const totalSize = entries.filter(e => !e.is_dir).reduce((s, e) => s + e.size, 0);
+  // ── Stats（搜索词生效中统计命中结果，否则统计当前目录）──
+  const statusEntries = activeSearch ? (searchResults ?? []) : entries;
+  const dirCount = statusEntries.filter(e => e.is_dir).length;
+  const fileCount = statusEntries.filter(e => !e.is_dir).length;
+  const totalSize = statusEntries.filter(e => !e.is_dir).reduce((s, e) => s + e.size, 0);
+
+  // 搜索视图的内容区占位（搜索中/错误/无命中）；有结果时 null → 走列表/网格渲染
+  const searchEmptyState = activeSearch ? (
+    searching ? (
+      <div className="fm-empty">
+        <div className="fm-empty-icon"><AppIcon name="search" size={40} /></div>
+        <div className="fm-empty-text">{t("fileManager.searching")}</div>
+      </div>
+    ) : searchError ? (
+      <div className="fm-empty">
+        <div className="fm-empty-icon"><AppIcon name="about" size={40} /></div>
+        <div className="fm-empty-text">{searchError}</div>
+      </div>
+    ) : (searchResults?.length ?? 0) === 0 ? (
+      <div className="fm-empty" onContextMenu={handleEmptyContextMenu} onClick={handleEmptyClick}>
+        <div className="fm-empty-icon"><AppIcon name="search" size={40} /></div>
+        <div className="fm-empty-text">{t("fileManager.searchNoResults")}</div>
+      </div>
+    ) : null
+  ) : null;
 
   return (
     <div className="fm-app" onKeyDown={handleKeyDown} tabIndex={0}>
@@ -1738,7 +1897,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
 
             {/* Path Input */}
             <div className="fm-toolbar-path">
-              {/* 面包屑导航：非编辑模式显示 */}
+              {/* 面包屑导航：始终可见（搜索框在地址栏右侧，不再替换地址栏） */}
               {!isEditingPath && (
                 <div
                   className="fm-breadcrumb"
@@ -1807,6 +1966,36 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
               )}
             </div>
 
+            {/* Search Box（地址栏右侧常驻，Ctrl+F 聚焦；下钻层数经右缘 ⌄ 菜单可调，
+                菜单走 portal 不占布局，触发钮仅 20px） */}
+            <div className="fm-search-bar">
+              <span className="fm-search-icon"><AppIcon name="search" size={14} /></span>
+              <input
+                ref={searchInputRef}
+                className="fm-search-input"
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    e.stopPropagation();
+                    exitSearch();
+                  }
+                }}
+                placeholder={fileManagerSearchDepth > 0
+                  ? t("fileManager.searchPlaceholderDepth", { n: fileManagerSearchDepth })
+                  : t("fileManager.searchPlaceholder")}
+                disabled={!activeServerId}
+              />
+              {searchInput && (
+                <button className="fm-search-exit" onClick={exitSearch} title={t("fileManager.exitSearch")}>✕</button>
+              )}
+              <ToolbarMenu
+                icon="⌄"
+                title={`${t("fileManager.searchScope")}：${searchScopeLabel}`}
+                items={searchScopeItems}
+              />
+            </div>
+
             {/* Actions */}
             <div className="fm-toolbar-actions">
               <button
@@ -1815,7 +2004,6 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                 title={t("fileManager.newFolder")}
                 disabled={!activeServerId}
               ><AppIcon name="folder-plus" size={15} /></button>
-              <button className="fm-toolbar-btn" title={t("fileManager.search")}><AppIcon name="search" size={15} /></button>
             </div>
 
             {/* View Toggle */}
@@ -1874,17 +2062,22 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                 </div>
               )}
             </div>
-        ) : loading ? (
+        ) : loading && !activeSearch ? (
+            /* 目录加载 spinner：搜索词生效中不显示（refreshAfterMutation 的后台
+               重载不打断搜索视图，搜索进度由 searchEmptyState 呈现） */
             <div className="fm-loading">
               <div className="spinner" />
               {t("common.loading")}
             </div>
-          ) : error ? (
+          ) : searchEmptyState ? (
+            /* 搜索视图占位（搜索中/错误/无命中）优先于目录浏览态 */
+            searchEmptyState
+          ) : !activeSearch && error ? (
             <div className="fm-empty">
               <div className="fm-empty-icon"><AppIcon name="about" size={40} /></div>
               <div className="fm-empty-text">{error}</div>
             </div>
-          ) : entries.length === 0 ? (
+          ) : !activeSearch && entries.length === 0 ? (
             <div
               className="fm-empty"
               onContextMenu={handleEmptyContextMenu}
@@ -1971,7 +2164,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
               >
                 {visibleEntries.map((entry, idx) => (
                   <div
-                    key={entry.name}
+                    key={entry.path ?? entry.name}
                     className={`fm-list-row${selectedIdx === idx ? " selected" : ""}`}
                     onClick={() => {
                       // 清除之前的定时器
@@ -1981,7 +2174,8 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                       }
 
                       // Adwaita-style: 如果文件已被选中，延迟判断是否为单击（防止双击误触发）
-                      if (selectedIdx === idx && editingEntry?.name !== entry.name) {
+                      // 编辑匹配带 path：搜索结果可含跨目录同名条目，避免误命中
+                      if (selectedIdx === idx && !(editingEntry?.name === entry.name && editingEntry?.path === entry.path)) {
                         clickTimerRef.current = setTimeout(() => {
                           handleRename(entry);
                           clickTimerRef.current = null;
@@ -2000,9 +2194,9 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                     }}
                     onContextMenu={(e) => handleContextMenu(e, entry, idx)}
                   >
-                    <div className="fm-file-name">
+                    <div className="fm-file-name" title={activeSearch ? entry.path : undefined}>
                       <span className="fm-fn-icon"><AppIcon name={getFileIcon(entry)} size={16} /></span>
-                      {editingEntry?.name === entry.name ? (
+                      {editingEntry?.name === entry.name && editingEntry?.path === entry.path ? (
                         <input
                           type="text"
                           className="fm-fn-edit-input"
@@ -2016,7 +2210,13 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                           style={{ width: `${Math.max(editingName.length + 0.5, 4)}ch` }}  // 动态宽度：文本长度 + 0.5字符，最小4字符
                         />
                       ) : (
-                        <span className="fm-fn-text">{entry.name}</span>
+                        <>
+                          <span className="fm-fn-text">{entry.name}</span>
+                          {/* 搜索命中在嵌套目录：名称后缀相对路径（Windows/Nautilus 副标题样式） */}
+                          {activeSearch && entry.path && hitDirLabel(entry.path) && (
+                            <span className="fm-fn-subdir">{hitDirLabel(entry.path)}</span>
+                          )}
+                        </>
                       )}
                     </div>
                     <span className="fm-file-size">{entry.is_dir ? "—" : formatSize(entry.size)}</span>
@@ -2035,7 +2235,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
             >
               {visibleEntries.map((entry, idx) => (
                 <div
-                  key={entry.name}
+                  key={entry.path ?? entry.name}
                   className={`fm-grid-item${selectedIdx === idx ? " selected" : ""}`}
                   onClick={() => {
                     // 清除之前的定时器
@@ -2045,7 +2245,8 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                     }
 
                     // Adwaita-style: 如果文件已被选中，延迟判断是否为单击（防止双击误触发）
-                    if (selectedIdx === idx && editingEntry?.name !== entry.name) {
+                    // 编辑匹配带 path：搜索结果可含跨目录同名条目，避免误命中
+                    if (selectedIdx === idx && !(editingEntry?.name === entry.name && editingEntry?.path === entry.path)) {
                       clickTimerRef.current = setTimeout(() => {
                         handleRename(entry);
                         clickTimerRef.current = null;
@@ -2065,7 +2266,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                   onContextMenu={(e) => handleContextMenu(e, entry, idx)}
                 >
                   <div className="fm-gi-icon"><AppIcon name={getFileIcon(entry)} size={36} /></div>
-                  {editingEntry?.name === entry.name ? (
+                  {editingEntry?.name === entry.name && editingEntry?.path === entry.path ? (
                     <input
                       type="text"
                       className="fm-gi-edit-input"
@@ -2079,7 +2280,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                       style={{ width: `${Math.max(editingName.length + 0.5, 4)}ch` }}  // 动态宽度：文本长度 + 0.5字符，最小4字符
                     />
                   ) : (
-                    <div className="fm-gi-label">{entry.name}</div>
+                    <div className="fm-gi-label" title={activeSearch ? entry.path : undefined}>{entry.name}</div>
                   )}
                 </div>
               ))}
@@ -2093,6 +2294,10 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         <div className="fm-statusbar-left">
           <span>{isOffline ? t("fileManager.dirFileCount", { dirs: PLACEHOLDER, files: PLACEHOLDER }) : t("fileManager.dirFileCount", { dirs: dirCount, files: fileCount })}</span>
           <span>{t("fileManager.totalSize")} {isOffline ? PLACEHOLDER : formatSize(totalSize)}</span>
+          {/* 搜索触达上限：提示结果可能不全（可细化关键词缩小范围） */}
+          {activeSearch && searchTruncated && (
+            <span className="fm-truncated-hint">{t("fileManager.searchTruncated")}</span>
+          )}
         </div>
 
         {/* 右侧：传输状态（新功能） */}

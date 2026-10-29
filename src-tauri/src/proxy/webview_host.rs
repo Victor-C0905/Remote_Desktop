@@ -17,7 +17,7 @@ use webview2_com::{
     CoreWebView2EnvironmentOptions, CreateCoreWebView2ControllerCompletedHandler,
     CreateCoreWebView2EnvironmentCompletedHandler, ExecuteScriptCompletedHandler,
 };
-use windows::core::{HSTRING, PWSTR};
+use windows::core::{HSTRING, Interface, PWSTR};
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -191,6 +191,12 @@ pub(crate) fn create_controller(
         .ok_or_else(|| "未找到新建 webview 窗口（差集为空）".to_string())?;
 
     let handle = WebviewHandle { controller, webview, hwnd };
+    // DefaultBackgroundColor = 壁纸平均色（实验 G 的 WebView2 层对浏览器
+    // webview 的对齐）：bounds 变更后 Chromium 新帧栅格化完成前的暴露区以
+    // 该色呈现——WebView2 默认白底会在主窗口最大化/缩放时闪白（高刷屏被
+    // DWM 采成多帧），壁纸平均色让坏帧与周边几乎不可分。必须在首次显示/
+    // 导航前设置，首帧即着色。壁纸运行时变更经 SyncBackgroundColor 补发。
+    apply_default_background(&handle);
     // 初始 bounds 的圆角 region（此后每次 set_bounds 随尺寸重设）
     apply_round_region(&handle, bounds.right - bounds.left, bounds.bottom - bounds.top);
     // 创建即可见（首 tab / wake 重建）时立即提顶：新窗口默认落在主 UI
@@ -236,6 +242,43 @@ pub(crate) fn set_bounds(wv: &WebviewHandle, bounds: RECT) {
     apply_round_region(wv, bounds.right - bounds.left, bounds.bottom - bounds.top);
 }
 
+/// 网页全屏 bounds（视频/游戏 Fullscreen API 铺满）：设置矩形并清除圆角 region。
+///
+/// region 必须清除：child HWND 不受 DOM 圆角裁剪（airspace），全屏时圆角
+/// region 会在屏幕四角露出透明缺口（下层是透明窗口 → 桌面）；SetWindowRgn(None)
+/// 恢复完整矩形。退出全屏经 set_bounds 自动重建圆角。
+pub(crate) fn set_fullscreen_bounds(wv: &WebviewHandle, bounds: RECT) {
+    use windows::Win32::Graphics::Gdi::SetWindowRgn;
+    unsafe {
+        if let Err(e) = wv.controller.SetBounds(bounds) {
+            tracing::error!(
+                "[Browser] 全屏 SetBounds 失败: rect=({},{},{},{}) err={e}",
+                bounds.left, bounds.top, bounds.right, bounds.bottom
+            );
+        }
+        // None = 移除窗口 region；fRedraw=true 立即重绘
+        SetWindowRgn(wv.hwnd, None, true);
+    }
+}
+
+/// 主窗口客户区矩形（物理像素，窗口自身坐标，原点=客户区左上）。
+///
+/// 网页全屏的 webview bounds 依据：铺满主窗口客户区——borderless 全屏
+/// 建立后客户区=监视器矩形；若全屏建立失败则铺满当前客户区，语义统一
+/// 为「跟随主窗口大小」，不再依赖监视器矩形（也规避 Resized 异步回流
+/// 期间客户区未就位的时序问题：全屏完成后经 ResyncBounds 再同步一次）。
+pub(crate) fn client_rect(hwnd: HWND) -> Option<RECT> {
+    use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
+    let mut rc = RECT::default();
+    unsafe {
+        if GetClientRect(hwnd, &mut rc).is_ok() && rc.right > rc.left && rc.bottom > rc.top {
+            Some(rc)
+        } else {
+            None
+        }
+    }
+}
+
 /// webview 内容卡片圆角（逻辑 px）：与前端 WEBVIEW_EDGE_INSET / --radius-md
 /// 同值，内缩边距与卡片圆角同心，视觉成一组
 const WEBVIEW_CORNER_RADIUS_LOGICAL: i32 = 12;
@@ -262,6 +305,32 @@ fn apply_round_region(wv: &WebviewHandle, width: i32, height: i32) {
         // 返回 0 即失败（窗口无效等）；非 0 成功后 region 归系统所有，无需 DeleteObject
         if SetWindowRgn(wv.hwnd, Some(rgn), true) == 0 {
             tracing::warn!("[Browser] webview 圆角 region 设置失败");
+        }
+    }
+}
+
+/// 应用 DefaultBackgroundColor = 当前壁纸平均色（crate 级 WINDOW_BG_COLORREF，
+/// 主窗口防闪同源单值）。调用时机：create_controller（新 webview 首帧着色）
+/// 与 SyncBackgroundColor（壁纸变更对存活 webview 补发）。colorref 0x00BBGGRR
+/// → COREWEBVIEW2_COLOR 字段序转换；窗口化宿主仅支持不透明色，A 固定 255。
+pub(crate) fn apply_default_background(wv: &WebviewHandle) {
+    let c = crate::WINDOW_BG_COLORREF.load(std::sync::atomic::Ordering::Relaxed);
+    let color = COREWEBVIEW2_COLOR {
+        A: 255,
+        R: (c & 0xFF) as u8,
+        G: ((c >> 8) & 0xFF) as u8,
+        B: ((c >> 16) & 0xFF) as u8,
+    };
+    unsafe {
+        // Controller2 是 Controller 的增补接口（运行时 ≥88 必有），cast 失败
+        // 仅降级为默认白底，不阻断 webview 创建/同步链路
+        match wv.controller.cast::<ICoreWebView2Controller2>() {
+            Ok(c2) => {
+                if let Err(e) = c2.SetDefaultBackgroundColor(color) {
+                    tracing::warn!("[Browser] SetDefaultBackgroundColor 失败: err={e}");
+                }
+            }
+            Err(e) => tracing::warn!("[Browser] 获取 ICoreWebView2Controller2 失败: err={e}"),
         }
     }
 }

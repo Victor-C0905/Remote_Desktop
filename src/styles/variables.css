@@ -111,6 +111,9 @@
   --quirel-frosted-blur:     blur(24px) saturate(160%);
   /* 毛玻璃边框（比普通边框更弱，避免突兀） */
   --quirel-frosted-border:   rgba(0, 0, 0, 0.06);
+  /* 失焦窗口标题栏底色：毛玻璃开启时降为半透明（blur 兜底可读性）；
+     关闭态在下方覆盖为不透明降档实色（无 blur 时半透明会直透壁纸） */
+  --quirel-headerbar-inactive-bg: rgba(var(--quirel-headerbar-bg-rgb), 0.55);
 
   /* Layout Constants */
   --topbar-height:    32px;
@@ -170,6 +173,11 @@ html:not([data-frosted="on"]) {
   --quirel-frosted-bg:     var(--quirel-headerbar-bg) !important;
   --quirel-frosted-blur:   none !important;
   --quirel-frosted-border: var(--quirel-border-color) !important;
+  /* 失焦标题栏无 blur 兜底，半透明会直透壁纸（2026-10-29 标题栏透明 bug）。
+     关闭态为不透明降档实色：向 window-bg 混 12% 与激活底色拉开一档
+     （亮色主题下更浅、暗色主题下更沉，方向随主题自动正确），
+     焦点层级与毛玻璃开启态的「厚玻璃→薄玻璃」同构 */
+  --quirel-headerbar-inactive-bg: color-mix(in srgb, var(--quirel-headerbar-bg) 88%, var(--quirel-window-bg)) !important;
 }
 
 /* ── 图标主题色板（与 AppBadge 双主题一致，settingsStore.iconTheme 驱动）──

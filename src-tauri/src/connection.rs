@@ -815,6 +815,179 @@ pub struct RemoteReadDirResponse {
     pub entries: Vec<FileEntry>,
 }
 
+// ── 远程搜索（宿主侧受限遍历，复用 ReadDir 走 Agent 权限模型）──────
+// 不新增协议变体：文件管理器搜索由客户端对当前目录发 ReadDirRequest，
+// 与浏览共用同一权限校验（uid/gid）与错误语义。depth=0 仅扫当前目录
+// 一层（单次往返即收束）；depth>0 下钻最多 depth 层，以下三重上限防
+// 超大目录树拖垮 QUIC 通道，触达任一即收束并置 truncated。
+
+const SEARCH_MAX_DEPTH: usize = 8; // 相对 root 的最大下钻深度（前端档位在此截断）
+const SEARCH_MAX_DIRS: usize = 400; // depth>0 时最多访问的目录数（每目录一次往返）
+const SEARCH_MAX_RESULTS: usize = 500; // 最多命中条数（各档位共用）
+const SEARCH_BUDGET: std::time::Duration = std::time::Duration::from_secs(10); // depth>0 时总时间预算
+
+/// 前端下钻档位 → 实际生效深度：超上限截断，防御异常大值
+fn clamp_search_depth(depth: u32) -> usize {
+    (depth as usize).min(SEARCH_MAX_DEPTH)
+}
+
+/// 搜索命中：FileEntry 展平 + 完整路径。嵌套命中必须自带路径，
+/// 前端打开/重命名/删除等操作按 path 定位（普通浏览仍按当前目录拼装）
+#[derive(Debug, Serialize)]
+pub struct RemoteSearchHit {
+    #[serde(flatten)]
+    pub entry: FileEntry,
+    pub path: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RemoteSearchResponse {
+    pub root: String,
+    pub results: Vec<RemoteSearchHit>,
+    /// 触达任一上限提前收束：结果非全量（前端提示）
+    pub truncated: bool,
+}
+
+/// 搜索命中：大小写不敏感前缀匹配（输入 a 只命中 a***，对齐命令行 tab 补全直觉）
+fn search_name_matches(name: &str, needle_lower: &str) -> bool {
+    name.to_lowercase().starts_with(needle_lower)
+}
+
+/// 远程 Linux 路径拼接：root "/" 特判避免双斜杠（目录路径均以 / 分隔）
+fn join_remote_path(dir: &str, name: &str) -> String {
+    if dir.ends_with('/') {
+        format!("{dir}{name}")
+    } else {
+        format!("{dir}/{name}")
+    }
+}
+
+/// 单目录条目匹配：前缀命中收集 + 命中数上限截断（单层/下钻两模式共用尾段）。
+/// 返回是否触达 SEARCH_MAX_RESULTS（true = 结果非全量）
+fn collect_search_hits(
+    entries: Vec<FileEntry>,
+    dir: &str,
+    needle: &str,
+    results: &mut Vec<RemoteSearchHit>,
+) -> bool {
+    for entry in entries {
+        if results.len() >= SEARCH_MAX_RESULTS {
+            return true;
+        }
+        if search_name_matches(&entry.name, needle) {
+            let path = join_remote_path(dir, &entry.name);
+            results.push(RemoteSearchHit { entry, path });
+        }
+    }
+    false
+}
+
+#[tauri::command]
+#[tracing::instrument(skip(app), fields(server_id = %server_id, root = %root))]
+pub async fn remote_search(
+    server_id: String,
+    root: String,
+    query: String,
+    depth: Option<u32>,
+    app: tauri::AppHandle,
+) -> Result<RemoteSearchResponse, AppError> {
+    let needle = query.trim().to_lowercase();
+    if needle.is_empty() {
+        return Ok(RemoteSearchResponse { root, results: Vec::new(), truncated: false });
+    }
+
+    let started = std::time::Instant::now();
+    let max_depth = clamp_search_depth(depth.unwrap_or(0));
+    let mut results: Vec<RemoteSearchHit> = Vec::new();
+    let mut truncated = false;
+
+    if max_depth == 0 {
+        // 仅当前目录一层：与浏览同一次 ReadDir 往返即收束，读取失败透传
+        // 错误（前端展示），区别于下钻模式的静默跳过
+        let resp = remote_send(
+            server_id.clone(),
+            Payload::ReadDirRequest { path: root.clone() },
+            app,
+        )
+        .await?;
+        let entries = match resp.payload {
+            Payload::ReadDirResponse { entries, .. } => entries,
+            Payload::Error { message, .. } => return Err(agent_error(message)),
+            _ => return Err(AppError::new(codes::UNEXPECTED_RESPONSE)),
+        };
+        truncated = collect_search_hits(entries, &root, &needle, &mut results);
+        tracing::debug!(
+            "[Search] server_id={server_id} root={root} queryLen={} depth=0 命中={} truncated={truncated} 耗时={:?}",
+            needle.len(),
+            results.len(),
+            started.elapsed(),
+        );
+        return Ok(RemoteSearchResponse { root, results, truncated });
+    }
+
+    // 下钻模式（depth>0）：深度优先（Vec::pop）受限遍历，目录数/时间预算双保险
+    let mut stack: Vec<(String, usize)> = vec![(root.clone(), 0)];
+    let mut visited_dirs = 0usize;
+
+    while let Some((dir, depth)) = stack.pop() {
+        if visited_dirs >= SEARCH_MAX_DIRS || started.elapsed() >= SEARCH_BUDGET {
+            truncated = true;
+            break;
+        }
+        visited_dirs += 1;
+
+        // 单目录读取失败（权限不足/并发中已消失）：静默跳过，继续其余分支
+        let resp = match remote_send(
+            server_id.clone(),
+            Payload::ReadDirRequest { path: dir.clone() },
+            app.clone(),
+        )
+        .await
+        {
+            Ok(resp) => resp,
+            Err(e) => {
+                tracing::debug!("[Search] 跳过目录 {dir}: {e}");
+                continue;
+            }
+        };
+        let entries = match resp.payload {
+            Payload::ReadDirResponse { entries, .. } => entries,
+            Payload::Error { message, .. } => {
+                tracing::debug!("[Search] 跳过目录 {dir}: agent={message}");
+                continue;
+            }
+            other => {
+                tracing::debug!("[Search] 跳过目录 {dir}: 意外响应 {}", other.type_name());
+                continue;
+            }
+        };
+
+        for entry in &entries {
+            if entry.is_dir {
+                // 目录命中也展示；子树无论是否命中都继续下钻（深层文件同样要被找到）
+                if depth < max_depth {
+                    stack.push((join_remote_path(&dir, &entry.name), depth + 1));
+                } else {
+                    // 达到深度上限：其下内容未扫描
+                    truncated = true;
+                }
+            }
+        }
+        if collect_search_hits(entries, &dir, &needle, &mut results) {
+            break; // 命中数触顶
+        }
+    }
+
+    tracing::debug!(
+        "[Search] server_id={server_id} root={root} queryLen={} depth={max_depth} 命中={} 目录={} truncated={truncated} 耗时={:?}",
+        needle.len(),
+        results.len(),
+        visited_dirs,
+        started.elapsed(),
+    );
+    Ok(RemoteSearchResponse { root, results, truncated })
+}
+
 #[tauri::command]
 #[tracing::instrument(skip(app), fields(server_id = %server_id))]
 pub async fn remote_get_current_user(server_id: String, app: tauri::AppHandle) -> Result<CurrentUser, AppError> {
@@ -2460,5 +2633,67 @@ mod connect_error_tests {
         assert_eq!(serde_json::to_string(&e).unwrap(), r#"{"code":201,"detail":"prod-1"}"#);
         let e2 = ConnectError::new(AuthErrorCode::ConnectionLost);
         assert_eq!(serde_json::to_string(&e2).unwrap(), r#"{"code":106,"detail":null}"#);
+    }
+}
+
+#[cfg(test)]
+mod search_tests {
+    use super::*;
+
+    /// 深度档位截断：0 保持原值，超上限收敛到 SEARCH_MAX_DEPTH
+    #[test]
+    fn clamp_search_depth_caps_at_limit() {
+        assert_eq!(clamp_search_depth(0), 0);
+        assert_eq!(clamp_search_depth(3), 3);
+        assert_eq!(clamp_search_depth(SEARCH_MAX_DEPTH as u32), SEARCH_MAX_DEPTH);
+        assert_eq!(clamp_search_depth(u32::MAX), SEARCH_MAX_DEPTH);
+    }
+
+    /// 名称匹配：大小写不敏感前缀语义（输入 a 只命中 a***，不命中中缀/后缀）
+    #[test]
+    fn search_name_matches_is_case_insensitive_prefix() {
+        assert!(search_name_matches("ReadMe.MD", "readme"));
+        assert!(search_name_matches("config", ""));
+        // 输入的自身必须命中：a*** 的 glob 语义包含 a 本身（空前缀后缀）
+        assert!(search_name_matches("a", "a"));
+        assert!(search_name_matches("ABC", "abc"));
+        assert!(search_name_matches("Apple.txt", "apple")); // needle 由调用方 to_lowercase 后传入
+        assert!(search_name_matches("readme.md", "read"));
+        assert!(search_name_matches(".hidden", "."));
+        assert!(!search_name_matches("中文文件.txt", "文件")); // 中缀不命中
+        assert!(!search_name_matches("data.log", "a")); // 子串命中已废弃：前缀不符
+        assert!(!search_name_matches("a.txt", "ab"));
+        assert!(!search_name_matches("readme.md", "xyz"));
+        assert!(!search_name_matches("readme.md", "READ")); // needle 未小写化则不命中（调用方负责小写化）
+    }
+
+    /// 路径拼接：根目录 "/" 特判避免双斜杠；普通目录单斜杠衔接
+    #[test]
+    fn join_remote_path_handles_root_and_nested() {
+        assert_eq!(join_remote_path("/", "home"), "/home");
+        assert_eq!(join_remote_path("/home", "user"), "/home/user");
+        assert_eq!(join_remote_path("/home/user/", "a.txt"), "/home/user/a.txt");
+    }
+
+    /// SearchHit 序列化形状：FileEntry 展平 + path 平级（前端 TS interface 契约）
+    #[test]
+    fn search_hit_flattens_entry_with_path() {
+        let hit = RemoteSearchHit {
+            entry: FileEntry {
+                name: "a.txt".into(),
+                is_dir: false,
+                size: 3,
+                mtime: "2026-01-01 00:00:00".into(),
+                permissions: "rw-r--r--".into(),
+                owner: "root".into(),
+                group: "root".into(),
+            },
+            path: "/home/user/a.txt".into(),
+        };
+        let v: serde_json::Value = serde_json::to_value(&hit).unwrap();
+        assert_eq!(v["name"], "a.txt");
+        assert_eq!(v["path"], "/home/user/a.txt");
+        assert_eq!(v["is_dir"], false);
+        assert_eq!(v["owner"], "root");
     }
 }

@@ -61,11 +61,13 @@
 }
 
 /* ── 非活动窗口的焦点表达（GNOME 式降级）──────────────────
-   多窗口并开时一眼辨焦点：标题栏毛玻璃降透明度 + 标题退次级色。
+   多窗口并开时一眼辨焦点：标题栏底色降透明度 + 标题退次级色。
    不用 filter（会在祖先上建立 backdrop root，破坏 headerbar 的
-   backdrop-filter 壁纸采样），只调颜色变量。 */
+   backdrop-filter 壁纸采样），只调颜色变量。
+   底色引用 --quirel-headerbar-inactive-bg 令牌（毛玻璃开启时半透明、
+   关闭时不透明——半透明形态依赖 blur 兜底，勿在此写散值）。 */
 .windowShellNotActive .windowHeaderBar {
-  background: rgba(var(--quirel-headerbar-bg-rgb), 0.55);
+  background: var(--quirel-headerbar-inactive-bg);
 }
 
 .windowShellNotActive .windowTitle {

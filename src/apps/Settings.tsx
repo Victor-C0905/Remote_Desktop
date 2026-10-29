@@ -782,36 +782,36 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                       <span className="st-server-time">{formatLastConnected(server.lastConnected)}</span>
                       <div className="st-server-actions">
                         {server.status === "connected" ? (
-                          <button 
+                          <button
                             className="st-server-action-btn st-server-action-connected"
                             onClick={(e) => { e.stopPropagation(); handleDisconnect(server.id); }}
                             title={t("settings.connectedTip")}
                           >
-                            ✓
+                            <SymbolicIcon name="emblem-ok" size={16} />
                           </button>
                         ) : server.status === "connecting" ? (
-                          <button 
+                          <button
                             className="st-server-action-btn st-server-action-connecting"
                             disabled
                             title={t("settings.statusConnecting")}
                           >
-                            ◷
+                            <SymbolicIcon name="clock" size={16} />
                           </button>
                         ) : server.status === "reconnecting" ? (
-                          <button 
+                          <button
                             className="st-server-action-btn st-server-action-connecting"
                             disabled
                             title={t("settings.reconnectingTip")}
                           >
-                            ◷
+                            <SymbolicIcon name="clock" size={16} />
                           </button>
                         ) : (
-                          <button 
+                          <button
                             className="st-server-action-btn"
                             onClick={(e) => { e.stopPropagation(); handleConnect(server.id); }}
                             title={t("settings.connectTip")}
                           >
-                            🔗
+                            <SymbolicIcon name="link" size={16} />
                           </button>
                         )}
                         <button 
@@ -1179,23 +1179,6 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
               </div>
             </div>
 
-            <div className="st-card">
-              <div className="st-card-header text-title">{t("settings.colorSchemeTitle")}</div>
-              <div className="st-theme-toggle">
-                <button className="st-theme-btn active">
-                  <span className="st-theme-icon">⬛</span>
-                  <span className="st-theme-label">{t("settings.schemeDark")}</span>
-                </button>
-                <button className="st-theme-btn">
-                  <span className="st-theme-icon">⬜</span>
-                  <span className="st-theme-label">{t("settings.schemeLight")}</span>
-                </button>
-                <button className="st-theme-btn">
-                  <span className="st-theme-icon">🔲</span>
-                  <span className="st-theme-label">{t("settings.schemeWhite")}</span>
-                </button>
-              </div>
-            </div>
             <div className="st-card">
               <div className="st-card-header text-title">{t("settings.terminalOptionsTitle")}</div>
               <div className="st-option-row">

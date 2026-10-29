@@ -10,45 +10,8 @@ import { useState, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useTransferProgress } from '../../hooks/useTransferProgress';
 import { TransferPanel } from './TransferPanel';
+import { SymbolicIcon } from '../symbolic';
 import './TransferStatusBar.css';
-
-// ── 内联 SVG 图标组件（Adwaita 风格）────────────────────────────
-
-/**
- * 下载图标（向下箭头）
- * 来源：Adwaita go-down-symbolic.svg
- */
-function DownloadIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-      <path d="M8 12l-4-4h2.5V4h3v4H12z" />
-    </svg>
-  );
-}
-
-/**
- * 展开图标（向下箭头）
- * 来源：Adwaita pan-down-symbolic.svg
- */
-function ExpandIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
-      <path d="M2 4l4 4 4-4z" />
-    </svg>
-  );
-}
-
-/**
- * 收起图标（向上箭头）
- * 来源：Adwaita pan-up-symbolic.svg
- */
-function CollapseIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
-      <path d="M10 8l-4-4-4 4z" />
-    </svg>
-  );
-}
 
 export function TransferStatusBar() {
   const { t } = useTranslation();
@@ -92,7 +55,7 @@ export function TransferStatusBar() {
       >
         {/* 图标 + 文本（保持与有任务时相同的布局） */}
         <div className="tsb-icon-count">
-          <DownloadIcon className="tsb-icon" />
+          <SymbolicIcon name="go-down" size={16} className="tsb-icon" />
           <span className="tsb-count" aria-live="polite">{t('transfer.bar.none')}</span>
         </div>
 
@@ -106,7 +69,7 @@ export function TransferStatusBar() {
 
         {/* 展开/收起指示器 */}
         <div className="tsb-toggle-indicator">
-          {isExpanded ? <CollapseIcon className="tsb-toggle-icon" /> : <ExpandIcon className="tsb-toggle-icon" />}
+          {isExpanded ? <SymbolicIcon name="pan-up" size={12} className="tsb-toggle-icon" /> : <SymbolicIcon name="pan-down" size={12} className="tsb-toggle-icon" />}
         </div>
 
         {/* 展开的空状态面板 */}
@@ -157,7 +120,7 @@ export function TransferStatusBar() {
     >
       {/* 图标 + 数量 */}
       <div className="tsb-icon-count">
-        <DownloadIcon className="tsb-icon" />
+        <SymbolicIcon name="go-down" size={16} className="tsb-icon" />
         <span className="tsb-count" aria-label={t('transfer.bar.countAria', { count: transfers.length })} aria-live="polite">
           {transfers.length}
         </span>
@@ -183,7 +146,7 @@ export function TransferStatusBar() {
 
       {/* 展开/收起指示器 */}
       <div className="tsb-toggle-indicator">
-        {isExpanded ? <CollapseIcon className="tsb-toggle-icon" /> : <ExpandIcon className="tsb-toggle-icon" />}
+        {isExpanded ? <SymbolicIcon name="pan-up" size={12} className="tsb-toggle-icon" /> : <SymbolicIcon name="pan-down" size={12} className="tsb-toggle-icon" />}
       </div>
 
       {/* 展开的任务列表面板 */}

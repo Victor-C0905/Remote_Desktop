@@ -383,44 +383,6 @@
   color: rgba(255, 255, 255, 0.75);
 }
 
-/* ── Theme Toggle ───────────────────────────────────── */
-.st-theme-toggle {
-  display: flex;
-  gap: 8px;
-}
-
-.st-theme-btn {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  padding: 12px 24px;
-  background: var(--quirel-card-bg);
-  border: 2px solid var(--quirel-border-color);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: background-color var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out), opacity var(--duration-fast) var(--ease-out);
-}
-
-.st-theme-btn:hover {
-  background: var(--quirel-card-hover);
-}
-
-.st-theme-btn.active {
-  border-color: var(--quirel-accent-bg);
-  background: var(--quirel-accent-bg);
-  color: var(--quirel-accent-fg);
-}
-
-.st-theme-icon {
-  font-size: 24px;
-}
-
-.st-theme-label {
-  font-size: var(--font-small);
-  white-space: nowrap;
-}
-
 /* ── Accent Colors ──────────────────────────────────── */
 .st-accent-colors {
   display: flex;
