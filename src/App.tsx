@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { Desktop } from "./shell/Desktop";
+import { RootErrorBoundary } from "./shell/RootErrorBoundary";
 import { StorageInitializer } from "./components/StorageInitializer";
 import { createLogger } from './utils/logger';
 import "./styles/variables.css";    // ✅ 层 1：全局变量定义
@@ -14,9 +15,17 @@ const log = createLogger('App');
 
 function App() {
   useEffect(() => {
-    // 孤儿浏览器窗口回收：主 webview 整页刷新（dev HMR / 调试器刷新 / 渲染进程
-    // 崩溃恢复）后，DOM 层浏览器窗口随前端重置消失，Rust 侧宿主线程与 WebView2
-    // 子窗口仍在（悬浮且无法移动/关闭）。挂载时统一回收；正常启动为 no-op。
+    // 孤儿浏览器窗口回收（仅限无会话快照的场景）：崩溃恢复/无痕首次启动时，
+    // sessionStorage 随进程消亡 → 无快照 → 前一次运行的浏览器会话成孤儿
+    // （悬浮 webview 无法管理），在此回收。
+    // ⚠️ 会话快照存在（wm.session 可解析）时必须整体跳过：刷新恢复流程会
+    // 重建窗口并收养会话（子组件 effect 先于本 effect 执行），全量回收会把
+    // 刚收养的多 tab 会话连带杀掉（webviews 2→1 实测两次）。快照存在 =
+    // 窗口将被恢复并接管其会话，回收器无事可做。
+    if (sessionStorage.getItem('wm.session') !== null) {
+      log.info('检测到会话快照，跳过孤儿浏览器窗口回收（会话由恢复的窗口接管）');
+      return;
+    }
     invoke('browser_close_all_windows').catch((e) => log.error('孤儿浏览器窗口回收失败:', e));
 
     const handleBeforeUnload = (_e: BeforeUnloadEvent) => {
@@ -53,9 +62,11 @@ function App() {
   }, []);
 
   return (
-    <StorageInitializer>
-      <Desktop />
-    </StorageInitializer>
+    <RootErrorBoundary>
+      <StorageInitializer>
+        <Desktop />
+      </StorageInitializer>
+    </RootErrorBoundary>
   );
 }
 

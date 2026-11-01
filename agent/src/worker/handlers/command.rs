@@ -40,9 +40,30 @@ struct CommandResult {
 }
 
 /// 允许远程执行的命令白名单（安全关键：在执行点强制）
-/// 客户端构造的命令永远无法越权——即使客户端被完全控制
-/// 语法：命令名（argv[0]）；绝对路径调用按最后一段匹配（/usr/bin/unzip → unzip）
+/// 语法：命令名（argv[0]）；仅接受裸命令名，任何路径形式一律拒绝
 const ALLOWED_COMMANDS: &[&str] = &["unzip", "tar", "7z", "unrar"];
+
+/// 白名单校验：仅接受白名单内的裸命令名。
+///
+/// 路径形式（含 `/` 或 `\`）一律拒绝——若按 basename 匹配放行绝对路径，
+/// 客户端可先上传同名二进制（如 ~/tmp/unzip）再以路径调用，绕过白名单
+/// 以登录用户身份执行任意代码。裸命令名的 PATH 查找由 worker 进程自身
+/// 环境完成，客户端无法影响。
+fn ensure_command_allowed(command: &str) -> Result<(), String> {
+    if command.is_empty() {
+        return Err("命令不能为空".to_string());
+    }
+    if command.contains('/') || command.contains('\\') {
+        return Err(format!(
+            "命令必须为白名单内的裸命令名，不接受路径形式: {}",
+            command
+        ));
+    }
+    if !ALLOWED_COMMANDS.contains(&command) {
+        return Err(format!("Command not allowed: {}", command));
+    }
+    Ok(())
+}
 
 /// timeout_secs 为 0 时的默认超时（秒）
 const DEFAULT_TIMEOUT_SECS: u64 = 300;
@@ -86,17 +107,13 @@ pub async fn handle_execute_command(req: ExecuteCommand) -> WorkerResponse {
         }
     }
 
-    // 白名单校验（执行点强制；命令可能以绝对路径传入，取最后一段匹配）
-    let base_name = Path::new(&req.command)
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
-    if !ALLOWED_COMMANDS.contains(&base_name) {
+    // 白名单校验（执行点强制；仅裸命令名，路径形式可被同名二进制绕过）
+    if let Err(message) = ensure_command_allowed(&req.command) {
         tracing::warn!("命令不在白名单，拒绝执行: {}", req.command);
         return WorkerResponse {
             payload: Some(worker_response::Payload::Error(Error {
                 code: 403,
-                message: format!("Command not allowed: {}", req.command),
+                message,
             })),
             ..Default::default()
         };
@@ -227,5 +244,34 @@ pub async fn handle_execute_command(req: ExecuteCommand) -> WorkerResponse {
                 ..Default::default()
             }
         }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn whitelist_accepts_bare_names() {
+        assert!(ensure_command_allowed("unzip").is_ok());
+        assert!(ensure_command_allowed("tar").is_ok());
+        assert!(ensure_command_allowed("7z").is_ok());
+        assert!(ensure_command_allowed("unrar").is_ok());
+    }
+
+    #[test]
+    fn whitelist_rejects_path_forms() {
+        // 同名二进制绕过：任何路径形式都不放行，即使 basename 在白名单内
+        assert!(ensure_command_allowed("/home/u/evil/unzip").is_err());
+        assert!(ensure_command_allowed("/usr/bin/unzip").is_err());
+        assert!(ensure_command_allowed("./unzip").is_err());
+        assert!(ensure_command_allowed("dir\\unzip").is_err());
+        assert!(ensure_command_allowed("../tar").is_err());
+    }
+
+    #[test]
+    fn whitelist_rejects_unknown_and_empty() {
+        assert!(ensure_command_allowed("rm").is_err());
+        assert!(ensure_command_allowed("sh").is_err());
+        assert!(ensure_command_allowed("").is_err());
     }
 }

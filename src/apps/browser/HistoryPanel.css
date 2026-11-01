@@ -1,0 +1,123 @@
+/* ============================================================
+   HistoryPanel — 历史记录下拉面板（锚定导航栏时钟按钮）
+   配色走 --quirel-* 变量；层级与 br-settings-menu 一致
+   ============================================================ */
+
+.br-history-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+/* 面板：按钮正下方右对齐，宽定值 + 高限滚动 */
+.br-history-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: var(--z-app-dropdown);
+  width: 380px;
+  max-height: 420px;
+  display: flex;
+  flex-direction: column;
+  background: var(--quirel-view-bg);
+  border: 1px solid var(--quirel-border-color);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-popup);
+  overflow: hidden;
+}
+
+.br-history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--quirel-border-color);
+}
+
+.br-history-title {
+  font-family: var(--font-ui);
+  font-size: var(--font-small);
+  font-weight: 600;
+  color: var(--quirel-text-primary);
+}
+
+.br-history-clear {
+  border: none;
+  background: transparent;
+  color: var(--quirel-text-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--font-small);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-xs);
+  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+}
+
+.br-history-clear:hover {
+  background: var(--quirel-card-hover);
+  color: #e01b24;
+}
+
+.br-history-empty {
+  padding: 24px 12px;
+  text-align: center;
+  font-family: var(--font-ui);
+  font-size: var(--font-small);
+  color: var(--quirel-text-secondary);
+}
+
+.br-history-list {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  padding: 4px;
+}
+
+/* 单条：两行（标题/URL）+ 右侧时间；悬停浮起同菜单项语言 */
+.br-history-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--quirel-text-primary);
+  font-family: var(--font-ui);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.br-history-item:hover {
+  background: var(--quirel-card-hover);
+}
+
+.br-history-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.br-history-entry-title {
+  font-size: var(--font-small);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.br-history-entry-url {
+  font-size: 10px;
+  color: var(--quirel-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.br-history-time {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--quirel-text-secondary);
+}

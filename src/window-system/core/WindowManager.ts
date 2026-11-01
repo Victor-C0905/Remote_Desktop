@@ -14,8 +14,12 @@ import {
 import { createLogger } from '../../utils/logger';
 import type { SnapZone } from '../../components/window-shell/aeroSnap';
 import { computeSnapRect } from '../../components/window-shell/aeroSnap';
+import { Window as WindowClass, type PersistedWindowData } from './Window';
 
 const log = createLogger('WindowManager');
+
+/** 窗口会话快照键（sessionStorage：刷新存活、关闭项目随窗口销亡） */
+const SESSION_KEY = 'wm.session';
 
 /**
  * WindowManager - singleton orchestrator for window system
@@ -467,5 +471,106 @@ export class WindowManager implements IWindowManager {
    */
   emit(event: WindowEvent): void {
     this.eventBus.emit(event);
+  }
+
+  // ── 会话快照（刷新存活、关闭项目随窗口销亡）──────────
+  // 与被移除的磁盘持久化（b8b3e28）不同：存储介质是 sessionStorage，
+  // 语义为「仅会话内」——刷新恢复、关项目干净桌面，无需设置开关
+
+  private saveTimer: number | null = null;
+  private sessionLoaded = false;
+
+  /**
+   * 快照当前全部窗口到 sessionStorage（300ms 防抖；Context 的 onAny 驱动）
+   */
+  saveSession(): void {
+    if (this.saveTimer !== null) clearTimeout(this.saveTimer);
+    this.saveTimer = window.setTimeout(() => {
+      this.saveTimer = null;
+      try {
+        // v2 快照：windows + order（激活栈=焦点顺序，恢复时末位即当时激活窗口）
+        const snapshot = {
+          windows: this.windows.getAll().map((w) => w.serialize()),
+          order: this._activationOrder.slice(),
+        };
+        sessionStorage.setItem(SESSION_KEY, JSON.stringify(snapshot));
+      } catch (error) {
+        log.error('保存窗口会话快照失败:', error);
+      }
+    }, 300);
+  }
+
+  /**
+   * 从 sessionStorage 恢复窗口（几何 + 应用上下文 preloadData）。
+   * 位置按工作区边界钳制（沿用旧持久化实现的约束）；每实例只恢复一次。
+   * @returns 恢复的窗口 id 列表（调用方据此通知订阅方重渲染）
+   */
+  loadSession(): string[] {
+    if (this.sessionLoaded) return [];
+    this.sessionLoaded = true;
+    try {
+      const stored = sessionStorage.getItem(SESSION_KEY);
+      if (!stored) return [];
+      // v1 快照为裸数组（无焦点顺序）；v2 为 { windows, order }
+      const parsed = JSON.parse(stored) as
+        | { windows?: PersistedWindowData[]; order?: string[] }
+        | PersistedWindowData[];
+      const data = Array.isArray(parsed) ? parsed : (parsed.windows ?? []);
+      const orderHint = Array.isArray(parsed)
+        ? data.map((d) => d.id)
+        : (parsed.order ?? data.map((d) => d.id));
+      if (data.length === 0) return [];
+
+      // 边界约束（沿用旧持久化实现）：恢复位置不得超出工作区
+      const containerWidth = window.innerWidth;
+      const containerHeight = window.innerHeight - 32; // TopBar 高度
+      const MIN_VISIBLE = 100;
+      const restored = new Set<string>();
+      const restoredPerApp = new Map<string, number>();
+
+      for (const windowData of data) {
+        if (!windowData?.id || !windowData?.appId) continue;
+        // 单实例约束在恢复路径同样生效：历史快照可能包含重复窗口（create
+        // 不强制单实例，约束在调用方），全量复活会让多个实例互抢同一会话
+        // （browser 的收养/关闭链路被对端重建打断）
+        const restoredApp = this.registry.get(windowData.appId);
+        const allowed = restoredApp?.allowMultipleInstances ? Number.POSITIVE_INFINITY : 1;
+        const sameAppCount = restoredPerApp.get(windowData.appId) ?? 0;
+        if (sameAppCount >= allowed) continue;
+        const window = WindowClass.deserialize(windowData);
+        const minX = -(windowData.size.width - MIN_VISIBLE);
+        const maxX = containerWidth - MIN_VISIBLE;
+        const maxY = containerHeight - MIN_VISIBLE;
+        window.setPosition({
+          x: Math.max(minX, Math.min(windowData.position.x, maxX)),
+          y: Math.max(0, Math.min(windowData.position.y, maxY)),
+        });
+        this.windows.add(window);
+        restoredPerApp.set(windowData.appId, sameAppCount + 1);
+        restored.add(window.id);
+      }
+      if (restored.size === 0) return [];
+
+      // 激活栈按快照的焦点顺序重建（末位=快照时的激活窗口），不按创建序；
+      // order 之外仍有恢复窗口时按创建序补齐（部分损坏兜底）
+      for (const id of orderHint) {
+        if (restored.has(id) && !this._activationOrder.includes(id)) {
+          this._activationOrder.push(id);
+        }
+      }
+      for (const w of this.windows.getAll()) {
+        if (!this._activationOrder.includes(w.id)) this._activationOrder.push(w.id);
+      }
+      if (this._activationOrder.length > 0) {
+        this.activeWindowId = this._activationOrder[this._activationOrder.length - 1];
+      }
+      log.info(`已从会话快照恢复 ${restored.size} 个窗口`);
+      return [...restored];
+    } catch (error) {
+      log.error('恢复窗口会话快照失败:', error);
+      // 损坏快照清除，避免每次刷新都失败
+      sessionStorage.removeItem(SESSION_KEY);
+      return [];
+    }
   }
 }

@@ -62,6 +62,17 @@ impl ProxySessionManager {
         }
     }
 
+    /// 对全部存活会话的 webview 下发隐藏（prepare_shutdown 刷新过渡态：
+    /// 旧页面死亡到新页面收养之间的空窗，webview 不得保持可见——悬浮脱离根治）
+    pub fn hide_all_webviews(&self) {
+        let guard = self.sessions.lock().unwrap();
+        for sess in guard.values() {
+            if let Some(host) = sess.host.lock().unwrap().as_ref() {
+                host.hide_all();
+            }
+        }
+    }
+
     /// server 的 SOCKS5 监听端口（仅活跃会话；断线挂起返回 None）
     ///
     /// 供 suggest 等本地复用隧道的功能取端口。过滤 listener_alive：挂起会话
@@ -274,7 +285,7 @@ async fn handle_socks5_conn(
 /// Windows 下 std/tokio 的 TcpListener::bind 默认不带该选项，旧会话残留的
 /// CLOSE_WAIT/TIME_WAIT Socket（中继泄漏或 TCP 收尾延迟）会让重新 bind
 /// 失败（10048），表现为"端口绑定失败且重试无效"。与 Agent 端
-/// WebSocket/QUIC 监听的项目惯例一致（见 agent quic.rs / websocket.rs）。
+/// QUIC 监听的项目惯例一致（见 agent quic.rs）。
 async fn spawn_socks5_listener(
     quic_conn: Arc<quinn::Connection>,
     port: u16,
@@ -560,7 +571,22 @@ async fn start_session_inner(
     if let Some((sess_port, listener_alive, host_alive)) = existing {
         if listener_alive {
             if host_alive {
-                // 活跃会话：no-op
+                // 活跃会话：no-op。但前端可能刚经历 webview 重载（刷新后窗口
+                // 会话恢复），标签列表需全量回灌——增量 page-state 在前端
+                // 空列表上合并不生效（实测多 tab 全部消失）
+                let host_arc = {
+                    let sessions: State<ProxySessionManager> = app.state();
+                    let guard = sessions.sessions.lock().unwrap();
+                    guard.get(server_id).and_then(|s| s.host.lock().unwrap().clone())
+                };
+                if let Some(host) = host_arc {
+                    host.refresh_tabs();
+                    // 前端 listen 注册是异步的，可能晚于上面的回灌；延迟补发（幂等）
+                    tokio::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                        host.refresh_tabs();
+                    });
+                }
                 return Ok(ProxySessionInfo { port: sess_port });
             }
             // 窗口刚关（监听保留）：原端口重建 host（Environment 重新创建）

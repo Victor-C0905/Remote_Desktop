@@ -1,7 +1,9 @@
 // src/window-system/init.ts
 
 import { WindowRegistry } from './core/WindowRegistry';
+import { invoke } from '@tauri-apps/api/core';
 import { createLogger } from '../utils/logger';
+import { useServersStore } from '../stores/serversStore';
 
 // Import app components
 import { TerminalApp } from '../apps/Terminal';
@@ -89,6 +91,26 @@ export function initWindowRegistry(registry: WindowRegistry): void {
     component: BrowserApp,
     desktopLabelKey: 'apps.browser.desktopLabel',
     dockLabelKey: 'apps.browser.dockLabel',
+    // ── 会话原子性：浏览器会话（host + TabBook + 全部 tab webview）的
+    // 生命周期绑定窗口生命周期，销毁单点在此（窗口系统是唯一权威）。
+    // 页面刷新不产生 close → 会话原地存活，由新页面 browser_open 收养；
+    // 窗口关闭 → 全量停止（含 SOCKS5 监听），不留「窗口已关、会话还在」
+    // 的中间态。BrowserApp 自身的 cleanup 不做任何会话销毁。
+    lifecycle: {
+      onAfterClose: () => {
+        // 会话归属与 BrowserApp 同源：activeServerId（BrowserApp 自身就绑定
+        // 它）。窗口创建路径（Desktop/useOpenApp → manager.create）不经过
+        // onBeforeCreate，window.preloadData 恒为 undefined——原实现读
+        // preloadData.serverId 恒为空而静默跳过，proxy_stop_session 从未
+        // 执行：webview 仅靠 3s 心跳兜底隐藏（表现为「延迟关闭」），
+        // SOCKS5 监听与 host 泄漏至退出。
+        const serverId = useServersStore.getState().activeServerId;
+        if (!serverId) return;
+        invoke('proxy_stop_session', { serverId }).catch((e) =>
+          console.error('[Browser] 会话全量停止失败:', e)
+        );
+      },
+    },
   });
 
   // Image Viewer - 远程图片查看（文件格式路由目标，非主动入口）

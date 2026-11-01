@@ -69,6 +69,12 @@ interface ChromeTabStripProps {
   /** 拖拽排序（库 fromIndex → toIndex） */
   onReorder(from: number, to: number): void;
 
+  /** 页签右键（宿主钩子已具备，透传给上层弹自定义菜单） */
+  onTabContextMenu?(tabId: string, event: MouseEvent): void;
+
+  /** 页签条空白区右键（新建/重新打开已关闭的标签页等） */
+  onStripContextMenu?(event: MouseEvent): void;
+
   /** 行尾附件（状态灯、菜单等） */
   children?: ReactNode;
 }
@@ -81,6 +87,8 @@ export function ChromeTabStrip({
   onActivate,
   onClose,
   onReorder,
+  onTabContextMenu,
+  onStripContextMenu,
   children,
 }: ChromeTabStripProps) {
   const { t } = useTranslation();
@@ -124,6 +132,10 @@ export function ChromeTabStrip({
       if (tabId) onClose(tabId);
     },
     onTabReorder: (_tabId, fromIndex, toIndex) => onReorder(fromIndex, toIndex),
+    onTabContextMenu: (tabId, event) => {
+      if (tabId && onTabContextMenu) onTabContextMenu(tabId, event);
+    },
+    onStripContextMenu: (event) => onStripContextMenu?.(event),
   });
 
   // + 按钮 x 坐标：末尾页签右缘 + 6px（Chrome 行为）。测量必须用页签元素的

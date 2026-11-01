@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -18,6 +18,11 @@ import { sortFileEntries, DEFAULT_SORT, DEFAULT_COLUMN_WIDTHS, clampColumnWidth,
 import type { SortKey, SortState, ColumnWidths, ColumnFilterState, SizeBucket, MtimeBucket, NameBucket } from './fileTable';
 import { SymbolicIcon } from "../components/symbolic";
 import { ToolbarMenu, type MenuEntry } from "../components/ToolbarMenu/ToolbarMenu";
+import { ContextMenu, type ContextMenuEntry } from "../components/ContextMenu/ContextMenu";
+import type { FileEntry } from './fileTypes';
+import { rangeSelection, toggleSelection, entryName } from './fileSelection';
+import { useFileTransfer } from './useFileTransfer';
+import { useMarquee } from './useMarquee';
 import { ConfirmDialog } from "../components/Dialog/ConfirmDialog";
 import { Dialog } from "../components/Dialog/Dialog";
 import { useTranslation } from "react-i18next";
@@ -30,17 +35,6 @@ const log = createLogger('FileManager');
 
 /** 搜索下钻层数档位（0 = 仅当前目录一层，不在选项内单列；Rust 侧 clamp_search_depth 在 8 截断） */
 const SEARCH_DEPTH_OPTIONS = [1, 2, 3, 5, 8];
-
-export interface FileEntry {
-  name: string;
-  is_dir: boolean;
-  size: number;
-  mtime: string;
-  permissions: string;
-  owner?: string;  // 所有者（旧版 Agent 不下发时为 undefined，显示回退 "—"）
-  group?: string;  // 所属组（同上）
-  path?: string;   // 搜索命中自带完整路径（嵌套目录定位依据）；普通浏览为 undefined
-}
 
 interface ReadDirResponse {
   path: string;
@@ -158,7 +152,19 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   // 权限不足目录：进入目录但内容不可见（空列表+轻微提示）
   // 存储无权限目录路径，null 表示当前目录可正常访问
   const [permissionDenied, setPermissionDenied] = useState<string | null>(null);
-  const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
+  // ── 多选（路径制：排序/筛选变化后选中随条目而非位置）──────
+  // selected：选中完整路径（保点击顺序）；anchorPath：Shift 范围锚点；
+  // focusIdx：键盘焦点位（visibleEntries 下标，-1 = 无）
+  const [selected, setSelected] = useState<string[]>([]);
+  const [anchorPath, setAnchorPath] = useState<string | null>(null);
+  const [focusIdx, setFocusIdx] = useState(-1);
+
+  /** 清空选区（目录切换/搜索切换/断连时调用；setState 稳定，无需 memo） */
+  const clearSelection = () => {
+    setSelected([]);
+    setAnchorPath(null);
+    setFocusIdx(-1);
+  };
   const [username, setUsername] = useState<string | null>(null);
   // 用户真实家目录（root 为 /root，普通用户从 /etc/passwd 读取，不再硬编码 /home/${username}）
   const [homeDir, setHomeDir] = useState<string | null>(null);
@@ -236,7 +242,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     }
     const epoch = ++searchEpochRef.current;
     setSearching(true);
-    setSelectedIdx(null); // 数据源即将切换，清除悬空选中
+    clearSelection(); // 数据源即将切换，清除悬空选中
     invoke<SearchResponse>("remote_search", {
       serverId: activeServerId,
       root: currentPath,
@@ -270,7 +276,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     setSearching(false);
     setSearchTruncated(false);
     setSearchError(null);
-    setSelectedIdx(null);
+    clearSelection();
   }, []);
 
   // Ctrl+F 聚焦搜索框（Windows Explorer 惯例）；离线无目标目录不启用
@@ -318,11 +324,8 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
-    type: 'file' | 'empty';  // 菜单类型：文件菜单或空白区域菜单
-    entry?: FileEntry;       // 文件信息（仅文件菜单）
+    targets: FileEntry[] | null;  // 选中条目数组（右键菜单作用对象）；null = 空白区域菜单
   } | null>(null);
-  // 右键菜单 DOM 引用：挂载后按实测尺寸做视口边界校正（x/y 仅是鼠标锚点）
-  const ctxMenuRef = useRef<HTMLDivElement>(null);
   const [propertiesEntry, setPropertiesEntry] = useState<FileEntry | null>(null);
   // 属性对话框可编辑状态（打开时从 entry 初始化；应用时与初始值比对决定是否发请求）
   const [permMatrix, setPermMatrix] = useState<PermMatrix>(parsePermissions(undefined));
@@ -423,7 +426,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     setLoading(true);
     setError(null);
     setPermissionDenied(null);
-    setSelectedIdx(null);
+    clearSelection();
     setContextMenu(null);
 
     // 调试：打印当前状态
@@ -519,8 +522,8 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         : key === "name"
           ? { ...prev, name: toggleBucket(prev.name, bucket as NameBucket) }
           : { ...prev, type: toggleBucket(prev.type, bucket) });
-    // 筛选改变可见列表：清空选中（过滤后的可见索引与旧选中位不再对应）
-    setSelectedIdx(null);
+    // 筛选改变可见列表：路径制选中天然跨筛选保留（被过滤掉的选中项不参与
+    // 右键批量操作，选中交集见 selectedEntries），不再强制清空
   }, []);
 
   // 点击菜单外关闭（与右键菜单同一模式：window 级 click 兜底）
@@ -822,7 +825,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       setError(null);
       setPermissionDenied(null);
       setLoading(false);
-      setSelectedIdx(null);
+      clearSelection();
       setContextMenu(null);
       log.debug("检测到断连，切换到离线模式");
     }
@@ -842,7 +845,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       setError(null);
       setPermissionDenied(null);
       setLoading(false);
-      setSelectedIdx(null);
+      clearSelection();
       setContextMenu(null);
       setUsername(null);  // 清空，让 username useEffect 重新获取
       setMounts([]);
@@ -1075,6 +1078,18 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     return currentPath === "/" ? `/${entry.name}` : `${currentPath}/${entry.name}`;
   }, [currentPath]);
 
+  /** 可见条目完整路径（visibleEntries 同序）：范围选择/框选/全选的顺序基准 */
+  const visiblePaths = useMemo(
+    () => visibleEntries.map((e) => entryFullPath(e)),
+    [visibleEntries, entryFullPath]
+  );
+
+  /** 选中条目对象（可见交集）：右键批量菜单的操作对象——被筛选掉的选中项不参与 */
+  const selectedEntries = useMemo(
+    () => visibleEntries.filter((e) => selected.includes(entryFullPath(e))),
+    [visibleEntries, selected, entryFullPath]
+  );
+
   /** 搜索命中的相对目录展示：path 去掉 root 前缀与末段名称（root 直下命中不显示） */
   const hitDirLabel = useCallback((p: string): string => {
     let rel = p;
@@ -1305,32 +1320,41 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   }, [finishRename, cancelRename]);
 
   // ── 删除确认（应用内 ConfirmDialog，替代原生 confirm）────
-  // UI 入口（右键菜单）先 setDeleteTarget 打开确认弹窗，确认后才执行删除；
+  // UI 入口（右键菜单/Del 键）先 setDeleteTargets 打开确认弹窗，确认后执行；
   // 危险操作：红色警示图标 + 初始焦点在取消上（防回车误触）
-  const [deleteTarget, setDeleteTarget] = useState<FileEntry | null>(null);
+  const [deleteTargets, setDeleteTargets] = useState<FileEntry[]>([]);
 
-  // 执行删除（仅由 ConfirmDialog 确认回调调用）
-  const doDelete = useCallback(async (entry: FileEntry) => {
-    // 构建路径（Linux 格式）：搜索命中自带 path，普通浏览按当前目录拼装
-    const path = entryFullPath(entry);
-
-    log.debug("delete:", path);
-
-    try {
-      if (activeServerId) {
-        await invoke("remote_delete", { serverId: activeServerId, path });
-      } else {
-        pushNotification({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
-        return;
-      }
-
-      // 刷新视图（搜索模式重跑搜索）
-      refreshAfterMutation();
-    } catch (err) {
-      log.error("delete 失败:", err);
-      pushNotification({ title: t("common.error"), body: t("fileManager.deleteFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
+  // 执行删除（仅由 ConfirmDialog 确认回调调用）：批量顺序执行，逐项收集失败
+  const doDelete = useCallback(async (targets: FileEntry[]) => {
+    if (!activeServerId) {
+      pushNotification({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
+      return;
     }
-  }, [entryFullPath, activeServerId, refreshAfterMutation]);
+
+    const failed: string[] = [];
+    for (const entry of targets) {
+      // 构建路径（Linux 格式）：搜索命中自带 path，普通浏览按当前目录拼装
+      const path = entryFullPath(entry);
+      log.debug("delete:", path);
+      try {
+        await invoke("remote_delete", { serverId: activeServerId, path });
+      } catch (err) {
+        log.error("delete 失败:", err);
+        failed.push(entry.name);
+      }
+    }
+
+    if (failed.length > 0) {
+      pushNotification({
+        title: t("common.error"),
+        body: t("fileManager.deleteFailedBatch", { n: failed.length, names: failed.slice(0, 3).join("、") }),
+        source: t("fileManager.source"),
+        urgency: "normal",
+      });
+    }
+    // 刷新视图（搜索模式重跑搜索）；部分失败也刷新（成功的项已删除）
+    refreshAfterMutation();
+  }, [entryFullPath, activeServerId, refreshAfterMutation, t]);
 
   // 刷新当前目录
   const handleRefresh = useCallback(() => {
@@ -1695,74 +1719,197 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   }, [activeServerId, entryFullPath]);
 
   // ── Context Menu ─────────────────────────────────────
-  // 右键菜单锚点：鼠标右下方 +3 紧贴。
-  // 边界溢出的翻转校正在菜单挂载后按实测尺寸进行（见 ctxMenuRef 的
-  // useLayoutEffect）——菜单宽高随类型动态（min-width 180、菜单项可增减），
-  // 预先估尺寸不可靠，渲染后测量才精确
-  const calculateMenuPosition = useCallback((mouseX: number, mouseY: number) => {
-    const offset = 3;  // 距离鼠标的距离（紧贴）
-    return { x: mouseX + offset, y: mouseY + offset };
-  }, []);
-
-  // 菜单挂载后按实测尺寸校正位置：右/下溢出视口时翻转到鼠标左/上方
-  // （与 +3 锚点对称：翻转后菜单右/下缘贴鼠标左/上 3px）；
-  // 视口过窄两侧都放不下时钳到视口边。useLayoutEffect 在浏览器 paint 前同步执行，
-  // 校正不可见（无中间态闪烁），且任意菜单宽高（文件/空白菜单、条件项）都精确
-  useLayoutEffect(() => {
-    const el = ctxMenuRef.current;
-    if (!el || !contextMenu) return;
-    const MARGIN = 8;  // 距视口边缘最小留白（与表头下拉菜单钳制一致）
-    const w = el.offsetWidth, h = el.offsetHeight;
-    let { x, y } = contextMenu;
-    if (x + w > window.innerWidth - MARGIN) {
-      x = Math.max(MARGIN, x - w - 6);  // 6 = 两侧各 3px 锚点偏移
-    }
-    if (y + h > window.innerHeight - MARGIN) {
-      y = Math.max(MARGIN, y - h - 6);
-    }
-    el.style.left = `${x}px`;
-    el.style.top = `${y}px`;
-  }, [contextMenu]);
-
+  // 右键菜单：坐标 = 鼠标右下方 +3 紧贴；targets = 作用条目（null = 空白菜单）。
+  // 视口越界翻转与钳制由共享 ContextMenu 组件内部处理（渲染后实测尺寸校正）
   const handleContextMenu = useCallback((e: React.MouseEvent, entry: FileEntry, idx: number) => {
     e.preventDefault();
-    e.stopPropagation();  // 阻止事件冒泡到父容器
+    e.stopPropagation();
 
-    const { x, y } = calculateMenuPosition(e.clientX, e.clientY);
-    // 只有当前已选中该文件时，才显示文件菜单
-    // 否则显示刷新菜单（和空白区域一样）
-    if (selectedIdx === idx) {
-      setContextMenu({ x, y, type: 'file', entry });
+    const path = entryFullPath(entry);
+    // Windows 惯例：右键未选中行 → 先单选该行再弹菜单；右键已选中项 → 菜单作用于整个选区
+    if (selected.includes(path)) {
+      setContextMenu({ x: e.clientX + 3, y: e.clientY + 3, targets: selectedEntries });
     } else {
-      // 未选中该文件，显示刷新菜单
-      setContextMenu({ x, y, type: 'empty' });
+      setSelected([path]);
+      setAnchorPath(path);
+      setFocusIdx(idx);
+      setContextMenu({ x: e.clientX + 3, y: e.clientY + 3, targets: [entry] });
     }
-  }, [selectedIdx, calculateMenuPosition]);
+  }, [selected, selectedEntries, entryFullPath]);
 
   // 空白区域右键菜单
   const handleEmptyContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
-    const position = calculateMenuPosition(e.clientX, e.clientY);
-    setContextMenu({ ...position, type: 'empty' });
-  }, [calculateMenuPosition]);
-
-  // 点击空白区域取消选中
-  const handleEmptyClick = useCallback((e: React.MouseEvent) => {
-    // 检查点击目标，如果是空白区域则取消选中
-    const target = e.target as HTMLElement;
-    if (!target.closest('.fm-list-row') && !target.closest('.fm-grid-item')) {
-      setSelectedIdx(-1);
-    }
+    setContextMenu({ x: e.clientX + 3, y: e.clientY + 3, targets: null });
   }, []);
 
-  // Close context menu on click anywhere
-  useEffect(() => {
-    const close = () => setContextMenu(null);
-    if (contextMenu) {
-      window.addEventListener("click", close);
-      return () => window.removeEventListener("click", close);
+  // 框选（marquee）状态机：按下→追踪→命中检测→抬起，Ctrl/⌘ 反选在内
+  const { marquee, beginMarquee, justEndedRef: marqueeJustEndedRef } = useMarquee({
+    editingEntry,
+    selected,
+    setSelected,
+  });
+
+  // 点击空白区域取消选中（框选刚结束时跳过一次：click 事件跟在 mouseup
+  // 之后触发，会误清刚框选出的选区）
+  const handleEmptyClick = useCallback((e: React.MouseEvent) => {
+    const target = e.target as HTMLElement;
+    if (target.closest(".fm-list-row") || target.closest(".fm-grid-item")) return;
+    if (marqueeJustEndedRef.current) {
+      marqueeJustEndedRef.current = false;
+      return;
     }
-  }, [contextMenu]);
+    clearSelection();
+  }, []);
+
+  /** 行单击（列表/网格共用）：Ctrl 切换 / Shift 范围 / 普通单击；
+   *  单击已选中项延迟 200ms 触发重命名（防双击误触，Adwaita 惯例） */
+  const handleRowClick = useCallback((e: React.MouseEvent, entry: FileEntry, idx: number) => {
+    if (clickTimerRef.current) {
+      clearTimeout(clickTimerRef.current);
+      clickTimerRef.current = null;
+    }
+
+    const path = entryFullPath(entry);
+    const editingThis = editingEntry?.name === entry.name && editingEntry?.path === entry.path;
+
+    if (e.ctrlKey || e.metaKey) {
+      setSelected((prev) => toggleSelection(prev, path));
+      setAnchorPath(path);
+      setFocusIdx(idx);
+      return;
+    }
+    if (e.shiftKey) {
+      // Shift 范围选：锚点到当前行（无锚点回退单选当前行）
+      setSelected(rangeSelection(visiblePaths, anchorPath ?? path, path));
+      setFocusIdx(idx);
+      return;
+    }
+    if (selected.length === 1 && selected[0] === path && !editingThis) {
+      clickTimerRef.current = setTimeout(() => {
+        handleRename(entry);
+        clickTimerRef.current = null;
+      }, 200);  // 200ms 延迟，确保双击不会触发重命名
+    } else {
+      setSelected([path]);
+      setAnchorPath(path);
+      setFocusIdx(idx);
+    }
+  }, [entryFullPath, editingEntry, visiblePaths, anchorPath, selected]);
+
+  /** 行双击（列表/网格共用）：清定时器防误触重命名，打开条目 */
+  const handleRowDoubleClick = useCallback((entry: FileEntry) => {
+    if (clickTimerRef.current) {
+      clearTimeout(clickTimerRef.current);
+      clickTimerRef.current = null;
+    }
+    handleOpen(entry);
+  }, [handleOpen]);
+
+  // ── 拖拽移动与应用内剪贴板（hook：状态机 + 批量执行器，详见 useFileTransfer）──
+  const {
+    clip, setClip,
+    dropTargetPath,
+    transferConfirm, setTransferConfirm,
+    riskConfirm, setRiskConfirm,
+    checkConflictsAndExec,
+    execTransfer,
+    handlePaste,
+    dragGhost, ghostPos,
+    handleRowMouseDown,
+  } = useFileTransfer({
+    activeServerId,
+    currentPath,
+    selected,
+    refreshAfterMutation,
+    entryFullPath,
+    navigateTo,
+    editingEntry,
+    setSelected,
+    setAnchorPath,
+  });
+
+  /** 拖拽幽灵的图标描述：路径 → { 图标, 名称 }（最多 3 个，叠放展示；
+   *  不在可见列表的路径按文件名回退图标） */
+  const describeGhostItems = useCallback((paths: string[]) => {
+    const byPath = new Map(visibleEntries.map((e) => [entryFullPath(e), e]));
+    return paths.slice(0, 3).map((p) => {
+      const e = byPath.get(p);
+      return {
+        icon: e ? getFileIcon(e) : getFileIconForName(entryName(p)),
+        name: e?.name ?? entryName(p),
+      };
+    });
+  }, [visibleEntries, entryFullPath]);
+
+  /** 右键菜单项：空白菜单（刷新/新建/上传）与文件菜单（作用于选区，多选批量） */
+  const contextMenuItems: ContextMenuEntry[] = useMemo(() => {
+    if (!contextMenu) return [];
+    const targets = contextMenu.targets;
+    if (!targets || targets.length === 0) {
+      return [
+        { label: t("fileManager.ctxRefresh"), icon: <AppIcon name="monitor" size={14} />, onClick: handleRefresh },
+        { separator: true },
+        { label: t("fileManager.newFolder"), icon: <AppIcon name="folder-plus" size={14} />, onClick: handleNewFolder },
+        { label: t("fileManager.ctxNewFile"), icon: <AppIcon name="file" size={14} />, onClick: handleNewFile },
+        { label: t("fileManager.ctxUpload"), icon: <AppIcon name="file-code" size={14} />, onClick: handleUpload },
+        { separator: true },
+        { label: t("fileManager.ctxPaste"), shortcut: "Ctrl+V", disabled: !clip, onClick: handlePaste },
+      ];
+    }
+
+    const single = targets.length === 1 ? targets[0] : null;
+    const items: ContextMenuEntry[] = [];
+    if (single) {
+      items.push({ label: t("fileManager.ctxOpen"), icon: <AppIcon name="folder-open" size={14} />, onClick: () => handleOpen(single) });
+      // 脚本运行（仅 .sh 文件）：双击=编辑器查看（方案 1），运行收右键显式入口
+      if (!single.is_dir && single.name.toLowerCase().endsWith(".sh")) {
+        items.push(
+          { label: t("fileManager.ctxRunInTerminal"), icon: <AppIcon name="terminal" size={14} />, onClick: () => runScriptInTerminal(single, false) },
+          { label: t("fileManager.ctxRunWithSudo"), icon: <AppIcon name="lock" size={14} />, onClick: () => runScriptInTerminal(single, true) },
+        );
+      }
+      items.push({ separator: true });
+      items.push({ label: t("fileManager.ctxRename"), icon: <AppIcon name="editor" size={14} />, onClick: () => handleRename(single) });
+    }
+
+    // 剪切/复制/粘贴（应用内剪贴板）：作用于选区，粘贴到当前目录
+    items.push({ separator: true });
+    items.push({
+      label: t("fileManager.ctxCut"), shortcut: "Ctrl+X",
+      onClick: () => setClip({ mode: "cut", paths: targets.map((en) => entryFullPath(en)) }),
+    });
+    items.push({
+      label: t("fileManager.ctxCopy"), shortcut: "Ctrl+C",
+      onClick: () => setClip({ mode: "copy", paths: targets.map((en) => entryFullPath(en)) }),
+    });
+    items.push({ label: t("fileManager.ctxPaste"), shortcut: "Ctrl+V", disabled: !clip, onClick: handlePaste });
+
+    // 批量删除（Del 键同入口）：菜单标签附数量，确认弹窗列明
+    items.push({
+      label: targets.length > 1 ? `${t("fileManager.ctxDelete")} (${targets.length})` : t("fileManager.ctxDelete"),
+      icon: <AppIcon name="trash" size={14} />,
+      danger: true,
+      shortcut: "Del",
+      onClick: () => setDeleteTargets(targets),
+    });
+
+    items.push({ separator: true });
+    items.push({
+      // 复制完整路径到剪贴板（多选逐行换行拼接）
+      label: t("fileManager.ctxCopyPath"),
+      icon: <AppIcon name="file-text" size={14} />,
+      onClick: () => navigator.clipboard.writeText(targets.map((en) => entryFullPath(en)).join("\n")),
+    });
+    if (single && !single.is_dir) {
+      items.push({ label: t("fileManager.ctxDownload"), icon: <AppIcon name="file-archive" size={14} />, onClick: () => handleDownload(single) });
+    }
+    if (single) {
+      items.push({ separator: true });
+      items.push({ label: t("fileManager.ctxProperties"), icon: <AppIcon name="about" size={14} />, onClick: () => showProperties(single) });
+    }
+    return items;
+  }, [contextMenu, t, entryFullPath, clip, handleOpen, handlePaste, handleRename, handleDownload, showProperties, handleRefresh, handleNewFolder, handleNewFile, handleUpload]);
 
   // ── Keyboard ─────────────────────────────────────────
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -1783,20 +1930,61 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       return;
     }
 
+    // Ctrl/⌘+A 全选可见条目（路径制选中，跨筛选有效）
+    if ((e.ctrlKey || e.metaKey) && (e.key === "a" || e.key === "A")) {
+      e.preventDefault();
+      setSelected(visiblePaths);
+      return;
+    }
+
+    // Ctrl/⌘+C/X/V：应用内剪贴板（复制/剪切选区、粘贴到当前目录）
+    if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C")) {
+      if (selected.length > 0) setClip({ mode: "copy", paths: [...selected] });
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && (e.key === "x" || e.key === "X")) {
+      if (selected.length > 0) setClip({ mode: "cut", paths: [...selected] });
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && (e.key === "v" || e.key === "V")) {
+      if (clip) handlePaste();
+      return;
+    }
+
+    // Del 批量删除选区（走确认弹窗）；Esc 清空选区
+    if (e.key === "Delete" && selected.length > 0) {
+      e.preventDefault();
+      setDeleteTargets(selectedEntries);
+      return;
+    }
+    if (e.key === "Escape") {
+      clearSelection();
+      return;
+    }
+
     if (e.key === "Backspace") { e.preventDefault(); goUp(); }
-    if (e.key === "Enter" && selectedIdx !== null) {
-      handleOpen(visibleEntries[selectedIdx]);
+    if (e.key === "Enter" && focusIdx >= 0 && focusIdx < visibleEntries.length) {
+      handleOpen(visibleEntries[focusIdx]);
     }
-    if (e.key === "ArrowDown") {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
-      // 上下键在过滤后的可见列表内移动（visibleEntries 即渲染顺序）
-      setSelectedIdx(prev => Math.min((prev ?? -1) + 1, visibleEntries.length - 1));
+      if (visibleEntries.length === 0) return;
+      const delta = e.key === "ArrowDown" ? 1 : -1;
+      // 空选区时 ↓ 从首项进入、↑ 停在首项
+      const base = focusIdx < 0 ? (delta > 0 ? -1 : 0) : focusIdx;
+      const next = Math.max(0, Math.min(base + delta, visibleEntries.length - 1));
+      setFocusIdx(next);
+      const nextPath = visiblePaths[next];
+      if (e.shiftKey) {
+        // Shift 扩选：锚点不动（无锚点回退目标自身 = 单选）
+        setSelected(rangeSelection(visiblePaths, anchorPath ?? nextPath, nextPath));
+      } else {
+        // 普通方向键：折叠为单选并重置锚点（Windows Explorer 惯例）
+        setSelected([nextPath]);
+        setAnchorPath(nextPath);
+      }
     }
-    if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setSelectedIdx(prev => Math.max((prev ?? 0) - 1, 0));
-    }
-  }, [visibleEntries, selectedIdx, goUp, handleOpen, editingEntry, isEditingPath, headerMenu]);
+  }, [visibleEntries, visiblePaths, focusIdx, anchorPath, selected, selectedEntries, clip, goUp, handleOpen, handlePaste, editingEntry, isEditingPath, headerMenu]);
 
   // ── 监听上传完成事件 ─────────────────────────────────
   useEffect(() => {
@@ -1844,7 +2032,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         <div className="fm-empty-text">{searchError}</div>
       </div>
     ) : (searchResults?.length ?? 0) === 0 ? (
-      <div className="fm-empty" onContextMenu={handleEmptyContextMenu} onClick={handleEmptyClick}>
+      <div className="fm-empty" onContextMenu={handleEmptyContextMenu} onClick={handleEmptyClick} onMouseDown={beginMarquee}>
         <div className="fm-empty-icon"><AppIcon name="search" size={40} /></div>
         <div className="fm-empty-text">{t("fileManager.searchNoResults")}</div>
       </div>
@@ -1871,16 +2059,22 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
             {sidebarSections.map((section, sectionIdx) => (
               <div key={sectionIdx} className="fm-sidebar-section">
                 <div className="fm-sidebar-section-title">{section.titleKey ? t(section.titleKey) : section.title}</div>
-                {section.items.map((item, itemIdx) => (
+                {section.items.map((item, itemIdx) => {
+                  // 书签/挂载点可作拖拽放置目标（网络项非本机路径不接）
+                  const droppable = item.type === "bookmark" || item.type === "mount";
+                  const isDropTarget = droppable && dropTargetPath === item.path;
+                  return (
                   <div
                     key={`${sectionIdx}-${itemIdx}`}
-                    className={`fm-sidebar-item${currentPath === item.path ? " fm-sidebar-item-active" : ""}`}
+                    className={`fm-sidebar-item${currentPath === item.path ? " fm-sidebar-item-active" : ""}${isDropTarget ? " drop-target" : ""}`}
+                    data-drop-dir={droppable ? item.path : undefined}
                     onClick={() => navigateTo(item.path)}
                   >
                     <span className="fm-si-icon"><AppIcon name={item.icon} size={16} /></span>
                     <span className="fm-si-label">{item.labelKey ? t(item.labelKey) : item.label}</span>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             ))}
           </div>
@@ -1912,7 +2106,9 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                     return (
                       <React.Fragment key={segment.path}>
                         <button
-                          className={`fm-breadcrumb-segment ${isLast ? 'fm-crumb-current' : ''}`}
+                          className={`fm-breadcrumb-segment ${isLast ? 'fm-crumb-current' : ''}${dropTargetPath === segment.path ? ' drop-target' : ''}`}
+                          data-drop-dir={segment.path}
+                          data-spring=""
                           onClick={(e) => {
                             e.stopPropagation();
                             handleBreadcrumbClick(segment.path);
@@ -2161,37 +2357,21 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                 className="fm-list-content"
                 onContextMenu={handleEmptyContextMenu}
                 onClick={handleEmptyClick}
+                onMouseDown={beginMarquee}
               >
-                {visibleEntries.map((entry, idx) => (
+                {visibleEntries.map((entry, idx) => {
+                  const rowPath = entryFullPath(entry);
+                  const isDropTarget = entry.is_dir && dropTargetPath === rowPath;
+                  const isCut = clip?.mode === "cut" && clip.paths.includes(rowPath);
+                  return (
                   <div
                     key={entry.path ?? entry.name}
-                    className={`fm-list-row${selectedIdx === idx ? " selected" : ""}`}
-                    onClick={() => {
-                      // 清除之前的定时器
-                      if (clickTimerRef.current) {
-                        clearTimeout(clickTimerRef.current);
-                        clickTimerRef.current = null;
-                      }
-
-                      // Adwaita-style: 如果文件已被选中，延迟判断是否为单击（防止双击误触发）
-                      // 编辑匹配带 path：搜索结果可含跨目录同名条目，避免误命中
-                      if (selectedIdx === idx && !(editingEntry?.name === entry.name && editingEntry?.path === entry.path)) {
-                        clickTimerRef.current = setTimeout(() => {
-                          handleRename(entry);
-                          clickTimerRef.current = null;
-                        }, 200);  // 200ms 延迟，更快的响应，确保双击不会触发重命名
-                      } else {
-                        setSelectedIdx(idx);
-                      }
-                    }}
-                    onDoubleClick={() => {
-                      // 双击时，清除单击的定时器，防止触发重命名
-                      if (clickTimerRef.current) {
-                        clearTimeout(clickTimerRef.current);
-                        clickTimerRef.current = null;
-                      }
-                      handleOpen(entry);
-                    }}
+                    data-path={rowPath}
+                    data-drop-dir={entry.is_dir ? rowPath : undefined}
+                    className={`fm-list-row${selected.includes(rowPath) ? " selected" : ""}${isCut ? " fm-cut" : ""}${isDropTarget ? " drop-target" : ""}`}
+                    onMouseDown={(e) => handleRowMouseDown(e, entry)}
+                    onClick={(e) => handleRowClick(e, entry, idx)}
+                    onDoubleClick={() => handleRowDoubleClick(entry)}
                     onContextMenu={(e) => handleContextMenu(e, entry, idx)}
                   >
                     <div className="fm-file-name" title={activeSearch ? entry.path : undefined}>
@@ -2224,7 +2404,8 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                     <span className="fm-file-type">{typeKeyLabel(typeKeyOf(entry))}</span>
                     <span className="fm-file-perm">{entry.permissions}</span>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           ) : (
@@ -2232,37 +2413,21 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
               className="fm-grid"
               onContextMenu={handleEmptyContextMenu}
               onClick={handleEmptyClick}
+              onMouseDown={beginMarquee}
             >
-              {visibleEntries.map((entry, idx) => (
+              {visibleEntries.map((entry, idx) => {
+                const rowPath = entryFullPath(entry);
+                const isDropTarget = entry.is_dir && dropTargetPath === rowPath;
+                const isCut = clip?.mode === "cut" && clip.paths.includes(rowPath);
+                return (
                 <div
                   key={entry.path ?? entry.name}
-                  className={`fm-grid-item${selectedIdx === idx ? " selected" : ""}`}
-                  onClick={() => {
-                    // 清除之前的定时器
-                    if (clickTimerRef.current) {
-                      clearTimeout(clickTimerRef.current);
-                      clickTimerRef.current = null;
-                    }
-
-                    // Adwaita-style: 如果文件已被选中，延迟判断是否为单击（防止双击误触发）
-                    // 编辑匹配带 path：搜索结果可含跨目录同名条目，避免误命中
-                    if (selectedIdx === idx && !(editingEntry?.name === entry.name && editingEntry?.path === entry.path)) {
-                      clickTimerRef.current = setTimeout(() => {
-                        handleRename(entry);
-                        clickTimerRef.current = null;
-                      }, 200);  // 200ms 延迟，更快的响应，确保双击不会触发重命名
-                    } else {
-                      setSelectedIdx(idx);
-                    }
-                  }}
-                  onDoubleClick={() => {
-                    // 双击时，清除单击的定时器，防止触发重命名
-                    if (clickTimerRef.current) {
-                      clearTimeout(clickTimerRef.current);
-                      clickTimerRef.current = null;
-                    }
-                    handleOpen(entry);
-                  }}
+                  data-path={rowPath}
+                  data-drop-dir={entry.is_dir ? rowPath : undefined}
+                  className={`fm-grid-item${selected.includes(rowPath) ? " selected" : ""}${isCut ? " fm-cut" : ""}${isDropTarget ? " drop-target" : ""}`}
+                  onMouseDown={(e) => handleRowMouseDown(e, entry)}
+                  onClick={(e) => handleRowClick(e, entry, idx)}
+                  onDoubleClick={() => handleRowDoubleClick(entry)}
                   onContextMenu={(e) => handleContextMenu(e, entry, idx)}
                 >
                   <div className="fm-gi-icon"><AppIcon name={getFileIcon(entry)} size={36} /></div>
@@ -2283,10 +2448,25 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                     <div className="fm-gi-label" title={activeSearch ? entry.path : undefined}>{entry.name}</div>
                   )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </AppLayout>
+
+      {/* 框选矩形（marquee）：viewport 坐标 fixed 定位，不随内容滚动 */}
+      {marquee && createPortal(
+        <div
+          className="fm-marquee"
+          style={{
+            left: Math.min(marquee.x0, marquee.x1),
+            top: Math.min(marquee.y0, marquee.y1),
+            width: Math.abs(marquee.x1 - marquee.x0),
+            height: Math.abs(marquee.y1 - marquee.y0),
+          }}
+        />,
+        document.body
+      )}
 
       {/* Status Bar */}
       <div className="fm-statusbar">
@@ -2297,6 +2477,10 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
           {/* 搜索触达上限：提示结果可能不全（可细化关键词缩小范围） */}
           {activeSearch && searchTruncated && (
             <span className="fm-truncated-hint">{t("fileManager.searchTruncated")}</span>
+          )}
+          {/* 已选计数（多选时显示） */}
+          {selected.length > 0 && (
+            <span className="fm-selected-count">{t("fileManager.itemsSelected", { n: selected.length })}</span>
           )}
         </div>
 
@@ -2344,108 +2528,111 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         </div>
       , document.body)}
 
-      {/* Context Menu - 使用 Portal 渲染到 body，确保 position: fixed 相对于视口 */}
-      {contextMenu && createPortal(
-        <div
-          ref={ctxMenuRef}
-          className="fm-context-menu"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
-        >
-          {contextMenu.type === 'file' && contextMenu.entry && (
-            // 文件/文件夹菜单
-            <>
-              <div className="fm-ctx-item" onClick={() => { handleOpen(contextMenu.entry!); setContextMenu(null); }}>
-                <span className="fm-ctx-icon"><AppIcon name="folder-open" size={14} /></span> {t("fileManager.ctxOpen")}
-              </div>
-
-              {/* 脚本运行（仅 .sh 文件）：双击=编辑器查看（方案 1），运行收右键显式入口 */}
-              {!contextMenu.entry!.is_dir && contextMenu.entry!.name.toLowerCase().endsWith('.sh') && (
-                <>
-                  <div className="fm-ctx-item" onClick={() => { runScriptInTerminal(contextMenu.entry!, false); setContextMenu(null); }}>
-                    <span className="fm-ctx-icon"><AppIcon name="terminal" size={14} /></span> {t("fileManager.ctxRunInTerminal")}
-                  </div>
-                  <div className="fm-ctx-item" onClick={() => { runScriptInTerminal(contextMenu.entry!, true); setContextMenu(null); }}>
-                    <span className="fm-ctx-icon"><AppIcon name="lock" size={14} /></span> {t("fileManager.ctxRunWithSudo")}
-                  </div>
-                </>
+      {/* 指针式拖拽幽灵：「图标被拿起」跟随层——真实文件/文件夹 AppIcon，
+          多选扇形叠放 + 数量角标，名称胶囊悬于下方（HTML5 DnD 在 WebView2
+          下不可用，内部拖拽为指针式实现，见 useFileTransfer 头注释） */}
+      {dragGhost && createPortal((() => {
+        const items = describeGhostItems(dragGhost.paths);
+        return (
+          <div
+            className="fm-drag-ghost"
+            /* 光标对齐图标堆叠中心：抓手的"手"落在图标中间（堆叠 38px，
+               中心 = +19；名称胶囊垂在下方不挡落点高亮） */
+            style={{ transform: `translate(${ghostPos.x - 19}px, ${ghostPos.y - 19}px)` }}
+          >
+            <span className="fm-drag-ghost-stack">
+              {items.map((it, i, arr) => (
+                <span
+                  key={`${i}-${it.name}`}
+                  className="fm-drag-ghost-icon"
+                  style={{
+                    transform: `translate(${-i * 6}px, ${-i * 4}px) rotate(${i * -7}deg)`,
+                    opacity: 1 - i * 0.18,
+                    zIndex: arr.length - i,
+                  }}
+                >
+                  <AppIcon name={it.icon} size={30} />
+                </span>
+              ))}
+              {dragGhost.count > 1 && (
+                <span className="fm-drag-ghost-count">{dragGhost.count}</span>
               )}
+            </span>
+            <span className="fm-drag-ghost-name">
+              {dragGhost.count > 1
+                ? t("fileManager.dragItems", { n: dragGhost.count })
+                : items[0]?.name ?? ""}
+            </span>
+          </div>
+        );
+      })(), document.body)}
 
-              <div className="fm-ctx-separator" />
-
-              {/* 文件操作 */}
-              <div className="fm-ctx-item" onClick={() => { handleRename(contextMenu.entry!); setContextMenu(null); }}>
-                <span className="fm-ctx-icon"><AppIcon name="editor" size={14} /></span> {t("fileManager.ctxRename")}
-              </div>
-              <div className="fm-ctx-item" onClick={() => { setDeleteTarget(contextMenu.entry!); setContextMenu(null); }}>
-                <span className="fm-ctx-icon"><AppIcon name="trash" size={14} /></span> {t("fileManager.ctxDelete")}
-              </div>
-
-              <div className="fm-ctx-separator" />
-
-              {/* 其他操作 */}
-              <div className="fm-ctx-item" onClick={() => {
-                // 复制路径到剪贴板（Linux 格式）
-                const sep = "/";
-                const path = currentPath === "/"
-                  ? `${currentPath}${sep}${contextMenu.entry!.name}`
-                  : `${currentPath}${sep}${contextMenu.entry!.name}`;
-                navigator.clipboard.writeText(path);
-                setContextMenu(null);
-              }}>
-                <span className="fm-ctx-icon"><AppIcon name="file-text" size={14} /></span> {t("fileManager.ctxCopyPath")}
-              </div>
-
-              {/* 下载功能（仅文件） */}
-              {!contextMenu.entry!.is_dir && (
-                <div className="fm-ctx-item" onClick={() => {
-                  handleDownload(contextMenu.entry!);
-                }}>
-                  <span className="fm-ctx-icon"><AppIcon name="file-archive" size={14} /></span> {t("fileManager.ctxDownload")}
-                </div>
-              )}
-
-              <div className="fm-ctx-separator" />
-              <div className="fm-ctx-item" onClick={() => { showProperties(contextMenu.entry!); setContextMenu(null); }}>
-                <span className="fm-ctx-icon"><AppIcon name="about" size={14} /></span> {t("fileManager.ctxProperties")}
-              </div>
-            </>
-          )}
-
-          {contextMenu.type === 'empty' && (
-            // 空白区域菜单
-            <>
-              <div className="fm-ctx-item" onClick={handleRefresh}>
-                <span className="fm-ctx-icon"><AppIcon name="monitor" size={14} /></span> {t("fileManager.ctxRefresh")}
-              </div>
-              <div className="fm-ctx-separator" />
-              <div className="fm-ctx-item" onClick={handleNewFolder}>
-                <span className="fm-ctx-icon"><AppIcon name="folder-plus" size={14} /></span> {t("fileManager.newFolder")}
-              </div>
-              <div className="fm-ctx-item" onClick={handleNewFile}>
-                <span className="fm-ctx-icon"><AppIcon name="file" size={14} /></span> {t("fileManager.ctxNewFile")}
-              </div>
-
-              {/* 上传功能 */}
-              <div className="fm-ctx-item" onClick={handleUpload}>
-                <span className="fm-ctx-icon"><AppIcon name="file-code" size={14} /></span> {t("fileManager.ctxUpload")}
-              </div>
-            </>
-          )}
-        </div>,
-        document.body
+      {/* 右键菜单：共享 ContextMenu 组件（portal + 实测尺寸视口钳制 +
+          data-browser-overlay 让位机制）。targets = null 为空白菜单 */}
+      {contextMenu && (
+        <ContextMenu
+          pos={{ x: contextMenu.x, y: contextMenu.y }}
+          items={contextMenuItems}
+          onClose={() => setContextMenu(null)}
+        />
       )}
 
-      {/* 删除确认弹窗：危险操作（红色警示图标 + 焦点默认在取消上防回车误触） */}
-      {deleteTarget && (
+      {/* 删除确认弹窗：危险操作（红色警示图标 + 焦点默认在取消上防回车误触）。
+          多选时列明数量，单选保留原文件名高亮文案 */}
+      {deleteTargets.length > 0 && (
         <ConfirmDialog
           title={t("fileManager.ctxDelete")}
-          message={t("fileManager.deleteConfirm", { name: deleteTarget.name })}
-          highlight={deleteTarget.name}
-          detail={deleteTarget.is_dir ? t("fileManager.deleteDetailDir") : t("fileManager.deleteDetailFile")}
+          message={
+            deleteTargets.length === 1
+              ? t("fileManager.deleteConfirm", { name: deleteTargets[0].name })
+              : t("fileManager.deleteConfirmMulti", { n: deleteTargets.length })
+          }
+          highlight={deleteTargets.length === 1 ? deleteTargets[0].name : undefined}
+          detail={
+            deleteTargets.length === 1
+              ? (deleteTargets[0].is_dir ? t("fileManager.deleteDetailDir") : t("fileManager.deleteDetailFile"))
+              : t("fileManager.deleteDetailMulti")
+          }
           confirmLabel={t("fileManager.ctxDelete")}
           danger
-          onCancel={() => setDeleteTarget(null)}
-          onConfirm={() => { const target = deleteTarget; setDeleteTarget(null); doDelete(target); }}
+          onCancel={() => setDeleteTargets([])}
+          onConfirm={() => { const targets = deleteTargets; setDeleteTargets([]); doDelete(targets); }}
+        />
+      )}
+
+      {/* 防呆确认弹窗：src/dst 触及系统或敏感目录时先于重名确认弹出 */}
+      {riskConfirm && (
+        <ConfirmDialog
+          title={t("fileManager.guardTitle", { op: riskConfirm.mode === "move" ? t("fileManager.opMove") : t("fileManager.opCopy") })}
+          message={t("fileManager.guardMessage")}
+          detail={riskConfirm.findings
+            .map((f) => t(f.reason === "systemPath" ? "fileManager.guardSystemPath" : "fileManager.guardSensitiveDir", { sample: f.sample }))
+            .join("；")}
+          confirmLabel={riskConfirm.mode === "move" ? t("fileManager.opMove") : t("fileManager.opCopy")}
+          danger
+          onCancel={() => setRiskConfirm(null)}
+          onConfirm={() => {
+            const { mode, targets } = riskConfirm;
+            setRiskConfirm(null);
+            void checkConflictsAndExec(mode, targets);
+          }}
+        />
+      )}
+
+      {/* 移动/复制重名确认：目标位置存在同名项时列出并请求覆盖确认 */}
+      {transferConfirm && (
+        <ConfirmDialog
+          title={transferConfirm.mode === "move" ? t("fileManager.moveConfirmTitle") : t("fileManager.copyConfirmTitle")}
+          message={t("fileManager.conflictDetail", { n: transferConfirm.conflicts.length, names: transferConfirm.conflicts.slice(0, 3).map(entryName).join("、") })}
+          detail={t("fileManager.conflictQuestion")}
+          confirmLabel={transferConfirm.mode === "move" ? t("fileManager.opMove") : t("fileManager.opCopy")}
+          danger
+          onCancel={() => setTransferConfirm(null)}
+          onConfirm={() => {
+            const { mode, targets } = transferConfirm;
+            setTransferConfirm(null);
+            void execTransfer(mode, targets);
+          }}
         />
       )}
 

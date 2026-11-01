@@ -171,3 +171,40 @@ export const transfersStorage: TauriStorage = {
     return storage.removeItem(name);
   },
 };
+let _browserDataStorage: TauriStorage | null = null;
+
+/**
+ * 获取浏览器数据存储（书签/历史等浏览产物）
+ */
+export async function getBrowserDataStorage(): Promise<TauriStorage> {
+  if (!_browserDataStorage) {
+    _browserDataStorage = await createTauriStorage("browser-data.bin");
+  }
+  return _browserDataStorage;
+}
+
+// 异步存储对象（用于 Zustand persist）：书签与历史两个 store 共用一个文件
+export const browserDataStorage: TauriStorage = {
+  getItem: async (name) => (await getBrowserDataStorage()).getItem(name),
+  setItem: async (name, value) => (await getBrowserDataStorage()).setItem(name, value),
+  removeItem: async (name) => (await getBrowserDataStorage()).removeItem(name),
+};
+
+let _notificationsStorage: TauriStorage | null = null;
+
+/**
+ * 获取通知存储（按服务器持久化的通知中心条目）
+ */
+export async function getNotificationsStorage(): Promise<TauriStorage> {
+  if (!_notificationsStorage) {
+    _notificationsStorage = await createTauriStorage("notifications.bin");
+  }
+  return _notificationsStorage;
+}
+
+// 异步存储对象（用于 Zustand persist）
+export const notificationsStorage: TauriStorage = {
+  getItem: async (name) => (await getNotificationsStorage()).getItem(name),
+  setItem: async (name, value) => (await getNotificationsStorage()).setItem(name, value),
+  removeItem: async (name) => (await getNotificationsStorage()).removeItem(name),
+};

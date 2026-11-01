@@ -31,6 +31,16 @@ const INITIAL_TAB_SIZE_PX: (i32, i32) = (800, 600);
 const MAIN_LOOP_FALLBACK_MS: u32 = 1000;
 /// 睡眠扫描间隔（秒）：定期触发 ScanSleep，超时未活跃的后台 tab 销毁 webview 释放内存
 const SLEEP_SCAN_INTERVAL_SECS: u64 = 60;
+/// 前端心跳中断判定阈值（ms）：超过即视为前端死亡/重载/卡死，runtime 自行
+/// 隐藏全部 webview（悬浮孤儿根治——可见性不再依赖前端"礼貌地"发指令）
+const FRONTEND_HEARTBEAT_TIMEOUT_MS: u64 = 3000;
+
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
 
 /// 单个 tab 的展示元数据（emit 给前端的形态）
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -311,6 +321,9 @@ pub(crate) enum HostCommand {
     EvNewWindow { #[allow(dead_code)] tab_id: u64, url: String },
     /// 网页全屏态变更（Fullscreen API：视频/游戏铺满请求）
     EvFullscreen { tab_id: u64, fullscreen: bool },
+    /// 刷新/关闭过渡态隐藏（prepare_shutdown 下发）：全部 webview 置不可见，
+    /// 不改 window_visible 命令态（新页面收养后由 SetVisible 全量版重管理）
+    HideAll,
     /// 主线程完成全屏切换后的回流：客户区就位，重新铺满 webview
     ResyncBounds,
 }
@@ -323,18 +336,35 @@ pub struct BrowserWindowHost {
     #[allow(dead_code)]
     proxy_port: u16,
     cmd_tx: CmdSender,
+    /// 前端存活凭证（与 RuntimeCtx 共享同一 Arc）：每次心跳/指令刷新
+    last_seen: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl BrowserWindowHost {
+    /// 刷新前端存活凭证（心跳与任意指令的公共入口）
+    fn touch(&self) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        self.last_seen.store(now, std::sync::atomic::Ordering::Relaxed);
+    }
     /// 请求窗口关闭（销毁全部 webview + drop Environment + 结束线程）。
     /// 监听不受影响（由 ProxySession 管理）。幂等：通道已断时静默。
     pub(crate) fn request_close(&self) {
-        let _ = self.cmd_tx.send(HostCommand::CloseAll { reply: None });
+        if let Err(e) = self.cmd_tx.send(HostCommand::CloseAll { reply: None }) {
+            tracing::error!("[Browser] CloseAll 入队失败（runtime 已提前退出？）: {e}");
+        }
+    }
+    /// 隐藏全部 webview（beforeunload/刷新过渡态）：旧页面死亡到新页面收养
+    /// 之间的空窗里，tab webview（独立 HWND）不得保持可见——悬浮脱离的根治。
+    /// 不改 window_visible 命令态，新页面收养后由 SetVisible 全量版重新接管。
+    pub(crate) fn hide_all(&self) {
+        let _ = self.cmd_tx.send(HostCommand::HideAll);
     }
 
     /// 请求重发全量标签列表（browser://tabs）。fire-and-forget：通道已断时静默。
-    pub(crate) fn refresh_tabs(&self) {
-        let _ = self.cmd_tx.send(HostCommand::RefreshTabs);
+    pub(crate) fn refresh_tabs(&self) {        let _ = self.cmd_tx.send(HostCommand::RefreshTabs);
     }
 
     /// 默认搜索引擎变更（browser_set_settings 持久化后转发，运行中即时生效）。
@@ -418,6 +448,9 @@ pub(crate) struct RuntimeCtx {
     /// 命令发送端（RuntimeState 与 COM 事件订阅闭包共用；plan 勘误：
     /// Receiver 无 clone_tx，改由 ctx 携带 cmd_tx 传入线程内）
     pub cmd_tx: CmdSender,
+    /// 前端存活凭证（Unix 毫秒）：browser_heartbeat / set_visible / set_bounds
+    /// 均刷新。中断超时由 runtime 主循环强制隐藏 webview（悬浮孤儿根治）
+    pub last_seen: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 struct RuntimeState {
@@ -434,6 +467,9 @@ struct RuntimeState {
     /// 网页全屏态（激活 webview 内 Fullscreen API 激活中）：true 时主窗口
     /// OS 全屏 + webview 铺满客户区 + 前端 bounds 上报被屏蔽
     page_fullscreen: bool,
+    /// 前端失联强制隐藏标记：心跳超时自行隐藏 webview 后置位，
+    /// 心跳恢复后按 window_visible 重.assert 并复位
+    enforcer_hidden: bool,
     cmd_tx: CmdSender,
 }
 
@@ -674,6 +710,10 @@ impl RuntimeState {
     }
 
     fn handle_command(&mut self, cmd: HostCommand) {
+        // 任意命令即前端存活凭证（心跳之外的兜底刷新）
+        self.ctx
+            .last_seen
+            .store(now_millis(), std::sync::atomic::Ordering::Relaxed);
         match cmd {
             HostCommand::Navigate { tab_id, url, reply } => {
                 let result = self.do_navigate(tab_id, &normalize_url(&url, self.search_engine));
@@ -762,18 +802,21 @@ impl RuntimeState {
                     self.webviews.len()
                 );
                 self.window_visible = visible;
-                if let Some(id) = self.book.active_id() {
-                    if let Some(wv) = self.webviews.get(&id) {
+                // 可见性应用到全部 webview：激活 tab = visible，非激活一律 false。
+                // ⚠️ 此前只作用于激活 tab——非激活 webview 的可见性从此无人
+                // 管治（刷新收养后残留可见，悬浮在桌面上，实测）。一律显式管理。
+                let active = self.book.active_id();
+                for (tab_id, wv) in self.webviews.iter() {
+                    let is_active = Some(*tab_id) == active;
+                    if visible && is_active {
                         // 显示前先按当前态归位（常规=卡片 bounds / 全屏=监视器
                         // 矩形）：bounds 与可见性是两条 IPC，可见性先到时
                         // webview 会在旧位置闪现再跳到新位置（拖拽松手"画面
                         // 原地闪过再补偿"的根因）；先归位再显示，保证出现即
                         // 最新 bounds。SetBounds 幂等，重复应用无害
-                        if visible {
-                            self.sync_bounds(wv);
-                        }
-                        webview_host::set_visible(wv, visible);
+                        self.sync_bounds(wv);
                     }
+                    webview_host::set_visible(wv, visible && is_active);
                 }
             }
             HostCommand::RefreshTabs => {
@@ -832,6 +875,13 @@ impl RuntimeState {
                 // 迟到事件在非激活时刻触发联动）
                 if self.book.active_id() == Some(tab_id) {
                     self.apply_page_fullscreen(fullscreen);
+                }
+            }
+            HostCommand::HideAll => {
+                // 过渡态隐藏：全部 webview 置不可见。不改 window_visible——
+                // 新页面收养后由 SetVisible 全量版（含非激活显式 false）重新接管
+                for wv in self.webviews.values() {
+                    webview_host::set_visible(wv, false);
                 }
             }
             HostCommand::ResyncBounds => self.resync_after_fullscreen(),
@@ -981,9 +1031,21 @@ impl RuntimeState {
                 }
             });
         }
+        // 先全量隐藏、再逐个销毁：controller.Close 是慢操作（Chromium 拆卸、
+        // 多 tab 串行），不先隐藏的话 React 窗口已移除而剩余 webview 仍以
+        // 独立 HWND 悬浮在桌面上（关窗「延迟关闭」的可见空窗）——与刷新
+        // 过渡态 hide_all（71b4f55）同源问题，关闭过渡态在此收口
+        let total = self.webviews.len();
+        for (_, wv) in self.webviews.iter() {
+            unsafe {
+                let _ = wv.controller.SetIsVisible(false);
+            }
+        }
+        tracing::info!("[Browser] 关窗过渡态: webview 已全量隐藏 n={total}");
         for (_, wv) in self.webviews.drain() {
             webview_host::destroy(&wv);
         }
+        tracing::info!("[Browser] 关窗过渡态: webview 已全部销毁 n={total}");
         self.env = None; // drop Environment（user-data-dir 锁随进程引用释放）
         self.book = TabBook::new();
         self.emit_tabs();
@@ -1054,6 +1116,7 @@ pub(crate) fn runtime_main(
         },
         window_visible: true,
         page_fullscreen: false,
+        enforcer_hidden: false,
     };
 
     // 首个 tab（先克隆 URL：&mut self 调用不能同时借用 self.ctx.first_url）
@@ -1108,6 +1171,34 @@ pub(crate) fn runtime_main(
         }
         if exit {
             break;
+        }
+        // ── 前端心跳强制执行（悬浮孤儿根治）────────────────
+        // 前端存活凭证中断 > 3s（死亡/重载/卡死）→ 不等前端"礼貌地"发指令，
+        // 自行隐藏全部 webview；凭证恢复 → 按 window_visible 重.assert 可见性。
+        // 主循环兜底唤醒粒度 1s < 阈值 3s，判定及时性足够
+        {
+            let stale = now_millis()
+                .saturating_sub(state.ctx.last_seen.load(std::sync::atomic::Ordering::Relaxed))
+                > FRONTEND_HEARTBEAT_TIMEOUT_MS;
+            if stale && !state.enforcer_hidden && !state.webviews.is_empty() {
+                for wv in state.webviews.values() {
+                    webview_host::set_visible(wv, false);
+                }
+                state.enforcer_hidden = true;
+                tracing::warn!(
+                    "[Browser] 前端心跳中断 >{}ms，webview 已自动隐藏: server_id={}",
+                    FRONTEND_HEARTBEAT_TIMEOUT_MS,
+                    state.ctx.server_id
+                );
+            } else if !stale && state.enforcer_hidden {
+                // 凭证恢复（新页面接管）：按命令态重.assert 可见性（激活 tab 显示）
+                let active = state.book.active_id();
+                for (tab_id, wv) in state.webviews.iter() {
+                    webview_host::set_visible(wv, state.window_visible && Some(*tab_id) == active);
+                }
+                state.enforcer_hidden = false;
+                tracing::info!("[Browser] 前端心跳恢复，webview 可见性已重.assert: server_id={}", state.ctx.server_id);
+            }
         }
         // 2) 泵消息：COM 事件派发（handler 内 send 命令 + SetEvent 即时唤醒下轮）
         webview_host::pump_messages();
@@ -1188,6 +1279,8 @@ impl BrowserWindowHost {
             .map_err(|e| AppError::new(codes::PROXY_BROWSER_WINDOW_FAILED)
                 .with_detail(format!("创建主循环唤醒事件失败: {e}")))?;
         let cmd_tx = CmdSender { tx: cmd_tx_raw, wake };
+        // 前端存活凭证：spawn 时刻初始化，host 与 runtime 共享同一 Arc
+        let last_seen_arc = Arc::new(std::sync::atomic::AtomicU64::new(now_millis()));
 
         let ctx = RuntimeCtx {
             server_id: server_id.clone(),
@@ -1200,6 +1293,7 @@ impl BrowserWindowHost {
             first_url,
             search_engine: settings.search_engine,
             incognito: settings.incognito,
+            last_seen: last_seen_arc.clone(),
         };
 
         if std::thread::Builder::new()
@@ -1223,6 +1317,7 @@ impl BrowserWindowHost {
             server_id,
             proxy_port,
             cmd_tx,
+            last_seen: last_seen_arc,
         });
 
         // 睡眠扫描任务：定期触发（host 死亡后 send 失败自动退出）
@@ -1334,13 +1429,24 @@ pub async fn browser_close_window(server_id: String, app: AppHandle) -> Result<(
 /// 窗口随前端重置消失，而 Rust 侧 host 线程与 WebView2 子窗口仍在——孤儿 webview
 /// 悬浮在桌面上且无 chrome 可操作。前端挂载时调用本命令统一回收；
 /// 正常启动时会话表为空，本命令为 no-op。
+/// `keep`：刷新恢复场景下，会话快照声明收养的 serverId 列表——这些会话
+/// 由恢复的浏览器窗口接管，不回收（缺省 None = 全部回收，兼容旧调用）。
 #[tauri::command]
-pub async fn browser_close_all_windows(app: AppHandle) -> Result<(), String> {
-    // 先摘除全部 host 再逐个关闭：持锁期间不做 await（close_all 最长 3s）
+pub async fn browser_close_all_windows(
+    keep: Option<Vec<String>>,
+    app: AppHandle,
+) -> Result<(), String> {
+    // 先摘除待回收 host 再逐个关闭：持锁期间不做 await（close_all 最长 3s）
     let hosts: Vec<std::sync::Arc<BrowserWindowHost>> = {
         let sessions: State<ProxySessionManager> = app.state();
         let guard = sessions.sessions.lock().unwrap();
-        guard.values().filter_map(|s| s.host.lock().unwrap().take()).collect()
+        guard
+            .iter()
+            .filter(|(server_id, _)| {
+                keep.as_ref().map_or(true, |keep| !keep.contains(server_id))
+            })
+            .filter_map(|(_, s)| s.host.lock().unwrap().take())
+            .collect()
     };
     for host in hosts {
         let _ = host.close_all().await;
@@ -1407,6 +1513,22 @@ pub async fn browser_focus_tab(server_id: String, tab_id: u64, app: AppHandle) -
 #[tauri::command]
 pub async fn browser_reorder_tab(server_id: String, from: usize, to: usize, app: AppHandle) -> Result<(), AppError> {
     host_of(&app, &server_id)?.reorder_tab(from, to).await
+}
+
+/// 前端订阅就绪后主动拉取全量标签列表（刷新恢复/监听注册竞态兜底）。
+/// 幂等：重复拉取无害，前端按全量列表合并
+#[tauri::command]
+pub async fn browser_refresh_tabs(server_id: String, app: AppHandle) -> Result<(), AppError> {
+    host_of(&app, &server_id)?.refresh_tabs();
+    Ok(())
+}
+
+/// 前端存活心跳（1s 间隔）：刷新 last_seen 凭证。中断超 3s 由 runtime
+/// 主循环强制隐藏 webview（悬浮孤儿根治）
+#[tauri::command]
+pub async fn browser_heartbeat(server_id: String, app: AppHandle) -> Result<(), AppError> {
+    host_of(&app, &server_id)?.touch();
+    Ok(())
 }
 
 /// content 区布局上报（CSS 像素 → 按 scale_factor 换算物理像素）。

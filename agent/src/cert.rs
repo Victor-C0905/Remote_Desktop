@@ -6,6 +6,35 @@ use std::path::Path;
 
 use crate::config::AgentConfig;
 
+/// 写入敏感文件（证书/私钥）：Unix 下强制 0600 + O_NOFOLLOW。
+/// .mode() 仅对新建文件生效，故对已存在的旧文件再补一次显式收紧——
+/// 否则 0644 的旧私钥会被本机任意用户读取（守护进程以 root 运行时尤为严重）。
+fn write_secret_file(path: &Path, contents: &str) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::fs::OpenOptions;
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mut f = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path)
+            .with_context(|| format!("打开文件失败: {:?}", path))?;
+        f.write_all(contents.as_bytes())
+            .with_context(|| format!("写入文件失败: {:?}", path))?;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("收紧文件权限失败: {:?}", path))?;
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, contents).with_context(|| format!("写入文件失败: {:?}", path))
+    }
+}
+
 pub fn ensure_certificate(cfg: &AgentConfig) -> Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
     let cert_path = Path::new(&cfg.server.cert_path);
     let key_path = Path::new(&cfg.server.key_path);
@@ -32,9 +61,9 @@ pub fn ensure_certificate(cfg: &AgentConfig) -> Result<(Vec<CertificateDer<'stat
     let cert = rcgen::Certificate::from_params(params)?;
     let cert_pem = cert.serialize_pem()?;
 
-    fs::write(cert_path, &cert_pem)
+    write_secret_file(cert_path, &cert_pem)
         .with_context(|| format!("写入证书文件失败: {:?}", cert_path))?;
-    fs::write(key_path, &key_pem)
+    write_secret_file(key_path, &key_pem)
         .with_context(|| format!("写入私钥文件失败: {:?}", key_path))?;
 
     tracing::info!("证书已生成:");
@@ -73,4 +102,26 @@ fn parse_key_pem(pem: &str) -> Result<PrivateKeyDer<'static>> {
         .context("解析私钥 PEM 失败")?
         .context("PEM 文件中未找到有效私钥")?;
     Ok(keys)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_secret_file_writes_content_with_private_mode() {
+        let dir = std::env::temp_dir().join(format!("quireld-cert-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("key.pem");
+        write_secret_file(&path, "TEST-PEM").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "TEST-PEM");
+        // Unix：私钥文件必须 0600（含对已存在旧文件的收紧）
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "私钥文件必须 0600");
+        }
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
 }

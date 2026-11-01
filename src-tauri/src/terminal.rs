@@ -333,8 +333,9 @@ pub async fn remote_terminal_resize(
     .await
     .map_err(|_| AppError::new(codes::NETWORK_FAILED).with_detail("send resize timeout"))??;
 
-    // 读取响应（添加超时，忽略响应内容）
-    let _ = tokio::time::timeout(TERMINAL_CONNECT_TIMEOUT, async {
+    // 读取响应（添加超时，忽略响应内容；失败仅告警——静默吞掉会让
+    // UI 尺寸与后端实际状态漂移且无从排查）
+    if tokio::time::timeout(TERMINAL_CONNECT_TIMEOUT, async {
         let mut len_buf = [0u8; 4];
         if recv.read_exact(&mut len_buf).await.is_ok() {
             let resp_len = u32::from_le_bytes(len_buf) as usize;
@@ -344,7 +345,11 @@ pub async fn remote_terminal_resize(
             }
         }
     })
-    .await;
+    .await
+    .is_err()
+    {
+        tracing::warn!("远程终端 resize 响应读取超时: session_id={}", session_id);
+    }
 
     tracing::debug!("远程终端 resize: session_id={}, {}x{}", session_id, cols, rows);
     Ok(())

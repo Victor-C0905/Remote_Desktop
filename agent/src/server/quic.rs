@@ -758,9 +758,9 @@ async fn handle_connection(
                                 resp_public_key.len()
                             );
 
-                            // 验证挑战-响应并验证签名
+                            // 验证挑战-响应（签名验证见下方 SshAuthenticator）
                             match challenge_manager
-                                .verify_response(&resp_challenge_id, &signature, &resp_public_key)
+                                .verify_response(&resp_challenge_id, &resp_public_key)
                                 .await
                             {
                                 Ok((verified_username, challenge_data, expected_public_key)) => {
@@ -940,7 +940,9 @@ async fn handle_connection(
                             }
                         }
                         other => {
-                            tracing::warn!("期望公钥认证响应，收到: {:?}", other);
+                            // 安全红线：认证相位收到意外 Payload 时只打印类型名，
+                            // 严禁 {:?} 全量 dump——AuthPasswordRequest 携带明文密码
+                            tracing::warn!("期望公钥认证响应，收到: {}", other.type_name());
                             send_error_then_close(&connection, &mut resp_send, AuthErrorCode::ProtocolError, "协议格式错误", b"expected pubkey response").await;
                             return Ok(());
                         }
@@ -955,7 +957,9 @@ async fn handle_connection(
         }
 
         other => {
-            tracing::warn!("期望认证请求,收到: {:?}", other);
+            // 安全红线：同上，意外认证请求只打印类型名（Payload::AuthPasswordRequest
+            // 携带明文密码，{:?} 会将其落盘）
+            tracing::warn!("期望认证请求,收到: {}", other.type_name());
             send_error_then_close(&connection, &mut auth_send, AuthErrorCode::ProtocolError, "协议格式错误", b"expected auth request").await;
             return Ok(());
         }

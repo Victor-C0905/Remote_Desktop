@@ -310,6 +310,24 @@
   font-size: 12px;
 }
 
+/* 状态栏已选计数（多选时显示，accent 强调） */
+.fm-selected-count {
+  color: var(--quirel-accent-bg);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* 框选矩形（marquee）：portal 到 body、fixed 定位，半透明强调色填充 +
+   1px 强调色描边；pointer-events 放行鼠标事件到下层容器 */
+.fm-marquee {
+  position: fixed;
+  z-index: var(--z-app-dropdown);
+  pointer-events: none;
+  background: color-mix(in srgb, var(--quirel-accent-bg) 18%, transparent);
+  border: 1px solid var(--quirel-accent-bg);
+  border-radius: 2px;
+}
+
 /* ── Content Area ─────────────────────────────────────── */
 .fm-sidebar {
   /* ✅ 不设置width，由AppLayout的CSS变量 --app-sidebar-width 控制 */
@@ -1697,4 +1715,114 @@
   word-break: break-all;
   color: var(--quirel-text-primary);
   margin: 0;
+}
+
+/* ── 拖拽移动与应用内剪贴板 ────────────────────────────── */
+
+/* 剪贴板 cut 状态的条目：淡化显示（提示粘贴后原位将消失） */
+.fm-list-row.fm-cut,
+.fm-grid-item.fm-cut {
+  opacity: 0.5;
+}
+
+/* 拖拽放置目标高亮：文件夹行（列表/网格）与面包屑祖先分段 */
+.fm-list-row.drop-target,
+.fm-grid-item.drop-target,
+.fm-breadcrumb-segment.drop-target,
+.fm-sidebar-item.drop-target {
+  outline: 2px solid var(--quirel-accent-bg);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--quirel-accent-bg) 14%, transparent);
+}
+
+/* 大目录渲染优化备注：曾在此给 .fm-list-row/.fm-grid-item 加
+   content-visibility: auto（跳过视口外渲染）。已移除——cv:auto 的
+   containment 与 draggable 行存在拖拽初始化的兼容风险（dragstart
+   可能不触发），且 HTML5 dragstart 的原生阈值不受 CSS 控制。后续做
+   大目录性能请走 JS 窗口化（虚拟滚动）而非 CSS containment。 */
+
+/* ── 指针式拖拽幽灵：「图标被拿起」跟随层（不用 HTML5 DnD，见
+   useFileTransfer 头注释；位置由内联 transform 驱动，锚定光标右上，
+   不遮挡落点高亮）。多选 = 扇形叠放 + 数量角标；整体带浮起投影 ── */
+.fm-drag-ghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: var(--z-app-tooltip);
+  pointer-events: none;
+  /* 宽度锁定为图标堆叠（38px）：抓取中心只由图标决定，名称胶囊
+     绝对定位悬挂于下方，不参与布局宽度（长文件名不产生偏移） */
+  width: 38px;
+  opacity: 0.94;
+  filter: drop-shadow(0 8px 14px rgba(0, 0, 0, 0.28));
+}
+
+/* 图标卡：白底小卡承载彩色 AppIcon，任意壁纸上都清晰可辨。
+   必须显式块级化：stack 是 span，行内盒的 width/height 不生效，
+   塌缩后绝对定位的图标卡与胶囊参照全部失真（错位实测） */
+.fm-drag-ghost-stack {
+  display: block;
+  position: relative;
+  width: 38px;
+  height: 38px;
+}
+
+.fm-drag-ghost-icon {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  display: inline-flex;
+  padding: 2px;
+  background: var(--quirel-view-bg);
+  border: 1px solid var(--quirel-border-color);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+}
+
+/* 数量角标：accent 圆徽（多选时右下角） */
+.fm-drag-ghost-count {
+  position: absolute;
+  right: -8px;
+  bottom: -6px;
+  z-index: 20;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--quirel-accent-bg);
+  color: var(--quirel-accent-fg);
+  border-radius: var(--radius-pill);
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 700;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+/* 名称胶囊：绝对定位悬挂在图标堆叠下方（水平居中于 38px 容器，
+   超宽向两侧延展，不影响抓取中心） */
+.fm-drag-ghost-name {
+  position: absolute;
+  top: calc(100% + 3px);
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 180px;
+  padding: 1px 8px;
+  background: var(--quirel-view-bg);
+  border: 1px solid var(--quirel-border-color);
+  border-radius: var(--radius-pill);
+  color: var(--quirel-text-primary);
+  font-family: var(--font-ui);
+  font-size: 10px;
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 拖拽进行中：全窗 grabbing 光标（data-drag-cursor 由 useFileTransfer 挂除） */
+body[data-drag-cursor="1"],
+body[data-drag-cursor="1"] * {
+  cursor: grabbing !important;
 }

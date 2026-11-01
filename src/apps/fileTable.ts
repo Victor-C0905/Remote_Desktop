@@ -2,7 +2,7 @@
 // 文件列表表头领域逻辑：排序（点击表头翻转）+ 列筛选（表头下拉）+ 列宽（拖拽调节/持久化）
 // 纯函数模块，与 permissions.ts 同模式：不含 React 依赖，单测覆盖（fileTable.test.ts）
 import i18n from "../i18n";
-import type { FileEntry } from "./FileManager";
+import type { FileEntry } from "./fileTypes";
 
 /* ── 排序 ─────────────────────────────────────────────────── */
 

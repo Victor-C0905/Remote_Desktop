@@ -6,9 +6,24 @@ vi.mock("../utils/storage", () => ({
   serversStorage: { getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() },
 }));
 
-import { useServersStore, getServerErrorInfo } from "./serversStore";
+import { useServersStore, getServerErrorInfo, persistMigrate } from "./serversStore";
 import { AuthErrorCode } from "../types/errors";
 import { AuthMethod } from "../types/server";
+
+describe("persistMigrate", () => {
+  it("旧版本数据（无 version 字段 = 0）原样透传，不丢字段", () => {
+    const legacy = {
+      servers: [{ id: "srv-1", name: "dev", host: "h", port: 22 }],
+      activeServerId: "srv-1",
+    };
+    expect(persistMigrate(legacy, 0)).toBe(legacy);
+  });
+
+  it("当前版本数据透传", () => {
+    const cur = { servers: [], activeServerId: null };
+    expect(persistMigrate(cur, 1)).toBe(cur);
+  });
+});
 
 const auth = { method: AuthMethod.PASSWORD, username: "root" };
 

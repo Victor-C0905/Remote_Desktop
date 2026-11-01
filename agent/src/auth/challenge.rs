@@ -77,18 +77,21 @@ impl ChallengeManager {
 
     /// 验证挑战响应
     ///
+    /// 只负责挑战的查找、单次消费与过期校验，并返回挑战数据供调用方
+    /// 验证签名（本模块不持有签名验证能力，签名验证在 quic.rs 认证流
+    /// 中经 SshAuthenticator 完成）。不设 signature 参数，避免「收下
+    /// 签名却不验」的误用形态。
+    ///
     /// # 参数
     /// - `challenge_id`: 挑战ID
-    /// - `signature`: 签名数据
     /// - `public_key`: 公钥数据
     ///
     /// # 返回
-    /// - Ok((username, expected_public_key)): 验证成功，返回用户名和公钥
+    /// - Ok((username, challenge, public_key)): 验证成功，返回用户名、挑战数据与公钥
     /// - Err: 验证失败
     pub async fn verify_response(
         &self,
         challenge_id: &str,
-        _signature: &[u8],
         public_key: &[u8],
     ) -> Result<(String, Vec<u8>, Vec<u8>)> {
         let mut challenges = self.challenges.lock().await;
@@ -183,7 +186,7 @@ mod tests {
 
         // 验证响应
         let result = manager
-            .verify_response(&challenge_id, &[], &[1, 2, 3])
+            .verify_response(&challenge_id, &[1, 2, 3])
             .await
             .unwrap();
 
@@ -196,7 +199,7 @@ mod tests {
         let manager = ChallengeManager::new();
 
         // 尝试验证不存在的挑战
-        let result = manager.verify_response("nonexistent", &[], &[1, 2, 3]).await;
+        let result = manager.verify_response("nonexistent", &[1, 2, 3]).await;
         assert!(result.is_err());
     }
 
@@ -211,7 +214,7 @@ mod tests {
             .unwrap();
 
         // 使用不同的公钥验证
-        let result = manager.verify_response(&challenge_id, &[], &[4, 5, 6]).await;
+        let result = manager.verify_response(&challenge_id, &[4, 5, 6]).await;
         assert!(result.is_err());
     }
 }

@@ -404,7 +404,12 @@ pub fn worker_response_to_serde(response: &crate::protocol::generated::WorkerRes
 
         // 其他响应类型不经过此适配层(SessionCreated 由 IpcServer 单独处理)
         other => {
-            tracing::warn!("协议适配层收到未处理的响应类型: {:?}", other);
+            // 安全约定：意外 Payload 只打印判别符，不做 {:?} 全量 dump
+            // （响应变体可能携带文件内容等用户数据）
+            tracing::warn!(
+                "协议适配层收到未处理的响应类型: {:?}",
+                std::mem::discriminant(other)
+            );
             None
         }
     }

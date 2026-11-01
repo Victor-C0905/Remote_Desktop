@@ -77,6 +77,10 @@ webview2-com = "0.39"
 # 版本与 tauri 2.12 的传递依赖对齐（0.62），错位会双份编译（二进制 +5~15MB）
 windows = { version = "0.62", features = ["Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_UI_HiDpi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_System_Threading", "Win32_System_Com", "Win32_System_Console", "Win32_Foundation", "Win32_Security"] }
 
+[profile.dev]
+# 行表级调试信息：回溯含行号，调试信息体积较完整 DWARF 大幅缩小（PDB/增量缓存）
+debug = "line-tables-only"
+
 [profile.release]
 opt-level = 3          # 最高优化等级
 lto = true             # 链接时优化(减少体积)

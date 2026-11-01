@@ -178,6 +178,20 @@ pub(crate) fn create_controller(
     let webview = unsafe { controller.CoreWebView2() }
         .map_err(|e| format!("获取 WebView2 页面接口失败: {e}"))?;
 
+    // 关闭浏览器类行为入口（WebView2 默认开启）：webview 装载的是远程
+    // 页面，JS 不可控——加速键（F5/Ctrl+R）与默认右键菜单（含「重新加载」）
+    // 都会绕过 browser_reload 的 tab 状态管理直接重载内容。加速键成员在
+    // Settings3 子接口（SDK 1.0.1108+）；失败仅告警，不阻塞会话建立。
+    unsafe {
+        if let Err(e) = webview.Settings().and_then(|s| {
+            s.SetAreDefaultContextMenusEnabled(false)?;
+            s.cast::<ICoreWebView2Settings3>()
+                .and_then(|s3| s3.SetAreBrowserAcceleratorKeysEnabled(false))
+        }) {
+            tracing::warn!("[Browser] 关闭浏览器加速键/默认右键菜单失败: err={e}");
+        }
+    }
+
     unsafe {
         controller.SetBounds(bounds).map_err(|e| format!("设置 bounds 失败: {e}"))?;
         controller.SetIsVisible(visible).map_err(|e| format!("设置可见性失败: {e}"))?;

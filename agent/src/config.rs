@@ -22,8 +22,6 @@ pub struct ServerConfig {
     pub bind: String,
     #[serde(default = "default_quic_port")]
     pub quic_port: u16,
-    #[serde(default = "default_ws_port")]
-    pub ws_port: u16,
     pub cert_path: String,
     pub key_path: String,
 }
@@ -33,7 +31,6 @@ impl Default for ServerConfig {
         Self {
             bind: "0.0.0.0".into(),
             quic_port: default_quic_port(),
-            ws_port: default_ws_port(),
             cert_path: "./cert.pem".into(),
             key_path: "./key.pem".into(),
         }
@@ -197,7 +194,6 @@ impl Default for WorkerConfig {
 }
 
 fn default_quic_port() -> u16 { 8443 }
-fn default_ws_port() -> u16 { 443 }
 // 移除：fn default_allowed_paths() -> Vec<String> { vec!["/home".into(), "/etc".into(), "/var/log".into(), "/opt".into()] }
 fn default_blocked_commands() -> Vec<String> { vec!["rm -rf /".into(), "dd if=".into(), "mkfs.".into()] }
 fn default_max_sessions() -> usize { 10 }
@@ -260,7 +256,6 @@ fn default_config() -> AgentConfig {
         server: ServerConfig {
             bind: "0.0.0.0".into(),
             quic_port: 8443,
-            ws_port: 443,
             cert_path: "./cert.pem".into(),
             key_path: "./key.pem".into(),
         },

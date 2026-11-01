@@ -4,6 +4,20 @@ import { LayoutType } from '../types';
 import type { SnapZone } from '../../components/window-shell/aeroSnap';
 
 /**
+ * 会话快照条目（存 sessionStorage：刷新存活、关闭项目随窗口销亡）
+ */
+export interface PersistedWindowData {
+  id: string;
+  appId: string;
+  position: { x: number; y: number };
+  size: { width: number; height: number };
+  minimized: boolean;
+  layout: LayoutType;
+  /** 应用上下文（文件管理器目录、编辑器路径等；纯 JSON 深拷贝） */
+  preloadData: any;
+}
+
+/**
  * Window class - encapsulates window state and behavior
  */
 export class Window {
@@ -197,5 +211,45 @@ export class Window {
       this._preSnapState = null;
     }
     this._snapZone = null;
+  }
+
+  /**
+   * 序列化为会话快照。preloadData 深拷贝为纯 JSON（函数/循环引用丢弃——
+   * 撤销闭包这类不可序列化的运行时产物不进快照）。
+   */
+  serialize(): PersistedWindowData {
+    let preloadData: any = null;
+    if (this._preloadData != null) {
+      try {
+        preloadData = JSON.parse(JSON.stringify(this._preloadData));
+      } catch {
+        preloadData = null;
+      }
+    }
+    return {
+      id: this.id,
+      appId: this.appId,
+      position: { ...this._position },
+      size: { ...this._size },
+      minimized: this._minimized,
+      layout: this._layout,
+      preloadData,
+    };
+  }
+
+  /**
+   * 从会话快照反序列化。运行时状态（最大化/snap/preMaximize）一律回默认；
+   * preloadData 存在时置 ready——应用挂载即拿到上下文（文件管理器目录、
+   * 编辑器路径等），不重走加载态。
+   */
+  static deserialize(data: PersistedWindowData): Window {
+    const window = new Window(data.id, data.appId, data.position, data.size);
+    window._minimized = data.minimized;
+    window._layout = data.layout;
+    if (data.preloadData != null) {
+      window._preloadData = data.preloadData;
+      window._preloadState = 'ready';
+    }
+    return window;
   }
 }

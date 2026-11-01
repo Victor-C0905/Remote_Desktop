@@ -33,6 +33,8 @@ export interface ChromeTabsHostListeners {
   onTabClose(tabId: string | undefined): void;
   /** 右键菜单（可选；tabId 为元素事件时刻的真实 id） */
   onTabContextMenu?(tabId: string | undefined, event: MouseEvent): void;
+  /** 页签条空白区右键（可选；原生 contextmenu 事件，命中页签时不触发） */
+  onStripContextMenu?(event: MouseEvent): void;
   /** 拖拽排序（dragEnd 时回调一次，from/to 为累积的起止索引） */
   onTabReorder(tabId: string | undefined, fromIndex: number, toIndex: number): void;
 }
@@ -157,6 +159,13 @@ export function useChromeTabsHost(
         idOf(event),
         (event as CustomEvent<{ event: MouseEvent }>).detail.event,
       );
+    // 空白条区右键：原生 contextmenu 事件（引擎的页签右键走 CustomEvent，
+    // 以 instanceof 区分；命中页签元素的场景由引擎事件接管，此处跳过）
+    const onNativeContextMenu = (event: Event) => {
+      if (!(event instanceof MouseEvent)) return;
+      if ((event.target as HTMLElement).closest?.('.chrome-tab')) return;
+      listenersRef.current.onStripContextMenu?.(event);
+    };
 
     let moveFrom: number | null = null;
     let moveTo = -1;
@@ -185,12 +194,14 @@ export function useChromeTabsHost(
     el.addEventListener('tabClick', onTabClick);
     el.addEventListener('tabClose', onTabClose);
     el.addEventListener('contextmenu', onContextMenu);
+    el.addEventListener('contextmenu', onNativeContextMenu);
     el.addEventListener('tabReorder', onTabReorder);
     el.addEventListener('dragEnd', onDragEnd);
     return () => {
       el.removeEventListener('tabClick', onTabClick);
       el.removeEventListener('tabClose', onTabClose);
       el.removeEventListener('contextmenu', onContextMenu);
+      el.removeEventListener('contextmenu', onNativeContextMenu);
       el.removeEventListener('tabReorder', onTabReorder);
       el.removeEventListener('dragEnd', onDragEnd);
     };

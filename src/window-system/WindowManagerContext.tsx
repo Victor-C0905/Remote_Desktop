@@ -9,7 +9,14 @@ import { initWindowRegistry } from './init';
 // ─── 全局状态类型 ──────────────────────────────────────
 // 仅包含"窗口列表 + 激活窗口 ID"，用于 Dock/Overview 等低频消费
 interface GlobalState {
-  windowList: Array<{ id: string; appId: string; isMinimized: boolean; isMaximized: boolean }>;
+  windowList: Array<{
+    id: string;
+    appId: string;
+    isMinimized: boolean;
+    isMaximized: boolean;
+    /** 激活栈排名（0=栈底，末位=激活窗口）；z 层计算用（zOrder.ts） */
+    zRank: number;
+  }>;
   activeWindowId: string | null;
 }
 
@@ -65,6 +72,7 @@ function getGlobalStateSnapshot(manager: WindowManager): GlobalState {
   // ⚠️ windowList 保持创建顺序（Map 插入序），绝不在此排序——
   // 排序会翻转 Desktop children 数组，React 重排 DOM 触发窗口内容重载。
   // MRU 层叠由 per-window 快照的 zRank（激活栈内排名）驱动内联 zIndex 表达。
+  const activation = manager.activationOrder;
   const windows = manager.getAll();
   const activeWindow = manager.getActive();
 
@@ -74,6 +82,7 @@ function getGlobalStateSnapshot(manager: WindowManager): GlobalState {
       appId: w.appId,
       isMinimized: w.minimized,
       isMaximized: w.maximized,
+      zRank: Math.max(0, activation.indexOf(w.id)),
     })),
     activeWindowId: activeWindow?.id ?? null,
   };
@@ -111,6 +120,20 @@ export function WindowManagerProvider({ children }: { children: ReactNode }) {
   //    等事件无法通知 useWindowState → 拖拽/最大化/最小化在 UI 层全部失效。
   useEffect(() => {
     initWindowEventBridge(manager as WindowManager);
+  }, [manager]);
+
+  // ── 会话窗口恢复 + 快照保存 ─────────────────────────
+  // 刷新（webview 重载）后按 sessionStorage 快照恢复窗口：几何 + 应用上下文
+  // preloadData（文件管理器目录、编辑器路径等）；关闭项目随窗口销亡，
+  // 不跨应用启动。恢复不走 create()、无事件产生，需显式通知全局与逐窗
+  // 订阅方重渲染；保存由任意窗口事件驱动（300ms 防抖在 saveSession 内）
+  useEffect(() => {
+    const restoredIds = manager.loadSession();
+    if (restoredIds.length > 0) {
+      notifyGlobalStateChange();
+      restoredIds.forEach((id) => notifyWindowStateChange(id));
+    }
+    return manager.onAny(() => manager.saveSession());
   }, [manager]);
 
   // 选择性事件监听：只在窗口列表变化时触发全局状态更新

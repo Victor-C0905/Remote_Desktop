@@ -76,11 +76,15 @@ mod tests {
     fn list_returns_nonempty_with_valid_fields() {
         let list = list();
         assert!(!list.is_empty(), "当前系统至少应有 1 个进程");
-        // 容器/WSL 均有 pid 1；首次调用 cpu_percent 允许为 0（无前次采样窗口）
-        let init = list.iter().find(|p| p.pid == 1).expect("pid 1 必然存在");
-        assert!(!init.name.is_empty());
-        assert!((0.0..=100.0).contains(&init.mem_percent));
-        assert_eq!(init.state.len(), 1);
+        // pid 1 是 Linux/容器语义（Windows 最小 pid 为 4），仅 unix 断言
+        #[cfg(unix)]
+        {
+            // 容器/WSL 均有 pid 1；首次调用 cpu_percent 允许为 0（无前次采样窗口）
+            let init = list.iter().find(|p| p.pid == 1).expect("pid 1 必然存在");
+            assert!(!init.name.is_empty());
+            assert!((0.0..=100.0).contains(&init.mem_percent));
+            assert_eq!(init.state.len(), 1);
+        }
     }
 }
 
