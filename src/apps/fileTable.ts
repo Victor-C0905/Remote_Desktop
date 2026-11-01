@@ -264,6 +264,34 @@ export function filterByColumnFilters(
   return result;
 }
 
+/* ── 新建默认名（Windows 规则的冲突递增）────────────────── */
+
+/**
+ * 新建条目的默认名：与现有条目重名时追加 " (N)" 后缀（N 从 2 递增取首个空闲值，
+ * 对齐 Windows Explorer「新建文件夹 (2)」行为）。文件按最后一个点拆基名/扩展名
+ * （后缀插在中间：`notes (2).txt`）；`lastDotIndex <= 0`（隐藏点文件/无扩展名）
+ * 不视为扩展名分隔（与 typeKeyOf 的 dot <= 0 惯例一致）。目录整名追加后缀。
+ * 精确比较（Linux 文件系统大小写敏感）；不剥离 base 自带的 (N) 后缀。
+ */
+export function generateUniqueName(base: string, isDir: boolean, entries: FileEntry[]): string {
+  const names = new Set(entries.map((e) => e.name));
+  if (!names.has(base)) return base;
+
+  let stem = base;
+  let ext = "";
+  if (!isDir) {
+    const dot = base.lastIndexOf(".");
+    if (dot > 0) {
+      stem = base.slice(0, dot);
+      ext = base.slice(dot);
+    }
+  }
+  for (let n = 2; ; n++) {
+    const candidate = `${stem} (${n})${ext}`;
+    if (!names.has(candidate)) return candidate;
+  }
+}
+
 /* ── 列宽 ─────────────────────────────────────────────────── */
 
 /**
