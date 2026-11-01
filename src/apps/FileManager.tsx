@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import React, { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -14,7 +14,7 @@ import { FOLDER_ICON, getFileIconForName } from './fileIcons';
 import { AppIcon, type AppIconName } from '../components/AppIcon';
 import { parsePermissions, matrixToOctal, octalToPermString } from './permissions';
 import type { PermMatrix } from './permissions';
-import { sortFileEntries, DEFAULT_SORT, DEFAULT_COLUMN_WIDTHS, clampColumnWidth, buildGridTemplate, filterByColumnFilters, toggleBucket, DEFAULT_COLUMN_FILTERS, SIZE_BUCKETS, MTIME_BUCKETS, NAME_BUCKETS, typeKeyOf, typeKeyLabel, listFileTypeBuckets } from './fileTable';
+import { sortFileEntries, DEFAULT_SORT, DEFAULT_COLUMN_WIDTHS, clampColumnWidth, buildGridTemplate, filterByColumnFilters, toggleBucket, DEFAULT_COLUMN_FILTERS, SIZE_BUCKETS, MTIME_BUCKETS, NAME_BUCKETS, typeKeyOf, typeKeyLabel, listFileTypeBuckets, generateUniqueName } from './fileTable';
 import type { SortKey, SortState, ColumnWidths, ColumnFilterState, SizeBucket, MtimeBucket, NameBucket } from './fileTable';
 import { SymbolicIcon } from "../components/symbolic";
 import { ToolbarMenu, type MenuEntry } from "../components/ToolbarMenu/ToolbarMenu";
@@ -396,6 +396,47 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       return () => clearTimeout(timer);
     }
   }, [renameDialog?.localPath]); // 只在弹窗首次打开时执行（依赖文件路径而不是整个对象）
+
+  // 内联编辑（新建默认名 / F2 重命名共用）初始选中：文件名含扩展名只选基名
+  // （Windows F2 惯例），否则全选。列表/网格共用一个 ref（同一时刻仅渲染其一）；
+  // 读 input.value 而非 editingName：只在进入编辑时执行一次，不随输入重跑
+  const inlineEditRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!editingEntry) return;
+    const timer = setTimeout(() => {
+      const input = inlineEditRef.current;
+      if (!input) return;
+      const lastDotIndex = input.value.lastIndexOf(".");
+      if (lastDotIndex > 0) {
+        input.setSelectionRange(0, lastDotIndex);
+      } else {
+        input.select();
+      }
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [editingEntry]);
+
+  // 内联编辑宽度跟随文本：ch 单位以 "0" 字形宽为基准，中日韩全角字符约为其 2 倍宽，
+  // 按 length 计 ch 宽对中文必然过窄（截断/滚动）。改用 canvas measureText 按输入框
+  // 实际字体测量，加 padding/border/光标余量后定 px 宽；layout 阶段生效，绘制无闪烁。
+  // 列表/网格两处输入框字号不同（--font-body / --font-small），从实际元素读计算样式
+  const inlineMeasureCtxRef = useRef<CanvasRenderingContext2D | null>(null);
+  useLayoutEffect(() => {
+    const input = inlineEditRef.current;
+    if (!editingEntry || !input) return;
+    if (!inlineMeasureCtxRef.current) {
+      inlineMeasureCtxRef.current = document.createElement("canvas").getContext("2d");
+    }
+    const ctx = inlineMeasureCtxRef.current;
+    if (!ctx) return;
+    const cs = getComputedStyle(input);
+    ctx.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+    const textWidth = ctx.measureText(editingName).width;
+    const extra =
+      parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight) +
+      parseFloat(cs.borderLeftWidth) + parseFloat(cs.borderRightWidth) + 4; // 4px：光标与末字符间隙
+    input.style.width = `${Math.max(Math.ceil(textWidth + extra), 40)}px`;
+  }, [editingName, editingEntry]);
 
   // 全局点击监听：点击外部时让输入框失焦输入框 ref（用于检测点击位置）
   const pathInputRef = useRef<HTMLInputElement>(null);
@@ -1219,34 +1260,6 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   }, [activeServerId, entryFullPath, manager]);
 
   // ── File Operations ───────────────────────────────────
-  const handleMkdir = useCallback(async () => {
-    // 使用简单的 prompt（后续可以改为对话框）
-    const name = prompt(t("fileManager.promptNewFolder"));
-    if (!name || name.trim() === "") return;
-
-    // 构建新路径（Linux 格式）
-    const sep = "/";
-    const newPath = currentPath === "/"
-      ? `${currentPath}${sep}${name.trim()}`
-      : `${currentPath}${sep}${name.trim()}`;
-
-    log.debug("mkdir:", newPath);
-
-    try {
-      if (activeServerId) {
-        await invoke("remote_mkdir", { serverId: activeServerId, path: newPath });
-      } else {
-        pushNotification({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
-        return;
-      }
-
-      // 刷新当前目录
-      loadDir(currentPath);
-    } catch (err) {
-      log.error("mkdir 失败:", err);
-      pushNotification({ title: t("common.error"), body: t("fileManager.createFolderFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
-    }
-  }, [currentPath, activeServerId, loadDir]);
 
   const handleRename = useCallback((entry: FileEntry) => {
     // Adwaita-style inline editing：直接在文件名上编辑
@@ -1272,6 +1285,18 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     const parentDir = oldPath.slice(0, oldPath.lastIndexOf("/")) || "/";
     const newPath = parentDir === "/" ? `/${trimmedName}` : `${parentDir}/${trimmedName}`;
 
+    // 重名预检：同父目录已有同名条目（排除自身）→ 提示并保留编辑态（改名或 Esc）
+    const listing = editingEntry.path === undefined ? entries : (searchResults ?? []);
+    const conflict = listing.some((e) =>
+      e.name === trimmedName
+      && !(e.name === editingEntry.name && e.path === editingEntry.path)
+      && (e.path ? e.path.slice(0, e.path.lastIndexOf("/")) || "/" : currentPath) === parentDir
+    );
+    if (conflict) {
+      pushNotification({ title: t("common.error"), body: t("fileManager.nameExists", { name: trimmedName }), source: t("fileManager.source"), urgency: "normal" });
+      return;
+    }
+
     log.debug("rename:", oldPath, "->", newPath);
 
     try {
@@ -1288,8 +1313,15 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         return;
       }
 
-      // 刷新视图（搜索模式重跑搜索）
-      refreshAfterMutation();
+      if (editingEntry.path === undefined) {
+        // 浏览模式：await 刷新后再选中（规避 loadDir 内部 clearSelection 的时序清空），
+        // 对齐 Windows「重命名后条目保持选中」
+        const ok = await loadDir(parentDir);
+        if (ok) setSelected([newPath]);
+      } else {
+        // 搜索模式：重跑搜索 + 浏览缓存刷新（结果重排后选中语义复杂，保持不选中）
+        refreshAfterMutation();
+      }
     } catch (err) {
       log.error("rename 失败:", err);
       pushNotification({ title: t("common.error"), body: t("fileManager.renameFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
@@ -1298,7 +1330,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     // 清除编辑状态
     setEditingEntry(null);
     setEditingName("");
-  }, [editingEntry, editingName, entryFullPath, activeServerId, refreshAfterMutation]);
+  }, [editingEntry, editingName, entryFullPath, activeServerId, refreshAfterMutation, entries, searchResults, currentPath, loadDir, t]);
 
   // 取消重命名（inline editing）
   const cancelRename = useCallback(() => {
@@ -1362,58 +1394,51 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     refreshAfterMutation();
   }, [refreshAfterMutation]);
 
-  // 新建文件夹
-  const handleNewFolder = useCallback(async () => {
+  // ── 新建（Windows 语义：立即创建默认名空条目 → 内联命名）──
+  // 默认名重名时按 Windows 规则递增（新建文件夹 (2)…）；创建成功进入内联编辑态
+  // （名称预选中，未改名不发 rename 请求）；Esc 取消命名但条目保留（Windows 同款）
+  const createEntry = useCallback(async (kind: "folder" | "file") => {
     setContextMenu(null);
-    const folderName = prompt(t("fileManager.promptFolderName"));
-    if (!folderName) return;
-
-    const sep = "/";
-    const folderPath = currentPath === "/"
-      ? `${currentPath}${sep}${folderName}`
-      : `${currentPath}${sep}${folderName}`;
-
-    try {
-      if (activeServerId) {
-        await invoke("remote_mkdir", { serverId: activeServerId, path: folderPath });
-        loadDir(currentPath);
-      } else {
-        pushNotification({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
-      }
-    } catch (err) {
-      log.error("mkdir 失败:", err);
-      pushNotification({ title: t("common.error"), body: t("fileManager.createFolderFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
+    if (!activeServerId) {
+      pushNotification({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
+      return;
     }
-  }, [currentPath, activeServerId, loadDir]);
+    if (activeSearch) exitSearch();  // 搜索结果视图无处落新条目：回浏览视图在当前目录创建
 
-  // 新建文件
-  const handleNewFile = useCallback(async () => {
-    setContextMenu(null);
-    const fileName = prompt(t("fileManager.promptFileName"));
-    if (!fileName) return;
+    const isDir = kind === "folder";
+    const baseName = isDir ? t("fileManager.newFolder") : t("fileManager.defaultNewFileName");
+    const name = generateUniqueName(baseName, isDir, entries);
+    const newPath = entryFullPath({ name, is_dir: isDir, size: 0, mtime: "", permissions: "" });
 
-    const sep = "/";
-    const filePath = currentPath === "/"
-      ? `${currentPath}${sep}${fileName}`
-      : `${currentPath}${sep}${fileName}`;
+    log.debug("create entry:", newPath);
 
     try {
-      if (activeServerId) {
+      if (isDir) {
+        await invoke("remote_mkdir", { serverId: activeServerId, path: newPath });
+      } else {
         // 创建空文件
         await invoke("remote_write_file", {
           serverId: activeServerId,
-          path: filePath,
+          path: newPath,
           content: ""
         });
-        loadDir(currentPath);
-      } else {
-        pushNotification({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
+      }
+
+      // 刷新成功才进编辑态：合成条目仅作内联编辑的 name+path 匹配键（渲染取真实条目）
+      const ok = await loadDir(currentPath);
+      if (ok) {
+        setEditingEntry({ name, is_dir: isDir, size: 0, mtime: "", permissions: "" });
+        setEditingName(name);
+        setSelected([newPath]);
       }
     } catch (err) {
-      log.error("new file 失败:", err);
-      pushNotification({ title: t("common.error"), body: t("fileManager.createFileFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
+      log.error("create entry 失败:", err);
+      const body = isDir
+        ? t("fileManager.createFolderFailed", { message: formatUnknownError(err) })
+        : t("fileManager.createFileFailed", { message: formatUnknownError(err) });
+      pushNotification({ title: t("common.error"), body, source: t("fileManager.source"), urgency: "normal" });
     }
-  }, [currentPath, activeServerId, loadDir]);
+  }, [activeServerId, activeSearch, exitSearch, entries, entryFullPath, currentPath, loadDir, t]);
 
   // ── 文件传输功能 ──────────────────────────────────────────
 
@@ -1721,19 +1746,17 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   // ── Context Menu ─────────────────────────────────────
   // 右键菜单：坐标 = 鼠标右下方 +3 紧贴；targets = 作用条目（null = 空白菜单）。
   // 视口越界翻转与钳制由共享 ContextMenu 组件内部处理（渲染后实测尺寸校正）
-  const handleContextMenu = useCallback((e: React.MouseEvent, entry: FileEntry, idx: number) => {
+  // 右键仅作用于已选中项（菜单作用于整个选区）；未选中位置一律弹空白菜单且
+  // 不改变选中——右键不是选择工具，误触不丢当前选区（原设计行为）
+  const handleContextMenu = useCallback((e: React.MouseEvent, entry: FileEntry) => {
     e.preventDefault();
     e.stopPropagation();
 
     const path = entryFullPath(entry);
-    // Windows 惯例：右键未选中行 → 先单选该行再弹菜单；右键已选中项 → 菜单作用于整个选区
     if (selected.includes(path)) {
       setContextMenu({ x: e.clientX + 3, y: e.clientY + 3, targets: selectedEntries });
     } else {
-      setSelected([path]);
-      setAnchorPath(path);
-      setFocusIdx(idx);
-      setContextMenu({ x: e.clientX + 3, y: e.clientY + 3, targets: [entry] });
+      setContextMenu({ x: e.clientX + 3, y: e.clientY + 3, targets: null });
     }
   }, [selected, selectedEntries, entryFullPath]);
 
@@ -1850,8 +1873,8 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       return [
         { label: t("fileManager.ctxRefresh"), icon: <AppIcon name="monitor" size={14} />, onClick: handleRefresh },
         { separator: true },
-        { label: t("fileManager.newFolder"), icon: <AppIcon name="folder-plus" size={14} />, onClick: handleNewFolder },
-        { label: t("fileManager.ctxNewFile"), icon: <AppIcon name="file" size={14} />, onClick: handleNewFile },
+        { label: t("fileManager.newFolder"), icon: <AppIcon name="folder-plus" size={14} />, onClick: () => createEntry("folder") },
+        { label: t("fileManager.ctxNewFile"), icon: <AppIcon name="file" size={14} />, onClick: () => createEntry("file") },
         { label: t("fileManager.ctxUpload"), icon: <AppIcon name="file-code" size={14} />, onClick: handleUpload },
         { separator: true },
         { label: t("fileManager.ctxPaste"), shortcut: "Ctrl+V", disabled: !clip, onClick: handlePaste },
@@ -1909,7 +1932,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       items.push({ label: t("fileManager.ctxProperties"), icon: <AppIcon name="about" size={14} />, onClick: () => showProperties(single) });
     }
     return items;
-  }, [contextMenu, t, entryFullPath, clip, handleOpen, handlePaste, handleRename, handleDownload, showProperties, handleRefresh, handleNewFolder, handleNewFile, handleUpload]);
+  }, [contextMenu, t, entryFullPath, clip, handleOpen, handlePaste, handleRename, handleDownload, showProperties, handleRefresh, createEntry, handleUpload]);
 
   // ── Keyboard ─────────────────────────────────────────
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -2196,7 +2219,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
             <div className="fm-toolbar-actions">
               <button
                 className="fm-toolbar-btn"
-                onClick={handleMkdir}
+                onClick={() => createEntry("folder")}
                 title={t("fileManager.newFolder")}
                 disabled={!activeServerId}
               ><AppIcon name="folder-plus" size={15} /></button>
@@ -2372,13 +2395,14 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                     onMouseDown={(e) => handleRowMouseDown(e, entry)}
                     onClick={(e) => handleRowClick(e, entry, idx)}
                     onDoubleClick={() => handleRowDoubleClick(entry)}
-                    onContextMenu={(e) => handleContextMenu(e, entry, idx)}
+                    onContextMenu={(e) => handleContextMenu(e, entry)}
                   >
                     <div className="fm-file-name" title={activeSearch ? entry.path : undefined}>
                       <span className="fm-fn-icon"><AppIcon name={getFileIcon(entry)} size={16} /></span>
                       {editingEntry?.name === entry.name && editingEntry?.path === entry.path ? (
                         <input
                           type="text"
+                          ref={inlineEditRef}
                           className="fm-fn-edit-input"
                           value={editingName}
                           onChange={(e) => setEditingName(e.target.value)}
@@ -2387,7 +2411,6 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                           autoFocus
                           onClick={(e) => e.stopPropagation()}
                           onDoubleClick={(e) => e.stopPropagation()}  // 阻止双击事件冒泡
-                          style={{ width: `${Math.max(editingName.length + 0.5, 4)}ch` }}  // 动态宽度：文本长度 + 0.5字符，最小4字符
                         />
                       ) : (
                         <>
@@ -2428,12 +2451,13 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                   onMouseDown={(e) => handleRowMouseDown(e, entry)}
                   onClick={(e) => handleRowClick(e, entry, idx)}
                   onDoubleClick={() => handleRowDoubleClick(entry)}
-                  onContextMenu={(e) => handleContextMenu(e, entry, idx)}
+                  onContextMenu={(e) => handleContextMenu(e, entry)}
                 >
                   <div className="fm-gi-icon"><AppIcon name={getFileIcon(entry)} size={36} /></div>
                   {editingEntry?.name === entry.name && editingEntry?.path === entry.path ? (
                     <input
                       type="text"
+                      ref={inlineEditRef}
                       className="fm-gi-edit-input"
                       value={editingName}
                       onChange={(e) => setEditingName(e.target.value)}
@@ -2442,7 +2466,6 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                       autoFocus
                       onClick={(e) => e.stopPropagation()}
                       onDoubleClick={(e) => e.stopPropagation()}  // 阻止双击事件冒泡
-                      style={{ width: `${Math.max(editingName.length + 0.5, 4)}ch` }}  // 动态宽度：文本长度 + 0.5字符，最小4字符
                     />
                   ) : (
                     <div className="fm-gi-label" title={activeSearch ? entry.path : undefined}>{entry.name}</div>

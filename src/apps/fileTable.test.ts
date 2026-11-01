@@ -13,6 +13,7 @@ import {
   nameBucketOf,
   typeKeyOf,
   typeKeyLabel,
+  generateUniqueName,
   listFileTypeBuckets,
   toggleBucket,
   filterByColumnFilters,
@@ -452,5 +453,63 @@ describe("hasActiveColumnFilters / 桶清单", () => {
       "today", "yesterday", "thisWeek", "lastWeek", "earlier",
     ]);
     expect(MTIME_BUCKETS.every((b) => b.labelKey.length > 0)).toBe(true);
+  });
+});
+
+/* ── generateUniqueName（新建文件/文件夹的默认名冲突递增，Windows 规则）── */
+
+describe("generateUniqueName", () => {
+  it("无冲突时返回原名", () => {
+    const entries = [entry({ name: "alpha.txt" }), entry({ name: "beta", is_dir: true })];
+    expect(generateUniqueName("新建文件夹", true, entries)).toBe("新建文件夹");
+    expect(generateUniqueName("gamma", false, entries)).toBe("gamma");
+  });
+
+  it("空目录返回原名", () => {
+    expect(generateUniqueName("新建文件夹", true, [])).toBe("新建文件夹");
+  });
+
+  it("目录冲突：整名后缀 (N) 从 2 递增", () => {
+    const entries = [entry({ name: "新建文件夹", is_dir: true })];
+    expect(generateUniqueName("新建文件夹", true, entries)).toBe("新建文件夹 (2)");
+    const entries3 = [...entries, entry({ name: "新建文件夹 (2)", is_dir: true })];
+    expect(generateUniqueName("新建文件夹", true, entries3)).toBe("新建文件夹 (3)");
+  });
+
+  it("文件冲突：按最后一个点拆基名/扩展名，后缀插在中间", () => {
+    const entries = [entry({ name: "新建文件" })];
+    expect(generateUniqueName("新建文件", false, entries)).toBe("新建文件 (2)");
+    const entries2 = [entry({ name: "notes.txt" })];
+    expect(generateUniqueName("notes.txt", false, entries2)).toBe("notes (2).txt");
+    const entries3 = [entry({ name: "notes.txt" }), entry({ name: "notes (2).txt" })];
+    expect(generateUniqueName("notes.txt", false, entries3)).toBe("notes (3).txt");
+  });
+
+  it("连续占用跳号：取首个空闲值", () => {
+    const entries = [
+      entry({ name: "新建文件夹" }),
+      entry({ name: "新建文件夹 (2)" }),
+      entry({ name: "新建文件夹 (4)" }),
+    ];
+    expect(generateUniqueName("新建文件夹", true, entries)).toBe("新建文件夹 (3)");
+  });
+
+  it("base 自身带 (N) 后缀时按整名比较，不剥离后缀", () => {
+    const entries = [entry({ name: "新建文件夹 (2)", is_dir: true })];
+    // "新建文件夹" 本身空闲 → 直接用原名（Windows 同款：不检查 (N) 序列）
+    expect(generateUniqueName("新建文件夹", true, entries)).toBe("新建文件夹");
+    const entries2 = [entry({ name: "新建文件夹 (2)", is_dir: true }), entry({ name: "新建文件夹 (3)", is_dir: true })];
+    expect(generateUniqueName("新建文件夹 (2)", true, entries2)).toBe("新建文件夹 (2) (2)");
+  });
+
+  it("大小写敏感（Linux 文件系统语义）", () => {
+    const entries = [entry({ name: "notes.TXT" })];
+    expect(generateUniqueName("notes.txt", false, entries)).toBe("notes.txt");
+  });
+
+  it("隐藏点文件（点前缀）不视为扩展名分隔", () => {
+    const entries = [entry({ name: ".bashrc" })];
+    // lastDotIndex = 0 不拆分（与 typeKeyOf 的 dot <= 0 惯例一致）
+    expect(generateUniqueName(".bashrc", false, entries)).toBe(".bashrc (2)");
   });
 });
