@@ -603,6 +603,9 @@
 /* 文件列表行容器（滚动已上提至 .fm-list） */
 .fm-list-content {
   flex: 1;  /* 空目录时仍占满，保住空白点击区（清空选中） */
+  display: flex;
+  flex-direction: column;
+  row-gap: 2px;  /* 行间细微间距（仅行与行之间，末行后不留空隙），与网格视图 gap 惯例一致 */
   /* 滚动已上提至 .fm-list（列超宽整体横滚 + 纵滚表头 sticky），
      此处不再做独立滚动容器 */
 }
