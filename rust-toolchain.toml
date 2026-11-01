@@ -1,4 +1,7 @@
 # 统一工具链版本：Windows（src-tauri 客户端）与 WSL（agent）共用
 # rustup 会自动按此文件解析工具链；升级时改此处即可
+# 统一工具链版本：Windows（src-tauri 客户端）与 WSL（agent）共用
+# 跟随 stable：rustup update 即完成工具链升级，项目自动跟进不锁小版本。
+# 升级后建议随手清旧产物：cargo sweep --toolchains <旧版本>（AGENTS §5.2）
 [toolchain]
-channel = "1.99.0"
+channel = "stable"

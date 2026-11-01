@@ -135,6 +135,7 @@ export function WindowShell({
   const mousedownPosRef = useRef({ x: 0, y: 0 });  // mousedown 的 client 坐标(阈值判断)
   const tornOffRef = useRef(false);               // 当前拖拽是否已执行 tear-off
   const dragBroadcastRef = useRef(false);         // 本次拖拽是否已广播"拖拽开始"（首次实际移动才广播）
+  const dragMovedRef = useRef(false);             // 本次按下是否已超过点击/拖动判别阈值（4px，SM_CXDRAG 惯例）
 
   // ── Resize 状态 ──────────────────────────────────────
   const [isResizing, setIsResizing] = useState(false);
@@ -197,6 +198,17 @@ export function WindowShell({
     if (!isDragging) return;
 
     const handleMouseMove = (e: MouseEvent) => {
+      // ✅ 点击/拖动判别（Windows SM_CXDRAG 惯例 4px）：mousedown 即挂监听，
+      //    未超阈值前一切按纯点击处理——不广播拖拽、不撕下 snap/最大化、
+      //    不移动窗口（此前 1px 手抖窗口就跟着动，表现为点击触发拖拽）；
+      //    超过后标记已拖动，本次按下的后续移动不再判阈
+      if (!dragMovedRef.current) {
+        const gdx = e.clientX - mousedownPosRef.current.x;
+        const gdy = e.clientY - mousedownPosRef.current.y;
+        if (gdx * gdx + gdy * gdy <= 16) return;
+        dragMovedRef.current = true;
+      }
+
       // 首次实际移动才广播"拖拽开始"：mousedown 即广播会让点击标题栏
       // （未移动）也触发 webview 隐藏→显示一轮 IPC，造成无谓闪隐
       if (!dragBroadcastRef.current) {
@@ -352,6 +364,7 @@ export function WindowShell({
         cancelAnimationFrame(rafIdRef.current);
         rafIdRef.current = null;
       }
+      dragMovedRef.current = false;
 
       // ✅ Aero Snap:应用 snap(若 snapZoneRef 有值)
       const currentZone = snapZoneRef.current;
@@ -601,6 +614,9 @@ export function WindowShell({
     if (!el) return;
 
     const onDown = (e: MouseEvent) => {
+      // 仅左键启动拖拽：右键要留给标题栏/页签条的自定义菜单
+      // （此前任何按键都会进入拖拽态并 preventDefault，吞掉 contextmenu）
+      if (e.button !== 0) return;
       // 点在控制按钮（红绿灯）或页签上不启动窗口拖拽
       // （页签有自己的拖拽排序，两者不能同时进行）
       const target = e.target as Element;
@@ -610,6 +626,7 @@ export function WindowShell({
       onFocus();
       mousedownPosRef.current = { x: e.clientX, y: e.clientY };
       tornOffRef.current = false;
+      dragMovedRef.current = false;
       const currentState = windowStateRef.current;
       dragStartPos.current = {
         x: e.clientX - currentState.x,
@@ -635,6 +652,9 @@ export function WindowShell({
   const snapPreviewNode = snapPreview ? createPortal(
     <div
       className={styles.snapPreview}
+      // AGENTS.md §5.1：portal 到 body 的浮层必须带标记，否则被独立 HWND 的
+      // 浏览器 webview 盖住（DOM z-index 跨不过 webview 子窗口）
+      data-browser-overlay="true"
       style={{
         left: snapPreview.x,
         top: snapPreview.y,

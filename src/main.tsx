@@ -7,10 +7,18 @@ import { invoke } from "@tauri-apps/api/core";
 import { probeKeyring } from "./utils/credentials";
 import { useSettingsStore } from "./stores/settingsStore";
 import { useWallpaperStore } from "./stores/wallpaperStore";
+import { installUiRefreshGuard } from "./utils/uiRefreshGuard";
 
 // 浏览器调试模式（无 Tauri 运行时）：静默桥接类报错，桌面会显示「浏览器模式」横幅
 if (!isTauri()) {
   suppressTauriBridgeErrors();
+}
+
+// release 构建：拦截宿主页面刷新类按键（F5/Ctrl+R）。壳页面没有正当刷新
+// 场景，刷新会重启整个 React 树（§5.1 会话丢失事故的触发源）；WebView2
+// 加速键已在 Rust 侧同步关闭，此处兜底键盘路径。dev / 浏览器调试模式不装。
+if (import.meta.env.PROD && isTauri()) {
+  installUiRefreshGuard();
 }
 
 // Hydration 门控：persist 存储底层是异步 Tauri IPC，不等 rehydrate 就渲染

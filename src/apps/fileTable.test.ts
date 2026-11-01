@@ -22,7 +22,7 @@ import {
   MTIME_BUCKETS,
   NAME_BUCKETS,
 } from "./fileTable";
-import type { FileEntry } from "./FileManager";
+import type { FileEntry } from "./fileTypes";
 
 /* ── 测试数据工厂 ───────────────────────────────────────── */
 

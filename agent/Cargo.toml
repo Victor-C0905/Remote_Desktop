@@ -28,11 +28,6 @@ rustls-pemfile = "2"
 # Socket 选项（设置 SO_REUSEADDR，解决 systemctl restart 端口释放延迟）
 socket2 = "0.6"
 
-# WebSocket 备选协议
-tokio-tungstenite = "0.21"
-futures-util = "0.3"
-tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging"] }
-
 # 序列化
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -93,6 +88,10 @@ prost-build = "0.12"
 
 [dev-dependencies]
 tempfile = "3"
+
+[profile.dev]
+# 行表级调试信息：回溯含行号，调试信息体积较完整 DWARF 大幅缩小（PDB/增量缓存）
+debug = "line-tables-only"
 
 [profile.release]
 opt-level = 3

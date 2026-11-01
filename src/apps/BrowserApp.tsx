@@ -19,18 +19,18 @@ import { getServerErrorInfo } from "../stores/serversStore";
 import { formatUnknownError } from "../types/errors";
 import { AppLayout } from "../components/app-shell/AppLayout";
 import { ChromeTabStrip } from "../components/ChromeTabStrip/ChromeTabStrip";
+import { ContextMenu, type ContextMenuEntry } from "../components/ContextMenu/ContextMenu";
 import { WINDOW_DRAG_EVENT } from "../components/window-shell/WindowShell";
 import { useOpenApp } from "../window-system/hooks/useOpenApp";
 import { useWindowManager, useWindowState } from "../window-system/WindowManagerContext";
 import { useBrowserTabs } from "./browser/useBrowserTabs";
 import { useBrowserBounds, insetWebviewRect } from "./browser/useBrowserBounds";
 import { BrowserNavbar, type BrowserSettings } from "./browser/BrowserNavbar";
+import { BookmarksBar } from "./browser/BookmarksBar";
+import { useHistoryStore } from "../stores/historyStore";
 import "./BrowserApp.css";
 
 const log = createLogger("BrowserApp");
-
-/** 模块级挂载序号：StrictMode（dev）假卸载守卫的判据（见关窗 cleanup 注释） */
-let browserMountSeq = 0;
 
 /** 代理会话信息（Rust 端 ProxySessionInfo） */
 interface ProxySessionInfo {
@@ -78,7 +78,7 @@ export function BrowserApp({ windowId }: BrowserAppProps) {
 
   const connected = activeServer?.status === "connected";
   const serverId = activeServer?.id ?? null;
-  const { tabs, activeId } = useBrowserTabs(connected ? serverId : null);
+  const { tabs, activeId, closedTabs, setClosedTabs } = useBrowserTabs(connected ? serverId : null);
   const activeTab = tabs.find((tab) => tab.id === activeId) || null;
 
   // 标签条挂载点：窗口标题栏槽位（Chrome 形态——标题栏即标签条，TextEditor 同款）
@@ -145,10 +145,12 @@ export function BrowserApp({ windowId }: BrowserAppProps) {
   }, [dragging, connected, serverId, navbarOverlayOpen, overlayOpen, win.isActive]);
 
   useBrowserBounds(
-    connected ? serverId : null,
+    // 断连期间也持续上报：webview 隐藏但 bounds 须跟随窗口移动，重连后
+    // 无缝归位（host 不在册时指令被 Rust 侧静默丢弃，无副作用）
+    serverId,
     contentRef,
     { x: win.position.x, y: win.position.y, width: win.size.width, height: win.size.height },
-    connected && win.isActive,
+    win.isActive,
     sessionEpoch,
   );
 
@@ -232,26 +234,9 @@ export function BrowserApp({ windowId }: BrowserAppProps) {
   }, [connected, serverId, sleepMinutes, proxyPort, restartEpoch]);
 
   // 关闭窗口 → 只销毁 webview + Environment（监听保留，重开秒恢复）。
-  // ⚠️ StrictMode（dev）双挂载守卫：首次挂载的 unmount cleanup 会在第二次
-  // 挂载之后才执行——若不区分真伪卸载，cleanup 发出的 browser_close_window
-  // 会销毁刚建立的同 server 会话，第二次挂载的 open 又复用销毁中的 host，
-  // 最终 webview 全灭（占位恒显、无法浏览）。守卫：cleanup 延迟一拍，
-  // 期间若出现更新的挂载序号（新实例接管）则跳过销毁；真实关窗序号不变，
-  // 销毁照常执行，无泄漏（Terminal.tsx 会话保活同款思路）。
-  useEffect(() => {
-    const mySeq = ++browserMountSeq;
-    return () => {
-      // cleanup 时刻读取：窗口可能先开、后连接（挂载时 ref 尚为 null）
-      const sid = activeServerIdRef.current;
-      if (!sid) return;
-      window.setTimeout(() => {
-        if (browserMountSeq !== mySeq) return;
-        invoke("browser_close_window", { serverId: sid })
-          .then(() => log.info("浏览器窗口已关闭"))
-          .catch((e) => log.error("关闭浏览器窗口失败:", e));
-      }, 0);
-    };
-  }, []);
+  // 会话生命周期归窗口系统所有（registry lifecycle.onAfterClose 全量停止），
+  // 本组件的挂载/卸载/刷新对会话零影响（原子性，见 init.ts browser 注册项）。
+  // 挂载后的 browser_open 负责收养（幂等：no-op 或原端口重建）。
 
   // 全局浮层收集：各浮层根元素带 data-browser-overlay 标记（全部条件渲染，
   // 仅打开时存在于 DOM），MutationObserver 监听 body 子树挂载/卸载判定存在性。
@@ -265,20 +250,24 @@ export function BrowserApp({ windowId }: BrowserAppProps) {
   }, []);
 
   // 窗口激活态 → webview 可见性（child HWND 无法被 React z-index 遮挡）；
+  // ⚠️ 断连时也必须显式下发 visible=false：webview 是独立 HWND，不下发就
+  // 保持最后的可见状态——离线占位显示期间 webview 悬浮在桌面上仍可交互
+  // （实测）。host 不在册（会话未建/已关）时指令被 Rust 侧静默丢弃，无副作用。
   // sessionEpoch：browser_open 就绪后补发一次，恢复 suspend 期间被
   // 置 false 的 runtime.window_visible（重连场景唯一恢复途径）；
   // dragging：拖拽中强制隐藏（bounds 链路滞后会画面分离），松手即恢复；
   // navbarOverlayOpen：导航行下拉（设置菜单/联想词）展开期间隐藏，露出 React 飞出面板；
   // overlayOpen：全局浮层打开期间隐藏让位（通知中心/对话框/总览/到达提示）
   useEffect(() => {
-    if (!connected || !serverId) return;
+    if (!serverId) return;
     // 拖拽恢复帧：显示由上方"先归位后显示"串行流程接管，本轮跳过，
     // 否则可见性先于 bounds 到达 runtime，webview 在旧位置闪现
     if (restorePendingRef.current) {
       restorePendingRef.current = false;
       return;
     }
-    invoke("browser_set_visible", { serverId, visible: win.isActive && !dragging && !navbarOverlayOpen && !overlayOpen }).catch(() => {});
+    const visible = connected && win.isActive && !dragging && !navbarOverlayOpen && !overlayOpen;
+    invoke("browser_set_visible", { serverId, visible }).catch(() => {});
   }, [connected, serverId, win.isActive, sessionEpoch, dragging, navbarOverlayOpen, overlayOpen]);
 
   // 导航行下拉开合上报（Navbar 经由 effect 上报；仅落本地态，可见性由
@@ -286,6 +275,51 @@ export function BrowserApp({ windowId }: BrowserAppProps) {
   const handleNavbarOverlayOpen = useCallback((open: boolean) => {
     setNavbarOverlayOpen(open);
   }, []);
+
+  // ── 前端存活心跳（1s 间隔）：Rust runtime 的 webview 可见性强制执行凭证。
+  // 心跳中断 >3s（前端死亡/重载/卡死）→ runtime 自行隐藏全部 webview
+  // （悬浮孤儿根治——可见性不再依赖前端"礼貌地"发指令），恢复后自动重.assert
+  useEffect(() => {
+    if (!serverId) return;
+    invoke("browser_heartbeat", { serverId }).catch(() => {});
+    const timer = window.setInterval(() => {
+      invoke("browser_heartbeat", { serverId }).catch(() => {});
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [serverId]);
+
+  // ── 历史记录埋点：页签加载完成（loading=false 且带 URL）即记录；
+  //    标题晚到经后续增量事件补齐（同 URL 重记 = 置顶刷新）。无痕会话豁免，
+  //    也不读不写 historyStore
+  useEffect(() => {
+    if (!connected || settings?.incognito) return;
+    let unlisten: (() => void) | null = null;
+    let disposed = false;
+    (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      const fn = await listen<{
+        server_id: string;
+        tab_id: number;
+        url?: string;
+        title?: string;
+        loading?: boolean;
+      }>("browser://page-state", (event) => {
+        const p = event.payload;
+        if (p.server_id !== serverId) return;
+        if (p.loading !== false || !p.url) return;
+        useHistoryStore.getState().record(p.url, p.title ?? "");
+      });
+      if (disposed) {
+        fn();
+        return;
+      }
+      unlisten = fn;
+    })().catch((e) => log.error("历史记录监听失败:", e));
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [connected, serverId, settings?.incognito]);
 
   // ── 操作 ──────────────────────────────────────────────
   const navigate = useCallback((url: string) => {
@@ -322,6 +356,70 @@ export function BrowserApp({ windowId }: BrowserAppProps) {
   const reorderTab = useCallback((from: number, to: number) => {
     if (serverId) invoke("browser_reorder_tab", { serverId, from, to }).catch(() => {});
   }, [serverId]);
+
+  // ── 页签右键菜单（ChromeTabStrip 宿主钩子透传；对齐通用浏览器）──
+  const [tabMenu, setTabMenu] = useState<{ x: number; y: number; tabId: string } | null>(null);
+  // 页签条空白区右键：新建 / 重新打开已关闭的标签页
+  const [stripMenu, setStripMenu] = useState<{ x: number; y: number } | null>(null);
+
+  const handleTabContextMenu = useCallback((tabId: string, event: MouseEvent) => {
+    event.preventDefault();
+    setTabMenu({ x: event.clientX + 3, y: event.clientY + 3, tabId });
+  }, []);
+
+  const handleStripContextMenu = useCallback((event: MouseEvent) => {
+    event.preventDefault();
+    setStripMenu({ x: event.clientX + 3, y: event.clientY + 3 });
+  }, []);
+
+  /** 重新打开最近关闭的标签页（LIFO 弹栈 → create_tab 携原 URL） */
+  const reopenClosedTab = useCallback(() => {
+    const tab = closedTabs[0];
+    if (!tab || !serverId) return;
+    invoke("browser_create_tab", { serverId, url: tab.url }).catch((e) => log.error("重新打开标签失败:", e));
+    setClosedTabs((cs) => cs.slice(1));
+  }, [closedTabs, serverId, setClosedTabs]);
+
+  const tabMenuItems: ContextMenuEntry[] = (() => {
+    if (!tabMenu) return [];
+    const idNum = Number(tabMenu.tabId);
+    const index = tabs.findIndex((t) => String(t.id) === tabMenu.tabId);
+    const menuTab = index >= 0 ? tabs[index] : undefined;
+    const closeTabs = (list: typeof tabs) => {
+      // 循环复用既有 close_tab；最后一个页签关闭 = 关窗由 Rust 侧自然呈现
+      if (serverId) list.forEach((t) => invoke("browser_close_tab", { serverId, tabId: t.id }).catch(() => {}));
+    };
+    const items: ContextMenuEntry[] = [
+      { label: t("browser.reload"), onClick: () => { if (serverId) invoke("browser_reload", { serverId, tabId: idNum }).catch(() => {}); } },
+    ];
+    if (menuTab?.url && menuTab.url !== "about:blank") {
+      items.push({ label: t("browser.copyPageUrl"), onClick: () => navigator.clipboard.writeText(menuTab.url ?? "") });
+    }
+    if (menuTab) {
+      items.push({
+        label: t("browser.ctxDuplicate"),
+        onClick: () => { if (serverId) invoke("browser_create_tab", { serverId, url: menuTab.url }).catch(() => {}); },
+      });
+    }
+    items.push({ separator: true });
+    if (tabs.length > 1) {
+      items.push({ label: t("browser.closeOthers"), onClick: () => closeTabs(tabs.filter((t) => String(t.id) !== tabMenu.tabId)) });
+    }
+    if (index >= 0 && index < tabs.length - 1) {
+      items.push({ label: t("browser.closeRight"), onClick: () => closeTabs(tabs.slice(index + 1)) });
+    }
+    items.push({ separator: true });
+    items.push({ label: t("browser.closeTab"), onClick: () => closeTab(tabMenu.tabId) });
+    return items;
+  })();
+
+  const stripMenuItems: ContextMenuEntry[] = (() => {
+    if (!stripMenu) return [];
+    return [
+      { label: t("browser.ctxReopenClosed"), disabled: closedTabs.length === 0, onClick: reopenClosedTab },
+      { label: t("browser.newTab"), onClick: newTab },
+    ];
+  })();
 
   // ── 设置（持久化在 Rust 侧；无痕切换需关窗重开会话）────
   const changeSearchEngine = useCallback(
@@ -374,24 +472,29 @@ export function BrowserApp({ windowId }: BrowserAppProps) {
       onClose={closeTab}
       onAdd={newTab}
       onReorder={reorderTab}
+      onTabContextMenu={handleTabContextMenu}
+      onStripContextMenu={handleStripContextMenu}
     />
   );
 
-  // ── 导航行 ────────────────────────────────────────────
+  // ── 导航行 + 书签栏（纵向堆叠占满 toolbar 槽）─────────
   const renderNavbar = () => (
-    <BrowserNavbar
-      activeTab={activeTab}
-      serverId={serverId}
-      incognito={settings?.incognito ?? false}
-      searchEngine={settings?.searchEngine ?? "google"}
-      onNavigate={navigate}
-      onBack={back}
-      onForward={forward}
-      onReload={reload}
-      onToggleIncognito={toggleIncognito}
-      onSearchEngineChange={changeSearchEngine}
-      onMenuOpenChange={handleNavbarOverlayOpen}
-    />
+    <div className="br-toolbar-stack">
+      <BrowserNavbar
+        activeTab={activeTab}
+        serverId={serverId}
+        incognito={settings?.incognito ?? false}
+        searchEngine={settings?.searchEngine ?? "google"}
+        onNavigate={navigate}
+        onBack={back}
+        onForward={forward}
+        onReload={reload}
+        onToggleIncognito={toggleIncognito}
+        onSearchEngineChange={changeSearchEngine}
+        onMenuOpenChange={handleNavbarOverlayOpen}
+      />
+      <BookmarksBar serverId={serverId} onNavigate={navigate} />
+    </div>
   );
 
   // ── 未连接：占位提示（复用现有 ConnectionState 组件）──
@@ -468,6 +571,24 @@ export function BrowserApp({ windowId }: BrowserAppProps) {
           )}
         </div>
       </AppLayout>
+
+      {/* 页签右键菜单（portal + data-browser-overlay：菜单弹出时 webview 让位） */}
+      {tabMenu && (
+        <ContextMenu
+          pos={{ x: tabMenu.x, y: tabMenu.y }}
+          items={tabMenuItems}
+          onClose={() => setTabMenu(null)}
+        />
+      )}
+
+      {/* 页签条空白区右键菜单 */}
+      {stripMenu && (
+        <ContextMenu
+          pos={{ x: stripMenu.x, y: stripMenu.y }}
+          items={stripMenuItems}
+          onClose={() => setStripMenu(null)}
+        />
+      )}
     </div>
   );
 }

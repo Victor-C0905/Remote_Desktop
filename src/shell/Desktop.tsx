@@ -15,6 +15,7 @@ import { useTheme } from "../hooks/useTheme";
 import { useContrastColor } from "../hooks/useContrastColor";
 import { WindowShell } from "../components/window-shell";
 import { WindowManagerProvider, useWindowManager, useWindowGlobalState, useWindowState } from "../window-system/WindowManagerContext";
+import { computeWindowZ } from "../window-system/zOrder";
 import { AppDefinition } from "../window-system/types";
 import { listen } from "@tauri-apps/api/event";
 import { createLogger } from "../utils/logger";
@@ -65,9 +66,12 @@ let __diagWinMountSeq = 0;
 const DesktopWindow = memo(function DesktopWindow({
   windowId,
   appId,
+  zIndex,
 }: {
   windowId: string;
   appId: string;
+  /** 会话快照/激活栈换算的层值（DesktopContent 经 zOrder 统一计算） */
+  zIndex: number;
 }) {
   const { manager } = useWindowManager();
   const win = manager.getById(windowId);
@@ -88,14 +92,6 @@ const DesktopWindow = memo(function DesktopWindow({
 
   if (!win || !app || !windowState) return null;
 
-  // ── MRU 层叠：非激活窗口按激活栈排名计算 z-index ──
-  // DOM 顺序保持创建顺序（React reconcile 稳定，避免 children 重排），
-  // 层叠改由内联 zIndex 表达：zRank = 激活栈中的排名（末尾=最近激活）。
-  // 激活窗口传 undefined（走 .windowShellActive 的 30）；
-  // 非激活 rank 挤压到 ≤9（z ≤ 29），保证任何情况下低于激活窗口。
-  const mruZIndex = windowState.isActive
-    ? undefined
-    : 20 + Math.min(windowState.zRank, 9);
 
   // 最大化尺寸（工作区占满屏幕）
   const maxWindowSize = {
@@ -112,7 +108,7 @@ const DesktopWindow = memo(function DesktopWindow({
       isActive={windowState.isActive}
       isMinimized={windowState.minimized}
       isMaximized={windowState.maximized}
-      zIndex={mruZIndex}
+      zIndex={zIndex}
       mode="standard"
       position={windowState.position}
       size={windowState.size}
@@ -359,6 +355,7 @@ function DesktopContent() {
             key={winInfo.id}
             windowId={winInfo.id}
             appId={winInfo.appId}
+            zIndex={computeWindowZ(winInfo.zRank, globalState.windowList.length)}
           />
         ))}
 

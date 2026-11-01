@@ -1,0 +1,98 @@
+/* ============================================================
+   ContextMenu — 共享右键菜单（共享组件）
+   配色全部走 --quirel-* 变量，亮暗主题自动跟随；
+   层级与 FileManager 右键菜单同层（--z-app-dropdown，Layer 60）
+   ============================================================ */
+
+.ctx-menu {
+  position: fixed;
+  z-index: var(--z-app-dropdown);
+  min-width: 180px;
+  padding: 4px;
+  background: var(--quirel-view-bg);
+  border: 1px solid var(--quirel-border-color);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-popup);
+  /* 初始位置由内联 left/top 给定（锚点坐标），溢出校正由组件挂载后写入 */
+}
+
+/* ── 菜单项（视觉语言与 ToolbarMenu 面板项一致）──────────── */
+.ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--quirel-text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--font-small);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.ctx-item:hover:not(:disabled) {
+  background: var(--quirel-card-hover);
+}
+
+.ctx-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 勾选列：固定宽度保证文案对齐 */
+.ctx-item-check {
+  width: 14px;
+  flex-shrink: 0;
+  color: var(--quirel-accent-bg);
+  font-weight: 700;
+}
+
+/* 图标列：symbolic 图标占位，颜色跟随菜单项文字色 */
+.ctx-item.has-icon .ctx-item-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  color: inherit;
+}
+
+/* 破坏性动作项：悬停转 libadwaita destructive 红 */
+.ctx-item.danger:hover:not(:disabled) {
+  background: #e01b24;
+  color: #fff;
+}
+
+.ctx-item.danger:hover:not(:disabled) .ctx-item-shortcut {
+  color: rgba(255, 255, 255, 0.75);
+}
+
+/* 勾选项文案用 accent 强调当前开启状态 */
+.ctx-item.checked .ctx-item-label {
+  color: var(--quirel-accent-bg);
+  font-weight: 600;
+}
+
+.ctx-item-label {
+  flex: 1;
+  white-space: nowrap;
+}
+
+/* 快捷键提示列（右对齐，弱化展示） */
+.ctx-item-shortcut {
+  margin-left: 16px;
+  font-family: var(--font-ui);
+  font-size: 10px;
+  color: var(--quirel-text-secondary);
+  white-space: nowrap;
+}
+
+/* ── 分隔线 ──────────────────────────────────────────────── */
+.ctx-separator {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--quirel-border-color);
+}

@@ -66,8 +66,14 @@ export function ArrivalToast({ onOpen }: { onOpen: () => void }) {
     if (notifications.length === 0) return;
     const latest = notifications[0];
     if (shownIdRef.current === latest.id) return;
-    if (visible) setMissed((m) => m + 1); // 展示期间连发 → 累计
     shownIdRef.current = latest.id;
+    // 静默通知（toast: false，如文件移动成功）：仅入通知中心，不弹预览条
+    if (latest.toast === false) return;
+    // 存量记录（持久化恢复的通知，无 live 标记）：不弹，仅保留在通知中心。
+    // 实时到达的通知由 pushNotification 打 live 标记（持久化时剥离，
+    // 刷新后自然转为存量）
+    if (latest.live !== true) return;
+    if (visible) setMissed((m) => m + 1); // 展示期间连发 → 累计
     setCurrent(latest);
     setLeaving(false);
     setVisible(true);

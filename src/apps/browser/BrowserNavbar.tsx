@@ -14,10 +14,12 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { useSettingsStore } from "../../stores/settingsStore";
+import { useBookmarksStore, isBookmarked } from "../../stores/bookmarksStore";
 import { SymbolicIcon } from "../../components/symbolic";
 import { createLogger } from "../../utils/logger";
 import type { TabInfo } from "./useBrowserTabs";
 import { useBrowserSuggest } from "./useBrowserSuggest";
+import { HistoryPanel } from "./HistoryPanel";
 
 const log = createLogger("BrowserNavbar");
 
@@ -130,13 +132,35 @@ export function BrowserNavbar({
 
   // 设置下拉/联想词下拉开合；任一展开期间点外部/Esc 关闭（联想词由 hook 管理）
   const [menuOpen, setMenuOpen] = useState(false);
+  // 历史面板开合（时钟按钮下方锚定下拉）
+  const [historyOpen, setHistoryOpen] = useState(false);
+  // 星标（书签）：直接读写 bookmarksStore，无需经 props 钻透
+  const bookmarks = useBookmarksStore((s) => s.bookmarks);
+  const addBookmark = useBookmarksStore((s) => s.addBookmark);
+  const removeBookmark = useBookmarksStore((s) => s.removeBookmark);
+  const barVisible = useBookmarksStore((s) => s.barVisible);
+  const setBarVisible = useBookmarksStore((s) => s.setBarVisible);
+  const currentUrl = activeTab?.url;
+  const bookmarked = isBookmarked(bookmarks, currentUrl);
+  const bookmarkable = !!currentUrl && /^https?:\/\//.test(currentUrl);
+
+  /** 星标 toggle：已收藏则移除，否则以当前标题收藏 */
+  const toggleBookmark = () => {
+    if (!currentUrl || !bookmarkable) return;
+    if (bookmarked) {
+      const target = useBookmarksStore.getState().bookmarks.find((b) => b.url === currentUrl);
+      if (target) removeBookmark(target.id);
+    } else {
+      addBookmark(currentUrl, activeTab?.title || currentUrl);
+    }
+  };
   const menuRef = useRef<HTMLDivElement>(null);
   // 开合上报（含挂载首帧 false：父层 set 相同值会 bail out，无多余渲染）。
   // 经由 effect 而非散落在各关闭路径，保证外部点击/Esc/切换标签等
   // 任何收起方式都会恢复 webview 可见性。任一展开即隐藏 webview
   useEffect(() => {
-    onMenuOpenChange(menuOpen || suggest.open);
-  }, [menuOpen, suggest.open, onMenuOpenChange]);
+    onMenuOpenChange(menuOpen || suggest.open || historyOpen);
+  }, [menuOpen, suggest.open, historyOpen, onMenuOpenChange]);
   useEffect(() => {
     if (!menuOpen) return;
     const onDown = (e: MouseEvent) => {
@@ -305,6 +329,36 @@ export function BrowserNavbar({
           </div>
         )}
       </div>
+      {/* 星标收藏 + 历史（设置按钮左侧；历史面板锚定按钮下方） */}
+      <button
+        type="button"
+        className={`br-nav-btn${bookmarked ? " br-star-on" : ""}`}
+        title={bookmarked ? t("browser.removeBookmark") : t("browser.addBookmark")}
+        disabled={!bookmarkable}
+        onClick={toggleBookmark}
+      >
+        <SymbolicIcon name={bookmarked ? "star" : "star-outline"} size={14} />
+      </button>
+      <div className="br-history-wrap">
+        <button
+          type="button"
+          className={`br-nav-btn br-history-btn${historyOpen ? " is-open" : ""}`}
+          title={t("browser.history")}
+          aria-haspopup="dialog"
+          aria-expanded={historyOpen}
+          onClick={() => setHistoryOpen((o) => !o)}
+        >
+          <SymbolicIcon name="clock" size={14} />
+        </button>
+        <HistoryPanel
+          open={historyOpen}
+          onClose={() => setHistoryOpen(false)}
+          onNavigate={onNavigate}
+          onNewTab={(url) => {
+            if (serverId) invoke("browser_create_tab", { serverId, url }).catch((err) => log.error("历史新标签打开失败:", err));
+          }}
+        />
+      </div>
       {/* 设置下拉（导航行右端；锚定按钮容器定位） */}
       <div className="br-settings-wrap" ref={menuRef}>
         <button
@@ -333,6 +387,19 @@ export function BrowserNavbar({
               <SymbolicIcon name="view-private" size={14} />
               <span className="br-settings-label">{t("browser.incognito")}</span>
               <span className={`br-switch${incognito ? " on" : ""}`} aria-hidden />
+            </button>
+            <div className="br-settings-divider" />
+            {/* 书签栏显隐（前端层偏好，bookmarksStore 持久化） */}
+            <button
+              type="button"
+              role="menuitemcheckbox"
+              aria-checked={barVisible}
+              className="br-settings-item"
+              onClick={() => setBarVisible(!barVisible)}
+            >
+              <SymbolicIcon name="star-outline" size={14} />
+              <span className="br-settings-label">{t("browser.bookmarksBar")}</span>
+              <span className={`br-switch${barVisible ? " on" : ""}`} aria-hidden />
             </button>
             <div className="br-settings-divider" />
             {/* 在系统浏览器中打开：空白页/内部地址也允许——仅启动浏览器开新

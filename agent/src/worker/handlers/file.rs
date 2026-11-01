@@ -88,7 +88,7 @@ pub async fn handle_read_dir(req: ReadDir) -> WorkerResponse {
     type DirEntry = (String, bool, u64, String, String, String, String);
 
     let path = safe_path.as_str().to_string();
-    let result: AnyhowResult<Vec<DirEntry>> = executor.execute_as_user(move || {
+    let result: AnyhowResult<Vec<DirEntry>> = executor.execute_as_user_blocking(move || {
         let p = Path::new(&path);
 
         if !p.exists() {
@@ -154,7 +154,7 @@ pub async fn handle_read_dir(req: ReadDir) -> WorkerResponse {
             .collect();
 
         Ok(entries)
-    });
+    }).await;
 
     match result {
         Ok(entries) => {
@@ -221,7 +221,7 @@ pub async fn handle_read_file(req: ReadFile) -> WorkerResponse {
     type FileData = (Vec<u8>, u64, u64);
 
     let path = safe_path.as_str().to_string();
-    let result: AnyhowResult<FileData> = executor.execute_as_user(move || {
+    let result: AnyhowResult<FileData> = executor.execute_as_user_blocking(move || {
         let p = Path::new(&path);
 
         let metadata = fs::metadata(p).map_err(|e| {
@@ -255,7 +255,7 @@ pub async fn handle_read_file(req: ReadFile) -> WorkerResponse {
             .as_secs();
 
         Ok((content, mtime, metadata.len()))
-    });
+    }).await;
 
     match result {
         Ok((content, mtime, size)) => {
@@ -345,7 +345,7 @@ pub async fn handle_file_info(req: FileInfo) -> WorkerResponse {
 
     // 序列化中间结果：(size, is_dir, extension, magic_bytes)
     let path = safe_path.as_str().to_string();
-    let result: AnyhowResult<(u64, bool, String, Vec<u8>)> = executor.execute_as_user(move || {
+    let result: AnyhowResult<(u64, bool, String, Vec<u8>)> = executor.execute_as_user_blocking(move || {
         let p = Path::new(&path);
 
         let metadata = fs::metadata(p)
@@ -373,7 +373,7 @@ pub async fn handle_file_info(req: FileInfo) -> WorkerResponse {
         head.truncate(n);
 
         Ok((metadata.len(), false, extension, head))
-    });
+    }).await;
 
     match result {
         Ok((size, is_dir, extension, head)) => {
@@ -432,7 +432,7 @@ pub async fn handle_write_file(req: WriteFile) -> WorkerResponse {
 
     let path = safe_path.as_str().to_string();
     let content = req.content.clone();
-    let result: AnyhowResult<WriteOutcome> = executor.execute_as_user(move || {
+    let result: AnyhowResult<WriteOutcome> = executor.execute_as_user_blocking(move || {
         let p = Path::new(&path);
 
         // 如果目录不存在,自动创建
@@ -466,7 +466,7 @@ pub async fn handle_write_file(req: WriteFile) -> WorkerResponse {
             .as_secs();
 
         Ok((mtime, metadata.len()))
-    });
+    }).await;
 
     match result {
         Ok((mtime, size)) => {
@@ -516,7 +516,7 @@ pub async fn handle_delete(req: Delete) -> WorkerResponse {
     let executor = UserExecutor::new(&session);
 
     let path = safe_path.as_str().to_string();
-    let result: AnyhowResult<()> = executor.execute_as_user(move || {
+    let result: AnyhowResult<()> = executor.execute_as_user_blocking(move || {
         let p = Path::new(&path);
         let metadata = fs::metadata(p).map_err(|e| {
             anyhow::anyhow!("无法访问 '{}': {}", path, e)
@@ -528,7 +528,7 @@ pub async fn handle_delete(req: Delete) -> WorkerResponse {
             fs::remove_file(p).map_err(|e| anyhow::anyhow!("删除文件失败: {}", e))?;
         }
         Ok(())
-    });
+    }).await;
 
     match result {
         Ok(()) => {
@@ -572,7 +572,7 @@ pub async fn handle_mkdir(req: Mkdir) -> WorkerResponse {
     let executor = UserExecutor::new(&session);
 
     let path = safe_path.as_str().to_string();
-    let result: AnyhowResult<String> = executor.execute_as_user(move || {
+    let result: AnyhowResult<String> = executor.execute_as_user_blocking(move || {
         fs::create_dir_all(&path).map_err(|e| {
             let msg = e.to_string();
             if msg.contains("Permission denied") {
@@ -582,7 +582,7 @@ pub async fn handle_mkdir(req: Mkdir) -> WorkerResponse {
             }
         })?;
         Ok(path)
-    });
+    }).await;
 
     match result {
         Ok(path) => {
@@ -638,7 +638,7 @@ pub async fn handle_rename(req: Rename) -> WorkerResponse {
 
     let old_path = safe_old.as_str().to_string();
     let new_path = safe_new.as_str().to_string();
-    let result: AnyhowResult<(String, String)> = executor.execute_as_user(move || {
+    let result: AnyhowResult<(String, String)> = executor.execute_as_user_blocking(move || {
         fs::rename(&old_path, &new_path).map_err(|e| {
             let msg = e.to_string();
             if msg.contains("Permission denied") {
@@ -648,7 +648,7 @@ pub async fn handle_rename(req: Rename) -> WorkerResponse {
             }
         })?;
         Ok((old_path, new_path))
-    });
+    }).await;
 
     match result {
         Ok((old, new)) => {
@@ -672,9 +672,29 @@ pub async fn handle_rename(req: Rename) -> WorkerResponse {
     }
 }
 
+/// 递归复制路径：目录深拷贝（create_dir_all + 逐项复制），文件直接 fs::copy。
+/// 供 handle_copy 在目标用户上下文中调用——剪贴板复制文件夹需要目录递归，
+/// 协议语义不变（仍是单 src → 单 dst）。
+fn copy_path_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    let metadata = fs::metadata(src)?;
+    if metadata.is_dir() {
+        fs::create_dir_all(dst)?;
+        for entry in fs::read_dir(src)? {
+            let entry = entry?;
+            copy_path_recursive(&entry.path(), &dst.join(entry.file_name()))?;
+        }
+        Ok(())
+    } else {
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::copy(src, dst).map(|_| ())
+    }
+}
+
 /// 处理 Copy 请求
 ///
-/// 在目标用户上下文中复制文件(不支持目录)。
+/// 在目标用户上下文中复制文件或目录（目录递归深拷贝）。
 #[tracing::instrument(fields(src = %req.src, dst = %req.dst, uid = req.uid))]
 pub async fn handle_copy(req: Copy) -> WorkerResponse {
     tracing::info!("处理 Copy 请求: {} -> {}, uid={}", req.src, req.dst, req.uid);
@@ -707,8 +727,9 @@ pub async fn handle_copy(req: Copy) -> WorkerResponse {
 
     let src = safe_src.as_str().to_string();
     let dst = safe_dst.as_str().to_string();
-    let result: AnyhowResult<(String, String)> = executor.execute_as_user(move || {
-        let metadata = fs::metadata(&src).map_err(|e| {
+    let result: AnyhowResult<(String, String)> = executor.execute_as_user_blocking(move || {
+        // 预检源可达性（不存在/权限错误给出友好消息；实际复制在 copy_path_recursive 内）
+        let _probe = fs::metadata(&src).map_err(|e| {
             let msg = e.to_string();
             if msg.contains("Permission denied") {
                 anyhow::anyhow!("权限不足: 无法访问源文件 '{}' (需要相应的 Linux 用户权限)", src)
@@ -719,11 +740,7 @@ pub async fn handle_copy(req: Copy) -> WorkerResponse {
             }
         })?;
 
-        if metadata.is_dir() {
-            anyhow::bail!("不支持复制目录 '{}' (请使用移动功能)", src);
-        }
-
-        fs::copy(&src, &dst).map_err(|e| {
+        copy_path_recursive(std::path::Path::new(&src), std::path::Path::new(&dst)).map_err(|e| {
             let msg = e.to_string();
             if msg.contains("Permission denied") {
                 anyhow::anyhow!("权限不足: 无法复制 '{}' (需要相应的 Linux 用户权限)", src)
@@ -732,7 +749,7 @@ pub async fn handle_copy(req: Copy) -> WorkerResponse {
             }
         })?;
         Ok((src, dst))
-    });
+    }).await;
 
     match result {
         Ok((s, d)) => {
@@ -826,7 +843,7 @@ pub async fn handle_file_exists(req: FileExistsReq) -> WorkerResponse {
     let executor = UserExecutor::new(&session);
 
     let path = safe_path.as_str().to_string();
-    let result: AnyhowResult<Option<(u64, u64)>> = executor.execute_as_user(move || {
+    let result: AnyhowResult<Option<(u64, u64)>> = executor.execute_as_user_blocking(move || {
         match fs::metadata(&path) {
             Ok(meta) => {
                 let size = meta.len();
@@ -840,7 +857,7 @@ pub async fn handle_file_exists(req: FileExistsReq) -> WorkerResponse {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(anyhow::anyhow!("无法访问文件: {}", e)),
         }
-    });
+    }).await;
 
     match result {
         Ok(Some((size, mtime))) => {
@@ -903,9 +920,9 @@ pub async fn handle_chmod(req: Chmod) -> WorkerResponse {
     let path = safe_path.as_str().to_string();
     let mode = req.mode;
     let recursive = req.recursive;
-    let result: AnyhowResult<()> = executor.execute_as_user(move || {
+    let result: AnyhowResult<()> = executor.execute_as_user_blocking(move || {
         apply_chmod(&path, mode, recursive)
-    });
+    }).await;
 
     match result {
         Ok(()) => {
@@ -980,9 +997,9 @@ pub async fn handle_chown(req: Chown) -> WorkerResponse {
 
     let path = safe_path.as_str().to_string();
     let recursive = req.recursive;
-    let result: AnyhowResult<()> = executor.execute_as_user(move || {
+    let result: AnyhowResult<()> = executor.execute_as_user_blocking(move || {
         apply_chown(&path, target_uid, target_gid, recursive)
-    });
+    }).await;
 
     match result {
         Ok(()) => {
@@ -1041,7 +1058,7 @@ pub async fn handle_apply_diff(req: ApplyDiffReq) -> WorkerResponse {
 
     let path = safe_path.as_str().to_string();
     let base_mtime = req.base_mtime;
-    let result: AnyhowResult<u64> = executor.execute_as_user(move || {
+    let result: AnyhowResult<u64> = executor.execute_as_user_blocking(move || {
         // 获取文件当前 mtime
         let metadata = fs::metadata(&path)
             .map_err(|e| anyhow::anyhow!("无法获取文件信息 '{}': {}", path, e))?;
@@ -1084,7 +1101,7 @@ pub async fn handle_apply_diff(req: ApplyDiffReq) -> WorkerResponse {
             .as_secs();
 
         Ok(new_mtime)
-    });
+    }).await;
 
     match result {
         Ok(new_mtime) => {

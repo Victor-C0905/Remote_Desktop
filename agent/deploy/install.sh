@@ -98,7 +98,6 @@ fi
 
 # 从配置文件读取端口信息
 QUIC_PORT=$(grep 'quic_port' "$CONFIG_FILE" | head -n1 | sed 's/[^0-9]//g')
-WS_PORT=$(grep 'ws_port' "$CONFIG_FILE" | head -n1 | sed 's/[^0-9]//g')
 
 # 显示安装信息
 echo ""
@@ -109,7 +108,6 @@ echo "  程序路径: $INSTALL_DIR/$SERVICE_NAME"
 echo "  配置路径: /etc/$SERVICE_NAME/quireld.toml"
 echo "  服务名称: $SERVICE_NAME"
 echo "  QUIC 端口: ${QUIC_PORT:-未知}/udp"
-echo "  WebSocket 端口: ${WS_PORT:-未知}/tcp"
 echo "================================"
 echo ""
 

@@ -20,6 +20,7 @@ import { ChromeTabStrip } from '../components/ChromeTabStrip/ChromeTabStrip';
 import { useWindowEvent } from '../window-system/hooks/useWindowEvent';
 import { useWindowManager } from '../window-system/WindowManagerContext';
 import { describeTerminalFailure, formatUnknownError } from '../types/errors';
+import { escapeHtml } from '../utils/escapeHtml';
 import { useTranslation } from 'react-i18next';
 import i18n from '../i18n';
 import { createLogger } from '../utils/logger';
@@ -482,7 +483,8 @@ function TerminalInstance({
       // depsKey 复位，避免下次 setup 把残缺终端误判为可保活
       depsKeyRef.current = null;
       teardownNow();
-      container.innerHTML = `<div class="terminal-init-failed">${i18n.t('terminal.initFailedHtml', { error: formatUnknownError(err) })}</div>`;
+      // initFailedHtml 进 innerHTML（非 React sink），err 为远端可控字符串，必须先转义
+      container.innerHTML = `<div class="terminal-init-failed">${i18n.t('terminal.initFailedHtml', { error: escapeHtml(formatUnknownError(err)) })}</div>`;
     }
   }, [activeServerId, activeServerName, activeServerHost, activeServerPort]);
 

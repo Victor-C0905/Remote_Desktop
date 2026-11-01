@@ -36,6 +36,20 @@ export interface ServersActions {
 
 const generateId = () => `srv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+/**
+ * persist 版本迁移（当前基线 v1：keyring 信封加密 + partialize 剥离凭据）。
+ *
+ * 旧版本落盘数据没有 version 字段，zustand 按 0 处理：若只声明 version: 1
+ * 而不提供 migrate，zustand 会跳过整个重水合（用户全部服务器条目蒸发）。
+ * 故 v0→v1 为原样透传，字段级清洗由 onRehydrateStorage（状态重置 + keyring
+ * 装配/旧明文迁移）承担。约定：未来改持久化结构必须递增 version 并在此补分支，
+ * 禁止让 persist 静默浅合并演进。
+ */
+export function persistMigrate(persisted: unknown, version: number): unknown {
+  void version;
+  return persisted;
+}
+
 /* ── Store ────────────────────────────────────────────── */
 
 export const useServersStore = create<ServersState & ServersActions>()(
@@ -75,6 +89,8 @@ export const useServersStore = create<ServersState & ServersActions>()(
         const servers = get().servers.filter((s) => s.id !== id);
         const activeServerId = get().activeServerId === id ? null : get().activeServerId;
         set({ servers, activeServerId });
+        // 联动清理该服务器的持久化通知（跨 store 单向调用，无循环）
+        void import("./notificationStore").then((m) => m.useNotificationStore.getState().purgeServer(id));
       },
 
       updateServer: (id, updates) => {
@@ -129,6 +145,8 @@ export const useServersStore = create<ServersState & ServersActions>()(
     }),
     {
       name: "quirel-servers",
+      version: 1,
+      migrate: persistMigrate,
       storage: createJSONStorage(() => serversStorage),
       // 落盘前剥离凭据——但仅在 keyring 确认可写之后（isKeyringReady 门控）：
       // 迁移期写入失败时保留明文落盘，防止凭据两头落空直接蒸发

@@ -58,6 +58,8 @@ export function NotificationCenter({ isOpen, onClose }: NotificationCenterProps)
   // 真实数据源：zustand 内存 store（连接失败/断连/恢复通知）
   const { notifications, markAsRead, dismiss, clearAll, markAllRead } = useNotificationStore();
   const [filter, setFilter] = useState<NotificationUrgency | "all">("all");
+  // 展开明细的通知 id（点击条目切换；如移动通知的逐条 src → dst）
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const unreadCount = notifications.filter((n) => !n.read).length;
   const criticalCount = notifications.filter((n) => n.urgency === "critical" && !n.read).length;
@@ -155,7 +157,11 @@ export function NotificationCenter({ isOpen, onClose }: NotificationCenterProps)
               <div
                 key={notif.id}
                 className={`nc-notif ${getUrgencyClass(notif.urgency)} ${!notif.read ? "nc-unread" : ""}`}
-                onClick={() => markAsRead(notif.id)}
+                onClick={() => {
+                  markAsRead(notif.id);
+                  // 有明细的通知：点击展开/收起逐条清单（如移动的 src → dst）
+                  if (notif.details?.length) setExpandedId((cur) => (cur === notif.id ? null : notif.id));
+                }}
               >
                 {/* 卡片头部行：时间（左上）+ 关闭按钮（右上） */}
                 <div className="nc-notif-top">
@@ -186,6 +192,29 @@ export function NotificationCenter({ isOpen, onClose }: NotificationCenterProps)
                     </div>
                     <div className="nc-notif-body">{notif.body}</div>
                     {notif.action && <div className="nc-notif-action">{notif.action}</div>}
+                    {expandedId === notif.id && notif.details && notif.details.length > 0 && (
+                      <div className="nc-notif-details">
+                        {notif.details.slice(0, 30).map((line, i) => (
+                          <div key={i} className="nc-notif-detail-line">{line}</div>
+                        ))}
+                        {notif.details.length > 30 && (
+                          <div className="nc-notif-detail-line">…{t('notifications.moreDetails', { n: notif.details.length - 30 })}</div>
+                        )}
+                      </div>
+                    )}
+                    {notif.onAction && (
+                      <button
+                        type="button"
+                        className="nc-notif-undo"
+                        onClick={(e) => {
+                          e.stopPropagation();  // 不触发条目的展开/已读切换
+                          notif.onAction?.run();
+                          dismiss(notif.id);
+                        }}
+                      >
+                        {notif.onAction.label}
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>

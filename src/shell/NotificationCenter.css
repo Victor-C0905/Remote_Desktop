@@ -430,3 +430,41 @@
 .nc-close-btn .symbolic-icon {
   color: var(--quirel-text-secondary);
 }
+/* 可执行动作按钮（如移动通知的「撤销移动」） */
+.nc-notif-undo {
+  margin-top: 6px;
+  padding: 3px 12px;
+  border: 1px solid var(--quirel-border-color);
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--quirel-accent-bg);
+  font-family: var(--font-ui);
+  font-size: var(--font-small);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+}
+
+.nc-notif-undo:hover {
+  background: var(--quirel-accent-bg);
+  color: var(--quirel-accent-fg);
+}
+
+/* 通知明细展开区（如移动通知的逐条 src → dst；点击条目切换） */
+.nc-notif-details {
+  margin-top: 6px;
+  padding: 6px 8px;
+  max-height: 160px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  background: var(--quirel-view-bg);
+  border: 1px solid var(--quirel-border-color);
+  border-radius: var(--radius-xs);
+}
+
+.nc-notif-detail-line {
+  font-family: Consolas, "Source Code Pro", monospace;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--quirel-text-secondary);
+  word-break: break-all;
+}

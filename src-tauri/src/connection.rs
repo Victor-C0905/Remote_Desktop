@@ -359,7 +359,8 @@ pub async fn remote_connect(
                     }
                     other => {
                         conn.close(0u32.into(), b"unexpected response");
-                        tracing::warn!("[Connection] 期望 AuthResponse，收到: {:?}", other);
+                        // 安全约定：意外 Payload 只打印类型名，不做 {:?} 全量 dump
+                        tracing::warn!("[Connection] 期望 AuthResponse，收到: {:?}", other.type_name());
                         return Err(ConnectError::new(AuthErrorCode::ProtocolError));
                     }
                 }
@@ -756,6 +757,21 @@ pub struct PingResult {
     pub ok: bool,
     pub latency_ms: f64,
     pub server_time: u64,
+}
+
+/// 列出当前存活连接的服务器 id（webview 刷新后前端恢复在线状态用：
+/// 连接在 Rust 侧持续存活，前端状态因页面重载归零，需按此快照恢复）
+#[tauri::command]
+pub async fn server_connected_ids(app: tauri::AppHandle) -> Result<Vec<String>, AppError> {
+    let manager = app.state::<ConnectionManager>();
+    let ids: Vec<String> = manager
+        .connections
+        .lock()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect();
+    Ok(ids)
 }
 
 #[tauri::command]
@@ -2054,8 +2070,10 @@ async fn perform_pubkey_auth(
     tracing::info!("[PubKeyAuth] 开始公钥认证流程: username={}", username);
 
     // ── 第一步：解析私钥 ───────────────────────────────
+    // 安全红线：私钥内容（含任何前缀片段）严禁入日志——client.log 落盘即
+    // 泄漏（2026-11-01 探针实测 INFO 级即输出，原「前150字符/预览」两处
+    // 已摘除，仅保留长度类元信息）
     tracing::info!("[PubKeyAuth] 私钥原始长度={}字节", private_key.len());
-    tracing::info!("[PubKeyAuth] 私钥前150字符: {}", &private_key.chars().take(150).collect::<String>());
 
     tracing::debug!("[PubKeyAuth] 解析私钥（长度={}字节）", private_key.len());
 
@@ -2071,10 +2089,6 @@ async fn perform_pubkey_auth(
         .to_string();
 
     tracing::debug!("[PubKeyAuth] 私钥清理后长度={}字节", private_key_cleaned.len());
-
-    // 调试：输出私钥的前150个字符
-    let preview_len = std::cmp::min(150, private_key_cleaned.len());
-    tracing::debug!("[PubKeyAuth] 私钥预览（前{}字符）: {:?}", preview_len, &private_key_cleaned[..preview_len]);
 
     // 检查是否包含不可见字符
     let has_null = private_key_cleaned.contains('\u{0000}');
@@ -2209,7 +2223,8 @@ async fn perform_pubkey_auth(
             return Err(ConnectError::with_detail(err_code, message));
         }
         other => {
-            tracing::error!("[PubKeyAuth] 期望挑战，收到: {:?}", other);
+                            // 安全约定：意外 Payload 只打印类型名，不做 {:?} 全量 dump
+                            tracing::error!("[PubKeyAuth] 期望挑战，收到: {:?}", other.type_name());
             return Err(ConnectError::new(AuthErrorCode::ProtocolError));
         }
     };
@@ -2394,7 +2409,7 @@ async fn perform_pubkey_auth(
             Err(ConnectError::with_detail(err_code, message))
         }
         other => {
-            tracing::error!("[PubKeyAuth] 期望认证结果，收到: {:?}", other);
+            tracing::error!("[PubKeyAuth] 期望认证结果，收到: {:?}", other.type_name());
             Err(ConnectError::new(AuthErrorCode::ProtocolError))
         }
     }
@@ -2518,9 +2533,10 @@ fn parse_private_key_auto(key_data: &str, passphrase: Option<&str>) -> Result<ss
     tracing::debug!("[KeyParser] 开始自动检测私钥格式");
 
     // 关键调试信息（INFO级别，确保显示）
+    // 安全红线：私钥内容与 passphrase 严禁入日志（client.log 落盘即泄漏，
+    // 2026-11-01 摘除原「前100字符/密码字段」两处）
     tracing::info!("[KeyParser] 私钥长度: {} 字节", key_data.len());
-    tracing::info!("[KeyParser] 私钥前100字符: {}", &key_data.chars().take(100).collect::<String>());
-    tracing::info!("[KeyParser] 密码字段: {:?}", passphrase);
+    tracing::info!("[KeyParser] 密码字段存在: {}", passphrase.is_some());
 
     // 1. 尝试 OpenSSH 格式（优先级最高）
     if key_data.contains("-----BEGIN OPENSSH PRIVATE KEY-----") {

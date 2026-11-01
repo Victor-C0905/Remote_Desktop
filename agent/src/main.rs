@@ -277,7 +277,6 @@ async fn run_manager_mode(args: &Args) -> Result<()> {
     tracing::info!("   日志级别: {}", cfg.log.level);
     tracing::info!("   日志目录: {}", if cfg.log.dir == "off" { "关闭".to_string() } else { cfg.log.dir.clone() });
     tracing::info!("   QUIC  监听: udp://{}:{}", cfg.server.bind, cfg.server.quic_port);
-    tracing::info!("   WS    监听: tcp://{}:{}", cfg.server.bind, cfg.server.ws_port);
 
     // 创建 EventBus 和 SubscriptionManager
     let event_bus = Arc::new(event_bus::EventBus::new());
@@ -309,23 +308,20 @@ async fn run_manager_mode(args: &Args) -> Result<()> {
     #[cfg(unix)]
     manager.start().await?;
 
-    let key_clone = key.clone_key();
-    let result = tokio::try_join!(
-        server::quic::run(
-            cfg.clone(),
-            cert.clone(),
-            key_clone,
-            subscription_manager.clone(),
-            event_bus.clone(),
-            authenticator.clone(),
-            audit_log.clone(),
-            #[cfg(unix)]
-            manager.clone(),
-        ),
-        server::websocket::run(cfg.clone(), cert, key),
-    );
+    let result = server::quic::run(
+        cfg.clone(),
+        cert,
+        key,
+        subscription_manager.clone(),
+        event_bus.clone(),
+        authenticator.clone(),
+        audit_log.clone(),
+        #[cfg(unix)]
+        manager.clone(),
+    )
+    .await;
 
-    // 阶段 1 新增:QUIC/WS 退出后停止 Manager
+    // 阶段 1 新增:QUIC 退出后停止 Manager
     #[cfg(unix)]
     manager.shutdown().await?;
 

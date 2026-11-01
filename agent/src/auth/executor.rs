@@ -40,9 +40,36 @@ fn with_fork_guard() -> std::sync::MutexGuard<'static, ()> {
     FORK_GUARD.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// 解析 /etc/group 内容，返回 username 所在组的 gid 列表。
+///
+/// 行格式 `group_name:password:gid:members`，members 逗号分隔、精确匹配
+/// 用户名；字段不足或 gid 非数字的畸形行跳过。调用方需自行并入主 gid。
+/// （仅 fork 降权路径使用，该路径 cfg(unix)；非 unix 平台无死代码告警）
+#[cfg_attr(not(unix), allow(dead_code))]
+fn parse_supplementary_group_ids(content: &str, username: &str) -> Vec<u32> {
+    let mut ids = Vec::new();
+    for line in content.lines() {
+        let fields: Vec<&str> = line.split(':').collect();
+        if fields.len() < 4 {
+            continue;
+        }
+        let gid = match fields[2].trim().parse::<u32>() {
+            Ok(g) => g,
+            Err(_) => continue,
+        };
+        if fields[3].split(',').any(|m| m.trim() == username) {
+            ids.push(gid);
+        }
+    }
+    ids
+}
+
 /// 用户上下文执行器
 #[derive(Clone)]
 pub struct UserExecutor {
+    /// 用户名（解析 /etc/group 附加组用，仅 unix fork 路径读取）
+    #[cfg_attr(not(unix), allow(dead_code))]
+    username: String,
     /// 用户ID (UID)
     uid: u32,
     /// 组ID (GID)
@@ -55,6 +82,7 @@ impl UserExecutor {
     /// 从 UserSession 创建新的执行器
     pub fn new(session: &UserSession) -> Self {
         Self {
+            username: session.username.clone(),
             uid: session.uid,
             gid: session.gid,
             home_dir: session.home_dir.clone(),
@@ -113,6 +141,18 @@ impl UserExecutor {
             let uid = self.uid;
             let gid = self.gid;
 
+            // 附加组：fork 前在父进程中解析目标用户的组列表。子进程 setgroups
+            // 显式替换（而不是继承父进程 = root 的附加组）；读取失败按空表
+            // 处理（仅保留主 gid，拒绝默认继承），fail-closed。
+            let supplementary = std::fs::read_to_string("/etc/group")
+                .map(|content| parse_supplementary_group_ids(&content, &self.username))
+                .unwrap_or_else(|e| {
+                    tracing::warn!("读取 /etc/group 失败，降权进程仅保留主 gid: {}", e);
+                    Vec::new()
+                });
+            let mut groups = vec![gid];
+            groups.extend(supplementary);
+
             tracing::debug!("fork 子进程执行操作: uid={}, gid={}", uid, gid);
 
             // fork 子进程
@@ -130,6 +170,19 @@ impl UserExecutor {
                     // ===== 子进程 =====
                     // 关闭管道的读取端
                     unsafe { libc::close(read_fd); }
+
+                    // 附加组：必须仍在 root 时 setgroups（setuid 后无权再改）
+                    let gids: Vec<libc::gid_t> = groups;
+                    if unsafe { libc::setgroups(gids.len(), gids.as_ptr()) } != 0 {
+                        let msg = format!(
+                            "setgroups({:?}) 失败: {}",
+                            gids,
+                            std::io::Error::last_os_error()
+                        );
+                        let _ = write_error_to_pipe(write_fd, &msg);
+                        unsafe { libc::close(write_fd); }
+                        unsafe { libc::_exit(1); }
+                    }
 
                     // 降权：先 setgid，再 setuid（顺序重要）
                     unsafe {
@@ -248,59 +301,21 @@ impl UserExecutor {
         }
     }
 
-    /// 在用户上下文中执行操作(不要求序列化)
+    /// 在阻塞线程池中执行用户上下文操作（async 友好包装）
     ///
-    /// # 重要说明
-    /// - 此方法**不会** fork 子进程或降权(因为无法通过管道传递不可序列化的结果)
-    /// - 操作以当前进程权限执行,依赖 Linux 文件系统权限检查
-    /// - 如需严格的用户隔离,请使用 `execute_as_user` 并确保返回值可序列化
-    ///
-    /// # 使用场景
-    /// - 返回不可序列化类型的操作(如 `FileStreamWriter`)
-    /// - 需要在用户上下文中创建复杂对象的场景
-    ///
-    /// # 安全性
-    /// - 仅用于信任用户或已在其他方式中验证的场景
-    /// - 不提供进程级的权限隔离
-    pub fn execute_as_user_unchecked<F, T>(&self, f: F) -> Result<T>
+    /// `execute_as_user` 全程同步阻塞（fork + waitpid + 管道阻塞读，最长可达
+    /// 整个文件操作时长）。直接在 async 上下文调用会占住 tokio runtime worker
+    /// 线程，并发文件操作会饿死线程池（心跳/PTY 转发全部排队）。本包装将其
+    /// 移入 `spawn_blocking`，调用方以 `.await` 等待；Ok/Err 原样透传。
+    pub async fn execute_as_user_blocking<F, T>(&self, f: F) -> Result<T>
     where
         F: FnOnce() -> Result<T> + Send + 'static,
-        T: Send + 'static,
+        T: serde::Serialize + for<'de> serde::Deserialize<'de> + Send + 'static,
     {
-        #[cfg(unix)]
-        {
-            // 如果当前已经是目标用户，直接执行
-            let current_uid = nix::unistd::getuid().as_raw();
-            if current_uid == self.uid {
-                tracing::debug!("当前用户已是目标用户，跳过切换: uid={}", self.uid);
-                return f();
-            }
-
-            // 如果目标用户是 root，直接执行
-            if self.uid == 0 {
-                tracing::debug!("目标用户是 root，直接执行");
-                return f();
-            }
-
-            // 非 root 目标用户，但返回值不可序列化
-            // 这里需要降权执行，但无法通过管道传递结果
-            // 最佳实践：在父进程中以 root 执行，依赖 Linux 文件系统权限
-            tracing::debug!(
-                "不可序列化的返回类型，依赖文件系统权限: uid={}, gid={}",
-                self.uid, self.gid
-            );
-            f()
-        }
-
-        #[cfg(not(unix))]
-        {
-            tracing::warn!(
-                "当前平台直接执行（无用户隔离）: uid={}, gid={}",
-                self.uid,
-                self.gid
-            );
-            f()
-        }
+        let executor = self.clone();
+        tokio::task::spawn_blocking(move || executor.execute_as_user(f))
+            .await
+            .map_err(|e| anyhow::anyhow!("隔离执行线程异常: {}", e))?
     }
 
     /// 获取用户 UID
@@ -817,6 +832,36 @@ mod tests {
     }
 
     #[test]
+    fn parse_group_ids_extracts_groups_containing_user() {
+        let content = "root:x:0:\n\
+adm:x:4:syslog,testuser\n\
+disk:x:6:\n\
+docker:x:998:testuser,alice\n\
+users:x:100:testuser\n";
+        let mut ids = parse_supplementary_group_ids(content, "testuser");
+        ids.sort();
+        assert_eq!(ids, vec![4, 100, 998]);
+    }
+
+    #[test]
+    fn parse_group_ids_requires_exact_member_match() {
+        let content = "g1:x:1:testuser2\n\
+g2:x:2:testuser\n";
+        assert_eq!(parse_supplementary_group_ids(content, "testuser"), vec![2]);
+    }
+
+    #[test]
+    fn parse_group_ids_tolerates_malformed_lines() {
+        assert!(parse_supplementary_group_ids("root:x:0:\n", "testuser").is_empty());
+        assert!(parse_supplementary_group_ids("", "testuser").is_empty());
+        // 字段不足 / gid 非数字的畸形行应跳过而非 panic
+        assert_eq!(
+            parse_supplementary_group_ids("broken\nnox:x:abc:testuser\n", "testuser"),
+            Vec::<u32>::new()
+        );
+    }
+
+    #[test]
     fn test_execute_as_user_simple() {
         // 在测试环境中，当前用户可能就是 uid=1000
         // 所以会直接执行，不走 fork 路径
@@ -838,6 +883,24 @@ mod tests {
         });
 
         assert!(result.is_err());
+    }
+
+    /// execute_as_user_blocking：async 上下文可等待，Ok/Err 均原样透传
+    /// （实现走 spawn_blocking，把同步阻塞的 fork+waitpid 移出 runtime worker）
+    #[tokio::test]
+    async fn test_execute_as_user_blocking_returns_result() {
+        let session = create_test_session();
+        let executor = UserExecutor::new(&session);
+
+        let ok: Result<i32> = executor.execute_as_user_blocking(|| Ok(42)).await;
+        assert!(ok.is_ok(), "blocking 执行失败: {:?}", ok.err());
+        assert_eq!(ok.unwrap(), 42);
+
+        let err: Result<()> = executor.execute_as_user_blocking(|| {
+            anyhow::bail!("Test error");
+        })
+        .await;
+        assert!(err.is_err());
     }
 
     /// 测试 spawn_isolated_writer 往返:写入数据 → 等待子进程 → 验证文件内容

@@ -283,12 +283,12 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
       passphrase: auth.passphrase,
     };
 
-    // 注意：不记录 credentials 中的敏感信息
+    // 注意：不记录 credentials 中的敏感信息（token 为连接令牌，仅记录存在性）
     log.info("调用 remote_connect:", {
       serverId: server.id,
       host: server.host,
       port: server.port,
-      token: server.token || null,
+      tokenExists: !!server.token,
       authMethod: auth.method,
       username: auth.username,
     });
@@ -482,12 +482,86 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
     }
   }, [servers, setActiveServerId]);
 
+  // ── 会话镜像 + 刷新恢复 ──────────────────────────────
+  // webview 重载（刷新）会销毁全部前端状态，但 Rust 侧 QUIC 连接持续存活。
+  // 镜像写 sessionStorage（刷新存活、关闭项目随窗口销亡——不跨应用启动）；
+  // 启动时按镜像逐个 ping 验活：存活→恢复在线标记，已死→清理残留后走
+  // 既有连接链自动重连。servers 在 StorageInitializer 预加载后才渲染
+  // 本组件，此处读到的列表已完成注水
+  const connectServerRef = useRef(connectServer);
+  connectServerRef.current = connectServer;
+
+  // 启动恢复标记（每轮页面生命周期一次；镜像写入依赖它放行）
+  const restoredRef = useRef(false);
+
+  // 在线状态变化即写镜像。
+  // ⚠️ 必须等恢复流程消费完快照才放行写入：挂载时状态是注水后的全离线，
+  // 若立即写入会把「刷新前」的快照覆盖成空，恢复读到空 = 在线记录丢失
+  useEffect(() => {
+    if (!restoredRef.current) return;
+    const connected = servers.filter((s) => s.status === "connected").map((s) => s.id);
+    sessionStorage.setItem("sm.session", JSON.stringify({ active: activeServerId, connected }));
+  }, [activeServerId, servers]);
+
+  // 启动恢复（每轮页面生命周期一次）
+  useEffect(() => {
+    if (restoredRef.current || servers.length === 0) return;
+    restoredRef.current = true;
+    void (async () => {
+      let snap: { active: string | null; connected: string[] } = { active: null, connected: [] };
+      try {
+        snap = JSON.parse(sessionStorage.getItem("sm.session") ?? "null") ?? snap;
+      } catch {
+        // 镜像损坏视同无快照
+      }
+      for (const id of snap.connected) {
+        if (!servers.some((s) => s.id === id)) continue; // 服务器已被删除
+        try {
+          const ping = await invoke<{ ok: boolean; latency_ms: number }>("remote_ping", { serverId: id });
+          setServerStatus(id, "connected", undefined, ping.latency_ms >= 0 ? ping.latency_ms : undefined);
+        } catch {
+          // 连接已死：清掉残留条目（可能已被清理，忽略缺失错误）后自动重连
+          try {
+            await invoke("remote_disconnect", { serverId: id });
+          } catch {
+            /* 条目不存在即已清理 */
+          }
+          void connectServerRef.current?.(id);
+        }
+      }
+      if (snap.active && servers.some((s) => s.id === snap.active)) {
+        setActiveServerId(snap.active);
+      }
+    })();
+  }, [servers, setServerStatus, setActiveServerId]);
+
+  /** 删除服务器前先断开其连接 + 全量停止其浏览器会话（防孤儿：连接与
+   *  浏览器会话都随服务器移除而终止，不留 UI 无法触达的残留） */
+  const removeServerWithCleanup = useCallback(
+    (id: string) => {
+      void (async () => {
+        try {
+          await invoke('remote_disconnect', { serverId: id });
+        } catch {
+          /* 未连接或条目已清理 */
+        }
+        try {
+          await invoke('proxy_stop_session', { serverId: id });
+        } catch {
+          /* 浏览器会话不存在 */
+        }
+      })();
+      removeServer(id);
+    },
+    [removeServer],
+  );
+
   const value: ServerManagerContextType = {
     servers,
     activeServerId,
     activeServer,
     addServer,
-    removeServer,
+    removeServer: removeServerWithCleanup,
     connectServer,
     disconnectServer,
     setActiveServer,

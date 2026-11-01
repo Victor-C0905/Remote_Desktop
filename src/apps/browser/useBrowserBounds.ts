@@ -85,12 +85,19 @@ export function useBrowserBounds(
     };
 
     schedule();
+    // ResizeObserver 只报布局盒（transform 不触发）；开窗动画（scale
+    // 0.96→1）期间 gBCR 按 96% 缩放测量，直接上报会把子 webview 钉在
+    // 缩小的 bounds 上（刷新恢复时 browser_open 快速返回、epoch 上报
+    // 落在动画窗口内——实测位置错乱）。监听 window resize：WindowShell
+    // 在动画归位后补发的 resize 事件触发时 gBCR 已恢复真实尺寸
+    window.addEventListener('resize', schedule);
     // RO 回调直测（不套 rAF）：RO 本身一帧最多一次批处理且在渲染前触发，
     // 再套 rAF 白等一帧——最大化/缩放时省 16ms。geometry 路径保留 rAF 合并
     const ro = new ResizeObserver(report);
     ro.observe(el);
     return () => {
       ro.disconnect();
+      window.removeEventListener('resize', schedule);
       if (rafRef.current) {
         cancelAnimationFrame(rafRef.current);
         rafRef.current = 0;

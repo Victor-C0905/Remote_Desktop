@@ -1,0 +1,5 @@
+# 工作区共享 target：src-tauri / agent / quirel-protocol 共用一份编译产物，
+# 公共依赖只编译一份（quirrel-protocol、tokio 栈），清理也只有一个位置。
+# 迁移自各 crate 独立 target（2026-11-01，磁盘 81G → 共享后单份）。
+[build]
+target-dir = "target"

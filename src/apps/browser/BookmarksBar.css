@@ -1,0 +1,45 @@
+/* ============================================================
+   BookmarksBar — 书签栏（导航行下方细条）
+   配色走 --quirel-* 变量，亮暗主题自动跟随
+   ============================================================ */
+
+.br-bookmarks-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--quirel-border-color);
+  background: var(--quirel-headerbar-bg);
+  overflow-x: auto;
+  scrollbar-width: thin;
+  min-height: 26px;
+}
+
+/* 单个书签 chip：文字省略 + 悬停浮起（页签/菜单同一视觉语言） */
+.br-bookmark-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 180px;
+  padding: 2px 8px;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--quirel-text-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--font-small);
+  line-height: 1.4;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+}
+
+.br-bookmark-chip:hover {
+  background: var(--quirel-card-hover);
+  color: var(--quirel-text-primary);
+}
+
+.br-bm-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

@@ -680,11 +680,39 @@ fn wallpaper_read_cached(app: tauri::AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn prepare_shutdown(_app: tauri::AppHandle) -> Result<(), String> {
+async fn prepare_shutdown(app: tauri::AppHandle) -> Result<(), String> {
     tracing::info!("[Frontend] 收到关闭通知");
-    // 前端会在 beforeunload 时调用此命令
-    // 可以在这里执行一些快速清理操作
+    // 刷新/关闭的前置隐藏（会话原子性的过渡态补全）：beforeunload 到新页面
+    // 收养之间存在空窗——tab webview（独立 HWND，Rust 持有）若保持可见，
+    // 会以「脱离的悬浮层」形态残留（实测截图）。此处对全部会话下发隐藏，
+    // 新页面收养后由可见性链路（SetVisible 全量版）重新接管。
+    {
+        use tauri::Manager as _;
+        let sessions = app.state::<proxy::ProxySessionManager>();
+        sessions.hide_all_webviews();
+    }
     Ok(())
+}
+
+/// 进程纪元（pid + 静态捕获的启动时刻）：前端 sessionStorage 以此判别
+/// 进程是否重启——WebView2 的 sessionStorage 会在进程重启后存活（Chromium
+/// 崩溃恢复特性，同 user-data + 同源即保留），纪元不一致即清空上一世代的
+/// 会话镜像（窗口快照/连接镜像/挂载代际），保证「关闭项目 = 干净桌面」。
+fn process_epoch() -> String {
+    static EPOCH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    EPOCH.get_or_init(|| {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        format!("{}-{ts}", std::process::id())
+    })
+    .clone()
+}
+
+#[tauri::command]
+fn app_process_epoch() -> String {
+    process_epoch()
 }
 
 /* ── App Entry ──────────────────────────────────────────── */
@@ -1026,11 +1054,24 @@ pub fn run() {
             .visible(false)
             // additional_browser_args 是替换语义 → 必须显式补回 wry 默认的
             // disable-features（与 webview_host.rs 同规则）；debug 构建追加
-            // CDP 远程调试口，供诊断「DOM 与可见像素脱节」类渲染问题
+            // CDP 远程调试口，供诊断「DOM 与可见像素脱节」类渲染问题。
+            //
+            // ⚠️ 必须禁用后台/遮挡定时器节流：§5.1 的 1s 前端心跳
+            // （browser_heartbeat）活在壳页面里，而浏览器 tab webview 是盖在
+            // 壳页面上的独立 HWND（且独立 user-data-dir = 独立 Chromium 进程），
+            // Chromium 把壳页面判为被遮挡 → IntensiveWakeUpThrottling 生效，
+            // setInterval 强节流到 60.000s/次（相位锁定）→ 心跳恒超 3s 阈值 →
+            // 执行器隐藏 webview → 遮挡解除 → 心跳恢复 → re-assert 可见 →
+            // 再被遮挡……自持振荡（webview 每分钟可见 3s、隐藏 57s）。
+            // 2026-11-01 探针实锤：心跳 seq0-3 后蒸发，恢复间隔恒 60.0s。
+            // 注意：IWT 不受 --disable-background-timer-throttling 管辖，必须
+            // 以 feature 名单独禁用；wry 的 background_throttling 策略仅在
+            // macOS (wkwebview) 实现，WebView2 后端无消费点。仅壳页面需要；
+            // tab webview（远程页）保持节流以省资源。
             .additional_browser_args(if cfg!(debug_assertions) {
-                "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port=9222"
+                "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,IntensiveWakeUpThrottling --remote-debugging-port=9222 --disable-background-timer-throttling --disable-backgrounding-occluded-windows"
             } else {
-                "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection"
+                "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,IntensiveWakeUpThrottling --disable-background-timer-throttling --disable-backgrounding-occluded-windows"
             });
 
             #[cfg(not(target_os = "windows"))]
@@ -1052,6 +1093,33 @@ pub fn run() {
                 tracing::error!("[Window] 主窗口创建失败: {}", e);
                 e
             })?;
+
+            // 关闭浏览器类行为入口（F5/Ctrl+R 加速键 + 默认右键菜单）：壳页面
+            // 刷新入口收编为 RootErrorBoundary 的「重置界面」受控重载，前端
+            // 另有键盘拦截兜底（main.tsx，仅 release 构建）；应用自身的自定义
+            // 右键菜单是 DOM 渲染，不受此设置影响。加速键成员在 Settings3
+            // 子接口；失败仅日志，不阻塞启动。
+            #[cfg(target_os = "windows")]
+            {
+                use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
+                use windows::core::Interface as _;
+                let _ = main_window.with_webview(|wv| {
+                    let controller = wv.controller();
+                    unsafe {
+                        if let Err(e) = controller
+                            .CoreWebView2()
+                            .and_then(|core| core.Settings())
+                            .and_then(|s| {
+                                s.SetAreDefaultContextMenusEnabled(false)?;
+                                s.cast::<ICoreWebView2Settings3>()
+                                    .and_then(|s3| s3.SetAreBrowserAcceleratorKeysEnabled(false))
+                            })
+                        {
+                            tracing::warn!("[Window] 主窗口关闭浏览器加速键/默认右键菜单失败: err={e}");
+                        }
+                    }
+                });
+            }
 
             // 实验 F+G：resize 防闪三件套（Win32 教科书组合）。
             // 1) 主窗口 subclass 拦 WM_ERASEBKGND：实验 F 原样「声称已擦不擦」
@@ -1268,6 +1336,7 @@ pub fn run() {
             window_close,
             set_window_background_color,
             prepare_shutdown,
+            app_process_epoch,
             fullscreen::toggle_fullscreen,
             fullscreen::is_fullscreen,
             fullscreen::start_os_drag,
@@ -1281,6 +1350,7 @@ pub fn run() {
             connection::remote_connect,
             connection::remote_disconnect,
             connection::remote_ping,
+            connection::server_connected_ids,
             connection::remote_send,
             connection::remote_read_dir,
             connection::remote_search, // 文件管理器搜索（宿主侧受限遍历，复用 ReadDir 权限模型）
@@ -1323,6 +1393,8 @@ pub fn run() {
             proxy::browser_window::browser_close_tab,
             proxy::browser_window::browser_focus_tab,
             proxy::browser_window::browser_reorder_tab,
+            proxy::browser_window::browser_refresh_tabs,
+            proxy::browser_window::browser_heartbeat,
             proxy::browser_window::browser_set_bounds,
             proxy::browser_window::browser_set_visible,
             proxy::browser_window::browser_get_settings,

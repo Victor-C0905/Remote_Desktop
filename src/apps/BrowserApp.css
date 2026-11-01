@@ -310,3 +310,15 @@
 .br-empty-icon { opacity: 0.6; }
 .br-empty-title { font-size: 14px; font-weight: 600; color: var(--quirel-text-secondary); }
 .br-empty-desc { font-size: 12px; }
+
+/* ── 导航行 + 书签栏纵向堆叠（toolbar 槽两行）────────── */
+.br-toolbar-stack {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+/* 星标已收藏态：强调色点亮 */
+.br-nav-btn.br-star-on {
+  color: var(--quirel-accent-bg);
+}

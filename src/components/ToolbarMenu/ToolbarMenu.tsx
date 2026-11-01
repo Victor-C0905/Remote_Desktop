@@ -68,6 +68,10 @@ function MenuPanel({ top, left, alignRight, items, onPick }: MenuPanelProps) {
     <div
       className="tbm-menu"
       role="menu"
+      // data-browser-overlay：浏览器 webview 子窗口让位标记——TopBar 的窗口
+      // 控制菜单等悬浮在浏览器窗口上方时，webview 必须隐藏让位（child HWND
+      // 无法被 DOM z-index 遮挡，缺失标记 = 菜单下半截被网页盖住，实测）
+      data-browser-overlay=""
       style={{ top, left, ...(alignRight ? { transform: 'translateX(-100%)' } : {}) }}
       onClick={(e) => e.stopPropagation()}
     >

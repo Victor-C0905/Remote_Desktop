@@ -23,7 +23,8 @@ export type SymbolicIconName =
   | "folder-open"
   | "external-link"
   | "system-search"
-  | "emblem-system" | "view-private";
+  | "emblem-system" | "view-private"
+  | "star" | "star-outline";
 
 /** 图标内容（16×16 网格；剪影用 fillRule=evenodd 镂空细节） */
 const ICONS: Record<SymbolicIconName, ReactNode> = {
@@ -98,6 +99,23 @@ const ICONS: Record<SymbolicIconName, ReactNode> = {
       fillRule="evenodd"
       d="M8 1.9a6.1 6.1 0 1 1 0 12.2A6.1 6.1 0 0 1 8 1.9Zm-.7 2.4h1.4v4l3 1.8-.7 1.2-3.7-2.2z"
       fill="currentColor"
+    />
+  ),
+  // 实心五角星（已收藏）：重心微下调视觉居中
+  "star": (
+    <path
+      d="M8 1.4l1.98 4.01 4.42.64-3.2 3.12.76 4.41L8 11.51l-3.96 2.07.76-4.4-3.2-3.13 4.42-.64L8 1.4Z"
+      fill="currentColor"
+    />
+  ),
+  // 五角星描边（未收藏）：线条语言与 emblem-ok/go-* 一致
+  "star-outline": (
+    <path
+      d="M8 2.6l1.5 3.04 3.36.49-2.43 2.37.57 3.35L8 10.28l-3 1.57.57-3.35-2.43-2.37 3.36-.49L8 2.6Z"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.2"
+      strokeLinejoin="round"
     />
   ),
   // 实心垃圾桶 + 镂空竖条
