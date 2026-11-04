@@ -18,18 +18,27 @@ use ring::rand::{SecureRandom, SystemRandom};
 use std::fs;
 use std::path::PathBuf;
 
+/// 生产 keyring service 名称（保持历史值，避免既有主密钥失效）
 const SERVICE: &str = "quirel-server-credentials";
+/// dev 构建使用独立 service，避免 dev 覆盖/删除 release 的主密钥
+const DEV_SERVICE: &str = "quirel-server-credentials-dev";
 /// keyring 中的主密钥条目 account（凭据本身不再进 keyring）
 const MASTER_ACCOUNT: &str = "__master__";
 const NONCE_LEN: usize = 12;
 
-fn entry(account: &str) -> Result<Entry, String> {
-    Entry::new(SERVICE, account).map_err(|e| format!("凭据存储不可用: {}", e))
+fn entry(app: &tauri::AppHandle, account: &str) -> Result<Entry, String> {
+    // debug 构建由 run() 在启动时把 identifier 切换为 com.quirel.app.dev
+    let service = if app.config().identifier == crate::PROD_IDENTIFIER {
+        SERVICE
+    } else {
+        DEV_SERVICE
+    };
+    Entry::new(service, account).map_err(|e| format!("凭据存储不可用: {}", e))
 }
 
 /// 主密钥：优先读取，不存在则生成并写入 keyring（首次初始化）
-fn master_key() -> Result<[u8; 32], String> {
-    let e = entry(MASTER_ACCOUNT)?;
+fn master_key(app: &tauri::AppHandle) -> Result<[u8; 32], String> {
+    let e = entry(app, MASTER_ACCOUNT)?;
     match e.get_password() {
         Ok(b64) => {
             let raw = base64::engine::general_purpose::STANDARD
@@ -105,7 +114,7 @@ fn open(sealed: &[u8], key: &[u8; 32]) -> Result<String, String> {
 
 #[tauri::command]
 pub fn credential_set(account: String, value: String, app: tauri::AppHandle) -> Result<(), String> {
-    let key = master_key()?;
+    let key = master_key(&app)?;
     let sealed = seal(&value, &key)?;
     let path = cred_path(&app, &account)?;
     if let Some(parent) = path.parent() {
@@ -121,7 +130,7 @@ pub fn credential_get(account: String, app: tauri::AppHandle) -> Result<Option<S
         return Ok(None);
     }
     let sealed = fs::read(&path).map_err(|e| format!("读取凭据文件失败: {}", e))?;
-    let key = master_key()?;
+    let key = master_key(&app)?;
     Ok(Some(open(&sealed, &key)?))
 }
 
@@ -141,7 +150,7 @@ pub fn credential_delete_all(accounts: Vec<String>, app: tauri::AppHandle) -> Re
     for a in accounts {
         let _ = credential_delete(a, app.clone());
     }
-    let _ = entry(MASTER_ACCOUNT).and_then(|e| match e.delete_credential() {
+    let _ = entry(&app, MASTER_ACCOUNT).and_then(|e| match e.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(e) => Err(format!("主密钥删除失败: {}", e)),
     });
@@ -152,7 +161,7 @@ pub fn credential_delete_all(accounts: Vec<String>, app: tauri::AppHandle) -> Re
 /// 前端启动时调用——不可用时立即暴露（表单阻止保存凭据）。
 #[tauri::command]
 pub fn credential_probe(app: tauri::AppHandle) -> Result<(), String> {
-    let key = master_key()?;
+    let key = master_key(&app)?;
     let probe = "quirel-probe-往返校验";
     let sealed = seal(probe, &key)?;
     if open(&sealed, &key)? != probe {

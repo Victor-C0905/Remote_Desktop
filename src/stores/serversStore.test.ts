@@ -4,26 +4,12 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 // mock 存储层：persist 中间件在测试环境不可调用 Tauri
 vi.mock("../utils/storage", () => ({
   serversStorage: { getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() },
+  isStoreBlocked: vi.fn(() => false),
 }));
 
-import { useServersStore, getServerErrorInfo, persistMigrate } from "./serversStore";
+import { useServersStore, getServerErrorInfo } from "./serversStore";
 import { AuthErrorCode } from "../types/errors";
 import { AuthMethod } from "../types/server";
-
-describe("persistMigrate", () => {
-  it("旧版本数据（无 version 字段 = 0）原样透传，不丢字段", () => {
-    const legacy = {
-      servers: [{ id: "srv-1", name: "dev", host: "h", port: 22 }],
-      activeServerId: "srv-1",
-    };
-    expect(persistMigrate(legacy, 0)).toBe(legacy);
-  });
-
-  it("当前版本数据透传", () => {
-    const cur = { servers: [], activeServerId: null };
-    expect(persistMigrate(cur, 1)).toBe(cur);
-  });
-});
 
 const auth = { method: AuthMethod.PASSWORD, username: "root" };
 
@@ -46,8 +32,8 @@ describe("getServerErrorInfo", () => {
   it("结构化错误 → 查表 title/message/action", () => {
     const info = getServerErrorInfo(useServersStore.getState().servers[0]);
     expect(info.title).toBe("无法连接服务器");
-    expect(info.message).toBe("连接超时，未能建立连接");
-    expect(info.action).toBe("请检查网络后重试");
+    expect(info.message).toBe("服务器未响应，可能未启动或网络被阻断");
+    expect(info.action).toContain("Quirel Agent 已启动");
   });
 
   it("字符串错误（旧格式）→ Unknown 映射 + detail", () => {

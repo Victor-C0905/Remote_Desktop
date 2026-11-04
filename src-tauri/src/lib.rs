@@ -11,6 +11,7 @@ mod connection;
 mod credentials;
 mod fullscreen;
 mod proxy;
+mod store_maintenance;
 mod terminal;
 mod transfer;
 mod ui_logging;
@@ -765,13 +766,32 @@ fn ensure_dev_server_or_exit() {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-/// 应用标识（数据目录名）：early_maintenance 在无 AppHandle 阶段手工定位目录
-const APP_IDENTIFIER: &str = "com.quirel.app";
+pub(crate) const PROD_IDENTIFIER: &str = "com.quirel.app";
+/// debug 构建强制使用的独立 identifier（数据目录/keyring/临时目录与 release 隔离）
+pub(crate) const DEV_IDENTIFIER: &str = "com.quirel.app.dev";
 
-fn data_dir_roaming() -> Option<std::path::PathBuf> {
+/// profile 临时目录/标记后缀：生产为空串，dev 形如 "-dev"（identifier 末段）
+pub(crate) fn identifier_suffix(identifier: &str) -> String {
+    if identifier == PROD_IDENTIFIER {
+        String::new()
+    } else {
+        identifier
+            .rsplit('.')
+            .next()
+            .map(|s| format!("-{s}"))
+            .unwrap_or_else(|| format!("-{identifier}"))
+    }
+}
+
+/// 按 profile 隔离的临时目录（dev 与 release 不互相清理/复用）
+pub(crate) fn profile_temp_path(base: &str, identifier: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("{base}{}", identifier_suffix(identifier)))
+}
+
+fn data_dir_roaming(identifier: &str) -> Option<std::path::PathBuf> {
     #[cfg(windows)]
     {
-        std::env::var("APPDATA").ok().map(|d| std::path::Path::new(&d).join(APP_IDENTIFIER))
+        std::env::var("APPDATA").ok().map(|d| std::path::Path::new(&d).join(identifier))
     }
     #[cfg(not(windows))]
     {
@@ -779,31 +799,32 @@ fn data_dir_roaming() -> Option<std::path::PathBuf> {
             .ok()
             .map(std::path::PathBuf::from)
             .or_else(|| std::env::var("HOME").ok().map(|h| std::path::Path::new(&h).join(".local/share")))
-            .map(|base| base.join(APP_IDENTIFIER))
+            .map(|base| base.join(identifier))
     }
 }
 
-fn data_dir_local() -> Option<std::path::PathBuf> {
+fn data_dir_local(identifier: &str) -> Option<std::path::PathBuf> {
     #[cfg(windows)]
     {
-        std::env::var("LOCALAPPDATA").ok().map(|d| std::path::Path::new(&d).join(APP_IDENTIFIER))
+        std::env::var("LOCALAPPDATA").ok().map(|d| std::path::Path::new(&d).join(identifier))
     }
     #[cfg(not(windows))]
     {
-        data_dir_roaming()
+        data_dir_roaming(identifier)
     }
 }
 
-fn wipe_flag_path() -> std::path::PathBuf {
-    std::env::temp_dir().join("quirel-pending-wipe")
+fn wipe_flag_path(identifier: &str) -> std::path::PathBuf {
+    profile_temp_path("quirel-pending-wipe", identifier)
 }
 
 /// 启动早期维护（webview 创建前执行，文件无锁）：
 /// 1) 删除数据目录中 WebView 升级残留的 *.bak 死数据（实测曾滞留 547MB）
 /// 2) 检测 pending-wipe 标记 → 等待旧进程退出 → 清空全部本地数据目录
-fn early_maintenance() {
+/// `identifier` 来自 tauri 配置：dev 构建（com.quirel.app.dev）与 release 完全隔离
+fn early_maintenance(identifier: &str) {
     // 1) .bak 残留清理
-    if let Some(local) = data_dir_local() {
+    if let Some(local) = data_dir_local(identifier) {
         if let Ok(entries) = fs::read_dir(&local) {
             for e in entries.flatten() {
                 let name = e.file_name().to_string_lossy().to_string();
@@ -817,14 +838,14 @@ fn early_maintenance() {
 
     // 2) pending-wipe（用户在应用内触发的完全清除，延迟到重启后执行——
     //    运行中的 webview/浏览器数据目录被自身锁定，进程外删除才干净）
-    let flag = wipe_flag_path();
+    let flag = wipe_flag_path(identifier);
     if flag.exists() {
         tracing::info!("[Wipe] 检测到完全清除标记，等待旧进程释放文件锁…");
         let targets: Vec<std::path::PathBuf> = [
-            data_dir_roaming(),
-            data_dir_local(),
-            Some(std::env::temp_dir().join("quirel-view")),
-            Some(std::env::temp_dir().join("quirel-test-browser-settings")),
+            data_dir_roaming(identifier),
+            data_dir_local(identifier),
+            Some(profile_temp_path("quirel-view", identifier)),
+            Some(profile_temp_path("quirel-test-browser-settings", identifier)),
         ]
         .into_iter()
         .flatten()
@@ -936,7 +957,7 @@ fn window_close(app: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn wipe_all_data(app: tauri::AppHandle) -> Result<(), String> {
     use std::io::Write;
-    let flag = wipe_flag_path();
+    let flag = wipe_flag_path(&app.config().identifier.clone());
     let mut f = fs::File::create(&flag).map_err(|e| format!("无法创建清除标记: {}", e))?;
     f.write_all(b"pending").map_err(|e| format!("无法写入清除标记: {}", e))?;
 
@@ -950,10 +971,26 @@ fn wipe_all_data(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 pub fn run() {
+    // 先取配置：debug 构建在下方运行时改为 com.quirel.app.dev，
+    // 保证数据目录/keyring/临时目录与 release 完全隔离
+    let mut context = tauri::generate_context!();
+
+    // debug 构建强制切换独立 identifier：无论用 `npm run tauri dev`、IDE 启动
+    // 还是直接跑 exe，都不会与 release 共用 servers.bin/keyring/临时目录。
+    #[cfg(debug_assertions)]
+    {
+        let config = context.config_mut();
+        if config.identifier == PROD_IDENTIFIER {
+            config.identifier = DEV_IDENTIFIER.to_string();
+        }
+    }
+
+    let identifier = context.config().identifier.clone();
+
     // 启动早期维护（任何窗口/webview 创建前，文件未被锁定）：
     // 1) WebView 升级残留的 *.bak 死数据自动清理
     // 2) pending-wipe：上一次「清除所有本地数据」的延迟执行（见 wipe_all_data）
-    early_maintenance();
+    early_maintenance(&identifier);
 
     // debug 启动守卫：debug 版前端页面来自 devUrl（vite localhost:1420），
     // dev 会话结束后单独运行 exe 时页面加载失败——transparent 窗口完全透明、
@@ -1030,6 +1067,9 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            // webview 加载前先备份全部 store：前端 persist 的首次写回不会覆盖原始数据
+            store_maintenance::backup_all_on_startup(app.handle());
+
             // 主窗口改由代码创建（tauri.conf.json 的 windows 已置空）：
             // - visible(false)：页面/首帧就绪前不显示，消除启动闪现（A3）
             // - no_redirection_bitmap（tauri 2.12 新 API）：绕开透明窗口的
@@ -1329,6 +1369,10 @@ pub fn run() {
             credentials::credential_delete,
             credentials::credential_delete_all,
             credentials::credential_probe,
+            store_maintenance::store_backup,      // 写前备份（Store 保护层）
+            store_maintenance::store_quarantine,  // 备份并移除损坏/高版本 store 后重启
+            store_maintenance::app_restart,
+            store_maintenance::app_exit,
             wipe_all_data,
             show_main_window,
             window_minimize,
@@ -1416,7 +1460,7 @@ pub fn run() {
             transfer::get_active_transfer_count,
             transfer::check_file_exists,
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application")
         .run(|app, event| {
             // App 退出时清理全部代理会话（SOCKS5 监听 + 浏览器子进程），

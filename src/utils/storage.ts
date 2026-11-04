@@ -3,6 +3,85 @@ import { createLogger } from "./logger";
 
 const log = createLogger('Storage');
 
+/* ── 磁盘契约与写保护 ───────────────────────────────────── */
+
+export type StoreBlockReason = "newer-version" | "unreadable";
+
+/** 阻断状态：本地文件版本过高或结构不可读时，禁止任何写回，等用户显式处理 */
+export interface StoreBlock {
+  path: string;
+  reason: StoreBlockReason;
+  detail: string;
+  version?: number;
+  expected?: number;
+}
+
+/**
+ * zustand persist store 名称 → 期望的磁盘结构版本。
+ * 只有破坏性结构变更才递增；结构不变时禁止改动（见 serversStore 注释）。
+ */
+const EXPECTED_STORE_VERSIONS: Record<string, number> = {
+  "quirel-servers": 0,
+  "quirel-settings": 0,
+  "quirel-wallpaper": 0,
+  "notifications": 0,
+  "bookmarks": 0,
+  "history": 0,
+};
+
+/** 直接存放业务 JSON 的文件（非 zustand persist 的 {state, version} 包装） */
+const RAW_STORE_PATHS = new Set(["transfers.bin", "secure.bin"]);
+
+const blockedStores = new Map<string, StoreBlock>();
+
+/** 当前被阻断的 store 文件（启动预检/恢复对话框使用） */
+export function getStoreBlocks(): StoreBlock[] {
+  return Array.from(blockedStores.values());
+}
+
+/** 指定 store 文件是否处于禁止写入状态 */
+export function isStoreBlocked(storePath: string): boolean {
+  return blockedStores.has(storePath);
+}
+
+/**
+ * 校验 zustand persist 的磁盘对象（纯函数，便于单测）。
+ * 只拒绝“更高版本”与结构缺失；更低版本交给 persist migrate 处理。
+ */
+export function evaluatePersistedValue(
+  value: unknown,
+  expectedVersion: number,
+): { ok: true } | { ok: false; reason: StoreBlockReason; detail: string; version?: number } {
+  if (value === null || value === undefined) return { ok: true };
+  if (typeof value !== "object" || Array.isArray(value)) {
+    return { ok: false, reason: "unreadable", detail: "持久化数据不是对象" };
+  }
+  const record = value as Record<string, unknown>;
+  if (!("state" in record)) {
+    return { ok: false, reason: "unreadable", detail: "持久化数据缺少 state 字段" };
+  }
+  const version = record.version;
+  if (typeof version === "number" && version > expectedVersion) {
+    return {
+      ok: false,
+      reason: "newer-version",
+      version,
+      detail: `数据版本 ${version} 高于当前支持的 ${expectedVersion}`,
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * 记录阻断：原文件保留，等待用户在恢复对话框处理。
+ * 备份由 Rust 侧在 webview 加载前统一完成（见 store_maintenance::backup_all_on_startup）。
+ */
+function blockStore(storePath: string, block: Omit<StoreBlock, "path">): void {
+  if (blockedStores.has(storePath)) return;
+  blockedStores.set(storePath, { path: storePath, ...block });
+  log.error(`已停止写入 ${storePath}: ${block.detail}（原文件保留，等待用户处理）`);
+}
+
 /* ── Types ─────────────────────────────────────────────── */
 
 interface TauriStorage {
@@ -31,17 +110,40 @@ export async function createTauriStorage(storePath: string): Promise<TauriStorag
       try {
         const value = await store.get(name);
         log.debug(`GET "${name}" from ${storePath}:`, value);
-        return value !== null && value !== undefined 
-          ? JSON.stringify(value) 
-          : null;
+        if (value === null || value === undefined) return null;
+
+        // 磁盘契约校验：更高版本/结构损坏 → 阻断该文件全部写入，保留原文件
+        if (!RAW_STORE_PATHS.has(storePath)) {
+          const expected = EXPECTED_STORE_VERSIONS[name];
+          if (expected !== undefined) {
+            const verdict = evaluatePersistedValue(value, expected);
+            if (!verdict.ok) {
+              blockStore(storePath, {
+                reason: verdict.reason,
+                detail: verdict.detail,
+                version: verdict.version,
+                expected,
+              });
+              return null;
+            }
+          }
+        }
+
+        return JSON.stringify(value);
       } catch (e) {
         // 读失败意味着设置/数据将静默回退默认值，必须 error 级才不会淹没在 debug 噪音里
         log.error(`Failed to get "${name}" from ${storePath}:`, e);
+        blockStore(storePath, { reason: "unreadable", detail: String(e) });
         return null;
       }
     },
 
     setItem: async (name: string, value: string): Promise<void> => {
+      // 阻断态的 store 一律拒绝写回：宁可本次修改不生效，也不覆盖原文件
+      if (blockedStores.has(storePath)) {
+        log.error(`已拒绝写入 ${storePath}（本地数据处于保护状态）`);
+        return;
+      }
       try {
         const parsedValue = JSON.parse(value);
         log.debug(`SET "${name}" in ${storePath}:`, parsedValue);
@@ -53,6 +155,11 @@ export async function createTauriStorage(storePath: string): Promise<TauriStorag
     },
 
     removeItem: async (name: string): Promise<void> => {
+      // 删除同属写操作：保护态下不允许改写原文件
+      if (blockedStores.has(storePath)) {
+        log.error(`已拒绝删除 ${storePath} 中的 "${name}"（本地数据处于保护状态）`);
+        return;
+      }
       try {
         await store.delete(name);
         await store.save();
@@ -208,3 +315,36 @@ export const notificationsStorage: TauriStorage = {
   setItem: async (name, value) => (await getNotificationsStorage()).setItem(name, value),
   removeItem: async (name) => (await getNotificationsStorage()).removeItem(name),
 };
+
+/* ── 启动预检 ───────────────────────────────────────────── */
+
+/** 关键 store 文件与其中的数据键：预检必须在渲染子组件前完成 */
+const PREFLIGHT_GROUPS: Array<{
+  path: string;
+  getStorage: () => Promise<TauriStorage>;
+  keys: string[];
+}> = [
+  { path: "servers.bin", getStorage: getServersStorage, keys: ["quirel-servers"] },
+  { path: "settings.bin", getStorage: getSettingsStorage, keys: ["quirel-settings", "quirel-wallpaper"] },
+  { path: "notifications.bin", getStorage: getNotificationsStorage, keys: ["notifications"] },
+  { path: "browser-data.bin", getStorage: getBrowserDataStorage, keys: ["bookmarks", "history"] },
+  { path: "transfers.bin", getStorage: getTransfersStorage, keys: ["quirel-transfers"] },
+];
+
+/**
+ * 读取所有关键 store 的磁盘数据并完成契约校验。
+ * 返回被阻断的文件列表；非空时调用方必须阻止进入主界面，等待用户备份/重启。
+ */
+export async function preflightStores(): Promise<StoreBlock[]> {
+  for (const group of PREFLIGHT_GROUPS) {
+    try {
+      const storage = await group.getStorage();
+      for (const key of group.keys) {
+        await storage.getItem(key);
+      }
+    } catch (e) {
+      blockStore(group.path, { reason: "unreadable", detail: String(e) });
+    }
+  }
+  return getStoreBlocks();
+}

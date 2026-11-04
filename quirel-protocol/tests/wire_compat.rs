@@ -226,6 +226,7 @@ fn file_info_resp_wire_format() {
             is_text: false,
             extension: "png".to_string(),
             magic_bytes: vec![0x89, 0x50, 0x4E, 0x47],
+            entry: None,
         },
     );
     let json = serde_json::to_string(&env).unwrap();
@@ -236,7 +237,7 @@ fn file_info_resp_wire_format() {
     // 线上往返：编码后必须可解码
     let env2 = roundtrip(&env);
     match env2.payload {
-        Payload::FileInfoResponse { path, size, is_dir, is_text, extension, magic_bytes } => {
+        Payload::FileInfoResponse { path, size, is_dir, is_text, extension, magic_bytes, .. } => {
             assert_eq!(path, "/a.png");
             assert_eq!(size, 1024);
             assert!(!is_dir);

@@ -239,6 +239,9 @@ pub enum Payload {
         is_text: bool,
         extension: String,
         magic_bytes: Vec<u8>,
+        /// 权威文件条目（客户端增量更新视图用；旧版 Agent 不携带 → None）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        entry: Option<FileEntry>,
     },
 
     /// 白名单命令执行请求（解压等文件操作；Worker 端白名单强制）
@@ -269,6 +272,9 @@ pub enum Payload {
         path: String,
         mtime: u64, // 文件修改时间（写入后的新 mtime）
         size: u64,
+        /// 权威文件条目（客户端增量更新视图用；旧版 Agent 不携带 → None）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        entry: Option<FileEntry>,
     },
 
     #[serde(rename = "delete")]
@@ -281,25 +287,52 @@ pub enum Payload {
     MkdirRequest { path: String },
 
     #[serde(rename = "mkdir_resp")]
-    MkdirResponse { success: bool, path: String },
+    MkdirResponse {
+        success: bool,
+        path: String,
+        /// 权威文件条目（客户端增量更新视图用；旧版 Agent 不携带 → None）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        entry: Option<FileEntry>,
+    },
 
     #[serde(rename = "rename")]
     RenameRequest { old_path: String, new_path: String },
 
     #[serde(rename = "rename_resp")]
-    RenameResponse { success: bool, old_path: String, new_path: String },
+    RenameResponse {
+        success: bool,
+        old_path: String,
+        new_path: String,
+        /// 目标路径的权威文件条目（客户端增量更新视图用；旧版 Agent 不携带 → None）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        entry: Option<FileEntry>,
+    },
 
     #[serde(rename = "copy")]
     CopyRequest { src: String, dst: String },
 
     #[serde(rename = "copy_resp")]
-    CopyResponse { success: bool, src: String, dst: String },
+    CopyResponse {
+        success: bool,
+        src: String,
+        dst: String,
+        /// 目标路径的权威文件条目（客户端增量更新视图用；旧版 Agent 不携带 → None）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        entry: Option<FileEntry>,
+    },
 
     #[serde(rename = "move")]
     MoveRequest { src: String, dst: String },
 
     #[serde(rename = "move_resp")]
-    MoveResponse { success: bool, src: String, dst: String },
+    MoveResponse {
+        success: bool,
+        src: String,
+        dst: String,
+        /// 目标路径的权威文件条目（客户端增量更新视图用；旧版 Agent 不携带 → None）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        entry: Option<FileEntry>,
+    },
 
     /// 修改文件/目录权限（chmod）
     #[serde(rename = "chmod")]

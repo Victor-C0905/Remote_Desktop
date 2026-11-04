@@ -90,7 +90,8 @@ try {
   let cmd = 'npx tauri build';
   if (version !== base) {
     const cfg = join(dir, 'dev-version.json');
-    writeFileSync(cfg, JSON.stringify({ version }));
+    // 开发/测试构建同时隔离数据目录与 keyring：不得写入正式 identifier 的数据
+    writeFileSync(cfg, JSON.stringify({ version, identifier: 'com.quirel.app.dev' }));
     cmd += ` --config "${cfg}"`;
   }
   execSync(cmd, { stdio: 'inherit' });

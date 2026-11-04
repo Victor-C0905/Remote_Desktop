@@ -22,6 +22,7 @@ import { ContextMenu, type ContextMenuEntry } from "../components/ContextMenu/Co
 import type { FileEntry } from './fileTypes';
 import { rangeSelection, toggleSelection, entryName } from './fileSelection';
 import { useFileTransfer } from './useFileTransfer';
+import { applyBrowseChanges, applySearchChanges, type FileViewChange } from './fileMutations';
 import { useMarquee } from './useMarquee';
 import { ConfirmDialog } from "../components/Dialog/ConfirmDialog";
 import { Dialog } from "../components/Dialog/Dialog";
@@ -1141,11 +1142,41 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   }, [currentPath]);
 
   /** 变更操作后刷新：底层目录始终重载（退出搜索即见新数据）；
-   *  搜索词生效中同时重跑搜索（nonce 触发 effect） */
+   *  搜索词生效中同时重跑搜索（nonce 触发 effect）。
+   *  仅在服务器未回传权威条目（旧版 Agent）时作为兜底使用 */
   const refreshAfterMutation = useCallback(() => {
     loadDir(currentPath);
     setSearchNonce((n) => n + 1);
   }, [loadDir, currentPath]);
+
+  /** 服务器确认后的增量视图更新：浏览列表与搜索结果同时打补丁，
+   *  再按当前表头重排；被移除路径同步从选区/锚点清理 */
+  const applyViewChanges = useCallback((changes: FileViewChange[]) => {
+    setEntries((prev) => sortFileEntries(applyBrowseChanges(prev, currentPath, changes), sortStateRef.current));
+    setSearchResults((prev) => (prev
+      ? sortFileEntries(applySearchChanges(prev, currentPath, searchQuery, fileManagerSearchDepth, changes), sortStateRef.current)
+      : prev));
+
+    // 选区/锚点同步：目录改名时其后代路径改写前缀；目录删除时其后代选中一并移除
+    const removed = changes.filter((c): c is Extract<FileViewChange, { kind: "remove" }> => c.kind === "remove").map((c) => c.path);
+    const renames = changes.filter((c): c is Extract<FileViewChange, { kind: "rename" }> => c.kind === "rename");
+    if (removed.length > 0 || renames.length > 0) {
+      const remap = (p: string): string => {
+        for (const r of renames) {
+          const prefix = r.from === "/" ? "/" : `${r.from}/`;
+          if (p.startsWith(prefix)) return `${r.to}${p.slice(r.from.length)}`;
+        }
+        return p;
+      };
+      const gone = (p: string): boolean => removed.some((path) => {
+        if (p === path) return true;
+        const prefix = path === "/" ? "/" : `${path}/`;
+        return p.startsWith(prefix);
+      });
+      setSelected((prev) => prev.map(remap).filter((p) => !gone(p)));
+      setAnchorPath((prev) => (prev ? (gone(remap(prev)) ? null : remap(prev)) : prev));
+    }
+  }, [currentPath, searchQuery, fileManagerSearchDepth]);
 
   // Double-click entry
   // 双击/上下文菜单打开条目
@@ -1234,15 +1265,21 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         });
         if (!ok) { setPermError(t("fileManager.ownerChangeFailed")); return; }
       }
+      // 成功：关闭对话框 + 用本次请求值对当前视图做增量补丁（服务器已确认成功）
+      const patched: FileEntry = {
+        ...propertiesEntry,
+        ...(modeChanged ? { permissions: octalToPermString(matrixToOctal(permMatrix)) } : {}),
+        ...(ownerChanged ? { owner: permOwner, group: permGroup } : {}),
+      };
       setPropertiesEntry(null);
-      refreshAfterMutation();  // 成功：关闭对话框 + 刷新视图（搜索模式重跑搜索）
+      applyViewChanges([{ kind: "upsert", path: fullPath, entry: patched }]);
     } catch (err) {
       log.error("应用属性失败:", err);
       setPermError(formatUnknownError(err));
     } finally {
       setPermSaving(false);
     }
-  }, [propertiesEntry, activeServerId, entryFullPath, permMatrix, permOwner, permGroup, permRecursive, permSaving, permDirty, refreshAfterMutation, t]);
+  }, [propertiesEntry, activeServerId, entryFullPath, permMatrix, permOwner, permGroup, permRecursive, permSaving, permDirty, applyViewChanges, t]);
 
   // ── Script Run（右键菜单入口）：打开终端并注入命令 ────
   // 方案 1 设计：双击 .sh 一律编辑器查看；运行是显式意图（右键菜单选择），
@@ -1300,8 +1337,9 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     log.debug("rename:", oldPath, "->", newPath);
 
     try {
+      let renamed: FileEntry | null = null;
       if (activeServerId) {
-        await invoke("remote_rename", {
+        renamed = await invoke<FileEntry | null>("remote_rename", {
           serverId: activeServerId,
           oldPath,
           newPath
@@ -1313,13 +1351,18 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         return;
       }
 
-      if (editingEntry.path === undefined) {
-        // 浏览模式：await 刷新后再选中（规避 loadDir 内部 clearSelection 的时序清空），
-        // 对齐 Windows「重命名后条目保持选中」
+      if (renamed) {
+        // 服务器确认：增量改名（浏览列表与搜索结果同步），无需整目录刷新
+        applyViewChanges([{ kind: "rename", from: oldPath, to: newPath, entry: renamed }]);
+        // 浏览模式保持选中新路径（对齐 Windows「重命名后条目保持选中」）；
+        // 搜索模式结果重排后选中语义复杂，保持不选中
+        if (editingEntry.path === undefined) setSelected([newPath]);
+      } else if (editingEntry.path === undefined) {
+        // 旧版 Agent 未回传条目：回退一次权威目录加载，再选中新路径
         const ok = await loadDir(parentDir);
         if (ok) setSelected([newPath]);
       } else {
-        // 搜索模式：重跑搜索 + 浏览缓存刷新（结果重排后选中语义复杂，保持不选中）
+        // 旧版 Agent + 搜索模式：回退重跑搜索 + 浏览缓存刷新
         refreshAfterMutation();
       }
     } catch (err) {
@@ -1330,7 +1373,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     // 清除编辑状态
     setEditingEntry(null);
     setEditingName("");
-  }, [editingEntry, editingName, entryFullPath, activeServerId, refreshAfterMutation, entries, searchResults, currentPath, loadDir, t]);
+  }, [editingEntry, editingName, entryFullPath, activeServerId, refreshAfterMutation, applyViewChanges, entries, searchResults, currentPath, loadDir, t]);
 
   // 取消重命名（inline editing）
   const cancelRename = useCallback(() => {
@@ -1364,12 +1407,14 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     }
 
     const failed: string[] = [];
+    const removed: string[] = [];
     for (const entry of targets) {
       // 构建路径（Linux 格式）：搜索命中自带 path，普通浏览按当前目录拼装
       const path = entryFullPath(entry);
       log.debug("delete:", path);
       try {
         await invoke("remote_delete", { serverId: activeServerId, path });
+        removed.push(path);
       } catch (err) {
         log.error("delete 失败:", err);
         failed.push(entry.name);
@@ -1384,9 +1429,11 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         urgency: "normal",
       });
     }
-    // 刷新视图（搜索模式重跑搜索）；部分失败也刷新（成功的项已删除）
-    refreshAfterMutation();
-  }, [entryFullPath, activeServerId, refreshAfterMutation, t]);
+    // 服务器确认成功的条目按路径增量移除（部分失败只移除成功项），不做整目录刷新
+    if (removed.length > 0) {
+      applyViewChanges(removed.map((path) => ({ kind: "remove" as const, path })));
+    }
+  }, [entryFullPath, activeServerId, applyViewChanges, t]);
 
   // 刷新当前目录
   const handleRefresh = useCallback(() => {
@@ -1413,24 +1460,27 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     log.debug("create entry:", newPath);
 
     try {
-      if (isDir) {
-        await invoke("remote_mkdir", { serverId: activeServerId, path: newPath });
-      } else {
-        // 创建空文件
-        await invoke("remote_write_file", {
-          serverId: activeServerId,
-          path: newPath,
-          content: ""
-        });
-      }
+      // 服务器返回权威条目：直接插入视图并进入内联命名，不做整目录刷新
+      const created: FileEntry | null = isDir
+        ? await invoke<FileEntry | null>("remote_mkdir", { serverId: activeServerId, path: newPath })
+        : (await invoke<{ entry: FileEntry | null }>("remote_write_file", {
+            serverId: activeServerId,
+            path: newPath,
+            content: ""
+          })).entry;
 
-      // 刷新成功才进编辑态：合成条目仅作内联编辑的 name+path 匹配键（渲染取真实条目）
-      const ok = await loadDir(currentPath);
-      if (ok) {
+      if (created) {
+        applyViewChanges([{ kind: "upsert", path: newPath, entry: created }]);
+        setEditingEntry(created);
+      } else {
+        // 旧版 Agent 未回传条目：回退一次权威目录加载，成功才进编辑态
+        const ok = await loadDir(currentPath);
+        if (!ok) return;
+        // 合成条目仅作内联编辑的 name+path 匹配键（渲染取真实条目）
         setEditingEntry({ name, is_dir: isDir, size: 0, mtime: "", permissions: "" });
-        setEditingName(name);
-        setSelected([newPath]);
       }
+      setEditingName(name);
+      setSelected([newPath]);
     } catch (err) {
       log.error("create entry 失败:", err);
       const body = isDir
@@ -1438,7 +1488,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         : t("fileManager.createFileFailed", { message: formatUnknownError(err) });
       pushNotification({ title: t("common.error"), body, source: t("fileManager.source"), urgency: "normal" });
     }
-  }, [activeServerId, activeSearch, exitSearch, entries, entryFullPath, currentPath, loadDir, t]);
+  }, [activeServerId, activeSearch, exitSearch, entries, entryFullPath, currentPath, loadDir, applyViewChanges, t]);
 
   // ── 文件传输功能 ──────────────────────────────────────────
 
@@ -1829,6 +1879,14 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     handleOpen(entry);
   }, [handleOpen]);
 
+  /** 移动/复制单项结果补丁：移动移除源、目标按服务器条目新增/覆盖 */
+  const applyTransferResult = useCallback((mode: 'move' | 'copy', src: string, dst: string, entry: FileEntry) => {
+    const changes: FileViewChange[] = mode === 'move'
+      ? [{ kind: 'remove', path: src }, { kind: 'upsert', path: dst, entry }]
+      : [{ kind: 'upsert', path: dst, entry }];
+    applyViewChanges(changes);
+  }, [applyViewChanges]);
+
   // ── 拖拽移动与应用内剪贴板（hook：状态机 + 批量执行器，详见 useFileTransfer）──
   const {
     clip, setClip,
@@ -1845,6 +1903,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     currentPath,
     selected,
     refreshAfterMutation,
+    applyTransferResult,
     entryFullPath,
     navigateTo,
     editingEntry,
@@ -2010,20 +2069,33 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   }, [visibleEntries, visiblePaths, focusIdx, anchorPath, selected, selectedEntries, clip, goUp, handleOpen, handlePaste, editingEntry, isEditingPath, headerMenu]);
 
   // ── 监听上传完成事件 ─────────────────────────────────
+  // 上传完成后定向探测该文件条目并增量插入；旧版 Agent 不返回条目时
+  // 回退一次权威目录刷新（不做逐文件整目录读取）
   useEffect(() => {
     let unlisten: (() => void) | null = null;
 
     const setupListener = async () => {
       const { listen } = await import('@tauri-apps/api/event');
-      unlisten = await listen<{ dir_path: string; file_name: string }>('upload-completed', (event) => {
-        log.debug('收到上传完成事件:', event.payload);
-        const { dir_path } = event.payload;
+      unlisten = await listen<{ remote_path: string; dir_path: string; file_name: string }>('upload-completed', (event) => {
+        const { remote_path, dir_path } = event.payload;
+        if (!activeServerId || dir_path !== currentPath) return;
 
-        // 如果上传的目录是当前目录，刷新
-        if (dir_path === currentPath) {
-          log.debug('上传目录匹配，刷新当前目录');
+        void (async () => {
+          try {
+            const info = await invoke<{ entry: FileEntry | null }>('remote_file_info', {
+              serverId: activeServerId,
+              path: remote_path,
+            });
+            if (info.entry) {
+              applyViewChanges([{ kind: 'upsert', path: remote_path, entry: info.entry }]);
+              return;
+            }
+          } catch (e) {
+            log.error('上传完成元数据探测失败:', e);
+          }
+          // 旧版 Agent 未回传条目：回退一次权威目录刷新
           loadDir(currentPath);
-        }
+        })();
       });
     };
 
@@ -2034,7 +2106,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         unlisten();
       }
     };
-  }, [currentPath, loadDir]);
+  }, [activeServerId, currentPath, loadDir, applyViewChanges]);
 
   // ── Stats（搜索词生效中统计命中结果，否则统计当前目录）──
   const statusEntries = activeSearch ? (searchResults ?? []) : entries;
@@ -2282,8 +2354,8 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
               )}
             </div>
         ) : loading && !activeSearch ? (
-            /* 目录加载 spinner：搜索词生效中不显示（refreshAfterMutation 的后台
-               重载不打断搜索视图，搜索进度由 searchEmptyState 呈现） */
+            /* 目录加载 spinner：搜索词生效中不显示（手动刷新/兜底重载的后台
+               加载不打断搜索视图，搜索进度由 searchEmptyState 呈现） */
             <div className="fm-loading">
               <div className="spinner" />
               {t("common.loading")}

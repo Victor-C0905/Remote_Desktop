@@ -147,6 +147,38 @@ impl ConnectError {
     }
 }
 
+/// 解析 Agent 认证拒绝时携带的结构化 close reason（`auth:<code>:<message>`）。
+///
+/// Agent 发送 AuthResponse/Error 帧后会等待客户端读取再关闭连接；若响应帧
+/// 在网络抖动中丢失，close reason 是客户端唯一能拿到的失败归因，
+/// 避免把「用户名或密码错误」误报成「网络连接中断」。
+fn parse_auth_close_reason(text: &str) -> Option<(AuthErrorCode, String)> {
+    let mut parts = text.splitn(3, ':');
+    if parts.next()? != "auth" {
+        return None;
+    }
+    let code = AuthErrorCode::from_i32(parts.next()?.parse().ok()?)?;
+    Some((code, parts.next().unwrap_or_default().to_string()))
+}
+
+/// 读取连接 close reason 中的认证拒绝归因
+fn auth_close_reason(conn: &quinn::Connection) -> Option<(AuthErrorCode, String)> {
+    let quinn::ConnectionError::ApplicationClosed(close) = conn.close_reason()? else {
+        return None;
+    };
+    parse_auth_close_reason(std::str::from_utf8(&close.reason).ok()?)
+}
+
+/// 认证阶段的传输失败优先按服务端 close reason 归因，否则沿用本地分类
+/// （超时 → StreamTimeout / 其他 → ConnectionLost）
+fn classify_auth_transport_failure(conn: &quinn::Connection, fallback: ConnectError) -> ConnectError {
+    match auth_close_reason(conn) {
+        Some((code, message)) if message.is_empty() => ConnectError::new(code),
+        Some((code, message)) => ConnectError::with_detail(code, message),
+        None => fallback,
+    }
+}
+
 /// 旧版 Agent（无结构化 code）的错误文案分类。
 /// 覆盖 Agent 侧已知中文文案 + 原有 4 关键词白名单语义；
 /// 无法识别 → Unknown。
@@ -327,14 +359,16 @@ pub async fn remote_connect(
                 let resp = send_and_receive_quic(&conn, manager.next_request_id(), auth_payload).await
                     .map_err(|e| {
                         tracing::warn!("[Connection] 认证请求失败: {:?}", e);
-                        // 传输层错误：超时类与断连类区分（结构化错误码 + detail 技术串）
+                        // 传输层错误：优先按 close reason 取 Agent 的拒绝原因
+                        // （响应帧可能因连接关闭而丢失），其次区分超时/断连
                         let is_timeout = e.code == codes::RESPONSE_TIMEOUT
                             || e.detail.as_deref().is_some_and(|d| d.contains("timeout"));
-                        if is_timeout {
+                        let fallback = if is_timeout {
                             ConnectError::new(AuthErrorCode::StreamTimeout)
                         } else {
                             ConnectError::new(AuthErrorCode::ConnectionLost)
-                        }
+                        };
+                        classify_auth_transport_failure(&conn, fallback)
                     })?;
 
                 let envelope = Envelope::decode(&resp)
@@ -1130,6 +1164,8 @@ pub struct RemoteFileInfo {
     pub extension: String,
     /// 文件头部字节（JSON 数组传输，前端用于 magic number 检测）
     pub magic_bytes: Vec<u8>,
+    /// 权威文件条目（旧版 Agent 不返回 → None，前端回退全量刷新）
+    pub entry: Option<FileEntry>,
 }
 
 /// 文件格式探测（双击文件时的格式路由依据）
@@ -1143,8 +1179,8 @@ pub async fn remote_file_info(server_id: String, path: String, app: tauri::AppHa
     // （旧版 [transport] 字符串前缀标记已由结构化错误码取代）
     let resp = remote_send(server_id, Payload::FileInfoRequest { path }, app).await?;
     match resp.payload {
-        Payload::FileInfoResponse { path, size, is_dir, is_text, extension, magic_bytes } => {
-            Ok(RemoteFileInfo { path, size, is_dir, is_text, extension, magic_bytes })
+        Payload::FileInfoResponse { path, size, is_dir, is_text, extension, magic_bytes, entry } => {
+            Ok(RemoteFileInfo { path, size, is_dir, is_text, extension, magic_bytes, entry })
         }
         Payload::Error { message, .. } => Err(agent_error(message)),
         _ => Err(AppError::new(codes::UNEXPECTED_RESPONSE)),
@@ -1292,9 +1328,9 @@ pub async fn remote_open_locally(
         .decode(base64_content.as_bytes())
         .map_err(|e| AppError::new(codes::UNEXPECTED_RESPONSE).with_detail(format!("base64 decode: {e}")))?;
 
-    // 2. 写入本地临时目录（%TEMP%/quirel-view/，不存在则创建，同名覆盖）
+    // 2. 写入本地临时目录（%TEMP%/quirel-view[-dev]/，不存在则创建，同名覆盖）
     let file_name = remote_path.rsplit('/').next().filter(|s| !s.is_empty()).unwrap_or("download.html");
-    let dir = std::env::temp_dir().join("quirel-view");
+    let dir = crate::profile_temp_path("quirel-view", &app.config().identifier);
     std::fs::create_dir_all(&dir)
         .map_err(|e| AppError::new(codes::IO_FAILED).with_detail(format!("create temp dir: {e}")))?;
     let local_path = dir.join(file_name);
@@ -1319,7 +1355,7 @@ pub async fn remote_write_file(server_id: String, path: String, content: String,
     let content_b64 = base64::engine::general_purpose::STANDARD.encode(content.as_bytes());
     let resp = remote_send(server_id, Payload::WriteFileRequest { path, content: content_b64 }, app).await?;
     match resp.payload {
-        Payload::WriteFileResponse { path, mtime, size } => Ok(RemoteWriteFileResponse { path, mtime, size }),
+        Payload::WriteFileResponse { path, mtime, size, entry } => Ok(RemoteWriteFileResponse { path, mtime, size, entry }),
         Payload::Error { message, .. } => Err(agent_error(message)),
         _ => Err(AppError::new(codes::UNEXPECTED_RESPONSE)),
     }
@@ -1330,6 +1366,8 @@ pub struct RemoteWriteFileResponse {
     pub path: String,
     pub mtime: u64, // 文件修改时间（写入后的新 mtime）
     pub size: u64,
+    /// 权威文件条目（旧版 Agent 不返回 → None，前端回退全量刷新）
+    pub entry: Option<FileEntry>,
 }
 
 #[tauri::command]
@@ -1345,13 +1383,15 @@ pub async fn remote_delete(server_id: String, path: String, app: tauri::AppHandl
 }
 
 #[tauri::command]
-pub async fn remote_mkdir(server_id: String, path: String, app: tauri::AppHandle) -> Result<bool, AppError> {
+pub async fn remote_mkdir(server_id: String, path: String, app: tauri::AppHandle) -> Result<Option<FileEntry>, AppError> {
     tracing::debug!("[Connection] remote_mkdir: server_id={}, path={}", server_id, path);
 
     let resp = remote_send(server_id, Payload::MkdirRequest { path }, app).await?;
 
     match resp.payload {
-        Payload::MkdirResponse { success, .. } => Ok(success),
+        // 返回权威条目供前端增量更新；旧版 Agent 不携带 → None（前端回退刷新）
+        Payload::MkdirResponse { success: true, entry, .. } => Ok(entry),
+        Payload::MkdirResponse { success: false, .. } => Err(agent_error("创建目录失败".to_string())),
         Payload::Error { message, .. } => Err(agent_error(message)),
         _ => Err(AppError::new(codes::UNEXPECTED_RESPONSE)),
     }
@@ -1363,13 +1403,15 @@ pub async fn remote_rename(
     old_path: String,
     new_path: String,
     app: tauri::AppHandle
-) -> Result<bool, AppError> {
+) -> Result<Option<FileEntry>, AppError> {
     tracing::debug!("[Connection] remote_rename: old={}, new={}", old_path, new_path);
 
     let resp = remote_send(server_id, Payload::RenameRequest { old_path, new_path }, app).await?;
 
     match resp.payload {
-        Payload::RenameResponse { success, .. } => Ok(success),
+        // 返回目标路径的权威条目供前端增量更新；旧版 Agent 不携带 → None
+        Payload::RenameResponse { success: true, entry, .. } => Ok(entry),
+        Payload::RenameResponse { success: false, .. } => Err(agent_error("重命名失败".to_string())),
         Payload::Error { message, .. } => Err(agent_error(message)),
         _ => Err(AppError::new(codes::UNEXPECTED_RESPONSE)),
     }
@@ -1381,13 +1423,15 @@ pub async fn remote_copy(
     src: String,
     dst: String,
     app: tauri::AppHandle
-) -> Result<bool, AppError> {
+) -> Result<Option<FileEntry>, AppError> {
     tracing::debug!("[Connection] remote_copy: src={}, dst={}", src, dst);
 
     let resp = remote_send(server_id, Payload::CopyRequest { src, dst }, app).await?;
 
     match resp.payload {
-        Payload::CopyResponse { success, .. } => Ok(success),
+        // 返回目标路径的权威条目供前端增量更新；旧版 Agent 不携带 → None
+        Payload::CopyResponse { success: true, entry, .. } => Ok(entry),
+        Payload::CopyResponse { success: false, .. } => Err(agent_error("复制失败".to_string())),
         Payload::Error { message, .. } => Err(agent_error(message)),
         _ => Err(AppError::new(codes::UNEXPECTED_RESPONSE)),
     }
@@ -1500,13 +1544,15 @@ pub async fn remote_move(
     src: String,
     dst: String,
     app: tauri::AppHandle
-) -> Result<bool, AppError> {
+) -> Result<Option<FileEntry>, AppError> {
     tracing::debug!("[Connection] remote_move: src={}, dst={}", src, dst);
 
     let resp = remote_send(server_id, Payload::MoveRequest { src, dst }, app).await?;
 
     match resp.payload {
-        Payload::MoveResponse { success, .. } => Ok(success),
+        // 返回目标路径的权威条目供前端增量更新；旧版 Agent 不携带 → None
+        Payload::MoveResponse { success: true, entry, .. } => Ok(entry),
+        Payload::MoveResponse { success: false, .. } => Err(agent_error("移动失败".to_string())),
         Payload::Error { message, .. } => Err(agent_error(message)),
         _ => Err(AppError::new(codes::UNEXPECTED_RESPONSE)),
     }
@@ -1894,8 +1940,15 @@ async fn try_quic_connect(host: &str, port: u16) -> Result<(quinn::Connection, f
         ConnectError::new(AuthErrorCode::ConnectTimeout)
     })?
     .map_err(|e| {
-        tracing::warn!("[QUIC] 握手失败: addr={}, error={:?}", addr, e);
-        ConnectError::new(AuthErrorCode::TlsHandshakeFailed)
+        // 握手阶段失败按原因细分：超时（服务未启动/防火墙）与版本不匹配
+        // 不应笼统归为「安全握手失败」，否则用户会误以为证书问题
+        let code = match &e {
+            quinn::ConnectionError::TimedOut => AuthErrorCode::ConnectTimeout,
+            quinn::ConnectionError::VersionMismatch => AuthErrorCode::ProtocolError,
+            _ => AuthErrorCode::TlsHandshakeFailed,
+        };
+        tracing::warn!("[QUIC] 握手失败: addr={}, code={:?}, error={:?}", addr, code, e);
+        ConnectError::new(code)
     })?;
 
     // 提取握手过程中观测到的服务器证书指纹
@@ -2149,7 +2202,7 @@ async fn perform_pubkey_auth(
         .map_err(|_| ConnectError::new(AuthErrorCode::StreamTimeout))?
         .map_err(|e| {
             tracing::warn!("[PubKeyAuth] 创建 Stream 失败: {:?}", e);
-            ConnectError::new(AuthErrorCode::ConnectionLost)
+            classify_auth_transport_failure(conn, ConnectError::new(AuthErrorCode::ConnectionLost))
         })?;
 
     // 发送 AuthPubKeyRequest
@@ -2170,15 +2223,15 @@ async fn perform_pubkey_auth(
     tokio::time::timeout(timeout_duration, async {
         send.write_all(&len).await.map_err(|e| {
             tracing::warn!("[PubKeyAuth] 发送长度失败: {:?}", e);
-            ConnectError::new(AuthErrorCode::ConnectionLost)
+            classify_auth_transport_failure(conn, ConnectError::new(AuthErrorCode::ConnectionLost))
         })?;
         send.write_all(&bytes).await.map_err(|e| {
             tracing::warn!("[PubKeyAuth] 发送数据失败: {:?}", e);
-            ConnectError::new(AuthErrorCode::ConnectionLost)
+            classify_auth_transport_failure(conn, ConnectError::new(AuthErrorCode::ConnectionLost))
         })?;
         send.flush().await.map_err(|e| {
             tracing::warn!("[PubKeyAuth] 刷新发送缓冲区失败: {:?}", e);
-            ConnectError::new(AuthErrorCode::ConnectionLost)
+            classify_auth_transport_failure(conn, ConnectError::new(AuthErrorCode::ConnectionLost))
         })?;
         Ok::<(), ConnectError>(())
     })
@@ -2192,14 +2245,14 @@ async fn perform_pubkey_auth(
         let mut len_buf = [0u8; 4];
         recv.read_exact(&mut len_buf).await.map_err(|e| {
             tracing::warn!("[PubKeyAuth] 读取挑战长度失败: {:?}", e);
-            ConnectError::new(AuthErrorCode::ConnectionLost)
+            classify_auth_transport_failure(conn, ConnectError::new(AuthErrorCode::ConnectionLost))
         })?;
         let resp_len = u32::from_le_bytes(len_buf) as usize;
 
         let mut data = vec![0u8; resp_len];
         recv.read_exact(&mut data).await.map_err(|e| {
             tracing::warn!("[PubKeyAuth] 读取挑战数据失败: {:?}", e);
-            ConnectError::new(AuthErrorCode::ConnectionLost)
+            classify_auth_transport_failure(conn, ConnectError::new(AuthErrorCode::ConnectionLost))
         })?;
         Ok::<Vec<u8>, ConnectError>(data)
     })
@@ -2328,7 +2381,7 @@ async fn perform_pubkey_auth(
         .map_err(|_| ConnectError::new(AuthErrorCode::StreamTimeout))?
         .map_err(|e| {
             tracing::warn!("[PubKeyAuth] 创建响应 Stream 失败: {:?}", e);
-            ConnectError::new(AuthErrorCode::ConnectionLost)
+            classify_auth_transport_failure(conn, ConnectError::new(AuthErrorCode::ConnectionLost))
         })?;
 
     let response_envelope = Envelope::new(request_id, Payload::AuthPubKeyResponse {
@@ -2348,15 +2401,15 @@ async fn perform_pubkey_auth(
     tokio::time::timeout(timeout_duration, async {
         resp_send.write_all(&len).await.map_err(|e| {
             tracing::warn!("[PubKeyAuth] 发送签名长度失败: {:?}", e);
-            ConnectError::new(AuthErrorCode::ConnectionLost)
+            classify_auth_transport_failure(conn, ConnectError::new(AuthErrorCode::ConnectionLost))
         })?;
         resp_send.write_all(&bytes).await.map_err(|e| {
             tracing::warn!("[PubKeyAuth] 发送签名数据失败: {:?}", e);
-            ConnectError::new(AuthErrorCode::ConnectionLost)
+            classify_auth_transport_failure(conn, ConnectError::new(AuthErrorCode::ConnectionLost))
         })?;
         resp_send.flush().await.map_err(|e| {
             tracing::warn!("[PubKeyAuth] 刷新发送缓冲区失败: {:?}", e);
-            ConnectError::new(AuthErrorCode::ConnectionLost)
+            classify_auth_transport_failure(conn, ConnectError::new(AuthErrorCode::ConnectionLost))
         })?;
         Ok::<(), ConnectError>(())
     })
@@ -2370,14 +2423,14 @@ async fn perform_pubkey_auth(
         let mut len_buf = [0u8; 4];
         resp_recv.read_exact(&mut len_buf).await.map_err(|e| {
             tracing::warn!("[PubKeyAuth] 读取认证结果长度失败: {:?}", e);
-            ConnectError::new(AuthErrorCode::ConnectionLost)
+            classify_auth_transport_failure(conn, ConnectError::new(AuthErrorCode::ConnectionLost))
         })?;
         let resp_len = u32::from_le_bytes(len_buf) as usize;
 
         let mut data = vec![0u8; resp_len];
         resp_recv.read_exact(&mut data).await.map_err(|e| {
             tracing::warn!("[PubKeyAuth] 读取认证结果数据失败: {:?}", e);
-            ConnectError::new(AuthErrorCode::ConnectionLost)
+            classify_auth_transport_failure(conn, ConnectError::new(AuthErrorCode::ConnectionLost))
         })?;
         Ok::<Vec<u8>, ConnectError>(data)
     })
@@ -2640,6 +2693,24 @@ mod connect_error_tests {
         assert_eq!(classify_legacy_error("QUIC 连接超时 (5秒)"), AuthErrorCode::StreamTimeout);
         assert_eq!(classify_legacy_error("QUIC 连接失败: QUIC 握手失败: ..."), AuthErrorCode::ConnectTimeout);
         assert_eq!(classify_legacy_error("任何未识别的文本"), AuthErrorCode::Unknown);
+    }
+
+    /// close reason 归因：解析 `auth:<code>:<message>`（响应帧丢失时的兜底通道）
+    #[test]
+    fn parse_auth_close_reason_parses_structured_reason() {
+        assert_eq!(
+            parse_auth_close_reason("auth:202:用户名或密码错误"),
+            Some((AuthErrorCode::InvalidCredentials, "用户名或密码错误".to_string()))
+        );
+        // 无消息部分：只带错误码
+        assert_eq!(
+            parse_auth_close_reason("auth:201"),
+            Some((AuthErrorCode::AccountLocked, String::new()))
+        );
+        // 非结构化原因 / 未知码 / 非数字码 → None（调用方回退网络断连归因）
+        assert_eq!(parse_auth_close_reason("authentication failed"), None);
+        assert_eq!(parse_auth_close_reason("auth:9999:boom"), None);
+        assert_eq!(parse_auth_close_reason("auth:abc:boom"), None);
     }
 
     /// ConnectError 序列化形状（前端 parseConnectError 的解析契约）

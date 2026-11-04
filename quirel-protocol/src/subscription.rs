@@ -17,6 +17,10 @@ pub enum SubscriptionType {
     },
 
     // 文件变化监控（后续实现）
+    //
+    // C 档想法（暂不实现，仅记录）：基于本订阅由 Agent 主动推送目录变化事件，
+    // 客户端据此同步“其他终端/会话”对同一目录做的新增/删除/改名，覆盖本机
+    // 操作之外的外部变更；需要 Agent 侧 inotify 监听、事件去重与前端合并策略。
     #[serde(rename = "file_changes")]
     FileChanges {
         path: String,
