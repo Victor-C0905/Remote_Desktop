@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
-import { serversStorage } from "../utils/storage";
+import { serversStorage, isStoreBlocked } from "../utils/storage";
 import { createLogger } from "../utils/logger";
 import { ServerConfig, AuthMethod, StructuredError } from "../types/server";
 import { getErrorInfo, parseConnectError } from "../types/errors";
@@ -36,21 +36,12 @@ export interface ServersActions {
 
 const generateId = () => `srv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-/**
- * persist 版本迁移（当前基线 v1：keyring 信封加密 + partialize 剥离凭据）。
- *
- * 旧版本落盘数据没有 version 字段，zustand 按 0 处理：若只声明 version: 1
- * 而不提供 migrate，zustand 会跳过整个重水合（用户全部服务器条目蒸发）。
- * 故 v0→v1 为原样透传，字段级清洗由 onRehydrateStorage（状态重置 + keyring
- * 装配/旧明文迁移）承担。约定：未来改持久化结构必须递增 version 并在此补分支，
- * 禁止让 persist 静默浅合并演进。
- */
-export function persistMigrate(persisted: unknown, version: number): unknown {
-  void version;
-  return persisted;
-}
-
 /* ── Store ────────────────────────────────────────────── */
+
+// 持久化 schema 说明：servers.bin 的结构固定为 { servers, activeServerId }，
+// 凭据剥离/keyring 装配属于运行时行为，不改变磁盘结构。因此 persist 保持
+// 默认 version=0，不得为了标记功能批次而升级——旧 release 无法识别更高版本，
+// 会在迁移失败后把空状态写回（2026-11-03 服务器列表丢失事故）。
 
 export const useServersStore = create<ServersState & ServersActions>()(
   persist(
@@ -145,8 +136,6 @@ export const useServersStore = create<ServersState & ServersActions>()(
     }),
     {
       name: "quirel-servers",
-      version: 1,
-      migrate: persistMigrate,
       storage: createJSONStorage(() => serversStorage),
       // 落盘前剥离凭据——但仅在 keyring 确认可写之后（isKeyringReady 门控）：
       // 迁移期写入失败时保留明文落盘，防止凭据两头落空直接蒸发
@@ -160,6 +149,11 @@ export const useServersStore = create<ServersState & ServersActions>()(
         log.debug("onRehydrateStorage 开始");
         return (state) => {
           log.debug("onRehydrateStorage 回调，state:", state);
+          // 保护态（版本过高/文件损坏）：禁止任何派生写入，原文件等待用户处理
+          if (isStoreBlocked("servers.bin")) {
+            log.error("服务器配置处于保护状态，跳过重水合后的状态写回");
+            return;
+          }
           if (state && state.servers) {
             log.debug("重置服务器状态");
             state.servers = state.servers.map((s) => ({

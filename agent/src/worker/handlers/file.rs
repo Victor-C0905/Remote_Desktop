@@ -84,11 +84,8 @@ pub async fn handle_read_dir(req: ReadDir) -> WorkerResponse {
     };
     let executor = UserExecutor::new(&session);
 
-    // 序列化中间结果类型:(name, is_dir, size, mtime_rfc3339, permissions, owner, group)
-    type DirEntry = (String, bool, u64, String, String, String, String);
-
     let path = safe_path.as_str().to_string();
-    let result: AnyhowResult<Vec<DirEntry>> = executor.execute_as_user_blocking(move || {
+    let result: AnyhowResult<Vec<FileEntryData>> = executor.execute_as_user_blocking(move || {
         let p = Path::new(&path);
 
         if !p.exists() {
@@ -116,40 +113,7 @@ pub async fn handle_read_dir(req: ReadDir) -> WorkerResponse {
                 let entry = entry_result.ok()?;
                 let metadata = entry.metadata().ok()?;
                 let name = entry.file_name().to_string_lossy().to_string();
-
-                let mtime = metadata
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                    .map(|d| {
-                        let dt = DateTime::<Utc>::from(SystemTime::UNIX_EPOCH + d);
-                        dt.to_rfc3339()
-                    })
-                    .unwrap_or_default();
-
-                // 属主/属组:MetadataExt 的 uid()/gid() 查映射,解析失败回退数字字符串
-                #[cfg(unix)]
-                let (owner, group) = {
-                    use std::os::unix::fs::MetadataExt;
-                    let uid = metadata.uid();
-                    let gid = metadata.gid();
-                    (
-                        uid_names.get(&uid).cloned().unwrap_or_else(|| uid.to_string()),
-                        gid_names.get(&gid).cloned().unwrap_or_else(|| gid.to_string()),
-                    )
-                };
-                #[cfg(not(unix))]
-                let (owner, group) = (String::new(), String::new());
-
-                Some((
-                    name,
-                    metadata.is_dir(),
-                    if metadata.is_dir() { 0 } else { metadata.len() },
-                    mtime,
-                    format_permissions(&metadata),
-                    owner,
-                    group,
-                ))
+                Some(entry_from_metadata(name, &metadata, &uid_names, &gid_names))
             })
             .collect();
 
@@ -160,23 +124,10 @@ pub async fn handle_read_dir(req: ReadDir) -> WorkerResponse {
         Ok(entries) => {
             tracing::info!("读取目录完成: path={}, count={}", req.path, entries.len());
 
-            let file_entries = entries
-                .into_iter()
-                .map(|(name, is_dir, size, mtime, permissions, owner, group)| FileEntry {
-                    name,
-                    is_dir,
-                    size,
-                    mtime,
-                    permissions,
-                    owner,
-                    group,
-                })
-                .collect();
-
             WorkerResponse {
                 payload: Some(worker_response::Payload::DirListing(DirListing {
                     path: req.path,
-                    entries: file_entries,
+                    entries: entries.into_iter().map(FileEntry::from).collect(),
                 })),
                 ..Default::default()
             }
@@ -343,17 +294,19 @@ pub async fn handle_file_info(req: FileInfo) -> WorkerResponse {
     };
     let executor = UserExecutor::new(&session);
 
-    // 序列化中间结果：(size, is_dir, extension, magic_bytes)
+    // 序列化中间结果：(size, is_dir, extension, magic_bytes, 权威条目)
     let path = safe_path.as_str().to_string();
-    let result: AnyhowResult<(u64, bool, String, Vec<u8>)> = executor.execute_as_user_blocking(move || {
+    let result: AnyhowResult<(u64, bool, String, Vec<u8>, Option<FileEntryData>)> = executor.execute_as_user_blocking(move || {
         let p = Path::new(&path);
 
         let metadata = fs::metadata(p)
             .map_err(|e| anyhow::anyhow!("无法访问文件 '{}': {}", path, e))?;
 
+        let entry = stat_entry_opt(p, &build_uid_name_map(), &build_gid_name_map());
+
         if !metadata.is_file() {
             // 目录或特殊文件（FIFO/socket/device）：返回目录标记，无头部字节
-            return Ok((metadata.len(), metadata.is_dir(), String::new(), Vec::new()));
+            return Ok((metadata.len(), metadata.is_dir(), String::new(), Vec::new(), entry));
         }
 
         // 扩展名（小写、不含点）
@@ -372,11 +325,11 @@ pub async fn handle_file_info(req: FileInfo) -> WorkerResponse {
             .map_err(|e| anyhow::anyhow!("读取文件头失败 '{}': {}", path, e))?;
         head.truncate(n);
 
-        Ok((metadata.len(), false, extension, head))
+        Ok((metadata.len(), false, extension, head, entry))
     }).await;
 
     match result {
-        Ok((size, is_dir, extension, head)) => {
+        Ok((size, is_dir, extension, head, entry)) => {
             let is_text = if is_dir { false } else { detect_is_text(&head) };
             tracing::debug!("探测完成: path={}, size={}, is_dir={}, is_text={}, ext={}", req.path, size, is_dir, is_text, extension);
 
@@ -388,6 +341,7 @@ pub async fn handle_file_info(req: FileInfo) -> WorkerResponse {
                     is_text,
                     extension,
                     magic_bytes: head,
+                    entry: entry.map(FileEntry::from),
                 })),
                 ..Default::default()
             }
@@ -427,8 +381,8 @@ pub async fn handle_write_file(req: WriteFile) -> WorkerResponse {
     };
     let executor = UserExecutor::new(&session);
 
-    // 序列化中间结果类型:(mtime_secs, size)
-    type WriteOutcome = (u64, u64);
+    // 序列化中间结果类型:(mtime_secs, size, 权威条目快照)
+    type WriteOutcome = (u64, u64, Option<FileEntryData>);
 
     let path = safe_path.as_str().to_string();
     let content = req.content.clone();
@@ -465,11 +419,12 @@ pub async fn handle_write_file(req: WriteFile) -> WorkerResponse {
             .map_err(|e| anyhow::anyhow!("时间转换失败: {}", e))?
             .as_secs();
 
-        Ok((mtime, metadata.len()))
+        let entry = stat_entry_opt(p, &build_uid_name_map(), &build_gid_name_map());
+        Ok((mtime, metadata.len(), entry))
     }).await;
 
     match result {
-        Ok((mtime, size)) => {
+        Ok((mtime, size, entry)) => {
             tracing::info!("文件写入成功: path={}, size={}", req.path, size);
 
             WorkerResponse {
@@ -477,6 +432,7 @@ pub async fn handle_write_file(req: WriteFile) -> WorkerResponse {
                     path: req.path,
                     mtime,
                     size,
+                    entry: entry.map(FileEntry::from),
                 })),
                 ..Default::default()
             }
@@ -572,7 +528,7 @@ pub async fn handle_mkdir(req: Mkdir) -> WorkerResponse {
     let executor = UserExecutor::new(&session);
 
     let path = safe_path.as_str().to_string();
-    let result: AnyhowResult<String> = executor.execute_as_user_blocking(move || {
+    let result: AnyhowResult<(String, Option<FileEntryData>)> = executor.execute_as_user_blocking(move || {
         fs::create_dir_all(&path).map_err(|e| {
             let msg = e.to_string();
             if msg.contains("Permission denied") {
@@ -581,14 +537,18 @@ pub async fn handle_mkdir(req: Mkdir) -> WorkerResponse {
                 anyhow::anyhow!("无法创建目录 '{}': {}", path, e)
             }
         })?;
-        Ok(path)
+        let entry = stat_entry_opt(Path::new(&path), &build_uid_name_map(), &build_gid_name_map());
+        Ok((path, entry))
     }).await;
 
     match result {
-        Ok(path) => {
+        Ok((path, entry)) => {
             tracing::info!("创建目录成功: path={}", path);
             WorkerResponse {
-                payload: Some(worker_response::Payload::MkdirResult(MkdirResult { path })),
+                payload: Some(worker_response::Payload::MkdirResult(MkdirResult {
+                    path,
+                    entry: entry.map(FileEntry::from),
+                })),
                 ..Default::default()
             }
         }
@@ -638,7 +598,7 @@ pub async fn handle_rename(req: Rename) -> WorkerResponse {
 
     let old_path = safe_old.as_str().to_string();
     let new_path = safe_new.as_str().to_string();
-    let result: AnyhowResult<(String, String)> = executor.execute_as_user_blocking(move || {
+    let result: AnyhowResult<(String, String, Option<FileEntryData>)> = executor.execute_as_user_blocking(move || {
         fs::rename(&old_path, &new_path).map_err(|e| {
             let msg = e.to_string();
             if msg.contains("Permission denied") {
@@ -647,16 +607,18 @@ pub async fn handle_rename(req: Rename) -> WorkerResponse {
                 anyhow::anyhow!("无法重命名 '{}': {}", old_path, e)
             }
         })?;
-        Ok((old_path, new_path))
+        let entry = stat_entry_opt(Path::new(&new_path), &build_uid_name_map(), &build_gid_name_map());
+        Ok((old_path, new_path, entry))
     }).await;
 
     match result {
-        Ok((old, new)) => {
+        Ok((old, new, entry)) => {
             tracing::info!("重命名成功: {} -> {}", old, new);
             WorkerResponse {
                 payload: Some(worker_response::Payload::RenameResult(RenameResult {
                     old_path: old,
                     new_path: new,
+                    entry: entry.map(FileEntry::from),
                 })),
                 ..Default::default()
             }
@@ -727,7 +689,7 @@ pub async fn handle_copy(req: Copy) -> WorkerResponse {
 
     let src = safe_src.as_str().to_string();
     let dst = safe_dst.as_str().to_string();
-    let result: AnyhowResult<(String, String)> = executor.execute_as_user_blocking(move || {
+    let result: AnyhowResult<(String, String, Option<FileEntryData>)> = executor.execute_as_user_blocking(move || {
         // 预检源可达性（不存在/权限错误给出友好消息；实际复制在 copy_path_recursive 内）
         let _probe = fs::metadata(&src).map_err(|e| {
             let msg = e.to_string();
@@ -748,14 +710,23 @@ pub async fn handle_copy(req: Copy) -> WorkerResponse {
                 anyhow::anyhow!("无法复制 '{}': {}", src, e)
             }
         })?;
-        Ok((src, dst))
+        let entry = stat_entry_opt(
+            std::path::Path::new(&dst),
+            &build_uid_name_map(),
+            &build_gid_name_map(),
+        );
+        Ok((src, dst, entry))
     }).await;
 
     match result {
-        Ok((s, d)) => {
+        Ok((s, d, entry)) => {
             tracing::info!("复制成功: {} -> {}", s, d);
             WorkerResponse {
-                payload: Some(worker_response::Payload::CopyResult(CopyResult { src: s, dst: d })),
+                payload: Some(worker_response::Payload::CopyResult(CopyResult {
+                    src: s,
+                    dst: d,
+                    entry: entry.map(FileEntry::from),
+                })),
                 ..Default::default()
             }
         }
@@ -812,6 +783,7 @@ pub async fn handle_move(req: Move) -> WorkerResponse {
                 payload: Some(worker_response::Payload::MoveResult(MoveResult {
                     src: r.old_path,
                     dst: r.new_path,
+                    entry: r.entry,
                 })),
                 ..Default::default()
             },
@@ -1170,6 +1142,98 @@ fn format_permissions(metadata: &fs::Metadata) -> String {
 #[cfg(not(unix))]
 fn format_permissions(_metadata: &fs::Metadata) -> String {
     "rw-rw-rw-".into()
+}
+
+// ===== 文件条目构建（ReadDir 与操作结果回传共用同一口径） =====
+
+/// 跨 fork 边界回传的条目快照：protobuf 生成的 FileEntry 不实现 serde，
+/// 不能直接作为 execute_as_user_blocking 的返回类型（父进程经 pipe 反序列化）
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct FileEntryData {
+    name: String,
+    is_dir: bool,
+    size: u64,
+    mtime: String,
+    permissions: String,
+    owner: String,
+    group: String,
+}
+
+impl From<FileEntryData> for FileEntry {
+    fn from(data: FileEntryData) -> Self {
+        Self {
+            name: data.name,
+            is_dir: data.is_dir,
+            size: data.size,
+            mtime: data.mtime,
+            permissions: data.permissions,
+            owner: data.owner,
+            group: data.group,
+        }
+    }
+}
+
+/// 从 metadata 构造条目快照：mtime 为 RFC3339，permissions 为 9 字符，
+/// 属主/属组按 uid/gid 映射解析（解析失败回退数字字符串）
+fn entry_from_metadata(
+    name: String,
+    metadata: &fs::Metadata,
+    uid_names: &HashMap<u32, String>,
+    gid_names: &HashMap<u32, String>,
+) -> FileEntryData {
+    let mtime = metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| {
+            let dt = DateTime::<Utc>::from(SystemTime::UNIX_EPOCH + d);
+            dt.to_rfc3339()
+        })
+        .unwrap_or_default();
+
+    #[cfg(unix)]
+    let (owner, group) = {
+        use std::os::unix::fs::MetadataExt;
+        let uid = metadata.uid();
+        let gid = metadata.gid();
+        (
+            uid_names.get(&uid).cloned().unwrap_or_else(|| uid.to_string()),
+            gid_names.get(&gid).cloned().unwrap_or_else(|| gid.to_string()),
+        )
+    };
+    #[cfg(not(unix))]
+    let (owner, group) = (String::new(), String::new());
+
+    FileEntryData {
+        name,
+        is_dir: metadata.is_dir(),
+        size: if metadata.is_dir() { 0 } else { metadata.len() },
+        mtime,
+        permissions: format_permissions(metadata),
+        owner,
+        group,
+    }
+}
+
+/// 单路径权威条目（best-effort）：操作已成功时元数据读取失败不应改写操作结果，
+/// 记 error 日志并回传 None，由客户端回退一次目录/搜索刷新
+fn stat_entry_opt(
+    path: &Path,
+    uid_names: &HashMap<u32, String>,
+    gid_names: &HashMap<u32, String>,
+) -> Option<FileEntryData> {
+    let metadata = match fs::metadata(path) {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::error!("构建文件条目失败（元数据不可读）: path={}, error={}", path.display(), e);
+            return None;
+        }
+    };
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    Some(entry_from_metadata(name, &metadata, uid_names, gid_names))
 }
 
 // ===== 属主/属组名称解析(手写解析 /etc/passwd 与 /etc/group,不引入新依赖) =====

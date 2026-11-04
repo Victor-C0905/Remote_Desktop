@@ -153,6 +153,8 @@ message FileInfoResult {
     bool is_text = 4;
     string extension = 5;
     bytes magic_bytes = 6;
+    // 权威文件条目（客户端增量更新视图用；与 ReadDir 的 FileEntry 同构）
+    FileEntry entry = 7;
 }
 
 message WriteFile {
@@ -169,6 +171,8 @@ message WriteResult {
     string path = 1;
     uint64 mtime = 2;
     uint64 size = 3;
+    // 权威文件条目（客户端增量更新视图用；与 ReadDir 的 FileEntry 同构）
+    FileEntry entry = 4;
 }
 
 // 删除文件/目录
@@ -195,6 +199,8 @@ message Mkdir {
 
 message MkdirResult {
     string path = 1;
+    // 权威文件条目（客户端增量更新视图用；与 ReadDir 的 FileEntry 同构）
+    FileEntry entry = 2;
 }
 
 // 重命名/移动
@@ -210,6 +216,8 @@ message Rename {
 message RenameResult {
     string old_path = 1;
     string new_path = 2;
+    // 目标路径的权威文件条目（客户端增量更新视图用）
+    FileEntry entry = 3;
 }
 
 // 复制(仅文件)
@@ -225,6 +233,8 @@ message Copy {
 message CopyResult {
     string src = 1;
     string dst = 2;
+    // 目标路径的权威文件条目（客户端增量更新视图用）
+    FileEntry entry = 3;
 }
 
 // 移动(等同于 Rename)
@@ -240,6 +250,8 @@ message Move {
 message MoveResult {
     string src = 1;
     string dst = 2;
+    // 目标路径的权威文件条目（客户端增量更新视图用）
+    FileEntry entry = 3;
 }
 
 // 检查文件是否存在

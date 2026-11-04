@@ -5,7 +5,10 @@
 pub struct ManagerRequest {
     #[prost(uint64, tag = "1")]
     pub request_id: u64,
-    #[prost(oneof = "manager_request::Payload", tags = "2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20")]
+    #[prost(
+        oneof = "manager_request::Payload",
+        tags = "2, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 10"
+    )]
     pub payload: ::core::option::Option<manager_request::Payload>,
 }
 /// Nested message and enum types in `ManagerRequest`.
@@ -62,7 +65,10 @@ pub mod manager_request {
 pub struct WorkerResponse {
     #[prost(uint64, tag = "1")]
     pub request_id: u64,
-    #[prost(oneof = "worker_response::Payload", tags = "2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19")]
+    #[prost(
+        oneof = "worker_response::Payload",
+        tags = "2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 9"
+    )]
     pub payload: ::core::option::Option<worker_response::Payload>,
 }
 /// Nested message and enum types in `WorkerResponse`.
@@ -147,7 +153,7 @@ pub struct CreateSession {
 pub struct SessionCreated {
     #[prost(string, tag = "1")]
     pub session_id: ::prost::alloc::string::String,
-    /// abstract socket 名称（Manager 用于连接 Session 进程）
+    /// 新增: abstract socket 名称（Manager 用于连接 Session 进程）
     #[prost(string, tag = "2")]
     pub socket_name: ::prost::alloc::string::String,
 }
@@ -172,16 +178,13 @@ pub struct KillSession {
 pub struct ReadDir {
     #[prost(string, tag = "1")]
     pub path: ::prost::alloc::string::String,
-    /// 用户上下文(阶段 3 新增):UID
+    /// 用户上下文(阶段 3 新增)
     #[prost(uint32, tag = "2")]
     pub uid: u32,
-    /// 用户上下文(阶段 3 新增):GID
     #[prost(uint32, tag = "3")]
     pub gid: u32,
-    /// 用户上下文(阶段 3 新增):用户名
     #[prost(string, tag = "4")]
     pub username: ::prost::alloc::string::String,
-    /// 用户上下文(阶段 3 新增):家目录
     #[prost(string, tag = "5")]
     pub home_dir: ::prost::alloc::string::String,
 }
@@ -206,10 +209,10 @@ pub struct FileEntry {
     pub mtime: ::prost::alloc::string::String,
     #[prost(string, tag = "5")]
     pub permissions: ::prost::alloc::string::String,
-    /// 属主用户名（解析失败回退 uid 数字字符串）
+    /// 新增：属主用户名（解析失败回退 uid 数字字符串）
     #[prost(string, tag = "6")]
     pub owner: ::prost::alloc::string::String,
-    /// 属组组名（解析失败回退 gid 数字字符串）
+    /// 新增：属组组名（解析失败回退 gid 数字字符串）
     #[prost(string, tag = "7")]
     pub group: ::prost::alloc::string::String,
 }
@@ -218,16 +221,13 @@ pub struct FileEntry {
 pub struct ReadFile {
     #[prost(string, tag = "1")]
     pub path: ::prost::alloc::string::String,
-    /// 用户上下文(阶段 3 新增):UID
+    /// 用户上下文(阶段 3 新增)
     #[prost(uint32, tag = "2")]
     pub uid: u32,
-    /// 用户上下文(阶段 3 新增):GID
     #[prost(uint32, tag = "3")]
     pub gid: u32,
-    /// 用户上下文(阶段 3 新增):用户名
     #[prost(string, tag = "4")]
     pub username: ::prost::alloc::string::String,
-    /// 用户上下文(阶段 3 新增):家目录
     #[prost(string, tag = "5")]
     pub home_dir: ::prost::alloc::string::String,
 }
@@ -274,6 +274,9 @@ pub struct FileInfoResult {
     pub extension: ::prost::alloc::string::String,
     #[prost(bytes = "vec", tag = "6")]
     pub magic_bytes: ::prost::alloc::vec::Vec<u8>,
+    /// 权威文件条目（客户端增量更新视图用；与 ReadDir 的 FileEntry 同构）
+    #[prost(message, optional, tag = "7")]
+    pub entry: ::core::option::Option<FileEntry>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -282,16 +285,13 @@ pub struct WriteFile {
     pub path: ::prost::alloc::string::String,
     #[prost(bytes = "vec", tag = "2")]
     pub content: ::prost::alloc::vec::Vec<u8>,
-    /// 用户上下文(阶段 3 新增):UID
+    /// 用户上下文(阶段 3 新增)
     #[prost(uint32, tag = "3")]
     pub uid: u32,
-    /// 用户上下文(阶段 3 新增):GID
     #[prost(uint32, tag = "4")]
     pub gid: u32,
-    /// 用户上下文(阶段 3 新增):用户名
     #[prost(string, tag = "5")]
     pub username: ::prost::alloc::string::String,
-    /// 用户上下文(阶段 3 新增):家目录
     #[prost(string, tag = "6")]
     pub home_dir: ::prost::alloc::string::String,
 }
@@ -304,7 +304,11 @@ pub struct WriteResult {
     pub mtime: u64,
     #[prost(uint64, tag = "3")]
     pub size: u64,
+    /// 权威文件条目（客户端增量更新视图用；与 ReadDir 的 FileEntry 同构）
+    #[prost(message, optional, tag = "4")]
+    pub entry: ::core::option::Option<FileEntry>,
 }
+/// 删除文件/目录
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Delete {
@@ -325,6 +329,7 @@ pub struct DeleteResult {
     #[prost(bool, tag = "1")]
     pub success: bool,
 }
+/// 创建目录
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Mkdir {
@@ -344,7 +349,11 @@ pub struct Mkdir {
 pub struct MkdirResult {
     #[prost(string, tag = "1")]
     pub path: ::prost::alloc::string::String,
+    /// 权威文件条目（客户端增量更新视图用；与 ReadDir 的 FileEntry 同构）
+    #[prost(message, optional, tag = "2")]
+    pub entry: ::core::option::Option<FileEntry>,
 }
+/// 重命名/移动
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Rename {
@@ -368,7 +377,11 @@ pub struct RenameResult {
     pub old_path: ::prost::alloc::string::String,
     #[prost(string, tag = "2")]
     pub new_path: ::prost::alloc::string::String,
+    /// 目标路径的权威文件条目（客户端增量更新视图用）
+    #[prost(message, optional, tag = "3")]
+    pub entry: ::core::option::Option<FileEntry>,
 }
+/// 复制(仅文件)
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Copy {
@@ -392,7 +405,11 @@ pub struct CopyResult {
     pub src: ::prost::alloc::string::String,
     #[prost(string, tag = "2")]
     pub dst: ::prost::alloc::string::String,
+    /// 目标路径的权威文件条目（客户端增量更新视图用）
+    #[prost(message, optional, tag = "3")]
+    pub entry: ::core::option::Option<FileEntry>,
 }
+/// 移动(等同于 Rename)
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Move {
@@ -416,7 +433,11 @@ pub struct MoveResult {
     pub src: ::prost::alloc::string::String,
     #[prost(string, tag = "2")]
     pub dst: ::prost::alloc::string::String,
+    /// 目标路径的权威文件条目（客户端增量更新视图用）
+    #[prost(message, optional, tag = "3")]
+    pub entry: ::core::option::Option<FileEntry>,
 }
+/// 检查文件是否存在
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FileExists {
@@ -453,16 +474,13 @@ pub struct Chmod {
     /// 递归应用于目录下所有内容
     #[prost(bool, tag = "3")]
     pub recursive: bool,
-    /// 用户上下文(与其他文件操作一致):UID
+    /// 用户上下文(与其他文件操作一致)
     #[prost(uint32, tag = "4")]
     pub uid: u32,
-    /// 用户上下文(与其他文件操作一致):GID
     #[prost(uint32, tag = "5")]
     pub gid: u32,
-    /// 用户上下文(与其他文件操作一致):用户名
     #[prost(string, tag = "6")]
     pub username: ::prost::alloc::string::String,
-    /// 用户上下文(与其他文件操作一致):家目录
     #[prost(string, tag = "7")]
     pub home_dir: ::prost::alloc::string::String,
 }
@@ -489,16 +507,13 @@ pub struct Chown {
     /// 递归应用于目录下所有内容
     #[prost(bool, tag = "4")]
     pub recursive: bool,
-    /// 用户上下文(与其他文件操作一致):UID
+    /// 用户上下文(与其他文件操作一致)
     #[prost(uint32, tag = "5")]
     pub uid: u32,
-    /// 用户上下文(与其他文件操作一致):GID
     #[prost(uint32, tag = "6")]
     pub gid: u32,
-    /// 用户上下文(与其他文件操作一致):用户名
     #[prost(string, tag = "7")]
     pub username: ::prost::alloc::string::String,
-    /// 用户上下文(与其他文件操作一致):家目录
     #[prost(string, tag = "8")]
     pub home_dir: ::prost::alloc::string::String,
 }
@@ -517,21 +532,21 @@ pub struct ExecuteCommand {
     pub args: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(string, tag = "3")]
     pub working_directory: ::prost::alloc::string::String,
-    /// 用户上下文(阶段 3 新增):UID
+    /// 用户上下文(阶段 3 新增)
     #[prost(uint32, tag = "4")]
     pub uid: u32,
-    /// 用户上下文(阶段 3 新增):GID
     #[prost(uint32, tag = "5")]
     pub gid: u32,
-    /// 用户上下文(阶段 3 新增):用户名
     #[prost(string, tag = "6")]
     pub username: ::prost::alloc::string::String,
-    /// 用户上下文(阶段 3 新增):家目录
     #[prost(string, tag = "7")]
     pub home_dir: ::prost::alloc::string::String,
     /// 额外环境变量(可选,当前未使用)
     #[prost(map = "string, string", tag = "8")]
-    pub env: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
+    pub env: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
     /// 超时秒数(0 = Worker 端默认 300s;超时 kill 子进程)
     #[prost(uint32, tag = "9")]
     pub timeout_secs: u32,

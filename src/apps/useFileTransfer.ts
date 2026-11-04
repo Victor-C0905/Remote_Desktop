@@ -50,6 +50,8 @@ export function useFileTransfer(params: {
   /** 起拖时的选区：源行在选区内则携带整个选区 */
   selected: string[];
   refreshAfterMutation: () => void;
+  /** 服务器确认后的逐项结果补丁：移动移除源、目标新增/覆盖（entry 由服务器回传） */
+  applyTransferResult: (mode: 'move' | 'copy', src: string, dst: string, entry: FileEntry) => void;
   entryFullPath: (entry: FileEntry) => string;
   /** 弹簧加载切目录用 */
   navigateTo: (path: string) => Promise<boolean>;
@@ -58,7 +60,7 @@ export function useFileTransfer(params: {
   setSelected: Dispatch<SetStateAction<string[]>>;
   setAnchorPath: Dispatch<SetStateAction<string | null>>;
 }) {
-  const { activeServerId, currentPath, selected, refreshAfterMutation, entryFullPath, navigateTo, editingEntry, setSelected, setAnchorPath } = params;
+  const { activeServerId, currentPath, selected, refreshAfterMutation, applyTransferResult, entryFullPath, navigateTo, editingEntry, setSelected, setAnchorPath } = params;
   const { t } = useTranslation();
   const pushNotification = useNotificationStore((s) => s.pushNotification);
 
@@ -96,19 +98,28 @@ export function useFileTransfer(params: {
   const execTransfer = useCallback(async (mode: 'move' | 'copy', targets: TransferTarget[]) => {
     if (!activeServerId || targets.length === 0) return;
     const failed: string[] = [];
-    const donePairs: Array<{ src: string; dst: string }> = [];
+    const donePairs: Array<{ src: string; dst: string; entry: FileEntry | null }> = [];
     for (const target of targets) {
       try {
-        await invoke(mode === 'move' ? 'remote_move' : 'remote_copy', {
+        const entry = await invoke<FileEntry | null>(mode === 'move' ? 'remote_move' : 'remote_copy', {
           serverId: activeServerId, src: target.src, dst: target.dst,
         });
-        donePairs.push({ src: target.src, dst: target.dst });
+        donePairs.push({ src: target.src, dst: target.dst, entry });
       } catch (err) {
         log.error(`${mode} 失败:`, err);
         failed.push(entryName(target.src));
       }
     }
-    refreshAfterMutation();
+    // 全部成功项都带回权威条目 → 逐项打补丁；任一缺失（旧版 Agent）→ 回退一次全量刷新
+    if (donePairs.length > 0) {
+      if (donePairs.every((p) => p.entry)) {
+        for (const p of donePairs) {
+          if (p.entry) applyTransferResult(mode, p.src, p.dst, p.entry);
+        }
+      } else {
+        refreshAfterMutation();
+      }
+    }
     const done = targets.length - failed.length;
     if (failed.length > 0) {
       pushNotification({
@@ -137,15 +148,26 @@ export function useFileTransfer(params: {
               run: () => {
                 void (async () => {
                   const undoFailed: string[] = [];
+                  const undoPairs: Array<{ src: string; dst: string; entry: FileEntry | null }> = [];
                   for (const p of [...donePairs].reverse()) {
                     try {
-                      await invoke('remote_move', { serverId: activeServerId, src: p.dst, dst: p.src });
+                      const entry = await invoke<FileEntry | null>('remote_move', { serverId: activeServerId, src: p.dst, dst: p.src });
+                      undoPairs.push({ src: p.dst, dst: p.src, entry });
                     } catch (err) {
                       log.error('撤销移动失败:', err);
                       undoFailed.push(entryName(p.dst));
                     }
                   }
-                  refreshAfterMutation();
+                  // 与正向移动同口径：条目齐全则增量回滚，否则回退全量刷新
+                  if (undoPairs.length > 0) {
+                    if (undoPairs.every((p) => p.entry)) {
+                      for (const p of undoPairs) {
+                        if (p.entry) applyTransferResult('move', p.src, p.dst, p.entry);
+                      }
+                    } else {
+                      refreshAfterMutation();
+                    }
+                  }
                   if (undoFailed.length > 0) {
                     pushNotification({
                       title: t('common.error'),
@@ -160,7 +182,7 @@ export function useFileTransfer(params: {
           }
         : {}),
     });
-  }, [activeServerId, refreshAfterMutation, t]);
+  }, [activeServerId, refreshAfterMutation, applyTransferResult, t]);
 
   /** 重名预检 + 执行（防呆确认通过后走这里） */
   const checkConflictsAndExec = useCallback(async (mode: 'move' | 'copy', targets: TransferTarget[]) => {

@@ -248,6 +248,26 @@ pub fn serde_to_worker_request(payload: &Payload, user: &UserContext) -> Option<
     }
 }
 
+/// protobuf FileEntry → serde FileEntry（字段一一对应，类型一致）
+fn proto_file_entry_to_serde(entry: &crate::protocol::generated::FileEntry) -> FileEntry {
+    FileEntry {
+        name: entry.name.clone(),
+        is_dir: entry.is_dir,
+        size: entry.size,
+        mtime: entry.mtime.clone(),
+        permissions: entry.permissions.clone(),
+        owner: entry.owner.clone(),
+        group: entry.group.clone(),
+    }
+}
+
+/// 操作结果中的可选权威条目：旧 Worker 未填写时为 None，客户端回退全量刷新
+fn optional_entry(
+    entry: &Option<crate::protocol::generated::FileEntry>,
+) -> Option<FileEntry> {
+    entry.as_ref().map(proto_file_entry_to_serde)
+}
+
 /// 将 Worker protobuf 响应转换为客户端 serde Payload
 ///
 /// # 参数
@@ -261,16 +281,8 @@ pub fn worker_response_to_serde(response: &crate::protocol::generated::WorkerRes
         Some(worker_response::Payload::DirListing(listing)) => {
             tracing::debug!("适配 DirListing: path={}, entries={}", listing.path, listing.entries.len());
 
-            // 转换 FileEntry(protobuf → serde,字段类型一致,直接映射)
-            let entries: Vec<FileEntry> = listing.entries.iter().map(|e| FileEntry {
-                name: e.name.clone(),
-                is_dir: e.is_dir,
-                size: e.size,
-                mtime: e.mtime.clone(),
-                permissions: e.permissions.clone(),
-                owner: e.owner.clone(),
-                group: e.group.clone(),
-            }).collect();
+            // 转换 FileEntry(protobuf → serde)
+            let entries: Vec<FileEntry> = listing.entries.iter().map(proto_file_entry_to_serde).collect();
 
             Some(Payload::ReadDirResponse {
                 path: listing.path.clone(),
@@ -302,6 +314,7 @@ pub fn worker_response_to_serde(response: &crate::protocol::generated::WorkerRes
                 is_text: r.is_text,
                 extension: r.extension.clone(),
                 magic_bytes: r.magic_bytes.to_vec(),
+                entry: optional_entry(&r.entry),
             })
         }
 
@@ -321,6 +334,7 @@ pub fn worker_response_to_serde(response: &crate::protocol::generated::WorkerRes
                 path: result.path.clone(),
                 mtime: result.mtime,
                 size: result.size,
+                entry: optional_entry(&result.entry),
             })
         }
 
@@ -343,6 +357,7 @@ pub fn worker_response_to_serde(response: &crate::protocol::generated::WorkerRes
             Some(Payload::MkdirResponse {
                 success: true,
                 path: result.path.clone(),
+                entry: optional_entry(&result.entry),
             })
         }
 
@@ -352,6 +367,7 @@ pub fn worker_response_to_serde(response: &crate::protocol::generated::WorkerRes
                 success: true,
                 old_path: result.old_path.clone(),
                 new_path: result.new_path.clone(),
+                entry: optional_entry(&result.entry),
             })
         }
 
@@ -361,6 +377,7 @@ pub fn worker_response_to_serde(response: &crate::protocol::generated::WorkerRes
                 success: true,
                 src: result.src.clone(),
                 dst: result.dst.clone(),
+                entry: optional_entry(&result.entry),
             })
         }
 
@@ -370,6 +387,7 @@ pub fn worker_response_to_serde(response: &crate::protocol::generated::WorkerRes
                 success: true,
                 src: result.src.clone(),
                 dst: result.dst.clone(),
+                entry: optional_entry(&result.entry),
             })
         }
 
@@ -747,13 +765,14 @@ mod tests {
                 is_text: false,
                 extension: "png".to_string(),
                 magic_bytes: vec![0x89, 0x50, 0x4E, 0x47],
+                entry: None,
             })),
         };
 
         let result = worker_response_to_serde(&resp);
 
         match result {
-            Some(Payload::FileInfoResponse { path, size, is_dir, is_text, extension, magic_bytes }) => {
+            Some(Payload::FileInfoResponse { path, size, is_dir, is_text, extension, magic_bytes, .. }) => {
                 assert_eq!(path, "/a.png");
                 assert_eq!(size, 1024);
                 assert!(!is_dir);
