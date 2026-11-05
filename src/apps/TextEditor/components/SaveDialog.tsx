@@ -1,107 +1,96 @@
 /**
  * 保存对话框组件
  *
- * 用于文本编辑器的"另存为"功能
- * 当用户保存新文件时，弹出此对话框让用户输入远程路径
- *
- * 底座使用共享 Dialog 组件（dg-*）：与全项目弹窗统一视觉
+ * 用于文本编辑器的“另存为”与未命名文件保存：
+ * - 文件名输入
+ * - 目录通过通用 RemoteDirectoryPicker 选择
+ * - 最终拼接为远程绝对路径
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { createLogger } from '../../../utils/logger';
 import { Dialog } from '../../../components/Dialog/Dialog';
+import { RemoteDirectoryPicker } from '../../../components/RemoteDirectoryPicker/RemoteDirectoryPicker';
+import { joinRemotePath, normalizeRemotePath } from '../../../components/RemoteDirectoryPicker/path';
 
-const log = createLogger('SaveDialog');
-
-/**
- * SaveDialog 组件 Props
- */
 interface SaveDialogProps {
-  /** 是否打开对话框 */
   isOpen: boolean;
-
-  /** 默认路径 */
-  defaultPath?: string;
-
-  /** 保存回调 */
+  /** 当前服务器；为空时只能手动取消 */
+  serverId: string;
+  defaultDirectory?: string;
+  defaultFileName?: string;
   onSave: (path: string) => void;
-
-  /** 取消回调 */
   onCancel: () => void;
 }
 
-/**
- * 保存对话框组件
- *
- * @param props - 组件属性
- *
- * @example
- * ```tsx
- * <SaveDialog
- *   isOpen={showSaveDialog}
- *   defaultPath="/home/user/untitled.txt"
- *   onSave={handleSaveAs}
- *   onCancel={handleCancelSave}
- * />
- * ```
- */
-export function SaveDialog({ isOpen, defaultPath, onSave, onCancel }: SaveDialogProps) {
+export function SaveDialog({
+  isOpen, serverId, defaultDirectory = '/home/user', defaultFileName = 'untitled.txt',
+  onSave, onCancel,
+}: SaveDialogProps) {
   const { t } = useTranslation();
-  // 使用 useState 管理路径输入
-  const [path, setPath] = useState(defaultPath || '/home/user/untitled.txt');
+  const [directory, setDirectory] = useState(() => normalizeRemotePath(defaultDirectory));
+  const [fileName, setFileName] = useState(defaultFileName);
+  const [browsing, setBrowsing] = useState(false);
 
-  // 如果对话框未打开，返回 null
+  // 每次重新打开时恢复默认目录/文件名
+  useEffect(() => {
+    if (!isOpen) return;
+    setDirectory(normalizeRemotePath(defaultDirectory));
+    setFileName(defaultFileName);
+    setBrowsing(false);
+  }, [isOpen, defaultDirectory, defaultFileName]);
+
   if (!isOpen) return null;
 
-  /**
-   * 处理保存按钮点击
-   */
+  if (browsing) {
+    return (
+      <RemoteDirectoryPicker
+        serverId={serverId}
+        initialPath={directory}
+        onSelect={(p) => { setDirectory(p); setBrowsing(false); }}
+        onCancel={() => setBrowsing(false)}
+      />
+    );
+  }
+
+  const name = fileName.trim();
+  const invalidName = !name || name.includes('/') || name.includes('\0');
+  const fullPath = invalidName ? '' : joinRemotePath(directory, name);
+
   const handleSave = () => {
-    // 验证路径不为空
-    if (!path.trim()) {
-      log.warn('路径为空，无法保存');
-      return;
-    }
-
-    // 调用保存回调
-    onSave(path.trim());
-  };
-
-  /**
-   * 处理键盘事件
-   *
-   * Enter 键保存，Esc 键取消（Esc 已由 Dialog 底座统一处理）
-   */
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
-      handleSave();
-    }
+    if (!invalidName) onSave(fullPath);
   };
 
   return (
     <Dialog onClose={onCancel}>
       <div className="dg-title">{t('textEditor.saveTitle')}</div>
 
-      {/* 内容区 */}
       <div>
-        <label className="dg-field-label" htmlFor="save-dialog-path">{t('textEditor.remotePath')}</label>
+        <label className="dg-field-label" htmlFor="save-dialog-name">{t('textEditor.fileName')}</label>
         <input
-          id="save-dialog-path"
+          id="save-dialog-name"
           type="text"
           className="dg-input"
-          value={path}
-          onChange={(e) => setPath(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="/home/user/untitled.txt"
+          value={fileName}
+          onChange={(e) => setFileName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); }}
           autoFocus
         />
       </div>
 
-      {/* 操作按钮区 */}
+      <div>
+        <label className="dg-field-label" htmlFor="save-dialog-dir">{t('textEditor.saveDirectory')}</label>
+        <div className="rdp-save-dir">
+          <input id="save-dialog-dir" type="text" className="dg-input" value={directory} readOnly />
+          <button className="dg-btn" onClick={() => setBrowsing(true)} disabled={!serverId}>
+            {t('textEditor.browseDirectory')}
+          </button>
+        </div>
+      </div>
+
       <div className="dg-actions">
         <button className="dg-btn" onClick={onCancel}>{t('common.cancel')}</button>
-        <button className="dg-btn-primary" onClick={handleSave} disabled={!path.trim()}>
+        <button className="dg-btn-primary" onClick={handleSave} disabled={invalidName || !serverId}>
           {t('textEditor.menuSave')}
         </button>
       </div>

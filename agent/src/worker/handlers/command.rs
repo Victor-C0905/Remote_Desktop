@@ -41,7 +41,7 @@ struct CommandResult {
 
 /// 允许远程执行的命令白名单（安全关键：在执行点强制）
 /// 语法：命令名（argv[0]）；仅接受裸命令名，任何路径形式一律拒绝
-const ALLOWED_COMMANDS: &[&str] = &["unzip", "tar", "7z", "unrar"];
+const ALLOWED_COMMANDS: &[&str] = &["unzip", "tar", "7z", "7zz", "unrar"];
 
 /// 白名单校验：仅接受白名单内的裸命令名。
 ///

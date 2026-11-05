@@ -75,8 +75,11 @@ pub use protocol_adapter::{UserContext, serde_to_worker_request, worker_response
 
 #[cfg(unix)]
 use std::sync::Arc;
+#[cfg(unix)]
+use std::collections::HashSet;
 use anyhow::Result;
 use crate::config::AgentConfig;
+use crate::protocol::generated::{manager_request, worker_response};
 
 /// Manager 主结构
 pub struct Manager {
@@ -388,8 +391,21 @@ impl Manager {
         payload: &crate::protocol::Payload,
         user_session: &crate::auth::session::UserSession,
     ) -> Result<Option<crate::protocol::Payload>> {
+        // 压缩包解压：先条目校验，再执行，最后清理 setuid/setgid
+        if matches!(payload, crate::protocol::Payload::ArchiveExtractRequest { .. }) {
+            return self.handle_archive_extract(payload, user_session).await;
+        }
+
         // 1. 协议适配:serde Payload → Worker manager_request::Payload
         let user_context = protocol_adapter::UserContext::from(user_session);
+
+        // 压缩包列表：Agent 侧构造固定 argv，优先处理
+        if let Some(worker_payload) =
+            protocol_adapter::semantic_archive_worker_request(payload, &user_context)?
+        {
+            return self.route_worker_payload(worker_payload).await.map(Some);
+        }
+
         let worker_payload = protocol_adapter::serde_to_worker_request(payload, &user_context);
 
         // 不需要路由到 Worker 的请求,返回 None
@@ -398,7 +414,159 @@ impl Manager {
             None => return Ok(None),
         };
 
-        // 2. 通过 IPC 发送到 Worker,接收响应
+        self.route_worker_payload(worker_payload).await.map(Some)
+    }
+
+    /// 压缩包解压：条目校验 → 执行 → setuid/setgid 清理
+    #[cfg(unix)]
+    async fn handle_archive_extract(
+        &self,
+        payload: &crate::protocol::Payload,
+        session: &crate::auth::session::UserSession,
+    ) -> Result<Option<crate::protocol::Payload>> {
+        let crate::protocol::Payload::ArchiveExtractRequest {
+            archive_path, target_dir, format_id, entries, policy,
+        } = payload
+        else {
+            return Ok(None);
+        };
+
+        // 1. 校验请求参数并构造固定 argv（失败直接回客户端可读错误）
+        let extract_cmd = match crate::archive::commands::build_extract(
+            archive_path, target_dir, format_id,
+            entries.as_deref(), *policy,
+        ) {
+            Ok(cmd) => cmd,
+            Err(e) => {
+                return Ok(Some(crate::protocol::Payload::Error {
+                    code: 400,
+                    message: format!("{e:#}"),
+                }))
+            }
+        };
+        let validation = match crate::archive::commands::build_validation_list(archive_path, format_id) {
+            Ok(list) => list,
+            Err(e) => {
+                return Ok(Some(crate::protocol::Payload::Error {
+                    code: 400,
+                    message: format!("{e:#}"),
+                }))
+            }
+        };
+
+        let user = protocol_adapter::UserContext::from(session);
+
+        // 2. 以登录用户身份读取归档清单
+        let list_resp = self
+            .ipc_server
+            .send_request(protocol_adapter::archive_command_to_worker(validation.command, &user))
+            .await
+            .map_err(|e| {
+                tracing::error!("压缩包条目校验命令失败: {:?}", e);
+                e
+            })?;
+
+        let output = match list_resp.payload {
+            Some(worker_response::Payload::CommandOutput(out)) => out,
+            Some(worker_response::Payload::Error(err)) => {
+                return Ok(Some(crate::protocol::Payload::Error {
+                    code: err.code as i32,
+                    message: err.message,
+                }))
+            }
+            _ => {
+                return Ok(Some(crate::protocol::Payload::Error {
+                    code: -1,
+                    message: "压缩包条目校验未返回命令输出".to_string(),
+                }))
+            }
+        };
+        if output.exit_code != 0 {
+            let detail = String::from_utf8_lossy(&output.stderr);
+            return Ok(Some(crate::protocol::Payload::Error {
+                code: 400,
+                message: format!("无法读取压缩包内容，已取消解压: {}", detail.trim()),
+            }));
+        }
+
+        // 3. 校验条目路径/链接/特殊文件；只校验本次解压范围
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let names = match crate::archive::validate::validate_listing(
+            validation.kind, &stdout, archive_path, entries.as_deref(),
+        ) {
+            Ok(names) => names,
+            Err(e) => {
+                return Ok(Some(crate::protocol::Payload::Error {
+                    code: 400,
+                    message: format!("压缩包包含不安全条目，已取消解压: {e:#}"),
+                }))
+            }
+        };
+
+        // 4. skip 策略下记录解压前已存在的条目，清理权限时跳过它们
+        let skip_existing: HashSet<String> = if matches!(
+            *policy,
+            quirel_protocol::archive::ArchiveExtractPolicy::Skip,
+        ) {
+            names
+                .iter()
+                .filter(|name| {
+                    std::fs::symlink_metadata(std::path::Path::new(target_dir).join(name.as_str())).is_ok()
+                })
+                .cloned()
+                .collect()
+        } else {
+            HashSet::new()
+        };
+
+        // 5. 执行解压
+        let extract_resp = self
+            .ipc_server
+            .send_request(protocol_adapter::archive_command_to_worker(extract_cmd, &user))
+            .await
+            .map_err(|e| {
+                tracing::error!("压缩包解压命令失败: {:?}", e);
+                e
+            })?;
+
+        // 6. 仅在解压成功时清理 setuid/setgid（失败时避免改动目标里已存在的旧文件）
+        let extract_ok = matches!(
+            &extract_resp.payload,
+            Some(worker_response::Payload::CommandOutput(out)) if out.exit_code == 0
+        );
+        if extract_ok {
+            let target = target_dir.clone();
+            let session_clone = session.clone();
+            let cleanup = tokio::task::spawn_blocking(move || {
+                let executor = crate::auth::UserExecutor::new(&session_clone);
+                executor.execute_as_user(move || {
+                    Ok(crate::archive::validate::sanitize_extracted_permissions(
+                        &target, &names, &skip_existing,
+                    ))
+                })
+            })
+            .await;
+            match cleanup {
+                Ok(Ok(count)) => tracing::info!("压缩包解压权限清理完成: cleaned={count}"),
+                Ok(Err(e)) => tracing::warn!("压缩包解压权限清理失败: {e:#}"),
+                Err(e) => tracing::warn!("压缩包解压权限清理任务失败: {e}"),
+            }
+        } else {
+            tracing::warn!("解压未成功，跳过 setuid/setgid 清理");
+        }
+
+        protocol_adapter::worker_response_to_serde(&extract_resp)
+            .ok_or_else(|| anyhow::anyhow!("协议适配层无法转换 Worker 响应"))
+            .map(Some)
+    }
+
+    /// 发送一个已构造的 Worker 请求并转换响应
+    #[cfg(unix)]
+    pub async fn route_worker_payload(
+        &self,
+        worker_payload: manager_request::Payload,
+    ) -> Result<crate::protocol::Payload> {
+        // 通过 IPC 发送到 Worker,接收响应
         let worker_response = self.ipc_server.send_request(worker_payload).await
             .map_err(|e| {
                 // 使用 {:?} 打印完整错误链,定位 receive_response 失败的根本原因
@@ -407,11 +575,9 @@ impl Manager {
                 e
             })?;
 
-        // 3. 协议适配:Worker WorkerResponse → serde Payload
-        let serde_payload = protocol_adapter::worker_response_to_serde(&worker_response)
-            .ok_or_else(|| anyhow::anyhow!("协议适配层无法转换 Worker 响应"))?;
-
-        Ok(Some(serde_payload))
+        // 协议适配:Worker WorkerResponse → serde Payload
+        protocol_adapter::worker_response_to_serde(&worker_response)
+            .ok_or_else(|| anyhow::anyhow!("协议适配层无法转换 Worker 响应"))
     }
 
     /// 获取 PtyRegistry 引用(供 quic.rs 读写 PTY)

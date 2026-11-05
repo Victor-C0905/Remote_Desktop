@@ -1138,6 +1138,22 @@ async fn handle_stream(
         }
     };
 
+    // 压缩能力探测：本地处理（不路由 Worker），按登录用户执行一次样本探测
+    if let Payload::ArchiveCapabilitiesRequest { refresh } = &envelope.payload {
+        tracing::debug!("收到压缩能力探测请求: refresh={}", refresh);
+        let capabilities = crate::archive::probe::capabilities(session, *refresh).await;
+        let response = Envelope::new(
+            envelope.request_id,
+            Payload::ArchiveCapabilitiesResponse(capabilities),
+        );
+        if let Ok(bytes) = response.encode() {
+            if let Err(e) = write_message(&mut send, &bytes).await {
+                tracing::warn!("发送压缩能力响应失败: {}", e);
+            }
+        }
+        return Ok(());
+    }
+
     // 处理订阅请求
     match &envelope.payload {
         Payload::Subscribe { server_id, types } => {
@@ -1574,7 +1590,7 @@ async fn handle_stream(
                             envelope.request_id,
                             Payload::Error {
                                 code: -1,
-                                message: format!("Worker 路由失败: {:?}", e),
+                                message: format!("{e:#}"),
                             },
                         );
                         match response.encode() {

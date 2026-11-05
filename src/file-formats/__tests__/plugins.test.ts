@@ -7,7 +7,7 @@ import { describe, it, expect } from 'vitest';
 import { pdfPlugin } from '../plugins/pdf';
 import { imagePlugin } from '../plugins/image';
 import { textPlugin } from '../plugins/text';
-import { archivePlugin, buildExtractCommand } from '../plugins/archive';
+import { archivePlugin } from '../plugins/archive';
 import { htmlPlugin } from '../plugins/html';
 import type { RemoteFileInfo } from '../types';
 
@@ -127,43 +127,6 @@ describe('archivePlugin', () => {
 
   it('普通文件不匹配', () => {
     expect(archivePlugin.detect(makeInfo({ extension: 'txt', isText: true }))).toBeNull();
-  });
-});
-
-describe('buildExtractCommand', () => {
-  it('.zip → unzip -o <archive> -d <target>', () => {
-    const cmd = buildExtractCommand('/tmp/a.zip', '/tmp/out', 'a.zip');
-    expect(cmd).toEqual({ command: 'unzip', args: ['-o', '/tmp/a.zip', '-d', '/tmp/out'] });
-  });
-
-  it('.tar → tar -xf <archive> -C <target>', () => {
-    const cmd = buildExtractCommand('/tmp/a.tar', '/tmp/out', 'a.tar');
-    expect(cmd).toEqual({ command: 'tar', args: ['-xf', '/tmp/a.tar', '-C', '/tmp/out'] });
-  });
-
-  it('.tar.gz → tar（自动识别压缩格式）', () => {
-    const cmd = buildExtractCommand('/tmp/a.tar.gz', '/tmp/out', 'a.tar.gz');
-    expect(cmd).toEqual({ command: 'tar', args: ['-xf', '/tmp/a.tar.gz', '-C', '/tmp/out'] });
-  });
-
-  it('.tgz → tar', () => {
-    const cmd = buildExtractCommand('/tmp/a.tgz', '/tmp/out', 'a.tgz');
-    expect(cmd.command).toBe('tar');
-  });
-
-  it('.7z → 7z x -o<target> -y', () => {
-    const cmd = buildExtractCommand('/tmp/a.7z', '/tmp/out', 'a.7z');
-    expect(cmd).toEqual({ command: '7z', args: ['x', '/tmp/a.7z', '-o/tmp/out', '-y'] });
-  });
-
-  it('.rar → unrar x -o+', () => {
-    const cmd = buildExtractCommand('/tmp/a.rar', '/tmp/out', 'a.rar');
-    expect(cmd).toEqual({ command: 'unrar', args: ['x', '-o+', '/tmp/a.rar', '/tmp/out/'] });
-  });
-
-  it('路径含空格无需转义（argv 直执行，不经 shell）', () => {
-    const cmd = buildExtractCommand('/tmp/my dir/a.zip', '/tmp/my dir/out', 'a.zip');
-    expect(cmd.args).toContain('/tmp/my dir/a.zip');
   });
 });
 

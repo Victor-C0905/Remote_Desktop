@@ -13,8 +13,8 @@ describe('parseUnzipListing（unzip -l 表格）', () => {
       123                     2 files`;
   it('解析文件与目录行', () => {
     expect(parseUnzipListing(OUT)).toEqual<ArchiveEntry[]>([
-      { path: 'dir/file.txt', size: 123, isDir: false },
-      { path: 'dir/', size: 0, isDir: true },
+      { path: 'dir/file.txt', size: 123, isDir: false, kind: 'file' },
+      { path: 'dir/', size: 0, isDir: true, kind: 'dir' },
     ]);
   });
   it('空输出抛错（格式不可识别而非静默空表）', () => {
@@ -30,14 +30,22 @@ describe('parseTarListing（tar -tvf 详单，GNU tar 真实输出）', () => {
 -rw-r--r-- root/root        56 2026-09-22 17:13 ./top.txt
 lrwxrwxrwx root/root         0 2026-09-22 17:13 lnk -> dir/file.txt
 -rw-r--r-- root/root         0 2020-01-01 12:00 old.txt`;
-  it('解析权限位/大小/路径；d 前缀或尾斜杠判目录；去 ./ 前缀；链接目标丢弃', () => {
+  it('解析权限位/大小/路径；d 前缀或尾斜杠判目录；去 ./ 前缀；链接保留目标', () => {
     expect(parseTarListing(OUT)).toEqual<ArchiveEntry[]>([
-      { path: 'dir/', size: 0, isDir: true },
-      { path: 'dir/empty.bin', size: 0, isDir: false },
-      { path: 'dir/file.txt', size: 6, isDir: false },
-      { path: 'top.txt', size: 56, isDir: false },
-      { path: 'lnk', size: 0, isDir: false },
-      { path: 'old.txt', size: 0, isDir: false },
+      { path: 'dir/', size: 0, isDir: true, kind: 'dir', linkTarget: undefined },
+      { path: 'dir/empty.bin', size: 0, isDir: false, kind: 'file', linkTarget: undefined },
+      { path: 'dir/file.txt', size: 6, isDir: false, kind: 'file', linkTarget: undefined },
+      { path: 'top.txt', size: 56, isDir: false, kind: 'file', linkTarget: undefined },
+      { path: 'lnk', size: 0, isDir: false, kind: 'symlink', linkTarget: 'dir/file.txt' },
+      { path: 'old.txt', size: 0, isDir: false, kind: 'file', linkTarget: undefined },
+    ]);
+  });
+  it('识别硬链接与设备特殊文件', () => {
+    const SPECIAL = `crw-r--r-- root/root     1,3 2026-09-22 17:13 dev-node
+hrw-r--r-- root/root       0 2026-09-22 17:13 hard link to dir/file.txt`;
+    expect(parseTarListing(SPECIAL)).toEqual<ArchiveEntry[]>([
+      { path: 'dev-node', size: 0, isDir: false, kind: 'special', linkTarget: undefined },
+      { path: 'hard', size: 0, isDir: false, kind: 'hardlink', linkTarget: 'dir/file.txt' },
     ]);
   });
   it('空输出抛错', () => {
@@ -67,14 +75,16 @@ Folder = -
 Size = 56`;
   it('按块解析；Folder=+ 判目录', () => {
     expect(parse7zListing(OUT)).toEqual<ArchiveEntry[]>([
-      { path: 'dir/file.txt', size: 1234, isDir: false },
-      { path: 'dir', size: 0, isDir: true },
-      { path: 'top.txt', size: 56, isDir: false },
+      { path: 'dir/file.txt', size: 1234, isDir: false, kind: 'file', linkTarget: undefined },
+      { path: 'dir', size: 0, isDir: true, kind: 'dir', linkTarget: undefined },
+      { path: 'top.txt', size: 56, isDir: false, kind: 'file', linkTarget: undefined },
     ]);
   });
   it('缺 Size 的目录条目 size 为 0', () => {
     const r = parse7zListing('Path = d\nFolder = +');
-    expect(r).toEqual<ArchiveEntry[]>([{ path: 'd', size: 0, isDir: true }]);
+    expect(r).toEqual<ArchiveEntry[]>([
+      { path: 'd', size: 0, isDir: true, kind: 'dir', linkTarget: undefined },
+    ]);
   });
   it('空输出抛错', () => {
     expect(() => parse7zListing('')).toThrow();
@@ -93,8 +103,8 @@ Details: RAR 5
          0          0    0%  2024-01-01 12:00  drw-r--r--  dir`;
   it('Attr 首字符 d 或尾斜杠判目录', () => {
     expect(parseUnrarListing(OUT)).toEqual<ArchiveEntry[]>([
-      { path: 'dir/file.txt', size: 1234, isDir: false },
-      { path: 'dir', size: 0, isDir: true },
+      { path: 'dir/file.txt', size: 1234, isDir: false, kind: 'file' },
+      { path: 'dir', size: 0, isDir: true, kind: 'dir' },
     ]);
   });
   it('空输出抛错', () => {

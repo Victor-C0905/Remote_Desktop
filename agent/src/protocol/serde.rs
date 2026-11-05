@@ -8,4 +8,5 @@ pub use quirel_protocol::{
     AuthStatsSnapshot, ConnectionStatsSnapshot, PerformanceStatsSnapshot,
     ResponseTimePercentiles, StatsResponse,
     AuthErrorCode,
+    ArchiveCapabilities, ArchiveFormatCapability, ArchiveHostOs, ArchiveTool,
 };

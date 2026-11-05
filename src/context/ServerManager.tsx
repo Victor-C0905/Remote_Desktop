@@ -9,6 +9,7 @@ import {
   getStatusColor,
 } from "../stores/serversStore";
 import type { ServerConfig } from "../stores/serversStore";
+import { useArchiveCapabilitiesStore } from "../stores/archiveCapabilitiesStore";
 import { useNotificationStore } from "../stores/notificationStore";
 import { parseConnectError, getErrorInfo, buildConnectFailureText, isRetryableConnectError, AuthErrorCode } from "../types/errors";
 import { createLogger } from "../utils/logger";
@@ -304,6 +305,9 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
 
     setServerStatus(server.id, "connected", undefined, info.rttMs >= 0 ? info.rttMs : undefined);
     setActiveServerId(server.id);
+
+    // 后台预取压缩能力：不阻塞连接成功，也不影响后续打开/解压
+    void useArchiveCapabilitiesStore.getState().fetchCapabilities(server.id);
 
     // 连接成功后，自动订阅系统指标（长期状态）
     try {

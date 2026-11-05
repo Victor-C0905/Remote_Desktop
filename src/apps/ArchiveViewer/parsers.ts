@@ -12,12 +12,18 @@
 /** 统一条目（与 tree.ts 解耦的最小契约） */
 import i18n from '../../i18n';
 
+export type ArchiveEntryKind = 'file' | 'dir' | 'symlink' | 'hardlink' | 'special';
+
 export interface ArchiveEntry {
   /** 包内路径（zip 目录条目带尾斜杠；tar 亦可由权限位判目录） */
   path: string;
   /** 字节；目录为 0 */
   size: number;
   isDir: boolean;
+  /** 条目类型（tar 可识别链接/特殊文件；其他工具未知时按 file/dir） */
+  kind: ArchiveEntryKind;
+  /** 链接目标（tar symlink/hardlink 可见时记录） */
+  linkTarget?: string;
 }
 
 /** 规整路径：去首尾空白、去 ./ 前缀 */
@@ -49,7 +55,12 @@ export function parseUnzipListing(out: string): ArchiveEntry[] {
     if (!m) continue;
     const path = normalizePath(m[2]);
     const isDir = path.endsWith('/');
-    entries.push({ path, size: isDir ? 0 : Number(m[1]), isDir });
+    entries.push({
+      path,
+      size: isDir ? 0 : Number(m[1]),
+      isDir,
+      kind: isDir ? 'dir' : 'file',
+    });
   }
   return failIfEmpty(entries, out);
 }
@@ -63,16 +74,38 @@ export function parseUnzipListing(out: string): ArchiveEntry[] {
  */
 export function parseTarListing(out: string): ArchiveEntry[] {
   if (!out.trim()) throw new Error(i18n.t('archive.tarEmpty'));
-  const re = /^([bcdlps-][-rwxstT+]{9})\s+\S+\/\S+\s+(\d+)\s+\d{4}-\d{2}-\d{2}(?:\s+\d{2}:\d{2})?\s+(.+)$/;
+  // 首列类型：- 普通 / d 目录 / l 符号链接 / h 硬链接 / b,c,p,s 特殊文件；
+  // 设备条目 size 列为 "主设备号,次设备号"，需单独匹配
+  const re = /^([bcdhlps-][-rwxstT+]{9})\s+\S+\/\S+\s+(\d+(?:,\d+)?)\s+\d{4}-\d{2}-\d{2}(?:\s+\d{2}:\d{2})?\s+(.+)$/;
   const entries: ArchiveEntry[] = [];
   for (const line of out.split('\n')) {
     const m = line.match(re);
     if (!m) continue;
-    let path = normalizePath(m[3].split(' -> ')[0]);
-    const isDir = m[1][0] === 'd' || path.endsWith('/');
+    const typeChar = m[1][0];
+    let rawPath = m[3];
+    let linkTarget: string | undefined;
+    if (rawPath.includes(' -> ')) {
+      const [p, ...rest] = rawPath.split(' -> ');
+      rawPath = p;
+      linkTarget = normalizePath(rest.join(' -> '));
+    } else if (rawPath.includes(' link to ')) {
+      const [p, ...rest] = rawPath.split(' link to ');
+      rawPath = p;
+      linkTarget = normalizePath(rest.join(' link to '));
+    }
+    let path = normalizePath(rawPath);
+    const isDir = typeChar === 'd' || path.endsWith('/');
     if (path.endsWith('/')) path = path.slice(0, -1) + '/'; // 规整后保持尾斜杠语义
-    const size = m[1][0] === 'l' ? 0 : Number(m[2]);
-    entries.push({ path, size, isDir });
+    const kind: ArchiveEntry['kind'] =
+      isDir ? 'dir'
+        : typeChar === 'l' ? 'symlink'
+          : typeChar === 'h' ? 'hardlink'
+            : ['b', 'c', 'p', 's'].includes(typeChar) ? 'special'
+              : 'file';
+    const size = kind === 'symlink' || kind === 'hardlink' || kind === 'special'
+      ? 0
+      : Number(m[2]);
+    entries.push({ path, size, isDir, kind, linkTarget });
   }
   return failIfEmpty(entries, out);
 }
@@ -95,7 +128,14 @@ export function parse7zListing(out: string): ArchiveEntry[] {
     const path = kv.get('Path');
     if (!path) continue;
     const isDir = kv.get('Folder') === '+';
-    entries.push({ path: normalizePath(path), size: Number(kv.get('Size') ?? 0), isDir });
+    const linkTarget = kv.get('Symbolic Link');
+    entries.push({
+      path: normalizePath(path),
+      size: Number(kv.get('Size') ?? 0),
+      isDir,
+      kind: isDir ? 'dir' : linkTarget ? 'symlink' : 'file',
+      linkTarget: linkTarget ? normalizePath(linkTarget) : undefined,
+    });
   }
   return failIfEmpty(entries, out);
 }
@@ -108,14 +148,16 @@ export function parse7zListing(out: string): ArchiveEntry[] {
  */
 export function parseUnrarListing(out: string): ArchiveEntry[] {
   if (!out.trim()) throw new Error(i18n.t('archive.unrarEmpty'));
-  const re = /^ *(\d+)\s+\d+\s+\d+%\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s+([d-][-.rwxsStT]{9})\s+(.+?)\s*$/;
+  // Attr 首字符 d=目录 / l=符号链接（unrar 5+ 部分版本）；其余按文件
+  const re = /^ *(\d+)\s+\d+\s+\d+%\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s+([dl-][-.rwxsStT]{9})\s+(.+?)\s*$/;
   const entries: ArchiveEntry[] = [];
   for (const line of out.split('\n')) {
     const m = line.match(re);
     if (!m) continue;
     const path = normalizePath(m[3]);
     const isDir = m[2][0] === 'd' || path.endsWith('/');
-    entries.push({ path, size: isDir ? 0 : Number(m[1]), isDir });
+    const kind: ArchiveEntry['kind'] = isDir ? 'dir' : m[2][0] === 'l' ? 'symlink' : 'file';
+    entries.push({ path, size: isDir ? 0 : Number(m[1]), isDir, kind });
   }
   return failIfEmpty(entries, out);
 }

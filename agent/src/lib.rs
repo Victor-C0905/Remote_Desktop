@@ -2,6 +2,7 @@
 //!
 //! 提供远程 Agent 服务端功能。
 
+pub mod archive;
 pub mod auth;
 pub mod audit;
 pub mod cert;

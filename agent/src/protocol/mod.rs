@@ -10,7 +10,7 @@
 //! ## 使用方式
 //!
 //! ```rust
-//! use protocol::{ManagerRequest, WorkerResponse};
+//! use quireld::protocol::generated::{ManagerRequest, WorkerResponse};
 //! ```
 
 // 导入自动生成的 Protobuf 代码
@@ -30,6 +30,7 @@ pub use serde::{
     Envelope, Payload, SubscriptionType, MetricsSnapshot,
     MountInfo, FileEntry, DiskInfo, ProcessEntry,
     AuthErrorCode,
+    ArchiveCapabilities, ArchiveFormatCapability, ArchiveHostOs, ArchiveTool,
 };
 
 /// 辅助函数：创建错误 Payload

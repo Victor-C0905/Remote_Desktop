@@ -40,6 +40,20 @@ fn with_fork_guard() -> std::sync::MutexGuard<'static, ()> {
     FORK_GUARD.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// 隔离/辅助子进程的可执行文件路径
+///
+/// 生产环境为当前进程（quireld 自身）。`cargo test` 的 current_exe 是测试
+/// harness，无法解析 `--isolated-*` 参数；集成测试通过 `QUIRELD_EXECUTABLE`
+/// 指向真实的 quireld 二进制。
+#[cfg(unix)]
+fn isolated_executable() -> Result<PathBuf> {
+    use anyhow::Context;
+    match std::env::var_os("QUIRELD_EXECUTABLE") {
+        Some(path) if !path.is_empty() => Ok(PathBuf::from(path)),
+        _ => std::env::current_exe().context("Failed to get current exe path"),
+    }
+}
+
 /// 解析 /etc/group 内容，返回 username 所在组的 gid 列表。
 ///
 /// 行格式 `group_name:password:gid:members`，members 逗号分隔、精确匹配
@@ -339,8 +353,7 @@ impl UserExecutor {
     pub fn spawn_isolated_writer(&self, temp_path: &str, final_path: &str, _file_size: u64) -> Result<(std::process::ChildStdin, i32)> {
         use anyhow::Context;
         let _guard = with_fork_guard();
-        let current_exe = std::env::current_exe()
-            .context("Failed to get current exe path")?;
+        let current_exe = isolated_executable()?;
         let mut cmd = std::process::Command::new(current_exe);
         cmd.arg("--isolated-writer").arg(temp_path)
            .arg("--final-path").arg(final_path)
@@ -371,8 +384,7 @@ impl UserExecutor {
     pub fn spawn_isolated_reader(&self, path: &str) -> Result<(std::process::ChildStdout, i32)> {
         use anyhow::Context;
         let _guard = with_fork_guard();
-        let current_exe = std::env::current_exe()
-            .context("Failed to get current exe path")?;
+        let current_exe = isolated_executable()?;
         let mut cmd = std::process::Command::new(current_exe);
         cmd.arg("--isolated-reader").arg(path)
            .arg("--uid").arg(self.uid.to_string())
@@ -410,8 +422,7 @@ impl UserExecutor {
     pub fn spawn_isolated_writer_part(&self, part_path: &str) -> Result<(std::process::ChildStdin, i32)> {
         use anyhow::Context;
         let _guard = with_fork_guard();
-        let current_exe = std::env::current_exe()
-            .context("Failed to get current exe path")?;
+        let current_exe = isolated_executable()?;
         let mut cmd = std::process::Command::new(current_exe);
         cmd.arg("--isolated-writer-part").arg(part_path)
            .arg("--uid").arg(self.uid.to_string())
@@ -448,8 +459,7 @@ impl UserExecutor {
     pub fn spawn_isolated_merger(&self, part_paths: Vec<String>, final_path: &str) -> Result<i32> {
         use anyhow::Context;
         let _guard = with_fork_guard();
-        let current_exe = std::env::current_exe()
-            .context("Failed to get current exe path")?;
+        let current_exe = isolated_executable()?;
         let part_paths_str = part_paths.join(",");
         let mut cmd = std::process::Command::new(current_exe);
         cmd.arg("--isolated-merger")
@@ -559,8 +569,7 @@ impl UserExecutor {
         tokio::task::spawn_blocking(move || -> Result<(u64, u64)> {
             use anyhow::Context;
             let _guard = with_fork_guard();
-            let current_exe = std::env::current_exe()
-                .context("Failed to get current exe path")?;
+            let current_exe = isolated_executable()?;
             let output = std::process::Command::new(current_exe)
                 .arg("--metadata").arg(&path)
                 .arg("--uid").arg(uid.to_string())
@@ -901,89 +910,6 @@ g2:x:2:testuser\n";
         })
         .await;
         assert!(err.is_err());
-    }
-
-    /// 测试 spawn_isolated_writer 往返:写入数据 → 等待子进程 → 验证文件内容
-    #[cfg(unix)]
-    #[test]
-    fn test_spawn_isolated_writer_round_trip() {
-        use std::io::{Read, Write};
-        use tempfile::tempdir;
-
-        let tmp = tempdir().expect("创建 tempdir 失败");
-        let final_path = tmp.path().join("test_upload.bin");
-        let temp_path = format!("{}.tmp", final_path.to_string_lossy());
-
-        // 创建测试 session(目标 uid = 当前 uid,避免降权复杂度)
-        let current_uid = nix::unistd::getuid().as_raw();
-        let current_gid = nix::unistd::getgid().as_raw();
-        let identity = crate::auth::UserIdentity::new(
-            "testuser".to_string(),
-            current_uid,
-            current_gid,
-            "/tmp".to_string(),
-            "/bin/bash".to_string(),
-        );
-        let session = crate::auth::UserSession::new(identity);
-        let executor = UserExecutor::new(&session);
-
-        let data = vec![0xAA; 1024 * 100]; // 100KB
-        let (mut pipe_writer, child_pid) = executor
-            .spawn_isolated_writer(&temp_path, &final_path.to_string_lossy(), data.len() as u64)
-            .expect("spawn_isolated_writer 失败");
-
-        pipe_writer.write_all(&data).expect("写入 pipe 失败");
-        drop(pipe_writer); // EOF signal
-
-        executor.wait_isolated_child(child_pid).expect("wait 失败");
-
-        // 验证文件内容
-        let mut file = std::fs::File::open(&final_path).expect("打开 final 失败");
-        let mut read_data = Vec::new();
-        file.read_to_end(&mut read_data).expect("读取失败");
-        assert_eq!(read_data, data);
-    }
-
-    /// 测试 spawn_isolated_reader 往返:写入测试文件 → 读取 pipe → 验证内容
-    #[cfg(unix)]
-    #[test]
-    fn test_spawn_isolated_reader_round_trip() {
-        use std::io::Read;
-        use tempfile::tempdir;
-
-        let tmp = tempdir().expect("创建 tempdir 失败");
-        let path = tmp.path().join("test_download.bin");
-        let data = vec![0xBB; 1024 * 100];
-        std::fs::write(&path, &data).expect("写入测试文件失败");
-
-        let current_uid = nix::unistd::getuid().as_raw();
-        let current_gid = nix::unistd::getgid().as_raw();
-        let identity = crate::auth::UserIdentity::new(
-            "testuser".to_string(),
-            current_uid,
-            current_gid,
-            "/tmp".to_string(),
-            "/bin/bash".to_string(),
-        );
-        let session = crate::auth::UserSession::new(identity);
-        let executor = UserExecutor::new(&session);
-
-        let (mut pipe_reader, child_pid) = executor
-            .spawn_isolated_reader(&path.to_string_lossy())
-            .expect("spawn_isolated_reader 失败");
-
-        let mut read_data = Vec::new();
-        let mut buf = [0u8; 4096];
-        loop {
-            match pipe_reader.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => read_data.extend_from_slice(&buf[..n]),
-                Err(e) => panic!("读取 pipe 失败: {}", e),
-            }
-        }
-        drop(pipe_reader);
-        executor.wait_isolated_child(child_pid).expect("wait 失败");
-        assert_eq!(read_data, data);
     }
 
     /// 测试 wait_isolated_child 处理 ECHILD:子进程已被回收时应返回错误

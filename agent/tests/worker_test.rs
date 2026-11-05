@@ -429,8 +429,8 @@ mod command_and_system_tests {
     }
 
     #[tokio::test]
-    async fn test_handle_execute_command_absolute_path_whitelist() {
-        // 绝对路径调用按最后一段匹配白名单（/usr/bin/tar → tar）
+    async fn test_handle_execute_command_rejects_absolute_path() {
+        // 安全策略：只接受白名单内的裸命令名，路径形式一律拒绝
         let req = ExecuteCommand {
             command: "/usr/bin/tar".to_string(),
             args: vec!["--version".to_string()],
@@ -445,10 +445,15 @@ mod command_and_system_tests {
         let response = command::handle_execute_command(req).await;
 
         match response.payload {
-            Some(worker_response::Payload::CommandOutput(output)) => {
-                assert_eq!(output.exit_code, 0);
+            Some(worker_response::Payload::Error(error)) => {
+                assert_eq!(error.code, 403, "绝对路径命令应被拒绝");
+                assert!(
+                    error.message.contains("裸命令名"),
+                    "错误信息应说明只接受裸命令名: {}",
+                    error.message
+                );
             }
-            _ => panic!("Expected CommandOutput for absolute-path whitelisted command, got {:?}", response.payload),
+            _ => panic!("Expected Error 403, got {:?}", response.payload),
         }
     }
 

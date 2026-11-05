@@ -38,10 +38,11 @@ impl AuditLogger {
     ///
     /// # 示例
     ///
-    /// ```rust
+    /// ```rust,no_run
     /// use quireld::audit::AuditLogger;
     ///
-    /// let logger = AuditLogger::new("/var/log/quireld/audit.log")?;
+    /// let _logger = AuditLogger::new("/var/log/quireld/audit.log")
+    ///     .expect("创建审计日志失败");
     /// ```
     pub fn new(log_path: &str) -> std::io::Result<Self> {
         // 自动创建日志目录
@@ -90,7 +91,7 @@ impl AuditLogger {
     ///
     /// # 日志格式
     ///
-    /// ```
+    /// ```text
     /// timestamp user=X uid=X op=X details=X
     /// ```
     fn log_operation(&self, user: &str, uid: u32, operation: &str, details: &str) {
@@ -148,10 +149,10 @@ impl AuditLogger {
     ///
     /// # 示例
     ///
-    /// ```rust
+    /// ```rust,ignore
     /// logger.log_file_operation("alice", 1000, "read", "/etc/passwd", 1234);
     /// logger.log_file_operation("root", 0, "write", "/etc/nginx/nginx.conf", 5678);
-    /// 记录文件操作
+    /// ```
     ///
     /// 已在文件传输流程的入口/完成/中断处调用:
     /// - handler.rs: handle_file_transfer_request 记录 upload_start/download_start

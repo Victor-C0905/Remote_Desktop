@@ -8,7 +8,7 @@
 //!
 //! # 架构位置
 //!
-//! ```
+//! ```text
 //! Manager (Gateway Layer)
 //!     ↓ CreateSession 请求
 //! Worker (Isolation Layer) ← SessionManager 在此运行
