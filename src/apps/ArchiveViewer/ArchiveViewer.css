@@ -1,4 +1,4 @@
-/* ArchiveViewer 单栏树视图（VSCode 风格）：工具栏 + 滚动树 + 内嵌解压对话框 */
+/* ArchiveViewer 平面导航视图（对齐 7-Zip / WinRAR）：工具栏 + 面包屑 + 列表 + 状态栏 */
 
 .archive-viewer {
   display: flex;
@@ -32,11 +32,39 @@
 }
 .av-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.08); }
 .av-btn:disabled { opacity: 0.4; cursor: default; }
-.av-btn-primary { background: #0e639c; border-color: #0e639c; color: #fff; }
-.av-btn-primary:hover:not(:disabled) { background: #1177bb; }
+.av-btn-primary { background: var(--quirel-accent-bg, #0f8658); border-color: var(--quirel-accent-bg, #0f8658); color: var(--quirel-accent-fg, #fff); }
+.av-btn-primary:hover:not(:disabled) { background: var(--quirel-accent-hover, #0d7a50); }
 
-/* ── 主体：加载/错误/树 ── */
-.av-body { flex: 1; overflow: auto; padding: 6px 4px; position: relative; }
+/* ── 面包屑导航（档案名 › 内部路径） ── */
+.av-nav {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--border-1, #333);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.av-crumb {
+  border: none;
+  background: transparent;
+  color: var(--text-3, #888);
+  cursor: pointer;
+  padding: 2px 5px;
+  border-radius: 4px;
+  font-size: 12px;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.av-crumb:hover { background: rgba(255, 255, 255, 0.08); color: var(--text-1, #d4d4d4); }
+.av-crumb-item { display: inline-flex; align-items: center; }
+.av-crumb-sep { color: var(--text-3, #888); padding: 0 2px; }
+
+/* ── 主体：加载/错误/列表 ── */
+.av-body { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
 .av-loading,
 .av-error {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -48,17 +76,105 @@
   font-size: 12px; white-space: pre-wrap;
 }
 
-/* ── 树行 ── */
+/* ── 列表（表头固定 + 内容滚动） ── */
+.av-list { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.av-list-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 12px; color: var(--text-3, #888);
+  flex-shrink: 0;
+}
+.av-list-head .av-col-name { flex: 1; }
+.av-list-head .av-col-size { width: 90px; text-align: right; }
+.av-list-body {
+  flex: 1; min-height: 0; overflow: auto; position: relative;
+  padding: 4px 4px 48px;   /* 底部留白：可从空白处开始拖拽框选 */
+  outline: none;
+  user-select: none;
+}
+
 .av-row {
-  display: flex; align-items: center; gap: 6px;
-  padding: 3px 8px; font-size: 13px;
-  border-radius: 4px; user-select: none;
+  display: flex; align-items: center; gap: 8px;
+  height: 28px; padding: 0 8px;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: default;
 }
 .av-row:hover { background: rgba(255, 255, 255, 0.06); }
 .av-row.av-extracting { opacity: 0.5; }
-.av-icon { width: 18px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
-.av-row .av-row-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.av-row .av-row-size { color: var(--text-3, #888); font-size: 12px; flex-shrink: 0; }
-.av-row[data-dir="true"] { cursor: pointer; }
+/* 强调色行选中（替代复选框） */
+.av-row.av-selected {
+  background: var(--quirel-accent-bg, #0f8658);
+  color: var(--quirel-accent-fg, #fff);
+}
+.av-row.av-selected:hover { background: var(--quirel-accent-hover, #0d7a50); }
+.av-row.av-selected .av-row-size { color: inherit; opacity: 0.85; }
 
-/* 内嵌解压对话框底座已迁移到共享 Dialog 组件（dg-*），见 components/Dialog/ */
+.av-up-row { color: var(--text-3, #888); cursor: pointer; }
+.av-up-row:hover { color: var(--text-1, #d4d4d4); }
+.av-up-icon { width: 18px; text-align: center; font-size: 14px; flex-shrink: 0; }
+.av-icon { width: 18px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.av-row .av-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.av-row .av-row-size { width: 90px; text-align: right; color: var(--text-3, #888); font-size: 12px; flex-shrink: 0; }
+.av-empty { padding: 24px 8px; text-align: center; color: var(--text-3, #888); font-size: 12px; }
+
+/* 拖拽框选矩形（强调色半透明） */
+.av-marquee {
+  position: absolute;
+  border: 1px solid var(--quirel-accent-bg, #0f8658);
+  background: color-mix(in srgb, var(--quirel-accent-bg, #0f8658) 18%, transparent);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+/* ── 状态栏 ── */
+.av-status {
+  display: flex; align-items: center; gap: 16px;
+  padding: 4px 12px;
+  border-top: 1px solid var(--border-1, #333);
+  color: var(--text-3, #888);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+/* ── 解压对话框表单（共用 dg-* 底座） ── */
+.av-subfolder {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--quirel-text-primary);
+  cursor: pointer;
+}
+.av-subfolder-disabled { cursor: not-allowed; opacity: 0.7; }
+.av-field-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--quirel-text-secondary);
+}
+.av-subfolder-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--quirel-text-secondary);
+}
+.av-extract-error {
+  margin-top: 8px;
+  color: var(--quirel-error-color, #e01b24);
+  font-size: 12px;
+}
+
+/* 冲突路径预览 */
+.av-conflict-paths {
+  max-height: 160px;
+  overflow: auto;
+  margin-bottom: 16px;
+  padding: 6px 8px;
+  background: var(--quirel-window-bg);
+  border: 1px solid var(--quirel-border-color);
+  border-radius: var(--radius-sm, 8px);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--quirel-text-secondary);
+}
+.av-conflict-path { white-space: pre-wrap; word-break: break-all; }
+.av-conflict-more { color: var(--quirel-text-secondary); opacity: 0.8; }

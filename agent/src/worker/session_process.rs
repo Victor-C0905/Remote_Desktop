@@ -378,6 +378,7 @@ fn session_io_loop(master_fd: RawFd, sock_fd: RawFd, bash_pid: i32, session_id: 
         // === 事件循环 ===
         let mut bash_exited = false;
         let mut socket_disconnected = false;
+        let mut close_requested = false;
 
         while !bash_exited && !socket_disconnected {
             let mut pfds = [
@@ -472,7 +473,8 @@ fn session_io_loop(master_fd: RawFd, sock_fd: RawFd, bash_pid: i32, session_id: 
                             }
                         }
                         t if t == msg_type::CLOSE => {
-                            // Manager 要求关闭
+                            // Manager 显式关闭：终止会话，不进入重连窗口
+                            close_requested = true;
                             socket_disconnected = true;
                         }
                         _ => {
@@ -507,6 +509,22 @@ fn session_io_loop(master_fd: RawFd, sock_fd: RawFd, bash_pid: i32, session_id: 
             }
             eprintln!(
                 "Session 进程退出: session_id={}, bash_pid={}, status={}",
+                session_id, bash_pid, status
+            );
+            return Ok(());
+        }
+
+        if close_requested {
+            // 显式 Close：立即终止 bash，区别于断线后的 30 秒重连窗口
+            unsafe {
+                libc::kill(bash_pid, libc::SIGHUP);
+            }
+            let mut status: i32 = 0;
+            unsafe {
+                libc::waitpid(bash_pid, &mut status, 0);
+            }
+            eprintln!(
+                "Session 收到 Close，终止 bash: session_id={}, bash_pid={}, status={}",
                 session_id, bash_pid, status
             );
             return Ok(());

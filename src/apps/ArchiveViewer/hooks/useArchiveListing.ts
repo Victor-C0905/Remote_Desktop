@@ -10,13 +10,14 @@ import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { createLogger } from '../../../utils/logger';
 import { formatUnknownError } from '../../../types/errors';
-import { buildListCommand, type ArchiveKind } from '../commands';
+import { describeExecFailure, describeInvokeError } from '../errors';
+import type { ArchiveKind } from '../commands';
 import { parseListing } from '../utils/format';
 import { buildTree, type ArchiveTreeNode } from '../tree';
 
 const log = createLogger('ArchiveViewer');
 
-/** remote_execute_command 返回结构（与 FileManager 一致） */
+/** remote_archive_list 返回结构（Agent 固定命令输出） */
 interface ExecResult { stdout: string; stderr: string; exitCode: number; }
 
 export interface ArchiveListingState {
@@ -32,6 +33,9 @@ export function useArchiveListing(
   path: string | undefined,
   serverId: string | undefined,
   kind: ArchiveKind | null,
+  tool?: string,
+  formatId?: string,
+  enabled = true,
 ): ArchiveListingState {
   const [tree, setTree] = useState<ArchiveTreeNode[]>([]);
   const [loading, setLoading] = useState(true);
@@ -39,6 +43,13 @@ export function useArchiveListing(
   const { t } = useTranslation();
 
   const refresh = useCallback(async () => {
+    // 能力探测中或格式不可用时，不发起必然失败的列表命令
+    if (!enabled) {
+      setTree([]);
+      setLoading(false);
+      setError(null);
+      return;
+    }
     if (!path || !serverId || !kind) {
       setError({ msg: t(kind ? 'archive.errNoTarget' : 'archive.errUnsupported') });
       setLoading(false);
@@ -47,23 +58,35 @@ export function useArchiveListing(
     setLoading(true);
     setError(null);
     try {
-      const cmd = buildListCommand(path, kind);
-      const r = await invoke<ExecResult>('remote_execute_command', {
-        serverId, command: cmd.command, args: cmd.args,
-        workingDirectory: '/', timeoutSecs: 30,
-      });
-      if (r.exitCode !== 0) {
-        setError({ msg: t('archive.errListCommandFailed', { code: r.exitCode }), detail: r.stderr || r.stdout });
+      let r: ExecResult;
+      try {
+        // 列表 argv 由 Agent 按 formatId 生成，客户端不再传命令/参数
+        r = await invoke<ExecResult>('remote_archive_list', {
+          serverId, archivePath: path, formatId: formatId ?? kind,
+        });
+      } catch (err) {
+        // 连接失败/Agent 拒绝与“输出解析失败”不是一回事，不能统一报解析错误
+        log.error('加载压缩包列表失败:', err);
+        setError({ msg: describeInvokeError(err) });
         return;
       }
-      setTree(buildTree(parseListing(kind, r.stdout)));
-    } catch (err) {
-      log.error('加载压缩包列表失败:', err);
-      setError({ msg: t('archive.errParse'), detail: formatUnknownError(err) });
+      if (r.exitCode !== 0) {
+        log.error('列表命令失败:', r.exitCode, r.stderr || r.stdout);
+        setError({ msg: describeExecFailure(r, 'list') });
+        return;
+      }
+      // zip 由 7z 兜底列表时输出是 -slt 格式，解析器必须跟随实际工具
+      try {
+        const parseKind = kind === 'zip' && (tool === '7z' || tool === '7zz') ? '7z' : kind;
+        setTree(buildTree(parseListing(parseKind, r.stdout)));
+      } catch (err) {
+        log.error('解析列表输出失败:', err);
+        setError({ msg: t('archive.errParse'), detail: formatUnknownError(err) });
+      }
     } finally {
       setLoading(false);
     }
-  }, [path, serverId, kind, t]);
+  }, [path, serverId, kind, tool, formatId, enabled, t]);
 
   useEffect(() => { refresh(); }, [refresh]);
 

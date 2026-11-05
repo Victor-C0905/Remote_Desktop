@@ -35,6 +35,20 @@ fn create_test_user_session() -> UserSession {
     }
 }
 
+/// 尝试连接 abstract UnixSocket：Session 进程退出后 socket 应不可连接
+fn abstract_socket_connectable(name: &str) -> bool {
+    use nix::sys::socket::{connect, socket, AddressFamily, SockFlag, SockType, UnixAddr};
+    use std::os::unix::io::AsRawFd;
+
+    let Ok(fd) = socket(AddressFamily::Unix, SockType::Stream, SockFlag::empty(), None) else {
+        return false;
+    };
+    let Ok(addr) = UnixAddr::new_abstract(name.as_bytes()) else {
+        return false;
+    };
+    connect(fd.as_raw_fd(), &addr).is_ok()
+}
+
 /// 测试通过 Worker 创建 PTY 会话
 #[tokio::test]
 async fn test_create_pty_session_via_worker() {
@@ -68,11 +82,23 @@ async fn test_create_pty_session_via_worker() {
     let registry = manager.pty_registry();
     let session = registry.get(&session_id).await;
     assert!(session.is_some(), "PtyRegistry 中应能找到 session");
-    assert!(session.unwrap().connection.socket_name().contains("quireld-session"), "应有有效的 socket_name");
+    let socket_name = session.unwrap().connection.socket_name().to_string();
+    assert!(socket_name.contains("quireld-session"), "应有有效的 socket_name");
 
     // 清理
     let removed = registry.unregister(&session_id).await;
     assert!(removed.is_ok(), "注销 session 应成功");
+
+    // Close 后 Session 进程应立即退出，不进入 30 秒重连窗口
+    let mut alive_after_close = true;
+    for _ in 0..20 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        if !abstract_socket_connectable(&socket_name) {
+            alive_after_close = false;
+            break;
+        }
+    }
+    assert!(!alive_after_close, "Close 后 Session 进程应立即退出（socket 不再可连接）");
 
     // 停止 Manager
     manager.shutdown().await.expect("Manager 停止失败");

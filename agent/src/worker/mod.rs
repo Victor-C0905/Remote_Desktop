@@ -4,7 +4,7 @@
 //!
 //! # 架构位置
 //!
-//! ```
+//! ```text
 //! Manager (Gateway Layer)
 //!     ↓ Unix Socket + FD Passing
 //! Worker (Isolation Layer) ← 当前模块

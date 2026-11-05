@@ -73,6 +73,7 @@ pub use quirel_protocol::{
     AuthStatsSnapshot, ConnectionStatsSnapshot, PerformanceStatsSnapshot,
     ResponseTimePercentiles, StatsResponse,
     AuthErrorCode,
+    ArchiveCapabilities, ArchiveExtractPolicy, ArchiveFormatCapability, ArchiveHostOs, ArchiveTool,
 };
 
 // ── 连接管理器 ───────────────────────────────────────
@@ -1215,6 +1216,23 @@ pub async fn remote_read_file_binary(server_id: String, path: String, app: tauri
     }
 }
 
+// ── 压缩能力探测（解压工具可用性）────────────────────────
+
+/// 查询服务器压缩/解压能力（refresh=true 强制 Agent 重新探测）
+#[tauri::command]
+pub async fn remote_archive_capabilities(
+    server_id: String,
+    refresh: bool,
+    app: tauri::AppHandle,
+) -> Result<ArchiveCapabilities, AppError> {
+    let resp = remote_send(server_id, Payload::ArchiveCapabilitiesRequest { refresh }, app).await?;
+    match resp.payload {
+        Payload::ArchiveCapabilitiesResponse(capabilities) => Ok(capabilities),
+        Payload::Error { message, .. } => Err(agent_error(message)),
+        _ => Err(AppError::new(codes::UNEXPECTED_RESPONSE)),
+    }
+}
+
 // ── 远程命令执行（解压等文件操作）──────────────────────────
 
 /// 远程命令执行结果（stdout/stderr 已转文本：UTF-8 优先，GB18030 回退）
@@ -1226,27 +1244,21 @@ pub struct RemoteCommandOutput {
     pub exit_code: i32,
 }
 
-/// 执行服务器白名单命令（unzip/tar/7z/unrar；Worker 端强制白名单）
+/// 发送压缩包语义请求并解码命令输出
 ///
-/// 解压等文件操作走此通道：argv 直执行不经 shell，路径无需转义。
-/// 超时独立于 remote_send 的 30s Stream 超时（大压缩包解压耗时长），
-/// 故不直接复用 remote_send，而是内联其发送模式 + 自定义外层超时。
-#[tauri::command]
-#[tracing::instrument(skip(app), fields(server_id = %server_id))]
-pub async fn remote_execute_command(
+/// 客户端不再构造 command/args；Agent 端根据 format_id + entries + policy 生成
+/// 固定 argv 并做路径校验。超时独立于 remote_send 的 30s Stream 超时。
+async fn send_archive_command(
     server_id: String,
-    command: String,
-    args: Vec<String>,
-    working_directory: Option<String>,
-    timeout_secs: Option<u32>,
+    payload: Payload,
+    timeout_secs: u32,
     app: tauri::AppHandle,
 ) -> Result<RemoteCommandOutput, AppError> {
     use base64::Engine;
-    tracing::info!("[ExecuteCommand] server_id={}, command={}, args={:?}", server_id, command, args);
+    tracing::debug!("[Archive] server_id={}, payload={:?}", server_id, payload.type_name());
 
     // 外层超时兜底：比命令自身 timeout 多 30s（Agent 端负责 kill 命令进程并回错误）
-    let cmd_timeout = timeout_secs.unwrap_or(600);
-    let outer_timeout = std::time::Duration::from_secs(cmd_timeout as u64 + 30);
+    let outer_timeout = std::time::Duration::from_secs(timeout_secs as u64 + 30);
 
     let manager = app.state::<ConnectionManager>();
     let (tx, request_id) = {
@@ -1255,12 +1267,7 @@ pub async fn remote_execute_command(
         (conn.tx.clone(), manager.next_request_id())
     };
 
-    let envelope = Envelope::new(request_id, Payload::ExecuteCommandRequest {
-        command,
-        args,
-        working_directory,
-        timeout_secs: cmd_timeout,
-    });
+    let envelope = Envelope::new(request_id, payload);
     let (response_tx, response_rx) = tokio::sync::oneshot::channel();
 
     tx.send(ClientRequest::Send { envelope, response_tx }).await
@@ -1269,7 +1276,7 @@ pub async fn remote_execute_command(
     let data = tokio::time::timeout(outer_timeout, response_rx)
         .await
         .map_err(|_| {
-            tracing::warn!("[ExecuteCommand] 命令执行超时: server_id={}", server_id);
+            tracing::warn!("[Archive] 命令执行超时: server_id={}", server_id);
             AppError::new(codes::RESPONSE_TIMEOUT)
         })?
         .map_err(|_| AppError::new(codes::CONNECTION_LOST))??;
@@ -1302,6 +1309,69 @@ pub async fn remote_execute_command(
     }
 }
 
+/// 列出压缩包内容（Agent 构造固定 tar/unzip/7z/unrar 列表命令）
+#[tauri::command]
+#[tracing::instrument(skip(app), fields(server_id = %server_id, archive_path = %archive_path))]
+pub async fn remote_archive_list(
+    server_id: String,
+    archive_path: String,
+    format_id: String,
+    app: tauri::AppHandle,
+) -> Result<RemoteCommandOutput, AppError> {
+    send_archive_command(
+        server_id,
+        Payload::ArchiveListRequest { archive_path, format_id },
+        60,
+        app,
+    ).await
+}
+
+/// 解压压缩包（entries=None 表示全部；policy="skip"/"overwrite"）
+#[tauri::command]
+#[tracing::instrument(skip(app), fields(server_id = %server_id, archive_path = %archive_path, target_dir = %target_dir))]
+pub async fn remote_archive_extract(
+    server_id: String,
+    archive_path: String,
+    target_dir: String,
+    format_id: String,
+    entries: Option<Vec<String>>,
+    policy: String,
+    app: tauri::AppHandle,
+) -> Result<RemoteCommandOutput, AppError> {
+    let policy = if policy == "skip" {
+        ArchiveExtractPolicy::Skip
+    } else {
+        ArchiveExtractPolicy::Overwrite
+    };
+    send_archive_command(
+        server_id,
+        Payload::ArchiveExtractRequest {
+            archive_path, target_dir, format_id, entries, policy,
+        },
+        600,
+        app,
+    ).await
+}
+
+/// 远端文件名 → 本地安全文件名
+///
+/// 只保留单段文件名：`/`、`\`、NUL 替换为 `_`，`.`/`..`/空名回退固定名。
+/// 防止远端构造 `..\..\x` 之类名称让 `Path::join` 逃逸临时目录。
+fn sanitize_local_filename(raw: &str) -> String {
+    let cleaned: String = raw
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | '\0' => '_',
+            _ => c,
+        })
+        .collect();
+    if cleaned.is_empty() || cleaned == "." || cleaned == ".." {
+        "download.html".to_string()
+    } else {
+        cleaned
+    }
+}
+
 /// 下载远程文件到本地临时目录并用系统默认应用打开（HTML → 浏览器）
 ///
 /// 数据流：ReadFileRequest（base64 全量）→ %TEMP%/quirel-view/<文件名> → opener
@@ -1329,7 +1399,9 @@ pub async fn remote_open_locally(
         .map_err(|e| AppError::new(codes::UNEXPECTED_RESPONSE).with_detail(format!("base64 decode: {e}")))?;
 
     // 2. 写入本地临时目录（%TEMP%/quirel-view[-dev]/，不存在则创建，同名覆盖）
-    let file_name = remote_path.rsplit('/').next().filter(|s| !s.is_empty()).unwrap_or("download.html");
+    // 远端文件名可含 `\`、`..` 等 Windows 路径语义字符，必须清洗后再落盘，
+    // 否则恶意远端名可逃逸临时目录写到客户端任意可写位置
+    let file_name = sanitize_local_filename(remote_path.rsplit('/').next().unwrap_or(""));
     let dir = crate::profile_temp_path("quirel-view", &app.config().identifier);
     std::fs::create_dir_all(&dir)
         .map_err(|e| AppError::new(codes::IO_FAILED).with_detail(format!("create temp dir: {e}")))?;
@@ -2782,5 +2854,13 @@ mod search_tests {
         assert_eq!(v["path"], "/home/user/a.txt");
         assert_eq!(v["is_dir"], false);
         assert_eq!(v["owner"], "root");
+    }
+
+    #[test]
+    fn sanitize_local_filename_blocks_path_escape() {
+        assert_eq!(sanitize_local_filename("a.html"), "a.html");
+        assert_eq!(sanitize_local_filename("..\\..\\evil.html"), ".._.._evil.html");
+        assert_eq!(sanitize_local_filename(".."), "download.html");
+        assert_eq!(sanitize_local_filename(""), "download.html");
     }
 }

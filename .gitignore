@@ -158,6 +158,16 @@ coverage/
 *.rar
 *.7z
 
+# 压缩能力探测样本：必须以真实扩展名入库（工具按内容识别，但探测流程依赖原文件名）
+!agent/assets/archive-probes/*.zip
+!agent/assets/archive-probes/*.tar
+!agent/assets/archive-probes/*.tar.gz
+!agent/assets/archive-probes/*.tar.bz2
+!agent/assets/archive-probes/*.tar.xz
+!agent/assets/archive-probes/*.tar.zst
+!agent/assets/archive-probes/*.7z
+!agent/assets/archive-probes/*.rar
+
 # 可执行文件
 *.exe
 *.dll

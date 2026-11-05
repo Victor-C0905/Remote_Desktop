@@ -26,6 +26,7 @@ import { createLogger } from '../../utils/logger';
 import { AppLayout } from '../../components/app-shell/AppLayout';
 import { AppTopbar } from '../../components/app-shell/AppTopbar';
 import { ChromeTabStrip } from '../../components/ChromeTabStrip/ChromeTabStrip';
+import { isDialogOpen } from '../../components/Dialog/Dialog';
 import { ConfirmDialog } from '../../components/Dialog/ConfirmDialog';
 import { useServerManager } from '../../context/ServerManager';
 import { useWindowManager } from '../../window-system/WindowManagerContext';
@@ -33,6 +34,7 @@ import { EditorDocument } from './components/EditorDocument';
 import type { DocStatus, EditorDocumentHandle } from './components/EditorDocument';
 import { StatusBar } from './components/StatusBar';
 import { SaveDialog } from './components/SaveDialog';
+import { parentRemotePath } from '../../components/RemoteDirectoryPicker/path';
 import './TextEditor.css';
 
 const log = createLogger('TextEditor');
@@ -178,6 +180,8 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
     const handleKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key === 's') {
         event.preventDefault();
+        // 模态弹窗（保存/目录选择）打开期间，宿主快捷键让位
+        if (isDialogOpen()) return;
         if (activeServerId) {
           if (activeStatus?.path) {
             docRefs.current.get(activeTab.id)?.save(activeServerId);
@@ -398,7 +402,15 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
       {/* 另存为对话框（绑定活动页签） */}
       <SaveDialog
         isOpen={showSaveDialog}
-        defaultPath="/home/user/untitled.txt"
+        serverId={activeServerId ?? ''}
+        defaultDirectory={
+          activeStatus?.path
+            ? parentRemotePath(activeStatus.path)
+            : activeServer?.auth?.username
+              ? (activeServer.auth.username === 'root' ? '/root' : `/home/${activeServer.auth.username}`)
+              : '/'
+        }
+        defaultFileName={activeStatus?.path ? pathTail(activeStatus.path) : 'untitled.txt'}
         onSave={async (path) => {
           if (activeServerId) {
             await docRefs.current.get(activeTab.id)?.saveAs(activeServerId, path);

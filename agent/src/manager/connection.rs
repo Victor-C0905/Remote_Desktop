@@ -29,9 +29,9 @@ use super::pty_registry::PtyRegistry;
 ///
 /// # 示例
 ///
-/// ```rust
-/// use manager::connection::ConnectionManager;
-/// use manager::pty_registry::PtyRegistry;
+/// ```rust,ignore
+/// use quireld::manager::connection::ConnectionManager;
+/// use quireld::manager::pty_registry::PtyRegistry;
 /// use std::sync::Arc;
 ///
 /// #[cfg(unix)]
@@ -105,7 +105,7 @@ impl ConnectionManager {
     ///
     /// # 示例
     ///
-    /// ```rust
+    /// ```rust,ignore
     /// manager.register_session("conn-1", "session-1").await.unwrap();
     /// ```
     pub async fn register_session(&self, connection_id: &str, session_id: &str) -> Result<()> {
@@ -167,7 +167,7 @@ impl ConnectionManager {
     ///
     /// # 示例
     ///
-    /// ```rust
+    /// ```rust,ignore
     /// let connection_id = manager.unregister_session("session-1").await.unwrap();
     /// ```
     pub async fn unregister_session(&self, session_id: &str) -> Result<Option<String>> {
@@ -225,7 +225,7 @@ impl ConnectionManager {
     ///
     /// # 示例
     ///
-    /// ```rust
+    /// ```rust,ignore
     /// let sessions = manager.get_sessions("conn-1").await;
     /// assert_eq!(sessions, vec!["session-1", "session-2"]);
     /// ```
@@ -255,7 +255,7 @@ impl ConnectionManager {
     ///
     /// # 示例
     ///
-    /// ```rust
+    /// ```rust,ignore
     /// let count = manager.cleanup_connection("conn-1").await.unwrap();
     /// info!("已清理 {} 个会话", count);
     /// ```

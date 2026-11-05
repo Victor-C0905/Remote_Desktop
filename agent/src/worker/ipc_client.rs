@@ -56,7 +56,7 @@ impl IpcClient {
     ///
     /// # 消息格式
     ///
-    /// ```
+    /// ```text
     /// [4 字节: 消息长度（big-endian）]
     /// [N 字节: Protobuf 编码的消息内容]
     /// ```
@@ -95,7 +95,7 @@ impl IpcClient {
     ///
     /// # 消息格式
     ///
-    /// ```
+    /// ```text
     /// [4 字节: 消息长度（big-endian）]
     /// [N 字节: Protobuf 编码的消息内容]
     /// ```

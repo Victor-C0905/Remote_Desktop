@@ -27,6 +27,14 @@
   box-shadow: var(--shadow-popup);
 }
 
+/* 可拖动卡片（draggable）：空白/标题区域按住即可移动；
+   输入框、按钮等交互元素不触发拖动，保留各自光标与点击行为 */
+.dg-card-draggable { cursor: grab; }
+.dg-card-draggable.dg-card-dragging {
+  cursor: grabbing;
+  user-select: none;
+}
+
 /* ── 标题与消息 ─────────────────────────────────────────── */
 .dg-title {
   font-size: calc(var(--font-body) + 2px);

@@ -9,11 +9,16 @@
 // - 不得移除字段；新增字段必须带 #[serde(default)]
 // - tests/wire_compat.rs 的 golden 用例锁死字节级格式
 
+pub mod archive;
 pub mod envelope;
 pub mod stats;
 pub mod subscription;
 pub mod types;
 
+pub use archive::{
+    ArchiveCapabilities, ArchiveExtractPolicy, ArchiveExtractRequest,
+    ArchiveFormatCapability, ArchiveHostOs, ArchiveListRequest, ArchiveTool,
+};
 pub use envelope::{AuthErrorCode, Envelope, Payload};
 pub use stats::{
     AuthStatsSnapshot, ConnectionStatsSnapshot, PerformanceStatsSnapshot,

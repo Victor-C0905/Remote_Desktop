@@ -13,6 +13,7 @@
 
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 
+use crate::archive::commands::{build_list, BuiltArchiveCommand};
 use crate::auth::UserSession;
 use crate::protocol::generated::{
     manager_request, worker_response,
@@ -45,7 +46,52 @@ impl From<&UserSession> for UserContext {
     }
 }
 
+pub(crate) fn archive_command_to_worker(
+    cmd: BuiltArchiveCommand,
+    user: &UserContext,
+) -> manager_request::Payload {
+    manager_request::Payload::ExecuteCommand(ExecuteCommand {
+        command: cmd.command,
+        args: cmd.args,
+        working_directory: cmd.working_directory,
+        env: Default::default(),
+        timeout_secs: cmd.timeout_secs,
+        uid: user.uid,
+        gid: user.gid,
+        username: user.username.clone(),
+        home_dir: user.home_dir.clone(),
+    })
+}
+
+/// 压缩包语义化请求 → Worker ExecuteCommand（Agent 侧构造固定 argv）
+///
+/// 客户端不再传 command/args；路径、条目与策略在此校验后转成固定参数模板，
+/// 从根上阻断 tar --checkpoint-action=exec 之类的参数注入。
+///
+/// # 返回
+/// - `Ok(Some(..))`: 已转换的 Worker 请求
+/// - `Ok(None)`: 不是压缩包语义请求
+/// - `Err(..)`: 路径/条目/格式校验失败
+pub fn semantic_archive_worker_request(
+    payload: &Payload,
+    user: &UserContext,
+) -> anyhow::Result<Option<manager_request::Payload>> {
+    match payload {
+        Payload::ArchiveListRequest { archive_path, format_id } => {
+            tracing::debug!("适配 ArchiveListRequest: archive={}, format={}", archive_path, format_id);
+            let cmd = build_list(archive_path, format_id)?;
+            Ok(Some(archive_command_to_worker(cmd, user)))
+        }
+        // ArchiveExtractRequest 由 Manager 的 handle_archive_extract 处理：
+        // 先跑条目校验 + 解压后权限清理，不能直接转换成单条命令
+        _ => Ok(None),
+    }
+}
+
 /// 将客户端 serde 请求转换为 Worker protobuf 请求 payload
+///
+/// 压缩包语义请求不在此处理（见 `semantic_archive_worker_request`），
+/// 避免通用命令执行通道绕过 Agent 侧参数构造。
 ///
 /// # 参数
 /// - `payload`: 客户端发送的 serde Payload
@@ -82,21 +128,6 @@ pub fn serde_to_worker_request(payload: &Payload, user: &UserContext) -> Option<
             tracing::debug!("适配 FileInfoRequest: path={}", path);
             Some(manager_request::Payload::FileInfo(FileInfo {
                 path: path.clone(),
-                uid: user.uid,
-                gid: user.gid,
-                username: user.username.clone(),
-                home_dir: user.home_dir.clone(),
-            }))
-        }
-
-        Payload::ExecuteCommandRequest { command, args, working_directory, timeout_secs } => {
-            tracing::debug!("适配 ExecuteCommandRequest: command={}, args={:?}, timeout={}s", command, args, timeout_secs);
-            Some(manager_request::Payload::ExecuteCommand(ExecuteCommand {
-                command: command.clone(),
-                args: args.clone(),
-                working_directory: working_directory.clone().unwrap_or_default(),
-                env: Default::default(),
-                timeout_secs: *timeout_secs,
                 uid: user.uid,
                 gid: user.gid,
                 username: user.username.clone(),
@@ -785,30 +816,17 @@ mod tests {
     }
 
     #[test]
-    fn test_execute_command_request_conversion() {
+    fn test_execute_command_request_no_longer_routed() {
+        // 通用命令执行通道已关闭：客户端不能直接下发 command/args，
+        // 压缩包操作必须走 ArchiveList/ArchiveExtract 语义请求
         let payload = Payload::ExecuteCommandRequest {
-            command: "unzip".to_string(),
-            args: vec!["-o".to_string(), "/tmp/a.zip".to_string()],
+            command: "tar".to_string(),
+            args: vec!["--checkpoint-action=exec=/bin/sh".to_string()],
             working_directory: Some("/tmp".to_string()),
             timeout_secs: 600,
         };
         let user = test_user_context();
-
-        let result = serde_to_worker_request(&payload, &user);
-
-        match result {
-            Some(manager_request::Payload::ExecuteCommand(req)) => {
-                assert_eq!(req.command, "unzip");
-                assert_eq!(req.args, vec!["-o".to_string(), "/tmp/a.zip".to_string()]);
-                assert_eq!(req.working_directory, "/tmp");
-                assert_eq!(req.timeout_secs, 600);
-                assert_eq!(req.uid, user.uid);
-                assert_eq!(req.gid, user.gid);
-                assert_eq!(req.username, user.username);
-                assert_eq!(req.home_dir, user.home_dir);
-            }
-            _ => panic!("Expected ExecuteCommand conversion"),
-        }
+        assert!(serde_to_worker_request(&payload, &user).is_none());
     }
 
     #[test]

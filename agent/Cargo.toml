@@ -43,6 +43,8 @@ tracing-appender = "0.2"
 # 工具
 bytes = "1"
 uuid = { version = "1", features = ["v4"] }
+# 探测/解压临时目录（安全随机名 + RAII 清理）
+tempfile = "3"
 lazy_static = "1.4"
 anyhow = "1"
 thiserror = "1"
@@ -85,9 +87,6 @@ which = "6"
 
 [build-dependencies]
 prost-build = "0.12"
-
-[dev-dependencies]
-tempfile = "3"
 
 [profile.dev]
 # 行表级调试信息：回溯含行号，调试信息体积较完整 DWARF 大幅缩小（PDB/增量缓存）

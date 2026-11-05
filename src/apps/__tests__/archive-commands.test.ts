@@ -1,7 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import {
-  classifyArchive, buildListCommand, buildExtractOneCommand, tmpDirFor,
-} from '../ArchiveViewer/commands';
+import { classifyArchive, tmpDirFor } from '../ArchiveViewer/commands';
 
 describe('classifyArchive 按文件名推断压缩格式', () => {
   it('识别各扩展名', () => {
@@ -20,43 +18,8 @@ describe('classifyArchive 按文件名推断压缩格式', () => {
     expect(classifyArchive('a.txt')).toBeNull();
     expect(classifyArchive('a.gz')).toBeNull(); // 单纯 .gz（非 .tar.gz）不支持
   });
-});
-
-describe('buildListCommand 列表命令', () => {
-  it('zip → unzip -l', () => {
-    expect(buildListCommand('/x/a.zip', 'zip'))
-      .toEqual({ command: 'unzip', args: ['-l', '/x/a.zip'] });
-  });
-  it('tar → tar -tvf（大小信息）', () => {
-    expect(buildListCommand('/x/a.tar.gz', 'tar'))
-      .toEqual({ command: 'tar', args: ['-tvf', '/x/a.tar.gz'] });
-  });
-  it('7z → 7z l -slt（机器可读）', () => {
-    expect(buildListCommand('/x/a.7z', '7z'))
-      .toEqual({ command: '7z', args: ['l', '-slt', '/x/a.7z'] });
-  });
-  it('rar → unrar l', () => {
-    expect(buildListCommand('/x/a.rar', 'rar'))
-      .toEqual({ command: 'unrar', args: ['l', '/x/a.rar'] });
-  });
-});
-
-describe('buildExtractOneCommand 提取单条目（目录条目递归提取）', () => {
-  it('zip', () => {
-    expect(buildExtractOneCommand('/x/a.zip', 'dir/f.txt', 'zip', '/tmp/t'))
-      .toEqual({ command: 'unzip', args: ['-o', '/x/a.zip', 'dir/f.txt', '-d', '/tmp/t'] });
-  });
-  it('tar（--no-wildcards 防条目名含通配符误匹配）', () => {
-    expect(buildExtractOneCommand('/x/a.tar.gz', 'dir/f.txt', 'tar', '/tmp/t'))
-      .toEqual({ command: 'tar', args: ['-xf', '/x/a.tar.gz', '-C', '/tmp/t', '--no-wildcards', '--', 'dir/f.txt'] });
-  });
-  it('7z', () => {
-    expect(buildExtractOneCommand('/x/a.7z', 'dir/f.txt', '7z', '/tmp/t'))
-      .toEqual({ command: '7z', args: ['x', '/x/a.7z', '-o/tmp/t', 'dir/f.txt', '-y'] });
-  });
-  it('rar', () => {
-    expect(buildExtractOneCommand('/x/a.rar', 'dir/f.txt', 'rar', '/tmp/t'))
-      .toEqual({ command: 'unrar', args: ['x', '-o+', '/x/a.rar', 'dir/f.txt', '/tmp/t/'] });
+  it('tar.zst 归为 tar 家族', () => {
+    expect(classifyArchive('a.tar.zst')).toBe('tar');
   });
 });
 

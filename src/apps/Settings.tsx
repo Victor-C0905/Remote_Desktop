@@ -16,6 +16,7 @@ import { createLogger } from '../utils/logger';
 import { AuthMethod } from '../types/server';
 import { StatsPanel } from '../components/StatsPanel';
 import { TransferLimitCard } from "../components/TransferLimitCard";
+import { ArchiveCapabilityCard } from "../components/ArchiveCapabilityCard";
 import { SymbolicIcon } from '../components/symbolic';
 import { getServerErrorInfo } from '../stores/serversStore';
 import { getSettingsStorage } from '../utils/storage';
@@ -1190,6 +1191,8 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
             </div>
             {/* 上传大小限制：值的单一事实来源在 Agent 端，组件内完成能力门控+查询+应用 */}
             <TransferLimitCard serverId={activeServer?.id || null} />
+            {/* 压缩能力：显示服务器实际可用格式与安装建议 */}
+            <ArchiveCapabilityCard serverId={activeServer?.id || null} />
           </div>
         );
 

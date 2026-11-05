@@ -12,6 +12,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::archive::{ArchiveCapabilities, ArchiveExtractPolicy};
 use crate::stats::StatsResponse;
 use crate::subscription::SubscriptionType;
 use crate::types::{
@@ -626,6 +627,36 @@ pub enum Payload {
     #[serde(rename = "process_list_response")]
     ProcessListResponse { processes: Vec<ProcessEntry> },
 
+    /// 压缩能力探测请求（refresh=false 时使用 Agent 侧缓存）
+    #[serde(rename = "archive_capabilities_request")]
+    ArchiveCapabilitiesRequest {
+        #[serde(default)]
+        refresh: bool,
+    },
+
+    /// 压缩能力探测响应
+    #[serde(rename = "archive_capabilities_resp")]
+    ArchiveCapabilitiesResponse(ArchiveCapabilities),
+
+    /// 压缩包列表请求（Agent 端构造固定 argv，客户端不传命令参数）
+    #[serde(rename = "archive_list_request")]
+    ArchiveListRequest {
+        archive_path: String,
+        format_id: String,
+    },
+
+    /// 压缩包解压请求（entries 为空表示全部；目标目录须已存在）
+    #[serde(rename = "archive_extract_request")]
+    ArchiveExtractRequest {
+        archive_path: String,
+        target_dir: String,
+        format_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        entries: Option<Vec<String>>,
+        #[serde(default)]
+        policy: ArchiveExtractPolicy,
+    },
+
     #[serde(rename = "error")]
     Error { code: i32, message: String },
 }
@@ -707,6 +738,10 @@ impl Payload {
             Payload::SetTransferLimit { .. } => "SetTransferLimit",
             Payload::GetProcesses {} => "GetProcesses",
             Payload::ProcessListResponse { .. } => "ProcessListResponse",
+            Payload::ArchiveCapabilitiesRequest { .. } => "ArchiveCapabilitiesRequest",
+            Payload::ArchiveCapabilitiesResponse(_) => "ArchiveCapabilitiesResponse",
+            Payload::ArchiveListRequest { .. } => "ArchiveListRequest",
+            Payload::ArchiveExtractRequest { .. } => "ArchiveExtractRequest",
             Payload::Error { .. } => "Error",
         }
     }

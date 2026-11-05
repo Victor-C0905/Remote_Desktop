@@ -21,7 +21,7 @@ pub use quirel_protocol::{FileDiff, DiffType};
 ///
 /// # 示例
 /// ```rust
-/// use agent::diff::{FileDiff, DiffType, apply_diff};
+/// use quireld::diff::{FileDiff, DiffType, apply_diff};
 ///
 /// let old = "line1\nline2\nline3";
 /// let diffs = vec![FileDiff {

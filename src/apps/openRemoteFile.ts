@@ -12,6 +12,8 @@
 import { invoke } from '@tauri-apps/api/core';
 import i18n from '../i18n';
 import { detectFileFormat, decideOpenTarget, createDefaultRegistry, SIZE_LIMITS } from '../file-formats/FileOpener';
+import { useArchiveCapabilitiesStore } from '../stores/archiveCapabilitiesStore';
+import { archiveFormatId, describeCapability } from '../utils/archiveFormat';
 import { isAppError, formatOpError, formatUnknownError } from '../types/errors';
 
 /**
@@ -108,9 +110,19 @@ export async function openRemoteFile(
     case 'hex':
       manager.create('hex-viewer', { serverId, preloadData: pre });
       return { kind: 'opened' };
-    case 'archive':
+    case 'archive': {
+      // 能力已探测且明确不支持时，不创建空白查看器，直接给出缺工具提示
+      const formatId = archiveFormatId(fullPath);
+      const caps = useArchiveCapabilitiesStore.getState().byServer[serverId];
+      const formatCap = formatId && caps?.status === 'ready'
+        ? caps.data?.formats.find((f) => f.id === formatId)
+        : undefined;
+      if (formatCap && !formatCap.can_list && caps?.data) {
+        return { kind: 'error', message: describeCapability(caps.data.os, formatCap) };
+      }
       manager.create('archive-viewer', { serverId, preloadData: pre });
       return { kind: 'opened' };
+    }
     case 'browser-local':
       try {
         await invoke('remote_open_locally', { serverId, remotePath: fullPath });

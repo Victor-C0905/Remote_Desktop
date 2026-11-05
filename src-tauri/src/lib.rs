@@ -1405,7 +1405,9 @@ pub fn run() {
             connection::remote_read_file,
             connection::remote_file_info, // 文件格式探测（格式路由依据）
             connection::remote_read_file_binary, // 二进制读取（图片/PDF/hex 查看器）
-            connection::remote_execute_command, // 白名单命令执行（解压）
+            connection::remote_archive_list, // 压缩包列表（Agent 构造固定命令）
+            connection::remote_archive_extract, // 压缩包解压（Agent 构造固定命令）
+            connection::remote_archive_capabilities, // 压缩能力探测（解压工具可用性）
             connection::remote_open_locally, // 下载到本地用系统应用打开（HTML）
             connection::remote_write_file,
             connection::remote_apply_diff, // 差异同步保存

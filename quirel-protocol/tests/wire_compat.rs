@@ -685,6 +685,63 @@ fn get_processes_wire_format() {
     );
 }
 
+// ── 压缩能力探测（2026-11-04 设计） ──
+
+#[test]
+fn archive_capabilities_request_wire_format() {
+    let env = Envelope::new(6, Payload::ArchiveCapabilitiesRequest { refresh: false });
+    let json = serde_json::to_string(&env).unwrap();
+    assert_eq!(
+        json,
+        r#"{"request_id":6,"payload":{"type":"archive_capabilities_request","data":{"refresh":false}}}"#
+    );
+}
+
+#[test]
+fn archive_capabilities_response_wire_format() {
+    use quirel_protocol::{ArchiveCapabilities, ArchiveFormatCapability, ArchiveHostOs, ArchiveTool};
+
+    let caps = ArchiveCapabilities {
+        probed_at: 123,
+        os: ArchiveHostOs {
+            id: "ubuntu".to_string(),
+            version: "24.04".to_string(),
+            package_manager: "apt".to_string(),
+        },
+        tools: vec![ArchiveTool {
+            name: "unzip".to_string(),
+            path: "/usr/bin/unzip".to_string(),
+            version: "UnZip 6.00".to_string(),
+        }],
+        formats: vec![ArchiveFormatCapability {
+            id: "zip".to_string(),
+            can_list: true,
+            can_extract_one: true,
+            can_extract_all: true,
+            tool: Some("unzip".to_string()),
+            reason_code: None,
+            missing_tool: None,
+            detail: None,
+        }],
+    };
+    let env = Envelope::new(5, Payload::ArchiveCapabilitiesResponse(caps));
+    let json = serde_json::to_string(&env).unwrap();
+    assert_eq!(
+        json,
+        r#"{"request_id":5,"payload":{"type":"archive_capabilities_resp","data":{"probed_at":123,"os":{"id":"ubuntu","version":"24.04","package_manager":"apt"},"tools":[{"name":"unzip","path":"/usr/bin/unzip","version":"UnZip 6.00"}],"formats":[{"id":"zip","can_list":true,"can_extract_one":true,"can_extract_all":true,"tool":"unzip"}]}}}"#
+    );
+
+    let back = roundtrip(&env);
+    match back.payload {
+        Payload::ArchiveCapabilitiesResponse(caps) => {
+            assert_eq!(caps.probed_at, 123);
+            assert_eq!(caps.formats.len(), 1);
+            assert_eq!(caps.formats[0].tool.as_deref(), Some("unzip"));
+        }
+        _ => panic!("变体不匹配"),
+    }
+}
+
 #[test]
 fn process_list_response_roundtrip() {
     let env = Envelope::new(
