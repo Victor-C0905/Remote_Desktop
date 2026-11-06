@@ -110,6 +110,37 @@ export function BrowserApp({ windowId }: BrowserAppProps) {
     return () => window.removeEventListener(WINDOW_DRAG_EVENT, onDrag);
   }, [windowId]);
 
+  // ── 可见性裁决的唯一入口 ────────────────────────────────
+  // 所有路径（拖拽恢复 / 浮层开合 / 窗口激活态）都必须读"此刻最新"的状态
+  // 再下发，禁止用创建闭包时的旧快照。反例（已修复的根因）：拖到顶端松手
+  // 时，吸附预览在本次 commit 才从 DOM 移除，MutationObserver 尚未回调，
+  // 恢复 effect 闭包里的 overlayOpen 仍是 true；它把 set_visible(false)
+  // 挂在 set_bounds 的 IPC 往返之后，晚于"浮层清理"触发的 set_visible(true)
+  // 落地，把 webview 又关回去——表现为最大化后页面持续隐藏。
+  const visibleStateRef = useRef({
+    connected,
+    isActive: win.isActive,
+    dragging,
+    navbarOverlayOpen,
+    overlayOpen,
+  });
+  visibleStateRef.current = {
+    connected,
+    isActive: win.isActive,
+    dragging,
+    navbarOverlayOpen,
+    overlayOpen,
+  };
+
+  const sendVisible = useCallback(() => {
+    if (!serverId) return;
+    const s = visibleStateRef.current;
+    // 拖拽/浮层期间必须隐藏，否则 child HWND 会盖住 React 层
+    const visible =
+      s.connected && s.isActive && !s.dragging && !s.navbarOverlayOpen && !s.overlayOpen;
+    invoke("browser_set_visible", { serverId, visible }).catch(() => {});
+  }, [serverId]);
+
   // 拖拽结束恢复：先归位（set_bounds）后显示（set_visible），同经一条 FIFO
   // 命令通道，顺序有保证。若不串行，可见性链路快于 bounds 链路（bounds 走
   // geometry effect + rAF），webview 会在旧 bounds 处闪现后再跳到新位置——
@@ -131,18 +162,15 @@ export function BrowserApp({ windowId }: BrowserAppProps) {
           })
             .catch(() => {})
             .finally(() => {
-              // 恢复可见性按统一条件计算：浮层/菜单若恰好开着则保持隐藏，
-              // bounds 已先行归位，后续状态变化经可见性 effect 补发
-              invoke("browser_set_visible", {
-                serverId,
-                visible: win.isActive && !navbarOverlayOpen && !overlayOpen,
-              }).catch(() => {});
+              // 必须按"此刻"的最新状态下发（不是触发拖拽时的旧快照）：
+              // 浮层若恰好开着则保持隐藏，已关闭则恢复显示
+              sendVisible();
             });
         }
       }
     }
     draggingPrevRef.current = dragging;
-  }, [dragging, connected, serverId, navbarOverlayOpen, overlayOpen, win.isActive]);
+  }, [dragging, connected, serverId, sendVisible]);
 
   useBrowserBounds(
     // 断连期间也持续上报：webview 隐藏但 bounds 须跟随窗口移动，重连后
@@ -266,9 +294,9 @@ export function BrowserApp({ windowId }: BrowserAppProps) {
       restorePendingRef.current = false;
       return;
     }
-    const visible = connected && win.isActive && !dragging && !navbarOverlayOpen && !overlayOpen;
-    invoke("browser_set_visible", { serverId, visible }).catch(() => {});
-  }, [connected, serverId, win.isActive, sessionEpoch, dragging, navbarOverlayOpen, overlayOpen]);
+    // 统一走单一裁决入口（读最新状态，杜绝旧闭包快照）
+    sendVisible();
+  }, [connected, serverId, win.isActive, sessionEpoch, dragging, navbarOverlayOpen, overlayOpen, sendVisible]);
 
   // 导航行下拉开合上报（Navbar 经由 effect 上报；仅落本地态，可见性由
   // 上方统一计算下发，避免与激活/拖拽恢复互相覆盖）
