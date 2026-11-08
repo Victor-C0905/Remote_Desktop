@@ -264,6 +264,14 @@ fn set_taskbars_visible(visible: bool) {
     }
 }
 
+/// 启动自愈（审计 低-13）：上一进程在全屏隐藏任务栏期间崩溃/被强杀时，
+/// Shell_TrayWnd 保持 SW_HIDE 且无人还原——每次启动先无条件恢复显示，
+/// 覆盖「上次异常退出」的残留态（正常退出路径本就会还原，此处幂等）。
+/// 必须在主窗口创建前调用（任务栏闪现一下无碍，远好于整轮会话无任务栏）。
+pub fn restore_taskbars_on_startup() {
+    set_taskbars_visible(true);
+}
+
 /// 把键盘焦点还给主 UI webview（WRY_WEBVIEW wrapper，主窗口直接 child）。
 /// FindWindowExW 按类名定位（不递归，仅直接 child 层）；找不到时静默
 /// （焦点悬空只影响快捷键，不致命）。
