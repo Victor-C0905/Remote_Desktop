@@ -820,6 +820,8 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            // 启动自愈（审计 低-13）：还原上次崩溃可能残留的隐藏任务栏
+            fullscreen::restore_taskbars_on_startup();
             // webview 加载前先备份全部 store：前端 persist 的首次写回不会覆盖原始数据
             store_maintenance::backup_all_on_startup(app.handle());
 

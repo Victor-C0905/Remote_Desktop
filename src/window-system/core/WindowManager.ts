@@ -485,19 +485,30 @@ export class WindowManager implements IWindowManager {
    */
   saveSession(): void {
     if (this.saveTimer !== null) clearTimeout(this.saveTimer);
-    this.saveTimer = window.setTimeout(() => {
+    this.saveTimer = window.setTimeout(() => this.writeSession(), 300);
+  }
+
+  /** 立即写快照（跳过防抖）：页面卸载/隐藏前调用，消除「新建窗口后
+   *  300ms 内刷新→快照缺该窗口→孤儿回收误杀会话」的窄竞态（审计 低-5） */
+  flushSession(): void {
+    if (this.saveTimer !== null) {
+      clearTimeout(this.saveTimer);
       this.saveTimer = null;
-      try {
-        // v2 快照：windows + order（激活栈=焦点顺序，恢复时末位即当时激活窗口）
-        const snapshot = {
-          windows: this.windows.getAll().map((w) => w.serialize()),
-          order: this._activationOrder.slice(),
-        };
-        sessionStorage.setItem(SESSION_KEY, JSON.stringify(snapshot));
-      } catch (error) {
-        log.error('保存窗口会话快照失败:', error);
-      }
-    }, 300);
+    }
+    this.writeSession();
+  }
+
+  private writeSession(): void {
+    try {
+      // v2 快照：windows + order（激活栈=焦点顺序，恢复时末位即当时激活窗口）
+      const snapshot = {
+        windows: this.windows.getAll().map((w) => w.serialize()),
+        order: this._activationOrder.slice(),
+      };
+      sessionStorage.setItem(SESSION_KEY, JSON.stringify(snapshot));
+    } catch (error) {
+      log.error('保存窗口会话快照失败:', error);
+    }
   }
 
   /**

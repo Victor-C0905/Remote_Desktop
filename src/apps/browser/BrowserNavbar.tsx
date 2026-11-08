@@ -113,6 +113,13 @@ export function BrowserNavbar({
   const submit = (override?: string) => {
     // override：选中的联想词（纯文本，经 Rust normalize_url 落到搜索结果页）
     const value = (override ?? draft).trim();
+    // 纵深防御（审计 L11）：脚本类 scheme 在前端显式拦截。Rust
+    // normalize_url 目前会把它们意外中和（归入搜索词/畸形 https），
+    // 但产品语义上地址栏永远不该执行脚本——显式阻断防 Rust 侧回归
+    if (/^(javascript|data|vbscript):/i.test(value)) {
+      log.warn("地址栏已拦截危险 scheme:", value.slice(0, 48));
+      return;
+    }
     if (value) {
       onNavigate(value);
       // 回车导航后主动失焦（Chrome/Edge 同款：导航即离开地址栏聚焦）。

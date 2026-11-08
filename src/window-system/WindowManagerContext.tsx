@@ -133,7 +133,20 @@ export function WindowManagerProvider({ children }: { children: ReactNode }) {
       notifyGlobalStateChange();
       restoredIds.forEach((id) => notifyWindowStateChange(id));
     }
-    return manager.onAny(() => manager.saveSession());
+    const unsub = manager.onAny(() => manager.saveSession());
+    // 卸载/隐藏前同步 flush（审计 低-5）：防抖窗口内新建的窗口否则不进
+    // 快照，刷新恢复时被孤儿回收误杀其浏览器会话
+    const flush = () => manager.flushSession();
+    window.addEventListener('beforeunload', flush);
+    document.addEventListener('visibilitychange', onVis);
+    function onVis() {
+      if (document.visibilityState === 'hidden') flush();
+    }
+    return () => {
+      unsub();
+      window.removeEventListener('beforeunload', flush);
+      document.removeEventListener('visibilitychange', onVis);
+    };
   }, [manager]);
 
   // 选择性事件监听：只在窗口列表变化时触发全局状态更新
