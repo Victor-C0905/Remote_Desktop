@@ -38,7 +38,3 @@ pub fn generate_socket_name(session_id: &str) -> String {
     format!("{}{}", SOCKET_PREFIX, session_id)
 }
 
-/// 验证 abstract socket 名称是否有效
-pub fn is_valid_socket_name(name: &str) -> bool {
-    name.starts_with(SOCKET_PREFIX) && name.len() > SOCKET_PREFIX.len()
-}

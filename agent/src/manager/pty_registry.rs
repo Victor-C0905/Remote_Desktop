@@ -79,28 +79,56 @@ impl PtyRegistry {
     ///
     /// # 流程
     ///
-    /// 1. 从注册表移除会话
-    /// 2. 发送 Close 帧给 Session 进程（通知其 kill bash 并退出）
+    /// 1. 从注册表移除会话（写锁仅在移除瞬间持有）
+    /// 2. 锁外发送 Close 帧给 Session 进程（带超时，防卡死会话阻塞全局）
     ///
     /// # 注意
     ///
     /// 先移除再发 Close，确保即使 Close 发送失败也不会残留注册表记录。
+    /// Close 必须在锁外发送：Session 进程事件循环停读 socket（如终端
+    /// Ctrl-S 流控）时 send 可能无限期阻塞，若在写锁内 await，所有用户
+    /// 所有会话的 write/read/resize/unregister 全部挂起（2026-11 审计 M3）。
     pub async fn unregister(&self, session_id: &str) -> Result<Option<PtySession>> {
-        let mut sessions = self.sessions.write().await;
-        if let Some(session) = sessions.remove(session_id) {
-            info!("注销 PTY 会话: session_id={}", session_id);
-            // 发送 Close 给 Session 进程（忽略错误：进程可能已退出）
-            let _ = session.connection.send_close().await;
-            Ok(Some(session))
-        } else {
-            Ok(None)
-        }
+        let session = {
+            let mut sessions = self.sessions.write().await;
+            sessions.remove(session_id)
+        };
+
+        let Some(session) = session else {
+            return Ok(None);
+        };
+
+        info!("注销 PTY 会话: session_id={}", session_id);
+        // 发送 Close 给 Session 进程（忽略错误：进程可能已退出），
+        // 1s 超时兜底——Session 进程本就有 30s 自杀逻辑，Close 丢失可接受
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            session.connection.send_close(),
+        )
+        .await;
+        Ok(Some(session))
     }
 
     /// 获取 PTY 会话
     pub async fn get(&self, session_id: &str) -> Option<PtySession> {
         let sessions = self.sessions.read().await;
         sessions.get(session_id).cloned()
+    }
+
+    /// 校验会话属主
+    ///
+    /// 会话按 session_id（UUID）索引且此前 write/resize 不做属主检查——
+    /// 凭泄露的 session_id 可向他人终端注入键盘输入（以受害者身份敲命令）。
+    /// 属主绑定是 UUID 之外的第二道防线（2026-11 审计 M2）
+    pub async fn ensure_owner(&self, session_id: &str, expected_uid: u32) -> Result<()> {
+        let sessions = self.sessions.read().await;
+        let Some(s) = sessions.get(session_id) else {
+            anyhow::bail!("PTY 会话不存在: {}", session_id);
+        };
+        if s.user_info.uid != expected_uid {
+            anyhow::bail!("PTY 会话不属于当前用户");
+        }
+        Ok(())
     }
 
     /// 获取所有活动会话的 ID

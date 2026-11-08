@@ -795,19 +795,32 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
   // ── 工作目录配置 ────────────────────────────────────────────────────
   // 优先使用 preloadData（从文件管理器打开），否则使用用户配置的默认路径
   const [configuredDefaultPath, setConfiguredDefaultPath] = useState<string | null>(null);
+  // 设置是否已就绪：就绪前不挂载 TerminalInstance——终端 effect 的 deps
+  // 不含 workingDirectory，若首个 PTY 在设置加载完成前以 null 目录建立，
+  // 「默认工作目录」设置会被静默忽略且不会重连（审计 M24）
+  const [defaultPathLoaded, setDefaultPathLoaded] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const { getSettingsStorage } = await import('../utils/storage');
-      const storage = await getSettingsStorage();
-      const value = await storage.getItem("terminal-default-path");
-      if (!cancelled) setConfiguredDefaultPath(value || null);
+      try {
+        const { getSettingsStorage } = await import('../utils/storage');
+        const storage = await getSettingsStorage();
+        const value = await storage.getItem("terminal-default-path");
+        if (!cancelled) setConfiguredDefaultPath(value || null);
+      } catch (e) {
+        log.warn('读取终端默认路径设置失败:', e);
+      } finally {
+        // 读取失败也放行挂载（回退 home 目录，与旧行为一致）
+        if (!cancelled) setDefaultPathLoaded(true);
+      }
     })();
     return () => { cancelled = true; };
   }, []);
 
   const workingDirectory = preloadData?.workingDirectory || configuredDefaultPath;
+  // 文件管理器显式指定目录时无需等待设置加载
+  const readyToMount = Boolean(preloadData?.workingDirectory) || defaultPathLoaded;
 
   // ── 窗口实例独立状态（每个窗口实例有自己的 tabs、设置等）────────────
   const [tabs, setTabs] = useState<TerminalTabMeta[]>([]);
@@ -1146,8 +1159,9 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
 
       {/* Terminal Containers —— 每个 tab 一个 TerminalInstance 子组件 */}
       {/* 所有 tab 都保持挂载，通过 display 控制显示，避免切换时卸载导致会话丢失 */}
+      {/* 默认路径设置就绪前不挂载实例（readyToMount，防错过 workingDirectory） */}
       <div className="terminal-container" onContextMenu={handleContextMenu}>
-        {tabs.map((tab) => (
+        {readyToMount && tabs.map((tab) => (
           <div
             key={tab.id}
             style={{

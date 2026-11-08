@@ -1282,18 +1282,20 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                 <input
                   type="number"
                   className="st-input"
-                  min={1024}
+                  min={0}
                   max={65535}
                   value={browserProxyPort}
                   onChange={(e) => {
                     const v = parseInt(e.target.value, 10);
-                    if (!Number.isNaN(v) && v >= 1024 && v <= 65535) {
+                    // 0 = 每次随机端口（推荐）；固定端口须落在用户端口区间
+                    if (!Number.isNaN(v) && (v === 0 || (v >= 1024 && v <= 65535))) {
                       useSettingsStore.getState().setBrowserProxyPort(v);
                     }
                   }}
                   style={{ width: 100 }}
                 />
               </div>
+              <div className="st-option-hint text-caption">{t("settings.socks5PortHint")}</div>
               <div className="st-option-row">
                 <span className="st-option-label text-body">{t("settings.browserSleepTitle")}</span>
                 <select

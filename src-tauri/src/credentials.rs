@@ -147,14 +147,25 @@ pub fn credential_delete(account: String, app: tauri::AppHandle) -> Result<(), S
 /// 主密钥在系统凭据库须显式清）
 #[tauri::command]
 pub fn credential_delete_all(accounts: Vec<String>, app: tauri::AppHandle) -> Result<(), String> {
+    // 聚合错误返回：完全清除若静默吞错，用户以为已清除而主密钥仍留在
+    // 系统凭据库（2026-11 审计 低-1）
+    let mut errors: Vec<String> = Vec::new();
     for a in accounts {
-        let _ = credential_delete(a, app.clone());
+        if let Err(e) = credential_delete(a, app.clone()) {
+            errors.push(e);
+        }
     }
-    let _ = entry(&app, MASTER_ACCOUNT).and_then(|e| match e.delete_credential() {
+    if let Err(e) = entry(&app, MASTER_ACCOUNT).and_then(|e| match e.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(e) => Err(format!("主密钥删除失败: {}", e)),
-    });
-    Ok(())
+    }) {
+        errors.push(e);
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
 }
 
 /// keyring 可用性探针：主密钥生成/读取 + 加解密往返 + 目录可写。

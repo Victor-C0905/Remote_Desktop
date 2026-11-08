@@ -18,6 +18,14 @@ const SOCKS5_VERSION: u8 = 0x05;
 
 /// 读 greeting 并回复"无需认证"。
 /// 浏览器发起：[VER=5, NMETHODS, METHODS...]
+///
+/// # 信任模型（审计 M12）
+///
+/// 监听绑定 127.0.0.1 且无认证（0x00）——浏览器 SOCKS5 客户端不支持
+/// 认证扩展是客观约束。含义：**本机任意进程**都能借用该隧道经用户已
+/// 连接的服务器出网。缓解：默认随机端口（见 settingsStore browserProxyPort），
+/// 固定端口为用户显式选择且设置页提示风险；跨用户借用受限于
+/// 「对端与本进程同用户」的事实约定，不做校验。
 pub async fn socks5_greeting(stream: &mut TcpStream) -> Result<(), String> {
     let ver = stream.read_u8().await.map_err(err("读协议版本"))?;
     if ver != SOCKS5_VERSION {

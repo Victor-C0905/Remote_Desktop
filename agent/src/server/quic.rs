@@ -2,7 +2,7 @@ use anyhow::Result;
 use quinn::{RecvStream, SendStream};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{broadcast, Mutex};
 
@@ -22,6 +22,24 @@ use crate::manager::{spawn_pty_output_task_v2, PtyOutputConfig};
 
 // 全局 Stream ID 计数器
 static STREAM_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+/// 未认证连接并发上限：防「完成握手后挂起认证流」的慢速连接耗尽
+/// fd/内存（2026-11 审计 H1）。应用层超时检查任务在认证成功后才启动，
+/// 认证前的连接只有这里的并发闸与传输层空闲超时兜底。
+const MAX_UNAUTHENTICATED_CONNECTIONS: usize = 64;
+
+/// 未认证连接计数守卫：Drop 时递减全局计数。
+/// 认证成功后由 handle_connection 显式释放；任何拒绝路径的提前
+/// return 自动触发 Drop 递减。
+struct UnauthConnGuard {
+    counter: Arc<AtomicUsize>,
+}
+
+impl Drop for UnauthConnGuard {
+    fn drop(&mut self) {
+        self.counter.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 
 /// 获取当前 Unix 时间戳（秒）
 fn current_timestamp_secs() -> u64 {
@@ -298,6 +316,9 @@ pub async fn run(
     let rate_limiter = Arc::new(AuthRateLimiter::new());
     tracing::info!("🛡️  认证速率限制器已启用");
 
+    // 未认证连接计数（并发上限闸）
+    let unauth_connections = Arc::new(AtomicUsize::new(0));
+
     // 创建全局挑战管理器（用于公钥认证）
     let challenge_manager = Arc::new(ChallengeManager::new());
     tracing::info!("🔐 挑战管理器已启用");
@@ -322,6 +343,22 @@ pub async fn run(
     });
 
     while let Some(incoming) = endpoint.accept().await {
+        // 未认证并发闸：超过上限直接丢弃握手（不 accept、不分配连接资源，
+        // 对端可重试）。守卫在认证完成后释放
+        if unauth_connections.fetch_add(1, Ordering::SeqCst) >= MAX_UNAUTHENTICATED_CONNECTIONS {
+            unauth_connections.fetch_sub(1, Ordering::SeqCst);
+            tracing::warn!(
+                "未认证连接数已达上限({}), 丢弃新握手: remote={}",
+                MAX_UNAUTHENTICATED_CONNECTIONS,
+                incoming.remote_address()
+            );
+            drop(incoming);
+            continue;
+        }
+        let unauth_guard = UnauthConnGuard {
+            counter: unauth_connections.clone(),
+        };
+
         let cfg_clone = cfg.clone();
         let subscription_manager_clone = subscription_manager.clone();
         let event_bus_clone = event_bus.clone();
@@ -350,6 +387,7 @@ pub async fn run(
                         timeout_secs,
                         #[cfg(unix)]
                         manager_clone,
+                        unauth_guard,
                     ).await {
                         tracing::warn!("QUIC 连接错误: {}", e);
                     }
@@ -376,7 +414,13 @@ fn build_server_config(
     
     // 配置传输参数：Bbr 拥塞控制 + 大窗口 + keep_alive
     let mut transport = quinn::TransportConfig::default();
-    transport.max_idle_timeout(None); // 禁用空闲超时，连接不会因无活动而关闭
+    // 空闲超时兜底：keep_alive(5s) 保证健康连接永不触发；真正死链（对端
+    // 消失/半开 NAT）在 120s 内被传输层回收。此前设 None 时死链只能靠
+    // 应用层超时检查兜底——而它认证成功后才启动，认证前的死连接会永久
+    // 占用 fd/内存（2026-11 审计 H1）
+    if let Ok(idle) = quinn::IdleTimeout::try_from(std::time::Duration::from_secs(120)) {
+        transport.max_idle_timeout(Some(idle));
+    }
     transport.keep_alive_interval(Some(std::time::Duration::from_secs(5))); // 每5秒发送保持活跃包
     // 并发双向流上限：quinn 默认仅 100 条，浏览器代理场景不够用——
     // 本端通告的限额直接约束客户端 open_bi；耗尽后客户端心跳 Ping 卡死
@@ -405,6 +449,7 @@ async fn handle_connection(
     idle_timeout_secs: u64,
     #[cfg(unix)]
     manager: Arc<crate::manager::Manager>,
+    unauth_guard: UnauthConnGuard,
 ) -> Result<()> {
     let remote = connection.remote_address();
     tracing::info!("✅ 新的 QUIC 连接来自: {}", remote);
@@ -422,12 +467,20 @@ async fn handle_connection(
     let (timeout_cancel_tx, mut timeout_cancel_rx) = tokio::sync::oneshot::channel::<()>();
 
     // ========== 认证流程 ==========
+    // 认证阶段每步限时：应用层超时检查任务在认证成功后才启动，不设限的话
+    // 恶意客户端完成握手后挂起认证流即可无限期占住连接（2026-11 审计 H1）
+    const AUTH_IO_TIMEOUT: Duration = Duration::from_secs(30);
+
     // 等待客户端的第一个 Stream（认证流）
-    let auth_stream = connection.accept_bi().await?;
+    let auth_stream = tokio::time::timeout(AUTH_IO_TIMEOUT, connection.accept_bi())
+        .await
+        .map_err(|_| anyhow::anyhow!("认证阶段超时({}s): 未建立认证流", AUTH_IO_TIMEOUT.as_secs()))??;
     let (mut auth_send, mut auth_recv) = auth_stream;
 
     // 读取认证请求
-    let auth_data = read_message(&mut auth_recv).await?;
+    let auth_data = tokio::time::timeout(AUTH_IO_TIMEOUT, read_message(&mut auth_recv))
+        .await
+        .map_err(|_| anyhow::anyhow!("认证阶段超时({}s): 读取认证请求超时", AUTH_IO_TIMEOUT.as_secs()))??;
     if auth_data.is_none() {
         tracing::warn!("认证流已关闭: remote={}", remote);
 
@@ -717,12 +770,16 @@ async fn handle_connection(
                 challenge_id
             );
 
-            // 第二步：等待客户端的响应 Stream
-            let response_stream = connection.accept_bi().await;
+            // 第二步：等待客户端的响应 Stream（认证阶段限时）
+            let response_stream = tokio::time::timeout(AUTH_IO_TIMEOUT, connection.accept_bi())
+                .await
+                .map_err(|_| anyhow::anyhow!("认证阶段超时({}s): 未建立响应流", AUTH_IO_TIMEOUT.as_secs()))?;
             match response_stream {
                 Ok((mut resp_send, mut resp_recv)) => {
-                    // 读取响应数据
-                    let resp_data = read_message(&mut resp_recv).await?;
+                    // 读取响应数据（认证阶段限时）
+                    let resp_data = tokio::time::timeout(AUTH_IO_TIMEOUT, read_message(&mut resp_recv))
+                        .await
+                        .map_err(|_| anyhow::anyhow!("认证阶段超时({}s): 读取认证响应超时", AUTH_IO_TIMEOUT.as_secs()))??;
                     if resp_data.is_none() {
                         tracing::warn!("公钥认证响应流已关闭: remote={}", remote);
                         send_error_then_close(&connection, &mut auth_send, AuthErrorCode::StreamTimeout, "认证响应超时").await;
@@ -937,6 +994,10 @@ async fn handle_connection(
             return Ok(());
         }
     };
+
+    // 认证成功：释放未认证并发闸，让位给新连接
+    // （各拒绝路径的提前 return 已通过 Drop 自动递减）
+    drop(unauth_guard);
 
     // 启动定期超时检查任务
     // 每 30 秒检查一次自上次活动是否超过 idle_timeout_secs
@@ -1325,6 +1386,8 @@ async fn handle_stream(
         Payload::TerminalData { session_id, data, is_input } => {
             // 单条终端数据消息（用于非持久连接）
             if *is_input {
+                // 属主校验：凭 session_id 不得向他人终端注入输入（审计 M2）
+                manager.pty_registry().ensure_owner(&session_id, session.uid).await?;
                 // 通过 PtyRegistry 写入(内部走 SessionConnection socket)
                 manager.pty_registry().write(&session_id, &data).await?;
             } else {
@@ -1353,6 +1416,18 @@ async fn handle_stream(
 
         #[cfg(unix)]
         Payload::TerminalResizeRequest { session_id, cols, rows } => {
+            // 属主校验（审计 M2）
+            if let Err(e) = manager.pty_registry().ensure_owner(&session_id, session.uid).await {
+                tracing::warn!("PTY resize 属主校验失败: session_id={}, err={}", session_id, e);
+                let response = Envelope::new(
+                    envelope.request_id,
+                    Payload::Error { code: -1, message: format!("resize 失败: {}", e) },
+                );
+                if let Ok(resp_bytes) = response.encode() {
+                    write_message(&mut send, &resp_bytes).await?;
+                }
+                return Ok(());
+            }
             // 调整远程 PTY 大小(通过 PtyRegistry 发送 RESIZE 帧给 Session 进程)
             match manager.pty_registry().resize(&session_id, *cols, *rows).await {
                 Ok(()) => {

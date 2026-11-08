@@ -134,6 +134,11 @@ pub struct WorkerManager {
     is_graceful_shutdown: Arc<AtomicBool>,
 }
 
+/// Worker 稳定运行阈值：上一个 Worker 连续运行超过此时长即视为稳定期，
+/// 重启计数清零。此前 restart_count 只增不清——累计 3 次崩溃（不限时间
+/// 间隔，可能跨越数周）后永久放弃自动重启（2026-11 审计 M19）
+const WORKER_STABLE_UPTIME: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
 impl WorkerManager {
     /// 创建新的 Worker 管理器
     ///
@@ -238,14 +243,44 @@ impl WorkerManager {
                 }
             }
 
-            // 等待进程退出(进程已死时 wait 仅回收资源,可能已被 waitpid 回收则忽略错误)
-            match child.wait() {
-                Ok(status) => {
-                    info!("Worker 进程已退出: pid={}, status={}", child.id(), status);
-                }
-                Err(e) => {
-                    // 进程可能已被 CrashDetector 的 waitpid 回收,不算错误
-                    warn!("等待 Worker 进程退出失败(可能已被回收): {}", e);
+            // 等待进程退出：try_wait 轮询（不阻塞 tokio worker，写锁仅短暂
+            // 伴随 sleep），超时 SIGKILL 升级——Worker 深陷 handler 卡死时
+            // 无超时等待会永久挂起 stop()，热更新随之半瘫（2026-11 审计 M4）
+            const STOP_GRACE_SECS: u64 = 5;
+            let pid_raw = child.id();
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(STOP_GRACE_SECS);
+            loop {
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        info!("Worker 进程已退出: pid={}, status={}", pid_raw, status);
+                        break;
+                    }
+                    Ok(None) => {
+                        if tokio::time::Instant::now() >= deadline {
+                            warn!(
+                                "Worker 未在 {}s 内退出，SIGKILL 升级: pid={}",
+                                STOP_GRACE_SECS, pid_raw
+                            );
+                            let _ = kill(Pid::from_raw(pid_raw as i32), Signal::SIGKILL);
+                            // SIGKILL 后同步回收（进程被强杀即刻退出；
+                            // 已被 CrashDetector 回收则此处报错忽略）
+                            match child.wait() {
+                                Ok(status) => {
+                                    info!("Worker 被 SIGKILL 后退出: pid={}, status={}", pid_raw, status)
+                                }
+                                Err(e) => warn!(
+                                    "SIGKILL 后等待 Worker 退出失败(可能已被回收): {}", e
+                                ),
+                            }
+                            break;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    }
+                    Err(e) => {
+                        // 进程可能已被 CrashDetector 的 waitpid 回收,不算错误
+                        warn!("等待 Worker 进程退出失败(可能已被回收): {}", e);
+                        break;
+                    }
                 }
             }
 
@@ -281,6 +316,17 @@ impl WorkerManager {
         {
             let mut info_guard = self.worker_info.write().await;
             if let Some(ref mut info) = *info_guard {
+                // 稳定期判定：started_at 是崩溃 Worker 的启动时间，
+                // 运行超阈值说明此前长期稳定，本次崩溃序列重新计数
+                let uptime = info.started_at.elapsed().unwrap_or_default();
+                if uptime > WORKER_STABLE_UPTIME {
+                    info!(
+                        "Worker 上次稳定运行 {:?}，重启计数清零 (原 count={})",
+                        uptime, info.restart_count
+                    );
+                    info.restart_count = 0;
+                }
+
                 info.restart_count += 1;
 
                 // 检查是否超过最大重启次数
@@ -459,11 +505,13 @@ impl WorkerManager {
 
 impl Drop for WorkerManager {
     fn drop(&mut self) {
-        // 确保 Worker 进程被停止
+        // 确保 Worker 进程被停止并回收（kill 后不 wait 会残留短暂僵尸，
+        // 由 init 兜底回收但进程表短暂膨胀，审计 L11）
         if let Ok(mut process_guard) = self.worker_process.try_write() {
             if let Some(ref mut child) = *process_guard {
                 tracing::info!("WorkerManager 释放，停止 Worker 进程: pid={}", child.id());
                 let _ = child.kill();
+                let _ = child.wait();
             }
         }
     }

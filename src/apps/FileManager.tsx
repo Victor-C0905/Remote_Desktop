@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open, save, ask } from "@tauri-apps/plugin-dialog";
 import { useServerManager } from "../context/ServerManager";
+import i18n from "../i18n";
 import { PLACEHOLDER } from "../utils/offlineDefaults";
 import { useWindowManager, useWindowState } from "../window-system/WindowManagerContext";
 import { AppLayout } from "../components/app-shell";
@@ -91,7 +92,8 @@ function formatSize(bytes: number): string {
 function formatDate(iso: string): string {
   if (!iso) return "—";
   const d = new Date(iso);
-  return d.toLocaleDateString("zh-CN", {
+  // locale 随当前语言（硬编码 zh-CN 对英文用户产出中文格式，审计 L8）
+  return d.toLocaleDateString(i18n.language, {
     year: "numeric", month: "2-digit", day: "2-digit",
     hour: "2-digit", minute: "2-digit",
   });
@@ -147,6 +149,11 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
 
   // 路径系统：始终使用 Linux 远程路径格式（远程 Linux 服务器控制工具）
   const [currentPath, setCurrentPath] = useState(() => "/");
+  /** 视图目录的即时引用：增量补丁必须按「此刻」视图目录过滤，
+   *  闭包捕获的 currentPath 在逐项 await 期间会过期（审计 M21） */
+  const currentPathRef = useRef("/");
+  /** 最近一次权限失败的目标目录（供地址栏导航区分错误类型，审计 L12） */
+  const permissionDeniedRef = useRef<string | null>(null);
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -184,6 +191,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   const [searchTruncated, setSearchTruncated] = useState(false); // Rust 触达上限，结果可能不全
   const [searchError, setSearchError] = useState<string | null>(null);
   const searchEpochRef = useRef(0);   // 丢弃过期响应（连打/换目录）
+  const dirEpochRef = useRef(0);      // 丢弃过期的目录列表响应（快速连续导航，与搜索同模式）
   const [searchNonce, setSearchNonce] = useState(0); // 删除/重命名等操作后重跑搜索的触发器
   const searchInputRef = useRef<HTMLInputElement>(null); // Ctrl+F 聚焦入口
   /** 搜索下钻层数（持久化到设置存储；0 = 仅当前目录一层） */
@@ -340,6 +348,16 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   const [editingName, setEditingName] = useState<string>("");  // 编辑中的新名称
   // ✅ 移除 mainRef，因为fm-main容器已被AppLayout替代
   const clickTimerRef = useRef<number | null>(null);  // 单击延迟定时器（防止双击误触发）
+  // 卸载清理：窗口关闭瞬间挂起的 200ms 定时器会触发 setEditingEntry
+  // （React 18 下无害 no-op 但属泄漏路径，审计 L7）
+  useEffect(() => {
+    return () => {
+      if (clickTimerRef.current) {
+        clearTimeout(clickTimerRef.current);
+        clickTimerRef.current = null;
+      }
+    };
+  }, []);
 
   // 侧边栏状态
   const [sidebarSections, setSidebarSections] = useState<SidebarSection[]>([]);
@@ -465,9 +483,15 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   }, []); // ❌ 不依赖 showSuggestions，让失焦功能始终工作
 
   const loadDir = useCallback(async (path: string): Promise<boolean> => {
+    // 竞态守卫：快速连续导航时，先发后至的旧响应不得覆盖新目录视图
+    // （与搜索的 searchEpochRef 同模式；过期响应静默丢弃并返回 false，
+    // 调用方不据此推导航历史）
+    const epoch = ++dirEpochRef.current;
+
     setLoading(true);
     setError(null);
     setPermissionDenied(null);
+    permissionDeniedRef.current = null;
     clearSelection();
     setContextMenu(null);
 
@@ -493,6 +517,8 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         resp = null;
       }
 
+      if (epoch !== dirEpochRef.current) return false; // 过期响应，丢弃
+
       if (resp && resp.entries) {
         // 按当前表头排序（默认：目录优先 + 名称升序，与历史行为一致）
         setEntries(sortFileEntries(resp.entries, sortStateRef.current));
@@ -502,8 +528,11 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
 
       // 成功后才更新当前路径（确保路径确实存在）
       setCurrentPath(path);
+      currentPathRef.current = path;
       return true;
     } catch (e: unknown) {
+      if (epoch !== dirEpochRef.current) return false; // 过期失败的请求，不污染新视图
+
       log.error('加载目录失败:', e);
       const errMsg = formatUnknownError(e);
       // 权限不足：当作空目录处理（进入目录但内容不可见）
@@ -511,14 +540,19 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       if (isPermissionDenied(e)) {
         setEntries([]);
         setPermissionDenied(path);
+        permissionDeniedRef.current = path;
         setCurrentPath(path);
+        currentPathRef.current = path;
       } else {
         setError(errMsg);
         setEntries([]);
       }
       return false;
     } finally {
-      setLoading(false);
+      // 仅最新一次加载有权收 loading 态（过期请求的 finally 会错杀在途新请求）
+      if (epoch === dirEpochRef.current) {
+        setLoading(false);
+      }
     }
   }, [activeServerId]);
 
@@ -652,12 +686,16 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   }, [resizing, setFileManagerColumns]);
 
   // ── Path Suggestions ───────────────────────────────────
+  const suggestEpochRef = useRef(0);
   const fetchSuggestions = useCallback(async (path: string) => {
     if (!activeServerId || path === "") {
+      suggestEpochRef.current++; // 清空调用也失效在途响应
       setSuggestions([]);
       setShowSuggestions(false);
       return;
     }
+    // 竞态守卫（审计 L3）：连续输入时旧 remote_read_dir 响应不得覆盖新的
+    const epoch = ++suggestEpochRef.current;
 
     try {
       // 解析路径：
@@ -704,11 +742,13 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
 
       log.debug("fetchSuggestions: 建议列表:", suggestions);
 
+      if (epoch !== suggestEpochRef.current) return; // 过期响应，丢弃
       setSuggestions(suggestions);
       setShowSuggestions(suggestions.length > 0);
       setSelectedSuggestionIdx(null);
     } catch (err) {
       log.error("获取建议失败:", err);
+      if (epoch !== suggestEpochRef.current) return;
       setSuggestions([]);
       setShowSuggestions(false);
     }
@@ -968,20 +1008,15 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       // 格式化路径
       const cleanPath = normalizePath(pathInput);
 
-      try {
-        await invoke<ReadDirResponse>("remote_read_dir", {
-          serverId: activeServerId,
-          path: cleanPath,
-        });
-        // 路径存在：正常导航（navigateTo → loadDir → setCurrentPath 更新完毕）
-        navigateTo(cleanPath);
-        // 导航完成后主动失焦，由 handlePathInputBlur 统一清理（同步 pathInput + 关闭编辑模式）
-        pathInputRef.current?.blur();
-      } catch {
-        // 路径不存在：弹窗提示，恢复为当前路径（正确格式）
+      // 直接 loadDir，失败按错误类型分流提示——此前先 remote_read_dir
+      // 探测再 navigateTo→loadDir，同一目录读两次（审计 L12）。
+      // loadDir 已区分权限/不存在并暴露 ok 返回值
+      const ok = await navigateTo(cleanPath);
+      pathInputRef.current?.blur();
+      if (!ok && !permissionDeniedRef.current) {
+        // loadDir 失败已 setError/权限提示；路径不存在类错误补弹窗引导
+        // （navigateTo 内部 loadDir 的错误路径会 setEntries([]) + setError）
         setPathErrorDialog(t("fileManager.pathNotFound", { path: cleanPath }));
-        // 同样通过失焦统一处理，blur handler 会将 pathInput 恢复为 currentPath
-        pathInputRef.current?.blur();
       }
     } else if (e.key === "Escape") {
       e.preventDefault();
@@ -1149,12 +1184,25 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     setSearchNonce((n) => n + 1);
   }, [loadDir, currentPath]);
 
+  // currentPathRef 兜底同步：覆盖 loadDir 之外的 setCurrentPath 调用点
+  // （初始化 preloadData、回到根目录等）
+  useEffect(() => {
+    currentPathRef.current = currentPath;
+  }, [currentPath]);
+
   /** 服务器确认后的增量视图更新：浏览列表与搜索结果同时打补丁，
-   *  再按当前表头重排；被移除路径同步从选区/锚点清理 */
+   *  再按当前表头重排；被移除路径同步从选区/锚点清理。
+   *
+   *  目录以「此刻」视图为准（currentPathRef）：本回调被 doDelete 等长
+   *  流程捕获后，逐项 await 期间用户可能已切换目录——若按闭包捕获的
+   *  发起时目录过滤，补丁会命中新目录视图的同名条目（误删/误增）。
+   *  视图已切换时补丁因 parentDirOf 不匹配被自然跳过，等价于丢弃
+   *  （审计 M21） */
   const applyViewChanges = useCallback((changes: FileViewChange[]) => {
-    setEntries((prev) => sortFileEntries(applyBrowseChanges(prev, currentPath, changes), sortStateRef.current));
+    const viewPath = currentPathRef.current;
+    setEntries((prev) => sortFileEntries(applyBrowseChanges(prev, viewPath, changes), sortStateRef.current));
     setSearchResults((prev) => (prev
-      ? sortFileEntries(applySearchChanges(prev, currentPath, searchQuery, fileManagerSearchDepth, changes), sortStateRef.current)
+      ? sortFileEntries(applySearchChanges(prev, viewPath, searchQuery, fileManagerSearchDepth, changes), sortStateRef.current)
       : prev));
 
     // 选区/锚点同步：目录改名时其后代路径改写前缀；目录删除时其后代选中一并移除
@@ -1176,7 +1224,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       setSelected((prev) => prev.map(remap).filter((p) => !gone(p)));
       setAnchorPath((prev) => (prev ? (gone(remap(prev)) ? null : remap(prev)) : prev));
     }
-  }, [currentPath, searchQuery, fileManagerSearchDepth]);
+  }, [searchQuery, fileManagerSearchDepth]);
 
   // Double-click entry
   // 双击/上下文菜单打开条目
@@ -1523,7 +1571,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       if (fileInfo && fileInfo.exists) {
         const size = fileInfo.size ? formatSize(fileInfo.size) : t("fileManager.unknown");
         const mtime = fileInfo.mtime
-          ? new Date(fileInfo.mtime * 1000).toLocaleString('zh-CN')
+          ? new Date(fileInfo.mtime * 1000).toLocaleString(i18n.language)
           : t("fileManager.unknown");
 
         const confirmed = await ask(
@@ -2073,10 +2121,11 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   // 回退一次权威目录刷新（不做逐文件整目录读取）
   useEffect(() => {
     let unlisten: (() => void) | null = null;
+    let disposed = false; // setupListener 是异步的：cleanup 先于 resolve 时补注销，防监听器泄漏
 
     const setupListener = async () => {
       const { listen } = await import('@tauri-apps/api/event');
-      unlisten = await listen<{ remote_path: string; dir_path: string; file_name: string }>('upload-completed', (event) => {
+      const fn = await listen<{ remote_path: string; dir_path: string; file_name: string }>('upload-completed', (event) => {
         const { remote_path, dir_path } = event.payload;
         if (!activeServerId || dir_path !== currentPath) return;
 
@@ -2097,11 +2146,17 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
           loadDir(currentPath);
         })();
       });
+      if (disposed) {
+        fn(); // effect 已清理：立即注销本次注册
+      } else {
+        unlisten = fn;
+      }
     };
 
     setupListener().catch((e) => log.error('上传完成事件监听设置失败:', e));
 
     return () => {
+      disposed = true;
       if (unlisten) {
         unlisten();
       }
@@ -2553,6 +2608,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       {marquee && createPortal(
         <div
           className="fm-marquee"
+          data-browser-overlay
           style={{
             left: Math.min(marquee.x0, marquee.x1),
             top: Math.min(marquee.y0, marquee.y1),
@@ -2591,6 +2647,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       {headerMenu && createPortal(
         <div
           className="fm-header-menu"
+          data-browser-overlay
           style={{ left: headerMenu.x, top: headerMenu.y }}
           /* 菜单内点击（含复选框连续勾选）不冒泡到 window 的外部关闭监听 */
           onClick={(e) => e.stopPropagation()}
@@ -2631,6 +2688,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         return (
           <div
             className="fm-drag-ghost"
+            data-browser-overlay
             /* 光标对齐图标堆叠中心：抓手的"手"落在图标中间（堆叠 38px，
                中心 = +19；名称胶囊垂在下方不挡落点高亮） */
             style={{ transform: `translate(${ghostPos.x - 19}px, ${ghostPos.y - 19}px)` }}
@@ -2838,7 +2896,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
 
       {/* Properties Dialog - 使用 Portal（分页：常规=只读信息 / 权限=可编辑 chmod+chown） */}
       {propertiesEntry && createPortal(
-        <div className="pd-overlay" onClick={(e) => {
+        <div className="pd-overlay" data-browser-overlay onClick={(e) => {
           // 保存进行中不允许点遮罩关闭（防丢失反馈）；其余状态点击遮罩 = 关闭（与 ed-overlay 一致）
           if (!permSaving && e.target === e.currentTarget) {
             setPropertiesEntry(null);

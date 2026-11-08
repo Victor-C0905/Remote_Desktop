@@ -132,6 +132,18 @@ impl IpcServer {
         let listener = UnixListener::bind(&self.socket_path)
             .context("Failed to bind Unix socket")?;
 
+        // 显式收敛 socket 文件权限为 0600（仅属主可连接）。
+        // bind 创建的 socket 文件权限 = 0777 & ~umask，纯靠进程 umask 兜底：
+        // quireld 以 root 运行、IPC 消息携带 uid/gid 并可直接指挥任意用户
+        // 上下文执行（execute_as_user 对 uid==0 跳过降权），socket 一旦被
+        // 其他本地用户可写即等价于本地提权入口（2026-11 审计 H2）
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&self.socket_path, std::fs::Permissions::from_mode(0o600))
+                .with_context(|| format!("Failed to chmod IPC socket: {}", self.socket_path))?;
+        }
+
         let mut listener_guard = self.listener.write().await;
         *listener_guard = Some(listener);
 
@@ -159,14 +171,31 @@ impl IpcServer {
     /// 所有等待响应的调用方会收到 "response dropped" 错误，
     /// 不再需要显式清理旧连接。
     pub async fn accept_and_set_pid(&self, worker_pid: u32) -> Result<()> {
-        // 1. accept 新 UnixStream
+        // 1. accept 新 UnixStream，并校验对端身份。
+        // 仅接受与自身同 uid 的连接（即 Manager 亲自拉起的 Worker）：
+        // IPC 消息携带 uid/gid 且 Worker 据此降权执行，谁能连上 socket
+        // 谁就能指挥任意用户上下文——对端身份必须验证（2026-11 审计 H2）。
+        // 非授权连接（本地其他用户）直接关闭并继续等待真正的 Worker。
+        let expected_uid = nix::unistd::getuid().as_raw();
         let stream = {
             let listener_guard = self.listener.read().await;
             let listener = listener_guard.as_ref()
                 .ok_or_else(|| anyhow::anyhow!("IPC server not started"))?;
-            let (stream, _addr) = listener.accept().await
-                .context("Failed to accept connection")?;
-            stream
+            loop {
+                let (stream, _addr) = listener.accept().await
+                    .context("Failed to accept connection")?;
+                match stream.peer_cred() {
+                    Ok(cred) if cred.uid() == expected_uid => break stream,
+                    other => {
+                        warn!(
+                            "拒绝非授权 IPC 连接（仅接受同 uid 的 Worker）: peer={:?}, expected_uid={}",
+                            other.map(|c| (c.uid(), c.pid())),
+                            expected_uid
+                        );
+                        // stream 在此 drop 关闭非法连接，继续 accept
+                    }
+                }
+            }
         };
 
         // 2. 创建新 mpsc channel

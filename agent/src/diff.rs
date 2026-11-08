@@ -65,6 +65,22 @@ pub fn apply_diff(old_text: &str, diffs: &[FileDiff]) -> String {
 
     for diff in sorted {
         let line_idx = diff.line_number.saturating_sub(1);
+        // 基线校验（仅告警不拒绝）：客户端声明 replace/delete 的原行内容与
+        // 实际不一致，说明 diff 基于过期版本——错位应用会让文件内容悄然
+        // 偏离作者预期，留日志供排查（2026-11 审计 L12）
+        if !matches!(diff.diff_type, DiffType::Insert) {
+            if line_idx < lines.len() {
+                if let Some(expected) = &diff.old_content {
+                    let actual = lines[line_idx].trim_end_matches('\n');
+                    if expected.trim_end_matches('\n') != actual {
+                        tracing::warn!(
+                            "diff 基线不一致（客户端缓存过期？）: line={}, 期望 {:?}, 实际 {:?}",
+                            diff.line_number, expected, actual
+                        );
+                    }
+                }
+            }
+        }
         match diff.diff_type {
             DiffType::Delete => {
                 if line_idx < lines.len() {

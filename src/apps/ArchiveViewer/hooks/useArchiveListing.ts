@@ -5,7 +5,7 @@
  * 不含提取/解压动作（见 useEntryActions）。
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { createLogger } from '../../../utils/logger';
@@ -41,8 +41,11 @@ export function useArchiveListing(
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<{ msg: string; detail?: string } | null>(null);
   const { t } = useTranslation();
+  const refreshEpochRef = useRef(0);
 
   const refresh = useCallback(async () => {
+    // 竞态守卫（审计 L6）：path/serverId 快速变化时旧列表响应不得覆盖新状态
+    const epoch = ++refreshEpochRef.current;
     // 能力探测中或格式不可用时，不发起必然失败的列表命令
     if (!enabled) {
       setTree([]);
@@ -67,24 +70,31 @@ export function useArchiveListing(
       } catch (err) {
         // 连接失败/Agent 拒绝与“输出解析失败”不是一回事，不能统一报解析错误
         log.error('加载压缩包列表失败:', err);
+        if (epoch !== refreshEpochRef.current) return;
         setError({ msg: describeInvokeError(err) });
         return;
       }
       if (r.exitCode !== 0) {
         log.error('列表命令失败:', r.exitCode, r.stderr || r.stdout);
+        if (epoch !== refreshEpochRef.current) return;
         setError({ msg: describeExecFailure(r, 'list') });
         return;
       }
       // zip 由 7z 兜底列表时输出是 -slt 格式，解析器必须跟随实际工具
       try {
         const parseKind = kind === 'zip' && (tool === '7z' || tool === '7zz') ? '7z' : kind;
-        setTree(buildTree(parseListing(parseKind, r.stdout)));
+        const nextTree = buildTree(parseListing(parseKind, r.stdout));
+        if (epoch !== refreshEpochRef.current) return; // 过期响应，丢弃
+        setTree(nextTree);
       } catch (err) {
         log.error('解析列表输出失败:', err);
+        if (epoch !== refreshEpochRef.current) return;
         setError({ msg: t('archive.errParse'), detail: formatUnknownError(err) });
       }
     } finally {
-      setLoading(false);
+      if (epoch === refreshEpochRef.current) {
+        setLoading(false);
+      }
     }
   }, [path, serverId, kind, tool, formatId, enabled, t]);
 

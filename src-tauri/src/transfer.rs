@@ -183,15 +183,13 @@ impl std::fmt::Display for TransferStatus {
 ///
 /// 文件名格式: `quirel_{hash前16位}.tmp`
 fn generate_temp_path(path: &Path) -> PathBuf {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
+    // SHA-256 而非 DefaultHasher：std 不保证 DefaultHasher 跨版本稳定
+    // （未来随机化即静默破坏续传定位，审计 低-11），SHA-256 恒定
+    use sha2::{Digest, Sha256};
 
     let path_str = path.to_string_lossy();
-    let mut hasher = DefaultHasher::new();
-    path_str.hash(&mut hasher);
-    let hash = hasher.finish();
-
-    let temp_name = format!("quirel_{:016x}.tmp", hash);
+    let digest = Sha256::digest(path_str.as_bytes());
+    let temp_name = format!("quirel_{:016x}.tmp", u64::from_be_bytes(digest[..8].try_into().unwrap()));
     path.parent().unwrap_or(Path::new(".")).join(temp_name)
 }
 
@@ -376,9 +374,11 @@ impl TransferManager {
             eta_secs: 0,
             status: TransferStatus::Pending,
             error: None,
+            // 时钟早于 1970 时 unwrap 会 panic（release=abort），与其他
+            // 时间戳处保持 unwrap_or_default 一致（审计 低-4）
             created_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .as_secs(),
             server_id: server_id,  // 保存原始参数
             agent_session_id: None,  // Agent 端 session_id，在传输开始后设置
@@ -634,12 +634,12 @@ impl TransferManager {
                 .with_param("status", task.status.to_string()));
         }
 
-        // 保存断点续传位置
-        let resume_from = if task.transferred > 0 {
-            Some(task.transferred)
-        } else {
-            None
-        };
+        // 断点续传位置：必须传 None（从头传输）。
+        // Agent 端隔离读取模式不支持续传——handle_file_transfer_request 对
+        // resume_from 仅告警并从字节 0 重发全量；客户端若按偏移打开残留临时
+        // 文件追加，将拼接出「旧前缀+完整新文件」的损坏产物（2026-11 审计 H5）。
+        // 等协议两端真正支持续传后再恢复偏移语义。
+        let resume_from: Option<u64> = None;
 
         // 重置任务状态
         task.status = TransferStatus::Pending;
@@ -1030,11 +1030,11 @@ impl FileWriter {
     /// - `resume_from`: 从哪个字节开始写入（0 = 从头开始）
     ///
     /// # 断点续传逻辑
-    /// - 如果 `resume_from` > 0，尝试打开已存在的临时文件并跳转到指定位置
-    /// - 验证临时文件完整性：
-    ///   1. 文件大小是否与 `resume_from` 一致
-    ///   2. 确保已有数据已落盘（sync_all）
-    /// - 如果临时文件不存在、大小不匹配或数据不完整，创建新文件并忽略 `resume_from`
+    /// - `resume_from` == 0：无条件从头写入，已存在的残留临时文件被截断丢弃
+    ///   （当前下载链路的服务端不支持偏移续传，恒传 0）
+    /// - `resume_from` > 0：要求临时文件存在且大小精确等于偏移（sync 校验），
+    ///   不满足一律报错（fail-closed），禁止静默降级为从头写——那会在服务端
+    ///   按偏移发送时产出缺前缀的损坏文件
     ///
     /// # 返回
     /// 成功返回 FileWriter，失败返回错误信息
@@ -1073,6 +1073,9 @@ impl FileWriter {
         }
 
         // 尝试断点续传
+        // 注意：resume_from > 0 的前提是握手协议两端都按偏移发送/接收；
+        // 本地状态与偏移语义不一致时 fail-closed 报错，禁止静默降级——
+        // 「截断从头写」在服务器按偏移发送时会产出缺前缀的损坏文件
         let (file, actual_resume_from) = if resume_from > 0 {
             if temp_path.exists() {
                 // 验证临时文件完整性
@@ -1091,50 +1094,50 @@ impl FileWriter {
                             Err(e) => {
                                 tracing::warn!(
                                     error = %e,
-                                    "跳转到断点位置失败，降级为重新传输"
+                                    "跳转到断点位置失败，拒绝续传"
                                 );
-                                Self::create_fresh_temp_file(&temp_path)?
+                                return Err(local_file_err(format!(
+                                    "resume seek failed ({}): {}",
+                                    e,
+                                    temp_path.display()
+                                )));
                             }
                         }
                     }
                     Err(reason) => {
                         tracing::warn!(
                             reason = %reason,
-                            "临时文件完整性校验失败，降级为重新传输"
+                            "临时文件完整性校验失败，拒绝续传"
                         );
-                        Self::create_fresh_temp_file(&temp_path)?
+                        return Err(local_file_err(format!(
+                            "resume temp file integrity check failed ({}): {}",
+                            reason,
+                            temp_path.display()
+                        )));
                     }
                 }
             } else {
                 tracing::debug!(
                     temp_path = %temp_path.display(),
-                    "临时文件不存在，从头开始传输"
+                    "临时文件不存在，拒绝续传（需从头重传）"
                 );
-                Self::create_fresh_temp_file(&temp_path)?
+                return Err(local_file_err(format!(
+                    "resume temp file not found: {}",
+                    temp_path.display()
+                )));
             }
         } else {
-            // resume_from == 0，但可能有保留的临时文件（之前的下载被取消/删除）
+            // resume_from == 0：无条件从头写入。临时文件名为确定性哈希
+            // （generate_temp_path），上次取消/失败保留的临时文件会命中
+            // 同一路径——此处必须截断丢弃残留，禁止追加（服务器从字节 0
+            // 重发全量，追加会拼接出损坏文件，2026-11 审计 H5）。
             if temp_path.exists() {
-                let existing_size = temp_path.metadata().map(|m| m.len()).unwrap_or(0);
-                if existing_size > 0 {
-                    tracing::debug!(
-                        temp_path = %temp_path.display(),
-                        existing_size,
-                        "发现保留的临时文件，尝试断点续传"
-                    );
-                    // 打开已有文件，追加模式
-                    let file = std::fs::OpenOptions::new()
-                        .write(true)
-                        .append(true)
-                        .open(&temp_path)
-                        .map_err(|e| local_file_err(format!("open preserved temp file: {}", e)))?;
-                    (BufWriter::new(file), existing_size)
-                } else {
-                    Self::create_fresh_temp_file(&temp_path)?
-                }
-            } else {
-                Self::create_fresh_temp_file(&temp_path)?
+                tracing::debug!(
+                    temp_path = %temp_path.display(),
+                    "发现残留临时文件，从头开始传输（截断丢弃）"
+                );
             }
+            Self::create_fresh_temp_file(&temp_path)?
         };
 
         // 如果文件已有数据，标记为 preserved（防止 Drop 删除）
@@ -1219,32 +1222,21 @@ impl FileWriter {
         tracing::debug!(
             temp_path = %temp_path.display(),
             exists,
-            "{}临时文件",
-            if exists { "打开已有" } else { "创建新" }
+            "{}临时文件（截断）",
+            if exists { "复用路径，" } else { "创建新" }
         );
 
-        let mut file = std::fs::OpenOptions::new()
+        // 恒截断：「fresh」语义即从字节 0 写入——临时文件名为确定性哈希，
+        // 已有内容只可能是上次失败传输的残留，追加会拼接出损坏文件
+        // （2026-11 审计 H5）
+        let file = std::fs::OpenOptions::new()
             .write(true)
             .create(true)
-            .truncate(!exists)  // 仅在文件不存在时截断
+            .truncate(true)
             .open(temp_path)
             .map_err(|e| local_file_err(format!("create temp file {:?}: {}", temp_path, e)))?;
 
-        // 如果文件已存在，获取已有数据大小
-        let existing_size = if exists {
-            file.metadata().map(|m| m.len()).unwrap_or(0)
-        } else {
-            0
-        };
-
-        if existing_size > 0 {
-            tracing::debug!(existing_size, "断点续传: 已有数据");
-            // 追加到文件末尾
-            file.seek(std::io::SeekFrom::End(0))
-                .map_err(|e| local_file_err(format!("seek to end: {}", e)))?;
-        }
-
-        Ok((BufWriter::new(file), existing_size))
+        Ok((BufWriter::new(file), 0))
     }
 
     /// 写入数据块
@@ -1271,6 +1263,18 @@ impl FileWriter {
         // 同步到磁盘
         self.writer.get_ref().sync_all()
             .map_err(|e| local_file_err(format!("sync file: {}", e)))?;
+
+        // 硬校验：实际写入字节数必须与声明大小一致，否则拒绝产出最终文件
+        // （协议失步/历史追加逻辑残留的最后一道防线，2026-11 审计 H5）。
+        // 不标记完成 → Drop 会清理临时文件，损坏数据不留存、不被误当续传基点
+        if self.transferred != self.file_size {
+            let error = format!(
+                "传输字节数与声明大小不一致: 已写 {} / 应为 {}",
+                self.transferred, self.file_size
+            );
+            tracing::error!("{}", error);
+            return Err(AppError::new(codes::TRANSFER_SAVE_FAILED).with_detail(error));
+        }
 
         // 标记为完成，防止 Drop 删除
         self.is_temporary = false;
@@ -1810,56 +1814,75 @@ async fn run_multi_stream_upload(
 
     // 4. 非主 stream (1..N-1): open_bi → MultiStreamJoin → ACK → spawn upload
     let mut secondary_handles: Vec<tokio::task::JoinHandle<Result<(), AppError>>> = Vec::new();
-    for stream_index in 1..stream_count {
-        let range = part_offsets[stream_index as usize];
+    // 循环内任何失败：先 abort 已 spawn 的上传任务再返回——JoinHandle
+    // drop 不会中止任务，泄漏的 run_upload_loop 会继续读文件、写 QUIC
+    // 流、上报进度（2026-11 审计 M14）
+    let abort_spawned = |secondary: &mut Vec<tokio::task::JoinHandle<Result<(), AppError>>>,
+                         primary: &tokio::task::JoinHandle<Result<(), AppError>>| {
+        primary.abort();
+        for h in secondary.drain(..) {
+            h.abort();
+        }
+    };
+    // 整个 join 循环包进 async 块：任何失败（含 ? 运算符路径）统一由
+    // 外层 abort 已 spawn 的任务后再返回——JoinHandle drop 不会中止任务，
+    // 泄漏的 run_upload_loop 会继续读文件、写 QUIC 流、上报进度
+    // （2026-11 审计 M14）
+    let join_result: Result<(), AppError> = async {
+        for stream_index in 1..stream_count {
+            let range = part_offsets[stream_index as usize];
 
-        // 开新 bi-stream
-        let (mut send, mut recv) = tokio::time::timeout(
-            FILE_TRANSFER_STREAM_TIMEOUT,
-            conn.open_bi(),
-        ).await
-        .map_err(|_| timeout_err().with_detail(format!("open stream {} timed out", stream_index)))?
-        .map_err(|e| net_err(format!("open stream {}: {}", stream_index, e)))?;
+            // 开新 bi-stream
+            let (mut send, mut recv) = tokio::time::timeout(
+                FILE_TRANSFER_STREAM_TIMEOUT,
+                conn.open_bi(),
+            ).await
+            .map_err(|_| timeout_err().with_detail(format!("open stream {} timed out", stream_index)))?
+            .map_err(|e| net_err(format!("open stream {}: {}", stream_index, e)))?;
 
-        // 发送 MultiStreamJoin (握手用 4字节len + JSON,和单流 handshake_transfer 一致)
-        // 不能用 write_control_frame(5字节 raw 帧),agent 端 read_message 期望 4字节len + JSON
-        let join_payload = Payload::MultiStreamJoin {
-            session_id: session_id.to_string(),
-            stream_index,
-            offset_start: range.0,
-            offset_end: range.1,
-        };
-        let join_env = Envelope::new(0, join_payload);
-        let join_bytes = join_env
-            .encode()
-            .map_err(|e| net_err(format!("encode join: {}", e)))?;
-        let join_len = (join_bytes.len() as u32).to_le_bytes();
-        send.write_all(&join_len).await.map_err(|e| net_err(format!("stream {} send join len: {}", stream_index, e)))?;
-        send.write_all(&join_bytes).await.map_err(|e| net_err(format!("stream {} send join: {}", stream_index, e)))?;
-        send.flush().await.map_err(|e| net_err(format!("stream {} flush join: {}", stream_index, e)))?;
+            // 发送 MultiStreamJoin (握手用 4字节len + JSON,和单流 handshake_transfer 一致)
+            // 不能用 write_control_frame(5字节 raw 帧),agent 端 read_message 期望 4字节len + JSON
+            let join_payload = Payload::MultiStreamJoin {
+                session_id: session_id.to_string(),
+                stream_index,
+                offset_start: range.0,
+                offset_end: range.1,
+            };
+            let join_env = Envelope::new(0, join_payload);
+            let join_bytes = join_env
+                .encode()
+                .map_err(|e| net_err(format!("encode join: {}", e)))?;
+            let join_len = (join_bytes.len() as u32).to_le_bytes();
+            send.write_all(&join_len).await.map_err(|e| net_err(format!("stream {} send join len: {}", stream_index, e)))?;
+            send.write_all(&join_bytes).await.map_err(|e| net_err(format!("stream {} send join: {}", stream_index, e)))?;
+            send.flush().await.map_err(|e| net_err(format!("stream {} flush join: {}", stream_index, e)))?;
 
-        // 接收 ACK (4字节len + JSON,和 agent write_message 一致)
-        let mut ack_len_buf = [0u8; 4];
-        recv.read_exact(&mut ack_len_buf).await
-            .map_err(|e| net_err(format!("stream {} read ACK len: {}", stream_index, e)))?;
-        let ack_len = u32::from_le_bytes(ack_len_buf) as usize;
-        let mut ack_body = vec![0u8; ack_len];
-        recv.read_exact(&mut ack_body).await
-            .map_err(|e| net_err(format!("stream {} read ACK: {}", stream_index, e)))?;
-        let ack_env = Envelope::decode(&ack_body)
-            .map_err(|e| net_err(format!("decode ACK: {}", e)))?;
-        match &ack_env.payload {
-            Payload::FileTransferAccept { .. } => {
-                tracing::info!(stream_index, "多流 stream 加入成功");
-            }
-            Payload::Error { message, .. } => {
-                return Err(agent_rejected(message.clone())
-                    .with_detail(format!("stream {} join rejected", stream_index)));
-            }
-            _ => {
-                return Err(AppError::new(codes::TRANSFER_PROTOCOL_UNEXPECTED)
-                    .with_detail(format!("stream {} unexpected response", stream_index)));
-            }
+            // 接收 ACK (4字节len + JSON,和 agent write_message 一致)
+            // 读取套超时：Agent 半死（进程在、流不发数据）时无超时读取会让
+            // 任务永久挂死且不可取消——cancel 检查只在 chunk 间生效
+            // （2026-11 审计 M13）
+            let ack_body = tokio::time::timeout(
+                FILE_CHUNK_TIMEOUT,
+                crate::net_frame::read_len_prefixed(&mut recv),
+            )
+            .await
+            .map_err(|_| timeout_err().with_detail(format!("stream {} read ACK timed out", stream_index)))?
+            .map_err(|e| net_err(format!("stream {} read ACK: {}", stream_index, e)))?
+            .ok_or_else(|| net_err(format!("stream {} ACK stream finished early", stream_index)))?;
+            let ack_env = Envelope::decode(&ack_body)
+                .map_err(|e| net_err(format!("decode ACK: {}", e)))?;
+            match &ack_env.payload {
+                Payload::FileTransferAccept { .. } => {
+                    tracing::info!(stream_index, "多流 stream 加入成功");
+                }
+                Payload::Error { message, .. } => {
+                    return Err(agent_rejected(message.clone())
+                        .with_detail(format!("stream {} join rejected", stream_index)));
+                }
+                _ => {
+                    return Err(AppError::new(codes::TRANSFER_PROTOCOL_UNEXPECTED)
+                        .with_detail(format!("stream {} unexpected response", stream_index)));
+                }
         }
 
         // 启动段上传任务
@@ -1881,6 +1904,13 @@ async fn run_multi_stream_upload(
             ).await
         });
         secondary_handles.push(handle);
+        }
+        Ok(())
+    }
+    .await;
+    if let Err(e) = join_result {
+        abort_spawned(&mut secondary_handles, &primary_handle);
+        return Err(e);
     }
 
     // 5. 等待主 stream 上传完成
@@ -1915,17 +1945,15 @@ async fn run_multi_stream_upload(
     // 7. 等待 MultiStreamMergeComplete (主 stream recv)
     tracing::info!(task_id, "所有段上传完成,等待合并结果");
     // 合并结果用 4字节len + JSON(和 agent write_message 一致,不是 raw 帧)
-    let mut merge_len_buf = [0u8; 4];
-    primary_recv
-        .read_exact(&mut merge_len_buf)
-        .await
-        .map_err(net_err)?;
-    let merge_len = u32::from_le_bytes(merge_len_buf) as usize;
-    let mut merge_body = vec![0u8; merge_len];
-    primary_recv
-        .read_exact(&mut merge_body)
-        .await
-        .map_err(net_err)?;
+    // 长度前缀封顶校验（net_frame）+ 超时兜底（同 ACK 读取，审计 M13）
+    let merge_body = tokio::time::timeout(
+        FILE_CHUNK_TIMEOUT,
+        crate::net_frame::read_len_prefixed(&mut primary_recv),
+    )
+    .await
+    .map_err(|_| timeout_err().with_detail("read merge result timed out"))?
+    .map_err(net_err)?
+    .ok_or_else(|| net_err("merge result stream finished early"))?;
     let merge_env = Envelope::decode(&merge_body).map_err(|e| {
         AppError::new(codes::TRANSFER_PROTOCOL_UNEXPECTED)
             .with_detail(format!("decode merge result: {}", e))
@@ -1961,8 +1989,11 @@ async fn run_download_loop(
     frame_mode: &str,
 ) -> Result<(), AppError> {
     let raw_mode = frame_mode == "raw";
-    let resume_pos = resume_from.unwrap_or(0);
-    let mut writer = FileWriter::with_resume(local_path, file_size, resume_pos)?;
+    // 下载一律从头接收：Agent 端（隔离读取模式）忽略 resume_from 并从字节 0
+    // 重发全量，客户端偏移续传会拼接出损坏文件（2026-11 审计 H5）。
+    // 残留临时文件由 FileWriter 在 fresh start 时截断丢弃。
+    let _ = resume_from;
+    let mut writer = FileWriter::with_resume(local_path, file_size, 0)?;
     tracing::info!(
         temp_path = %writer.temp_path.display(),
         final_path = %writer.path.display(),
@@ -2062,14 +2093,11 @@ async fn run_download_loop(
         } else {
             // ===== JSON 模式(旧端回退) =====
             let read_result = tokio::time::timeout(FILE_CHUNK_TIMEOUT, async {
-                let mut chunk_len_buf = [0u8; 4];
-                recv.read_exact(&mut chunk_len_buf)
+                // 长度前缀封顶校验（net_frame）
+                crate::net_frame::read_len_prefixed(recv)
                     .await
-                    .map_err(net_err)?;
-                let chunk_len = u32::from_le_bytes(chunk_len_buf) as usize;
-                let mut chunk_buf = vec![0u8; chunk_len];
-                recv.read_exact(&mut chunk_buf).await.map_err(net_err)?;
-                Ok::<Vec<u8>, AppError>(chunk_buf)
+                    .map_err(net_err)?
+                    .ok_or_else(|| net_err("chunk stream finished early"))
             })
             .await;
 
@@ -2394,5 +2422,88 @@ mod tests {
         assert_ne!(p1, generate_temp_path(Path::new("/data/其他.zip")));
         // 临时文件与目标文件同目录（删除命令按 local_path 重算即可定位）
         assert_eq!(p1.parent(), Some(Path::new("/data")));
+    }
+
+    // ── FileWriter：fresh start 截断 + finish 字节数硬校验（审计 H5） ──
+
+    /// 每测试独占目录（跟随项目测试惯例：std::env::temp_dir + 进程号命名）
+    fn h5_test_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("quirel-h5-test-{}-{}", std::process::id(), tag));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// fresh start（resume_from == 0）必须截断残留临时文件：
+    /// 临时文件名为确定性哈希，上次取消保留的残留会被同名命中，
+    /// 追加即产生「旧前缀+完整新文件」的损坏产物
+    #[test]
+    fn fresh_start_truncates_leftover_temp_file() {
+        let dir = h5_test_dir("fresh");
+        let local = dir.join("video.mp4");
+
+        // 伪造上次取消留下的残留临时文件（与 generate_temp_path 同名命中）
+        let temp = generate_temp_path(&local);
+        std::fs::write(&temp, b"LEFTOVER-DATA").unwrap();
+
+        let mut w = FileWriter::with_resume(local.to_str().unwrap(), 10, 0).unwrap();
+        assert_eq!(w.transferred, 0, "fresh start 必须从 0 起算");
+
+        w.write_chunk(b"0123456789").unwrap();
+        w.finish().unwrap();
+
+        // 最终文件必须只含本次数据，不得混入残留前缀
+        let final_bytes = std::fs::read(&local).unwrap();
+        assert_eq!(final_bytes, b"0123456789");
+        assert!(!w.temp_path.exists(), "临时文件已重命名为最终文件");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// finish() 字节数硬校验：写入不足声明大小时必须拒绝 rename，
+    /// 且不残留临时文件（Drop 清理），防止损坏数据被误当续传基点
+    #[test]
+    fn finish_rejects_byte_count_mismatch() {
+        let dir = h5_test_dir("mismatch");
+        let local = dir.join("doc.bin");
+
+        let mut w = FileWriter::with_resume(local.to_str().unwrap(), 10, 0).unwrap();
+        w.write_chunk(b"abc").unwrap();
+        assert!(w.finish().is_err(), "3/10 字节不允许完成");
+        assert!(!local.exists(), "损坏产物不得落盘");
+        // 临时文件由 Drop 清理——先释放写入器再断言
+        let temp_path = w.temp_path.clone();
+        drop(w);
+        assert!(!temp_path.exists(), "临时文件应被 Drop 清理");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// finish() 正常路径：字节数一致时原子重命名成功
+    #[test]
+    fn finish_succeeds_when_size_matches() {
+        let dir = h5_test_dir("ok");
+        let local = dir.join("ok.bin");
+
+        let mut w = FileWriter::with_resume(local.to_str().unwrap(), 4, 0).unwrap();
+        w.write_chunk(b"ab").unwrap();
+        w.write_chunk(b"cd").unwrap();
+        w.finish().unwrap();
+        assert_eq!(std::fs::read(&local).unwrap(), b"abcd");
+        assert!(!w.temp_path.exists(), "临时文件已重命名为最终文件");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 续传校验失败 fail-closed：偏移与临时文件大小不符时报错而非静默降级
+    #[test]
+    fn resume_rejects_when_temp_missing_or_mismatched() {
+        let dir = h5_test_dir("resume");
+        let local = dir.join("x.bin");
+
+        // 临时文件不存在 → 拒绝
+        assert!(FileWriter::with_resume(local.to_str().unwrap(), 10, 5).is_err());
+
+        // 临时文件存在但大小与偏移不符 → 拒绝（7 字节 ≠ 偏移 5）
+        std::fs::write(generate_temp_path(&local), b"shorter").unwrap();
+        assert!(FileWriter::with_resume(local.to_str().unwrap(), 10, 5).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

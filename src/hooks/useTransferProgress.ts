@@ -137,11 +137,49 @@ export function useTransferProgress(connectionId?: string) {
     return () => { cancelled = true; };
   }, []);
 
-  // 监听变化并保存到 Tauri Store（加载完成后才启用，防止空数组覆盖）
+  // 最新任务列表的即时引用（节流 flush 时读取，避免闭包捕获过期值）
+  const transfersRef = useRef(transfers);
+  transfersRef.current = transfers;
+
+  // 监听变化并保存到 Tauri Store（加载完成后才启用，防止空数组覆盖）。
+  // 节流：transfer-progress 事件为 tick 级频率，每次全量序列化+写盘会
+  // 持续放大 IPC/磁盘 IO——1s 内至多落盘一次，不足 1s 的变更由尾随
+  // 定时器合并追平（终态变更最坏延迟 1s 落盘）
+  const lastSaveRef = useRef(0);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (!loadedRef.current) return;
-    transferStorage.save(transfers);
+
+    const SAVE_INTERVAL_MS = 1000;
+    const flush = () => {
+      lastSaveRef.current = Date.now();
+      void transferStorage.save(transfersRef.current);
+    };
+
+    if (Date.now() - lastSaveRef.current >= SAVE_INTERVAL_MS) {
+      // 距上次落盘已超间隔：清掉挂起的尾随保存，立即落盘
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+      flush();
+    } else if (!saveTimerRef.current) {
+      saveTimerRef.current = setTimeout(() => {
+        saveTimerRef.current = null;
+        flush();
+      }, SAVE_INTERVAL_MS);
+    }
   }, [transfers]);
+
+  // 卸载兜底：窗口关闭时把挂起未落盘的最终状态写回
+  useEffect(() => {
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      if (loadedRef.current) {
+        void transferStorage.save(transfersRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     log.debug('初始化传输任务数据:', transfers.length, '个任务');
@@ -217,7 +255,7 @@ export function useTransferProgress(connectionId?: string) {
         } else {
           log.debug(`创建新任务: id=${payload.id}, file=${payload.file_name}`);
           // 添加新任务
-          return [
+          const withNew: TransferTask[] = [
             ...prev,
             {
               id: payload.id,
@@ -237,6 +275,21 @@ export function useTransferProgress(connectionId?: string) {
               start_time: Date.now(), // 记录任务开始时间
             },
           ];
+
+          // 终态任务保留上限：超过 MAX_FINISHED 时丢弃最旧的，防任务列表
+          // 与持久化存储随使用无界增长（非终态任务不受影响）
+          const MAX_FINISHED_TASKS = 50;
+          const finished = withNew.filter(t => isTerminalStatus(t.status));
+          if (finished.length > MAX_FINISHED_TASKS) {
+            const ordered = [...finished].sort((a, b) =>
+              (a.completed_at ?? a.start_time) - (b.completed_at ?? b.start_time)
+            );
+            const evict = new Set(
+              ordered.slice(0, finished.length - MAX_FINISHED_TASKS).map(t => t.id)
+            );
+            return withNew.filter(t => !evict.has(t.id));
+          }
+          return withNew;
         }
       });
     });

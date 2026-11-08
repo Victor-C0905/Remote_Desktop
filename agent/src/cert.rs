@@ -41,6 +41,20 @@ pub fn ensure_certificate(cfg: &AgentConfig) -> Result<(Vec<CertificateDer<'stat
 
     if cert_path.exists() && key_path.exists() {
         tracing::info!("使用已有证书: {}", cfg.server.cert_path);
+        // 对已存在文件补一次权限收紧：write_secret_file 的 0600 仅对新建
+        // 生效，历史遗留的 0644 私钥会被本机任意用户读取（守护进程以
+        // root 运行时尤为严重；2026-11 审计 L2）
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for p in [key_path, cert_path] {
+                if let Err(e) =
+                    std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o600))
+                {
+                    tracing::warn!("收紧已有密钥/证书权限失败: {:?}: {}", p, e);
+                }
+            }
+        }
         let certs = load_certs(cert_path)?;
         let key = load_key(key_path)?;
         return Ok((certs, key));

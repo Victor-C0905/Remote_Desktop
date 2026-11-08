@@ -5,13 +5,18 @@ use crate::protocol::MetricsSnapshot;
 use sysinfo::{System, Disks, CpuRefreshKind};
 use tokio::time::{sleep, Duration};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::Mutex;
 
 /// 系统监控采集器
+///
+/// 生命周期由采集任务句柄管理：start 幂等（重复调用忽略），stop 立即
+/// abort 在跑任务——此前用 running 布尔标志，stop→start 快速切换时旧
+/// 任务在 sleep 间隔内看不到 false、醒来后读到新 start 的 true，导致
+/// 双任务双倍采集/发布（2026-11 审计 M10）
 pub struct MetricsCollector {
     interval_secs: u64,
     event_bus: Arc<EventBus>,
-    running: Arc<RwLock<bool>>,
+    task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl MetricsCollector {
@@ -19,42 +24,32 @@ impl MetricsCollector {
         Self {
             interval_secs,
             event_bus,
-            running: Arc::new(RwLock::new(false)),
+            task: Mutex::new(None),
         }
     }
 
-    /// 启动采集
+    /// 启动采集（幂等：已有存活任务时忽略）
     pub async fn start(&self) {
-        let running = self.running.clone();
+        let mut task_guard = self.task.lock().await;
+        if task_guard
+            .as_ref()
+            .is_some_and(|h| !h.is_finished())
+        {
+            tracing::debug!("MetricsCollector 已在运行，忽略重复 start");
+            return;
+        }
+
         let event_bus = self.event_bus.clone();
         let interval = self.interval_secs;
-
-        // 设置运行状态
-        {
-            let mut r = running.write().await;
-            *r = true;
-        }
 
         // 创建 System 实例（持久化，避免每次创建）
         let mut sys = System::new_all();
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             // 第一次刷新（初始化 CPU 信息）
             sys.refresh_cpu_specifics(CpuRefreshKind::everything());
 
             loop {
-                // 检查是否有订阅者
-                let should_run = {
-                    let r = running.read().await;
-                    *r
-                };
-
-                if !should_run {
-                    // 任务停止，释放 System 实例
-                    tracing::info!("MetricsCollector 任务停止，释放 System 实例");
-                    break;
-                }
-
                 // 等待一段时间（让 CPU 使用率计算准确）
                 sleep(Duration::from_secs(interval)).await;
 
@@ -64,18 +59,27 @@ impl MetricsCollector {
                 // 采集数据
                 let metrics = Self::collect(&mut sys);
 
-                // 发布事件
-                event_bus.publish("metrics", serde_json::to_value(metrics).unwrap()).await;
+                // 发布事件。to_value 对可序列化结构不会失败，仍按防御处理：
+                // 失败跳过本帧（unwrap 一旦触发即杀掉整个采集任务，审计 L10）
+                match serde_json::to_value(&metrics) {
+                    Ok(value) => event_bus.publish("metrics", value).await,
+                    Err(e) => tracing::warn!("指标序列化失败，跳过本帧: {}", e),
+                }
             }
 
             // 任务结束，System 实例会被自动释放
         });
+
+        *task_guard = Some(handle);
     }
 
-    /// 停止采集
+    /// 停止采集（立即 abort 在跑任务；无任务时为空操作）
     pub async fn stop(&self) {
-        let mut running = self.running.write().await;
-        *running = false;
+        let mut task_guard = self.task.lock().await;
+        if let Some(handle) = task_guard.take() {
+            handle.abort();
+            tracing::info!("MetricsCollector 任务已停止");
+        }
     }
 
     /// 采集系统指标

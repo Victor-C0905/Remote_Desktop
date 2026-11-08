@@ -109,9 +109,11 @@ impl ConnectionManager {
     /// manager.register_session("conn-1", "session-1").await.unwrap();
     /// ```
     pub async fn register_session(&self, connection_id: &str, session_id: &str) -> Result<()> {
-        // 检查会话是否已存在
+        // 检查与写入合并进单个写锁临界区：原「读锁检查 → 分两次写锁写入」
+        // 之间可被并发注册插队，同一 session_id 注册到不同连接时双向映射
+        // 短暂不一致（2026-11 审计 L9）
         {
-            let session_to_conn = self.session_to_connection.read().await;
+            let mut session_to_conn = self.session_to_connection.write().await;
             if let Some(existing_conn_id) = session_to_conn.get(session_id) {
                 if existing_conn_id == connection_id {
                     // 幂等性：会话已存在且属于同一连接，直接返回成功
@@ -120,28 +122,24 @@ impl ConnectionManager {
                         connection_id, session_id
                     );
                     return Ok(());
-                } else {
-                    // 冲突：会话已存在但属于不同连接
-                    return Err(anyhow::anyhow!(
-                        "会话已注册到不同连接: session_id={}, existing_connection_id={}, new_connection_id={}",
-                        session_id, existing_conn_id, connection_id
-                    ));
                 }
+                // 冲突：会话已存在但属于不同连接
+                return Err(anyhow::anyhow!(
+                    "会话已注册到不同连接: session_id={}, existing_connection_id={}, new_connection_id={}",
+                    session_id, existing_conn_id, connection_id
+                ));
             }
-        }
 
-        // 更新连接 -> 会话映射
-        {
-            let mut connections = self.connections.write().await;
-            connections
-                .entry(connection_id.to_string())
-                .or_insert_with(Vec::new)
-                .push(session_id.to_string());
-        }
+            // 更新连接 -> 会话映射
+            {
+                let mut connections = self.connections.write().await;
+                connections
+                    .entry(connection_id.to_string())
+                    .or_insert_with(Vec::new)
+                    .push(session_id.to_string());
+            }
 
-        // 更新会话 -> 连接映射
-        {
-            let mut session_to_conn = self.session_to_connection.write().await;
+            // 更新会话 -> 连接映射
             session_to_conn.insert(session_id.to_string(), connection_id.to_string());
         }
 

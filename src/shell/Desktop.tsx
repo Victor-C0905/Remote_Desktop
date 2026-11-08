@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, memo, useRef } from "react";
 import { useTranslation } from "react-i18next";
+import i18n from "../i18n";
 import { AppBadge } from "../components/AppBadge";
 import { NotificationCenter } from "./NotificationCenter";
 import { ArrivalToast } from "./ArrivalToast";
@@ -207,7 +208,7 @@ function DesktopContent() {
     const update = () => {
       const now = new Date();
       setClock(
-        now.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })
+        now.toLocaleTimeString(i18n.language, { hour: "2-digit", minute: "2-digit" })
       );
     };
     update();
@@ -232,11 +233,17 @@ function DesktopContent() {
     };
 
     let unlistenFn: (() => void) | undefined;
+    let disposed = false; // setupListener 异步：cleanup 先于 resolve 时补注销，防监听器泄漏
     setupListener().then((fn) => {
-      unlistenFn = fn;
+      if (disposed) {
+        fn();
+      } else {
+        unlistenFn = fn;
+      }
     }).catch((e) => log.error('事件监听设置失败:', e));
 
     return () => {
+      disposed = true;
       if (unlistenFn) {
         unlistenFn();
       }

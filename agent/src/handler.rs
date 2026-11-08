@@ -45,12 +45,16 @@ pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &U
         }
 
         Payload::MetricsSubscribeRequest {} => {
-            match collect_metrics() {
-                Ok(metrics) => Envelope::new(
+            // 采集含 new_all/refresh_all/磁盘枚举等同步系统调用，进程/挂载点
+            // 多时可达数百 ms——移入阻塞线程池，避免占用 runtime worker
+            // （2026-11 审计 M8）
+            match tokio::task::spawn_blocking(collect_metrics).await {
+                Ok(Ok(metrics)) => Envelope::new(
                     envelope.request_id,
                     Payload::MetricsData(metrics),
                 ),
-                Err(e) => error_response(envelope.request_id, &e),
+                Ok(Err(e)) => error_response(envelope.request_id, &e),
+                Err(e) => error_response(envelope.request_id, &format!("采集线程异常: {}", e)),
             }
         }
 
@@ -123,7 +127,7 @@ pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &U
         // 文件数据块
         Payload::FileChunk { session_id, seq, data, size } => {
             tracing::debug!("文件数据块: session_id={}, seq={}, size={}", session_id, seq, size);
-            match handle_file_chunk(envelope.request_id, session_id, *seq, data, cfg, stats_manager.clone()).await {
+            match handle_file_chunk(envelope.request_id, session_id, *seq, data, cfg, stats_manager.clone(), session.uid).await {
                 Ok(response) => response,
                 Err(e) => {
                     tracing::error!("处理数据块失败: {}", e);
@@ -135,7 +139,7 @@ pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &U
         // 文件传输完成
         Payload::FileTransferComplete { session_id, success, mtime: _, error: _ } => {
             tracing::info!("文件传输完成: session_id={}, success={}", session_id, success);
-            match handle_file_transfer_complete(envelope.request_id, session_id, *success, cfg).await {
+            match handle_file_transfer_complete(envelope.request_id, session_id, *success, cfg, session.uid).await {
                 Ok(response) => response,
                 Err(e) => {
                     tracing::error!("处理传输完成失败: {}", e);
@@ -147,7 +151,7 @@ pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &U
         // 取消文件传输
         Payload::CancelFileTransfer { session_id, reason } => {
             tracing::info!("取消文件传输: session_id={}, reason={}", session_id, reason);
-            match handle_cancel_file_transfer(envelope.request_id, session_id, cfg).await {
+            match handle_cancel_file_transfer(envelope.request_id, session_id, cfg, session.uid).await {
                 Ok(response) => response,
                 Err(e) => {
                     tracing::error!("取消传输失败: {}", e);
@@ -159,11 +163,18 @@ pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &U
         // 进程列表查询（任何已认证用户；能力串 "processes" 由客户端门控）
         Payload::GetProcesses {} => {
             tracing::info!("进程列表查询: uid={}", session.uid);
+            // 全量进程扫描（含全部线程枚举）同步执行数百 ms，
+            // 移入阻塞线程池避免占住 runtime worker、多客户端轮询连坐
+            // （2026-11 审计 M8）
+            let processes = match tokio::task::spawn_blocking(crate::collectors::processes::list).await {
+                Ok(p) => p,
+                Err(e) => {
+                    return error_response(envelope.request_id, &format!("进程采集线程异常: {}", e));
+                }
+            };
             Envelope::new(
                 envelope.request_id,
-                Payload::ProcessListResponse {
-                    processes: crate::collectors::processes::list(),
-                },
+                Payload::ProcessListResponse { processes },
             )
         }
 
@@ -505,6 +516,7 @@ pub async fn handle_file_transfer_request(
                     chunk_size,
                     stream_count,
                     part_offsets.clone(),
+                    session.uid,
                 );
                 transfer_session.writer = Some(writer);
                 transfer_session.part_paths[0] = part_path;
@@ -552,6 +564,7 @@ pub async fn handle_file_transfer_request(
                     path.to_string(),
                     file_size,
                     chunk_size,
+                    session.uid,
                 );
                 transfer_session.writer = Some(writer);
 
@@ -612,6 +625,7 @@ pub async fn handle_file_transfer_request(
                 path.to_string(),
                 file_size,
                 chunk_size,
+                session.uid,
             );
             transfer_session.reader = Some(reader);
 
@@ -702,6 +716,12 @@ pub async fn handle_multi_stream_join(
     let transfer_session = sessions.get_mut(session_id)
         .ok_or_else(|| format!("多流加入失败: 会话不存在: {}", session_id))?;
 
+    // 属主校验：凭泄露的 session_id 不得跨用户加入他人在途传输
+    // （2026-11 审计 M2）
+    if transfer_session.owner_uid != session.uid {
+        return Err("多流加入失败: 会话不属于当前用户".to_string());
+    }
+
     // 校验为多流会话
     if !transfer_session.is_multi_stream() {
         return Err(format!(
@@ -785,6 +805,7 @@ async fn handle_file_chunk(
     data: &[u8],
     _cfg: &AgentConfig,
     stats_manager: Arc<StatsManager>,
+    requester_uid: u32,
 ) -> Result<Envelope, String> {
     // 1. 从 TRANSFER_SESSIONS 取出 writer,立即释放锁(避免在 sync pipe 写期间持有 tokio Mutex)
     let mut writer = {
@@ -792,6 +813,11 @@ async fn handle_file_chunk(
         let session = sessions
             .get_mut(session_id)
             .ok_or_else(|| format!("传输会话不存在: {}", session_id))?;
+        // 属主校验：会话仅按 UUID 索引，凭泄露的 session_id 不得跨用户
+        // 注入数据（2026-11 审计 M2）
+        if session.owner_uid != requester_uid {
+            return Err("传输会话不属于当前用户".to_string());
+        }
         // 检查会话状态是否为 Active
         if session.status != TransferStatus::Active {
             return Err(format!("传输会话状态异常: {:?}", session.status));
@@ -862,6 +888,7 @@ async fn handle_file_transfer_complete(
     session_id: &str,
     success: bool,
     _cfg: &AgentConfig,
+    requester_uid: u32,
 ) -> Result<Envelope, String> {
     // 1. 从 TRANSFER_SESSIONS 获取会话
     let mut sessions = TRANSFER_SESSIONS.lock().await;
@@ -869,6 +896,11 @@ async fn handle_file_transfer_complete(
     let mut session = sessions
         .remove(session_id)
         .ok_or_else(|| format!("传输会话不存在: {}", session_id))?;
+    // 属主校验（2026-11 审计 M2）：防跨用户强制 finish/abort 他人在途传输
+    if session.owner_uid != requester_uid {
+        sessions.insert(session_id.to_string(), session);
+        return Err("传输会话不属于当前用户".to_string());
+    }
 
     // 2. 根据成功状态处理
     let mtime = if success {
@@ -943,6 +975,7 @@ async fn handle_cancel_file_transfer(
     request_id: u32,
     session_id: &str,
     _cfg: &AgentConfig,
+    requester_uid: u32,
 ) -> Result<Envelope, String> {
     // 1. 从 TRANSFER_SESSIONS 移除会话
     let mut sessions = TRANSFER_SESSIONS.lock().await;
@@ -950,6 +983,11 @@ async fn handle_cancel_file_transfer(
     let mut session = sessions
         .remove(session_id)
         .ok_or_else(|| format!("传输会话不存在: {}", session_id))?;
+    // 属主校验（2026-11 审计 M2）：防跨用户取消/删除他人传输的临时文件
+    if session.owner_uid != requester_uid {
+        sessions.insert(session_id.to_string(), session);
+        return Err("传输会话不属于当前用户".to_string());
+    }
 
     // 2. 如果有 writer，调用 abort() 清理临时文件
     //    使用 take() 将 writer 从 session 中取出，避免 Drop 时重复清理

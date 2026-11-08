@@ -123,16 +123,11 @@ pub async fn remote_spawn_terminal(
     .await
     .map_err(|_| AppError::new(codes::NETWORK_FAILED).with_detail("send terminal spawn timeout"))??;
 
-    // 读取响应（添加超时）
+    // 读取响应（添加超时；长度前缀封顶校验见 net_frame）
     let resp_data = tokio::time::timeout(TERMINAL_CONNECT_TIMEOUT, async {
-        let mut len_buf = [0u8; 4];
-        recv.read_exact(&mut len_buf).await
-            .map_err(|e| AppError::new(codes::NETWORK_FAILED).with_detail(format!("read response length: {e}")))?;
-        let resp_len = u32::from_le_bytes(len_buf) as usize;
-        let mut resp_data = vec![0u8; resp_len];
-        recv.read_exact(&mut resp_data).await
-            .map_err(|e| AppError::new(codes::NETWORK_FAILED).with_detail(format!("read response data: {e}")))?;
-        Ok::<Vec<u8>, AppError>(resp_data)
+        crate::net_frame::read_len_prefixed(&mut recv).await
+            .map_err(|e| AppError::new(codes::NETWORK_FAILED).with_detail(format!("read response: {e}")))?
+            .ok_or_else(|| AppError::new(codes::NETWORK_FAILED).with_detail("read response: stream finished early"))
     })
     .await
     .map_err(|_| AppError::new(codes::RESPONSE_TIMEOUT))??;
@@ -283,25 +278,28 @@ pub async fn remote_terminal_close(
 
 /// 调整远程终端大小（同步到远程 PTY）
 #[tauri::command]
-#[tracing::instrument(skip(app), fields(server_id = %_server_id, session_id = %session_id))]
+#[tracing::instrument(skip(app), fields(server_id = %server_id, session_id = %session_id))]
 pub async fn remote_terminal_resize(
     session_id: String,
     cols: u16,
     rows: u16,
-    _server_id: String,
+    server_id: String,
     app: tauri::AppHandle,
 ) -> Result<(), AppError> {
     let manager = app.state::<ConnectionManager>();
 
-    // 获取 QUIC Connection（用于发送 resize 请求）
+    // 按 server_id 精确取连接：此前取「第一个可用连接」，多服务器同时
+    // 连接时 resize 发错目标、错误被静默吞掉，终端尺寸永远不同步
+    // （2026-11 审计 M15；前端本就传 server_id，恢复使用即可）
     let quic_conn = {
         let conns = manager.connections.lock().unwrap();
-        // 找到包含该 session 的连接
-        // 简化处理：使用第一个可用连接
-        conns.values().next().and_then(|c| c.quic_conn.clone())
+        conns.get(&server_id).and_then(|c| c.quic_conn.clone())
     };
 
-    let conn = quic_conn.ok_or_else(|| AppError::new(codes::CONNECTION_NOT_FOUND))?;
+    let conn = quic_conn.ok_or_else(|| {
+        AppError::new(codes::CONNECTION_NOT_FOUND)
+            .with_detail(format!("server not connected: {server_id}"))
+    })?;
 
     // 创建新的 Stream 发送 resize 请求（添加超时）
     let stream = tokio::time::timeout(TERMINAL_CONNECT_TIMEOUT, conn.open_bi())
@@ -333,22 +331,37 @@ pub async fn remote_terminal_resize(
     .await
     .map_err(|_| AppError::new(codes::NETWORK_FAILED).with_detail("send resize timeout"))??;
 
-    // 读取响应（添加超时，忽略响应内容；失败仅告警——静默吞掉会让
-    // UI 尺寸与后端实际状态漂移且无从排查）
-    if tokio::time::timeout(TERMINAL_CONNECT_TIMEOUT, async {
+    // 读取响应（添加超时；Error 载荷显式告警——静默吞掉会让
+    // UI 尺寸与后端实际状态漂移且无从排查，审计 M15）
+    let resize_ack = tokio::time::timeout(TERMINAL_CONNECT_TIMEOUT, async {
         let mut len_buf = [0u8; 4];
-        if recv.read_exact(&mut len_buf).await.is_ok() {
-            let resp_len = u32::from_le_bytes(len_buf) as usize;
-            if resp_len > 0 && resp_len < 1024 * 1024 {
-                let mut resp_data = vec![0u8; resp_len];
-                let _ = recv.read_exact(&mut resp_data).await;
+        recv.read_exact(&mut len_buf).await.map_err(|_| ())?;
+        let resp_len = u32::from_le_bytes(len_buf) as usize;
+        if resp_len == 0 || resp_len >= 1024 * 1024 {
+            return Err(());
+        }
+        let mut resp_data = vec![0u8; resp_len];
+        recv.read_exact(&mut resp_data).await.map_err(|_| ())?;
+        Ok(resp_data)
+    })
+    .await;
+    match resize_ack {
+        Ok(Ok(resp_data)) => {
+            if let Ok(env) = Envelope::decode(&resp_data) {
+                if let Payload::Error { message, .. } = env.payload {
+                    tracing::warn!(
+                        "PTY resize 被 Agent 拒绝: session_id={}, err={}",
+                        session_id, message
+                    );
+                }
             }
         }
-    })
-    .await
-    .is_err()
-    {
-        tracing::warn!("远程终端 resize 响应读取超时: session_id={}", session_id);
+        Ok(Err(())) => {
+            tracing::warn!("远程终端 resize 响应帧异常: session_id={}", session_id);
+        }
+        Err(_) => {
+            tracing::warn!("远程终端 resize 响应读取超时: session_id={}", session_id);
+        }
     }
 
     tracing::debug!("远程终端 resize: session_id={}, {}x{}", session_id, cols, rows);

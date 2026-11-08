@@ -8,8 +8,10 @@
 //!
 //! # 支持的签名算法
 //! - ssh-ed25519（Ed25519 签名算法）
-//! - ssh-rsa（RSA 签名算法）
-//! - rsa-sha2-256 / rsa-sha2-512（SHA2 变体）
+//! - rsa-sha2-256 / rsa-sha2-512（RSA SHA-2 变体，按签名声明选择哈希）
+//!
+//! 不接受 ssh-rsa（SHA-1 签名）：已弃用（OpenSSH 8.8+ 默认禁用），
+//! Quirel 客户端恒以 rsa-sha2-256 签名，无兼容性需求。
 //!
 //! ## 职责边界（高内聚）
 //! - ✅ 处理SSH公钥认证
@@ -245,8 +247,8 @@ impl SshAuthenticator {
             return Ok(false);
         }
 
-        // 第四步：使用底层加密库验证签名
-        match self.verify_with_key(&public_key, &sig_data, challenge) {
+        // 第四步：使用底层加密库验证签名（RSA 按签名声明的哈希算法选择）
+        match self.verify_with_key(&public_key, &sig_algorithm, &sig_data, challenge) {
             Ok(true) => {
                 tracing::info!("签名验证成功");
                 Ok(true)
@@ -358,13 +360,8 @@ impl SshAuthenticator {
 
     /// 检查公钥和签名算法是否兼容
     ///
-    /// # 参数
-    /// - `key_algorithm`: 公钥算法
-    /// - `sig_algorithm`: 签名算法名称
-    ///
-    /// # 返回
-    /// - 兼容返回 true
-    /// - 不兼容返回 false
+    /// RSA 仅接受 SHA-2 变体：ssh-rsa（SHA-1 签名）已弃用
+    /// （OpenSSH 8.8+ 默认禁用），Quirel 客户端恒以 rsa-sha2-256 签名
     fn is_algorithm_compatible(&self, key_algorithm: &ssh_key::Algorithm, sig_algorithm: &str) -> bool {
         tracing::trace!(
             "检查算法兼容性: key_algorithm={:?}, sig_algorithm={}",
@@ -375,10 +372,7 @@ impl SshAuthenticator {
         match key_algorithm {
             ssh_key::Algorithm::Ed25519 => sig_algorithm == "ssh-ed25519",
             ssh_key::Algorithm::Rsa { .. } => {
-                matches!(
-                    sig_algorithm,
-                    "ssh-rsa" | "rsa-sha2-256" | "rsa-sha2-512"
-                )
+                matches!(sig_algorithm, "rsa-sha2-256" | "rsa-sha2-512")
             }
             _ => false,
         }
@@ -388,6 +382,7 @@ impl SshAuthenticator {
     ///
     /// # 参数
     /// - `public_key`: 公钥
+    /// - `sig_algorithm`: 签名声明的算法名（RSA 据此选择哈希）
     /// - `sig_data`: 签名数据（原始字节，不包含算法信息）
     /// - `challenge`: 挑战数据
     ///
@@ -397,6 +392,7 @@ impl SshAuthenticator {
     fn verify_with_key(
         &self,
         public_key: &ssh_key::PublicKey,
+        sig_algorithm: &str,
         sig_data: &[u8],
         challenge: &[u8],
     ) -> Result<bool> {
@@ -429,8 +425,10 @@ impl SshAuthenticator {
                 }
             }
             ssh_key::Algorithm::Rsa { .. } => {
-                // RSA 验证（使用 rsa-sha2-256 算法）
-                tracing::debug!("开始 RSA 签名验证: sig_len={}", sig_data.len());
+                // RSA 验证：按签名声明的算法选择哈希（PKCS#1 v1.5）。
+                // 此前硬编码 SHA-256，以 rsa-sha2-512 签名的客户端恒验证
+                // 失败（2026-11 审计 M1）
+                tracing::debug!("开始 RSA 签名验证: alg={}, sig_len={}", sig_algorithm, sig_data.len());
 
                 // 从 ssh_key 公钥提取 RSA 公钥的 n 和 e
                 let rsa_pub = match public_key.key_data().rsa() {
@@ -455,13 +453,6 @@ impl SshAuthenticator {
                     anyhow::anyhow!("RSA 公钥构造失败: {}", e)
                 })?;
 
-                // 使用 PKCS#1 v1.5 + SHA-256 验证签名
-                use rsa::pkcs1v15::VerifyingKey;
-                use rsa::sha2::Sha256;
-                use rsa::signature::Verifier;
-
-                let verifying_key = VerifyingKey::<Sha256>::new(rsa_public_key);
-
                 // sig_data 是原始的 PKCS#1 v1.5 签名
                 let signature = rsa::pkcs1v15::Signature::try_from(sig_data)
                     .map_err(|e| {
@@ -469,13 +460,11 @@ impl SshAuthenticator {
                         anyhow::anyhow!("签名格式转换失败: {}", e)
                     })?;
 
-                match verifying_key.verify(challenge, &signature) {
-                    Ok(()) => {
-                        tracing::info!("RSA 签名验证成功");
-                        Ok(true)
-                    }
-                    Err(e) => {
-                        tracing::warn!("RSA 签名验证失败: {}", e);
+                match sig_algorithm {
+                    "rsa-sha2-256" => Ok(verify_with_digest::<rsa::sha2::Sha256>(&rsa_public_key, &signature, challenge)),
+                    "rsa-sha2-512" => Ok(verify_with_digest::<rsa::sha2::Sha512>(&rsa_public_key, &signature, challenge)),
+                    other => {
+                        tracing::warn!("不支持的 RSA 签名算法: {}", other);
                         Ok(false)
                     }
                 }
@@ -596,6 +585,34 @@ impl Authenticator for SshAuthenticator {
 // ============================================================================
 // 辅助函数
 // ============================================================================
+
+/// 使用指定摘要算法验证 RSA PKCS#1 v1.5 签名
+///
+/// 按签名声明的算法（rsa-sha2-256/512）选择哈希，由 `verify_with_key`
+/// 的 RSA 分支分发调用。
+fn verify_with_digest<D>(
+    public_key: &rsa::RsaPublicKey,
+    signature: &rsa::pkcs1v15::Signature,
+    challenge: &[u8],
+) -> bool
+where
+    D: rsa::sha2::Digest + rsa::pkcs8::AssociatedOid,
+{
+    use rsa::pkcs1v15::VerifyingKey;
+    use rsa::signature::Verifier;
+
+    let verifying_key = VerifyingKey::<D>::new(public_key.clone());
+    match verifying_key.verify(challenge, signature) {
+        Ok(()) => {
+            tracing::info!("RSA 签名验证成功");
+            true
+        }
+        Err(e) => {
+            tracing::warn!("RSA 签名验证失败: {}", e);
+            false
+        }
+    }
+}
 
 /// Base64解码辅助函数
 ///
@@ -740,5 +757,22 @@ mod tests {
 
         // 测试空数据
         assert!(auth.parse_ssh_signature(&[]).is_err());
+    }
+
+    /// RSA 签名算法矩阵（M1）：仅接受 SHA-2 变体，
+    /// ssh-rsa（SHA-1，已弃用）与未知算法一律不兼容
+    #[test]
+    fn test_rsa_algorithm_matrix() {
+        let auth = SshAuthenticator::new();
+        let rsa_alg = ssh_key::Algorithm::Rsa { hash: None };
+
+        assert!(auth.is_algorithm_compatible(&rsa_alg, "rsa-sha2-256"));
+        assert!(auth.is_algorithm_compatible(&rsa_alg, "rsa-sha2-512"));
+        assert!(!auth.is_algorithm_compatible(&rsa_alg, "ssh-rsa"));
+        assert!(!auth.is_algorithm_compatible(&rsa_alg, "rsa-sha2-384"));
+
+        let ed_alg = ssh_key::Algorithm::Ed25519;
+        assert!(auth.is_algorithm_compatible(&ed_alg, "ssh-ed25519"));
+        assert!(!auth.is_algorithm_compatible(&ed_alg, "rsa-sha2-256"));
     }
 }

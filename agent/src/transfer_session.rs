@@ -50,6 +50,12 @@ pub struct TransferSession {
     pub status: TransferStatus,
     /// 开始时间
     pub started_at: Option<SystemTime>,
+    /// 属主 uid（创建该会话的已认证用户）。
+    ///
+    /// 会话仅按 session_id（UUID）索引，任何拿到 ID 的已认证连接此前
+    /// 即可注入数据块/强制 finish/取消他人传输——属主绑定是 UUID 之外
+    /// 的第二道防线（2026-11 审计 M2）
+    pub owner_uid: u32,
 
     /// 文件流处理器（上传时使用 writer，下载时使用 reader）
     ///
@@ -114,6 +120,7 @@ impl TransferSession {
         path: String,
         file_size: u64,
         chunk_size: u32,
+        owner_uid: u32,
     ) -> Self {
         Self {
             session_id,
@@ -124,6 +131,7 @@ impl TransferSession {
             chunk_size,
             status: TransferStatus::Active,
             started_at: Some(SystemTime::now()),
+            owner_uid,
             writer: None,
             reader: None,
             // 多流字段默认值（单流模式）
@@ -160,6 +168,7 @@ impl TransferSession {
         chunk_size: u32,
         stream_count: u32,
         part_offsets: Vec<(u64, u64)>,
+        owner_uid: u32,
     ) -> Self {
         assert!(
             stream_count >= 1,
@@ -184,6 +193,7 @@ impl TransferSession {
             chunk_size,
             status: TransferStatus::Active,
             started_at: Some(SystemTime::now()),
+            owner_uid,
             writer: None,
             reader: None,
             stream_count,
@@ -294,6 +304,7 @@ mod tests {
             "/tmp/file.bin".to_string(),
             1024,
             256 * 1024,
+            1000,
         );
         assert_eq!(s.stream_count, 1);
         assert_eq!(s.completed_streams, 0);
@@ -316,6 +327,7 @@ mod tests {
             256 * 1024,
             4,
             offsets.clone(),
+            1000,
         );
         assert_eq!(s.stream_count, 4);
         assert!(s.is_multi_stream());
@@ -340,6 +352,7 @@ mod tests {
             256 * 1024,
             4,
             vec![(0, 256), (256, 512), (512, 768)],
+            1000,
         );
     }
 
@@ -355,6 +368,7 @@ mod tests {
             256 * 1024,
             4,
             offsets,
+            1000,
         );
         assert!(!s.mark_stream_completed(), "第 1 次不应触发合并");
         assert!(!s.mark_stream_completed(), "第 2 次不应触发合并");
@@ -373,6 +387,7 @@ mod tests {
             "/tmp/file.bin".to_string(),
             1024,
             256 * 1024,
+            1000,
         );
         assert!(s.mark_stream_completed(), "单流 1 次 mark 即应触发");
     }

@@ -308,18 +308,52 @@ async fn run_manager_mode(args: &Args) -> Result<()> {
     #[cfg(unix)]
     manager.start().await?;
 
-    let result = server::quic::run(
-        cfg.clone(),
-        cert,
-        key,
-        subscription_manager.clone(),
-        event_bus.clone(),
-        authenticator.clone(),
-        audit_log.clone(),
+    let result = {
         #[cfg(unix)]
-        manager.clone(),
-    )
-    .await;
+        {
+            // 主路径信号处理（2026-11 审计 M5）：此前 SIGTERM 走默认行为
+            // 直接杀进程——不走 worker_manager.stop、不删 IPC socket 文件，
+            // watch_sigterm 零调用，优雅关闭链路形同虚设。现 SIGTERM 与
+            // Ctrl+C 都进入 select：放弃 QUIC accept 循环（endpoint 随
+            // future drop 关闭），走下方 manager.shutdown() 优雅收尾
+            let (sig_tx, mut sig_rx) = tokio::sync::mpsc::channel::<()>(1);
+            quireld::manager::signal_handler::watch_sigterm(sig_tx);
+
+            tokio::select! {
+                r = server::quic::run(
+                    cfg.clone(),
+                    cert,
+                    key,
+                    subscription_manager.clone(),
+                    event_bus.clone(),
+                    authenticator.clone(),
+                    audit_log.clone(),
+                    manager.clone(),
+                ) => r,
+                _ = sig_rx.recv() => {
+                    tracing::info!("收到 SIGTERM，开始优雅关闭 Manager");
+                    Ok(())
+                }
+                _ = tokio::signal::ctrl_c() => {
+                    tracing::info!("收到 Ctrl+C，开始优雅关闭 Manager");
+                    Ok(())
+                }
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            server::quic::run(
+                cfg.clone(),
+                cert,
+                key,
+                subscription_manager.clone(),
+                event_bus.clone(),
+                authenticator.clone(),
+                audit_log.clone(),
+            )
+            .await
+        }
+    };
 
     // 阶段 1 新增:QUIC 退出后停止 Manager
     #[cfg(unix)]

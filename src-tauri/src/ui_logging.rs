@@ -22,11 +22,14 @@ pub async fn log_write(level: String, module: String, message: String, data: Vec
         format!(" {}", data.join(" "))
     };
 
+    // 统一 `ui:` 前缀（审计 低-8）：前端任意字符串直接进 client.log 可
+    // 伪造形如 Rust 日志的条目（renderer 被攻破时的纵深防御）——所有 UI
+    // 日志带显式来源标记，排查时可区分「来自前端桥接」与「Rust 原生」
     match level.as_str() {
-        "error" => tracing::error!(target: "quirel_lib::ui", "[{module}] {message}{extra}"),
-        "warn" => tracing::warn!(target: "quirel_lib::ui", "[{module}] {message}{extra}"),
+        "error" => tracing::error!(target: "quirel_lib::ui", "ui: [{module}] {message}{extra}"),
+        "warn" => tracing::warn!(target: "quirel_lib::ui", "ui: [{module}] {message}{extra}"),
         // 未知级别按 info 兜底，避免静默丢日志
-        _ => tracing::info!(target: "quirel_lib::ui", "[{module}] {message}{extra}"),
+        _ => tracing::info!(target: "quirel_lib::ui", "ui: [{module}] {message}{extra}"),
     }
 }
 
