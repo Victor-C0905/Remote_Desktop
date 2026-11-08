@@ -41,6 +41,10 @@ impl SubscriptionManager {
         stream_id: u64,
         types: Vec<SubscriptionType>,
     ) -> Result<Vec<SubscriptionType>> {
+        // 回收同 stream_id 的旧订阅计数：insert 直接覆盖会让旧类型计数
+        // 只增不减，采集器永不停止（2026-11 审计 M10）。无旧订阅时为空操作
+        self.remove_all(stream_id).await?;
+
         // 记录订阅者
         {
             let mut subs = self.subscribers.write().await;
@@ -125,5 +129,52 @@ impl SubscriptionManager {
     pub async fn has_subscribers(&self, event_type: &str) -> bool {
         let counts = self.type_counts.read().await;
         counts.get(event_type).map(|v| *v > 0).unwrap_or(false)
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::SubscriptionType;
+
+    /// 订阅覆盖泄漏（M10）：同 stream_id 重复订阅必须先回收旧计数，
+    /// 否则旧类型计数只增不减、采集器永不停止
+    #[tokio::test]
+    async fn test_resubscribe_reclaims_old_counts() {
+        let manager = SubscriptionManager::new(
+            crate::config::AgentConfig::default(),
+            Arc::new(EventBus::new()),
+        );
+        let metrics = || SubscriptionType::Metrics { interval_secs: Some(1) };
+
+        manager.subscribe(1, vec![metrics()]).await.unwrap();
+        assert!(manager.has_subscribers("metrics").await);
+
+        // 同 stream 重复订阅（覆盖路径）：计数必须仍为 1
+        manager.subscribe(1, vec![metrics()]).await.unwrap();
+        assert!(manager.has_subscribers("metrics").await);
+
+        // 全部移除后归零（若泄漏，这里计数仍为 1 → 采集器永不停止）
+        manager.remove_all(1).await.unwrap();
+        assert!(!manager.has_subscribers("metrics").await);
+    }
+
+    /// 多 stream 计数：互不影响，逐一移除后归零
+    #[tokio::test]
+    async fn test_multiple_streams_counted_independently() {
+        let manager = SubscriptionManager::new(
+            crate::config::AgentConfig::default(),
+            Arc::new(EventBus::new()),
+        );
+        let metrics = || SubscriptionType::Metrics { interval_secs: Some(1) };
+
+        manager.subscribe(1, vec![metrics()]).await.unwrap();
+        manager.subscribe(2, vec![metrics()]).await.unwrap();
+        assert!(manager.has_subscribers("metrics").await);
+
+        manager.remove_all(1).await.unwrap();
+        assert!(manager.has_subscribers("metrics").await, "另一 stream 仍订阅");
+
+        manager.remove_all(2).await.unwrap();
+        assert!(!manager.has_subscribers("metrics").await);
     }
 }

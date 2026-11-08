@@ -515,6 +515,12 @@
   padding: 8px 0;
 }
 
+.st-option-hint {
+  margin-top: -4px;
+  font-size: var(--font-small);
+  color: var(--quirel-text-disabled);
+}
+
 .st-option-label {
 }
 

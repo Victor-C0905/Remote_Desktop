@@ -117,7 +117,10 @@ pub async fn spawn_pty_output_task_v2(
         });
 
         let mut batch_buffer = Vec::with_capacity(config.batch_size);
-        let mut last_send_time = std::time::Instant::now();
+        // 本批首字节入缓冲的时刻（批龄）。此前用 last_send_time 计时：
+        // 持续输出时距上次 flush 的间隔恒过阈值 → 每帧一 flush，聚合
+        // 完全失效（2026-11 审计 L3）
+        let mut batch_started_at = std::time::Instant::now();
 
         loop {
             tokio::select! {
@@ -125,14 +128,17 @@ pub async fn spawn_pty_output_task_v2(
                 Some(result) = frame_rx.recv() => {
                     match result {
                         Ok((frame_type, data)) if frame_type == msg_type::PTY_OUTPUT => {
-                            // PTY 输出：加入批量缓冲
+                            // PTY 输出：加入批量缓冲（记录批龄起点）
                             if !data.is_empty() {
+                                if batch_buffer.is_empty() {
+                                    batch_started_at = std::time::Instant::now();
+                                }
                                 batch_buffer.extend_from_slice(&data);
                             }
 
-                            // 判断是否需要刷新
+                            // 判断是否需要刷新：批满 或 批龄超时
                             let should_flush = batch_buffer.len() >= config.batch_size
-                                || last_send_time.elapsed().as_millis()
+                                || batch_started_at.elapsed().as_millis()
                                     >= config.batch_interval_ms as u128;
 
                             if should_flush && !batch_buffer.is_empty() {
@@ -147,7 +153,6 @@ pub async fn spawn_pty_output_task_v2(
                                     batch_buffer.len()
                                 );
                                 batch_buffer.clear();
-                                last_send_time = std::time::Instant::now();
                             }
                         }
                         Ok((frame_type, _)) if frame_type == msg_type::EOF => {
@@ -179,7 +184,7 @@ pub async fn spawn_pty_output_task_v2(
                 _ = sleep(Duration::from_millis(config.poll_interval_ms)),
                     if !batch_buffer.is_empty() =>
                 {
-                    if last_send_time.elapsed().as_millis()
+                    if batch_started_at.elapsed().as_millis()
                         >= config.batch_interval_ms as u128
                     {
                         if let Err(e) = send_batch(&send, &batch_buffer).await {
@@ -193,7 +198,6 @@ pub async fn spawn_pty_output_task_v2(
                             batch_buffer.len()
                         );
                         batch_buffer.clear();
-                        last_send_time = std::time::Instant::now();
                     }
                 }
             }

@@ -5,7 +5,7 @@ import { createLogger } from "../utils/logger";
 import { ServerConfig, AuthMethod, StructuredError } from "../types/server";
 import { getErrorInfo, parseConnectError } from "../types/errors";
 import i18n from "../i18n";
-import { hasSecrets, secretsSet, secretsDelete, stripSecrets, hydrateCredentials, isKeyringReady } from "../utils/credentials";
+import { hasSecrets, secretsSet, secretsDelete, stripSecrets, hydrateCredentials } from "../utils/credentials";
 
 const log = createLogger('ServersStore');
 
@@ -137,10 +137,11 @@ export const useServersStore = create<ServersState & ServersActions>()(
     {
       name: "quirel-servers",
       storage: createJSONStorage(() => serversStorage),
-      // 落盘前剥离凭据——但仅在 keyring 确认可写之后（isKeyringReady 门控）：
-      // 迁移期写入失败时保留明文落盘，防止凭据两头落空直接蒸发
+      // 落盘前无条件剥离凭据：keyring 未就绪时保留明文等于把密码/私钥
+      // 写在磁盘上（审计 M18）。代价是 keyring 故障期间新编辑的凭据仅存
+      // 内存不落盘——secretsSet 失败通知会明确告知用户修复后重新保存
       partialize: (state) => ({
-        servers: state.servers.map((s) => (isKeyringReady() ? stripSecrets(s) : s)),
+        servers: state.servers.map(stripSecrets),
         activeServerId: state.activeServerId,
       }),
       // 加载时重置所有服务器状态为 disconnected；随后从 keyring 装配凭据
@@ -188,7 +189,7 @@ export function formatLastConnected(timestamp?: number): string {
   if (diff < 1000 * 60 * 60) return i18n.t("servers.minutesAgo", { n: Math.floor(diff / 60000) });
   if (diff < 1000 * 60 * 60 * 24) return i18n.t("servers.hoursAgo", { n: Math.floor(diff / 3600000) });
   if (diff < 1000 * 60 * 60 * 24 * 7) return i18n.t("servers.daysAgo", { n: Math.floor(diff / 86400000) });
-  return new Date(timestamp).toLocaleDateString("zh-CN");
+  return new Date(timestamp).toLocaleDateString(i18n.language);
 }
 
 export function getStatusColor(status: ServerConfig["status"]): string {

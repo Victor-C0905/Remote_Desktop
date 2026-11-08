@@ -2,12 +2,40 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the main window",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "opener:default",
-    "store:default",
-    "store:allow-load",
+    {
+      "identifier": "store:default",
+      "allow": [
+        {
+          "path": "quirel-servers"
+        },
+        {
+          "path": "quirel-settings"
+        },
+        {
+          "path": "quirel-wallpaper"
+        }
+      ]
+    },
+    {
+      "identifier": "store:allow-load",
+      "allow": [
+        {
+          "path": "quirel-servers"
+        },
+        {
+          "path": "quirel-settings"
+        },
+        {
+          "path": "quirel-wallpaper"
+        }
+      ]
+    },
     "dialog:default",
     "dialog:allow-open",
     "dialog:allow-save",

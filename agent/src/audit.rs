@@ -4,6 +4,26 @@ use std::io::Write as IoWrite;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+/// 审计字段净化：转义换行与控制字符，防日志注入
+///
+/// user/path/reason 等字段来自客户端输入——认证失败路径在认证之前即可
+/// 携带任意用户名，Linux 合法路径可含 `\n`。不转义时攻击者可伪造任意
+/// 审计行（如追加 `user=root uid=0 op=auth_success`），污染取证与告警
+/// （2026-11 审计 H4）。保留 key=value 单行格式，仅替换换行/控制字符。
+fn sanitize_field(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => out.push_str(&format!("\\x{:02x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 /// 审计日志记录器
 ///
 /// 用于记录所有关键操作，包括：
@@ -53,12 +73,31 @@ impl AuditLogger {
             }
         }
 
-        // 以追加模式打开文件（不存在则创建）
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .write(true)
-            .open(&path)?;
+        // 以追加模式打开文件（不存在则创建）。审计日志含用户名/操作路径，
+        // 权限收紧为 0600（2026-11 审计 L1：原 0644 随 umask 决定，全机可读）。
+        // mode() 仅在创建时生效，已存在的旧文件靠打开后的 set_permissions 收紧
+        let file = {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+                let f = OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .write(true)
+                    .mode(0o600)
+                    .open(&path)?;
+                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+                f
+            }
+            #[cfg(not(unix))]
+            {
+                OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .write(true)
+                    .open(&path)?
+            }
+        };
 
         Ok(Self {
             log_file: Mutex::new(file),
@@ -103,15 +142,18 @@ impl AuditLogger {
         let log_line = format!(
             "{} user={} uid={} op={} details={}\n",
             timestamp.format("%Y-%m-%d %H:%M:%S%.3f"),
-            user,
+            sanitize_field(user),
             uid,
-            operation,
-            details
+            sanitize_field(operation),
+            sanitize_field(details)
         );
 
-        // 加锁并写入
+        // 加锁并写入；失败必须留痕——审计写入静默丢失等于审计缺失
+        // （2026-11 审计 L1）
         if let Ok(mut file) = self.log_file.lock() {
-            let _ = file.write_all(log_line.as_bytes());
+            if let Err(e) = file.write_all(log_line.as_bytes()) {
+                tracing::error!("审计日志写入失败: {}", e);
+            }
         }
     }
 
@@ -267,5 +309,37 @@ mod tests {
         logger.log_auth_success("alice", 1000, "token");
 
         assert!(log_path.exists());
+    }
+
+    /// 审计日志注入（H4）：含换行的用户名/路径必须被转义为单行，
+    /// 不得产出可伪造的额外审计行
+    #[test]
+    fn test_newline_injection_is_escaped() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path().to_str().unwrap();
+        let logger = AuditLogger::new(path).unwrap();
+
+        // 未认证攻击者可控的三个入口：用户名、路径（details）、失败原因
+        logger.log_auth_failure("root\nuid=0 op=auth_success details=method=pam\n", 0, "x");
+        logger.log_file_operation("alice", 1000, "write", "/tmp/evil\nuid=0 op=auth_success", 0);
+
+        let content = fs::read_to_string(path).unwrap();
+        // 两次记录恰好两行，注入内容全部内联转义
+        assert_eq!(content.lines().count(), 2, "注入不得产生额外行: {:?}", content);
+        assert!(content.contains("\\n"), "换行应被转义为 \\n 字面量");
+        assert!(!content.contains("op=auth_success details=method=pam\nuid="));
+    }
+
+    /// 控制字符（\r、\t 及其他 C0）同样转义，防归因混淆
+    #[test]
+    fn test_control_chars_escaped() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path().to_str().unwrap();
+        let logger = AuditLogger::new(path).unwrap();
+
+        logger.log_auth_failure("a\rb\tc\u{1}d", 0, "r");
+
+        let content = fs::read_to_string(path).unwrap();
+        assert!(content.contains("a\\rb\\tc\\x01d"), "实际: {:?}", content);
     }
 }

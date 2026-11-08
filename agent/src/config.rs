@@ -6,7 +6,6 @@ use std::path::Path;
 pub struct AgentConfig {
     pub server: ServerConfig,
     pub auth: AuthConfig,
-    pub security: SecurityConfig,
     pub limits: LimitsConfig,
     pub collectors: CollectorsConfig, // 新增
     #[serde(default)]
@@ -64,28 +63,13 @@ pub struct SshAuthConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct SecurityConfig {
-    // 移除：pub allowed_paths: Vec<String>,
-    #[serde(default = "default_blocked_commands")]
-    pub blocked_commands: Vec<String>,
-}
-
-impl Default for SecurityConfig {
-    fn default() -> Self {
-        Self {
-            blocked_commands: default_blocked_commands(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LimitsConfig {
     #[serde(default = "default_max_sessions")]
     pub max_terminal_sessions: usize,
     #[serde(default = "default_max_file_mb")]
     pub max_file_transfer_mb: u64,
-    #[serde(default = "default_metrics_interval")]
-    pub metrics_interval_secs: u64,
+    // metrics_interval_secs 已移除：与 collectors.metrics_interval_secs 重复
+    // 定义且无任何消费方（真正的消费在 collectors 侧），保留只会误导运维
     /// 连接空闲超时（秒）：在此时间内无任何 Stream 活动的连接将被强制关闭
     /// 默认 300 秒（5 分钟）
     #[serde(default = "default_connection_idle_timeout")]
@@ -97,7 +81,6 @@ impl Default for LimitsConfig {
         Self {
             max_terminal_sessions: default_max_sessions(),
             max_file_transfer_mb: default_max_file_mb(),
-            metrics_interval_secs: default_metrics_interval(),
             connection_idle_timeout_secs: default_connection_idle_timeout(),
         }
     }
@@ -195,7 +178,6 @@ impl Default for WorkerConfig {
 
 fn default_quic_port() -> u16 { 8443 }
 // 移除：fn default_allowed_paths() -> Vec<String> { vec!["/home".into(), "/etc".into(), "/var/log".into(), "/opt".into()] }
-fn default_blocked_commands() -> Vec<String> { vec!["rm -rf /".into(), "dd if=".into(), "mkfs.".into()] }
 fn default_max_sessions() -> usize { 10 }
 fn default_max_file_mb() -> u64 { 500 }
 fn default_metrics_interval() -> u64 { 2 }
@@ -246,7 +228,16 @@ pub fn load(path: &str) -> Result<AgentConfig, anyhow::Error> {
         return Ok(cfg);
     }
     let content = fs::read_to_string(p)?;
-    let cfg: AgentConfig = toml::from_str(&content)?;
+    let mut cfg: AgentConfig = toml::from_str(&content)?;
+
+    // 间隔类配置下限防御：0 会让采集循环 sleep(0) 忙循环打满 CPU
+    // （2026-11 审计 M7）
+    cfg.collectors.metrics_interval_secs = cfg.collectors.metrics_interval_secs.max(1);
+    cfg.collectors.process_scan_interval_secs = cfg.collectors.process_scan_interval_secs.max(1);
+    cfg.collectors.service_status_interval_secs = cfg.collectors.service_status_interval_secs.max(1);
+    if cfg.limits.connection_idle_timeout_secs == 0 {
+        cfg.limits.connection_idle_timeout_secs = 300;
+    }
 
     Ok(cfg)
 }
@@ -266,14 +257,9 @@ fn default_config() -> AgentConfig {
                 pam_service: "sshd".into(),
             },
         },
-        security: SecurityConfig {
-            // 移除：allowed_paths: default_allowed_paths(),
-            blocked_commands: default_blocked_commands(),
-        },
         limits: LimitsConfig {
             max_terminal_sessions: 10,
             max_file_transfer_mb: 500,
-            metrics_interval_secs: 2,
             connection_idle_timeout_secs: default_connection_idle_timeout(),
         },
         collectors: CollectorsConfig {

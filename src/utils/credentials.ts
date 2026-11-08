@@ -7,6 +7,7 @@
  * 启动时 hydrateCredentials 把凭据合并回内存 state，消费方（连接逻辑）
  * 零改动；persist 时 stripCredentials 剥离，永不落盘。
  */
+import i18n from "../i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { createLogger } from "./logger";
 import type { ServerConfig } from "../types/server";
@@ -66,11 +67,11 @@ export async function probeKeyring(): Promise<void> {
     try {
       const { useNotificationStore } = await import("../stores/notificationStore");
       useNotificationStore.getState().pushNotification({
-        title: "系统凭据库不可用",
+        title: i18n.t("notify.keyringUnavailableTitle"),
         body: String(e),
-        action: "服务器密码/私钥将无法保存。请重启应用或检查系统凭据服务后重试",
+        action: i18n.t("notify.keyringUnavailableAction"),
         urgency: "critical",
-        source: "凭据",
+        source: i18n.t("notify.sourceCredentials"),
       });
     } catch { /* 通知不可用时仅日志 */ }
   }
@@ -98,15 +99,16 @@ export async function secretsSet(serverId: string, auth: Partial<ServerConfig["a
     return true;
   } catch (e) {
     log.error("凭据写入 keyring 失败:", e);
-    // 不再静默：用户必须知道凭据没进安全库（当前会话回退明文落盘模式）
+    // 不再静默：用户必须知道凭据没进安全库。keyring 故障期间凭据仅存
+    // 内存、不会落盘（审计 M18：禁止明文回退），修复后需重新保存
     try {
       const { useNotificationStore } = await import("../stores/notificationStore");
       useNotificationStore.getState().pushNotification({
-        title: "凭据安全存储失败",
+        title: i18n.t("notify.keyringSetFailedTitle"),
         body: String(e),
-        action: "凭据本次将以明文保存在本地配置中；若刚更新过应用，请完全重启后重新保存服务器",
+        action: i18n.t("notify.keyringSetFailedAction"),
         urgency: "critical",
-        source: "凭据",
+        source: i18n.t("notify.sourceCredentials"),
       });
     } catch { /* 通知不可用时仅日志 */ }
     return false;

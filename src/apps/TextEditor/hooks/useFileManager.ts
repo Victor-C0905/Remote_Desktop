@@ -419,7 +419,9 @@ export function useFileManager(): UseFileManagerReturn {
           ...prev,
           path: result.path,
           checksum: newChecksum,
-          mtime: 0, // 当前 API 不返回 mtime
+          mtime: result.mtime, // 与 saveAs 一致使用 Agent 回传的新 mtime；
+                               // 置 0 会让下一次差异保存携带 baseMtime=0，
+                               // 触发误报版本冲突或使并发校验失效
         };
       });
 

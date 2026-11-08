@@ -24,6 +24,40 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, PeekMessageW, PM_REMOVE, TranslateMessage, MSG,
 };
 
+/// WebView2 就绪等待上限：Controller/Environment 创建挂死（驱动或环境
+/// 异常）时，无期限的 wait_with_pump 会让 STA 主循环永久停摆——会话
+/// 全部命令回执永不返回、心跳执行器失效、窗口也无法销毁（2026-11 审计 M16）
+const WEBVIEW_CREATE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// 带期限的 STA 消息泵等待（行为同 webview2_com::wait_with_pump，加超时）。
+///
+/// 每 100ms 轮询一次完成通道，间隙持续 Peek/Dispatch 队列中的 COM/UI
+/// 消息（保持 STA 泵活），超期返回 Err。调用方为同步上下文，
+/// 不能用 tokio::time::timeout 包裹。
+fn wait_with_pump_capped<T>(rx: std::sync::mpsc::Receiver<T>) -> Result<T, String> {
+    let deadline = std::time::Instant::now() + WEBVIEW_CREATE_TIMEOUT;
+    loop {
+        match rx.recv_timeout(std::time::Duration::from_millis(100)) {
+            Ok(v) => return Ok(v),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                return Err("WebView2 完成回调通道已关闭".to_string());
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(format!("等待 WebView2 就绪超时({:?})", WEBVIEW_CREATE_TIMEOUT));
+                }
+                unsafe {
+                    let mut msg = MSG::default();
+                    while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                        let _ = TranslateMessage(&msg);
+                        DispatchMessageW(&msg);
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// WebView2 控制器 + 页面接口句柄
 pub(crate) struct WebviewHandle {
     pub controller: ICoreWebView2Controller,
@@ -136,9 +170,9 @@ pub(crate) fn create_environment(
         .map_err(|e| format!("创建 WebView2 环境失败: {e}"))?;
     }
 
-    // wait_with_pump 返回双层 Result：外层是泵等待失败（webview2_com::Error），
-    // 内层是 handler 转发的 WebView2 HRESULT 失败（windows::core::Error）
-    webview2_com::wait_with_pump(rx)
+    // 带期限泵等待：外层是等待失败（超时/通道关闭），内层是 handler
+    // 转发的 WebView2 HRESULT 失败（windows::core::Error）
+    wait_with_pump_capped(rx)
         .map_err(|e| format!("等待 WebView2 环境就绪失败: {e}"))?
         .map_err(|e| format!("创建 WebView2 环境失败: {e}"))
 }
@@ -171,7 +205,7 @@ pub(crate) fn create_controller(
             .map_err(|e| format!("创建 WebView2 控制器失败: {e}"))?;
     }
     // 同上：外层泵等待失败 / 内层 WebView2 HRESULT 失败，分别转译
-    let controller = webview2_com::wait_with_pump(rx)
+    let controller = wait_with_pump_capped(rx)
         .map_err(|e| format!("等待 WebView2 控制器就绪失败: {e}"))?
         .map_err(|e| format!("创建 WebView2 控制器失败: {e}"))?;
 

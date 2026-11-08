@@ -1,7 +1,6 @@
 //! Phase 4 热更新集成测试
 //!
 //! 测试场景：
-//! - OrphanProcessReaper Session 清理（新架构：不再 waitpid，只清理 PtyRegistry）
 //! - WorkerManager 优雅关闭标志
 //! - HotUpdateCoordinator 协调器创建和防重入
 //! - SIGHUP 信号处理
@@ -13,26 +12,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use quireld::manager::{
     WorkerManager, PtyRegistry,
-    OrphanProcessReaper, WorkerCrashDetector,
+    WorkerCrashDetector,
     HotUpdateCoordinator, ReloadTrigger, watch_sighup,
 };
 use tokio::sync::mpsc;
-
-#[tokio::test]
-async fn test_orphan_reaper_creation() {
-    let pty_registry = Arc::new(PtyRegistry::new());
-    let _reaper = OrphanProcessReaper::new(pty_registry);
-}
-
-#[tokio::test]
-async fn test_orphan_reaper_cleanup_nonexistent() {
-    // 新架构：cleanup_session 清理不存在的会话应返回 Ok
-    let pty_registry = Arc::new(PtyRegistry::new());
-    let reaper = OrphanProcessReaper::new(pty_registry);
-
-    let result = reaper.cleanup_session("nonexistent-session").await;
-    assert!(result.is_ok());
-}
 
 #[tokio::test]
 async fn test_worker_manager_graceful_shutdown_flag() {

@@ -4,8 +4,6 @@
 //! 与独立 Session 进程通信，间接读写 PTY。Manager 不再直接持有 master_fd。
 
 pub mod connection;
-pub mod session;
-pub mod auth;
 
 // Unix-only 模块
 #[cfg(unix)]
@@ -21,7 +19,6 @@ pub mod worker_manager;
 pub mod ipc_server;
 
 #[cfg(unix)]
-pub mod orphan_reaper;
 
 #[cfg(unix)]
 pub mod crash_detector;
@@ -40,7 +37,6 @@ pub mod session_connection;
 pub mod protocol_adapter;
 
 pub use connection::ConnectionManager;
-pub use session::SessionManager;
 
 #[cfg(unix)]
 pub use pty_registry::{PtyRegistry, PtySession, UserInfo};
@@ -55,7 +51,6 @@ pub use worker_manager::{WorkerManager, WorkerInfo, WorkerStatus, WorkerStatusEv
 pub use ipc_server::IpcServer;
 
 #[cfg(unix)]
-pub use orphan_reaper::OrphanProcessReaper;
 
 #[cfg(unix)]
 pub use crash_detector::WorkerCrashDetector;
@@ -97,7 +92,6 @@ pub struct Manager {
 
     /// 孤儿进程回收器（简化版：清理已断开的 Session）
     #[cfg(unix)]
-    orphan_reaper: Arc<OrphanProcessReaper>,
 
     /// 崩溃检测器
     /// 阶段 1:启动后持续监控 Worker 进程状态
@@ -136,13 +130,11 @@ impl Manager {
 
         // 创建孤儿进程回收器
         // Phase 4 新增：用于在 PTY EOF 时回收 Session 僵尸进程
-        let orphan_reaper = Arc::new(OrphanProcessReaper::new(pty_registry.clone()));
 
         Ok(Self {
             pty_registry,
             worker_manager,
             ipc_server,
-            orphan_reaper,
             crash_detector: tokio::sync::Mutex::new(None),
         })
     }
@@ -153,71 +145,6 @@ impl Manager {
         Ok(Self {})
     }
 
-    /// 启动 Manager
-    ///
-    /// # 流程
-    /// 1. 启动 IPC 服务器（监听 Worker 状态变化）
-    /// 2. 启动 Worker 进程
-    /// 3. 启动崩溃检测器（Phase 4 新增）
-    /// 4. 启动 SIGHUP 信号监听（Phase 4 新增）
-    /// 5. 启动热更新协调器（Phase 4 新增）
-    /// 6. 等待终止信号
-    pub async fn run(&mut self) -> Result<()> {
-        #[cfg(unix)]
-        {
-            // 启动 IPC 服务器（在后台运行，等待 bind 完成后再启动 Worker）
-            let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
-            let ipc_server = self.ipc_server.clone();
-            tokio::spawn(async move {
-                if let Err(e) = ipc_server.run(Some(ready_tx)).await {
-                    tracing::error!("IPC 服务器运行失败: {}", e);
-                }
-            });
-
-            // 等待 IPC 服务器 bind 完成 + subscribe 完成（避免 Worker 启动竞态）
-            ready_rx.await
-                .map_err(|_| anyhow::anyhow!("IPC 服务器启动失败: sender dropped"))?;
-
-            // 启动 Worker 进程
-            self.worker_manager.start().await?;
-
-            // 启动崩溃检测器（Phase 4 新增）
-            // 在后台监控 Worker 进程状态，崩溃时自动重启
-            let mut crash_detector = WorkerCrashDetector::new(self.worker_manager.clone());
-            crash_detector.start();
-
-            // 启动 SIGHUP 信号监听（Phase 4 新增）
-            // 收到 SIGHUP 时发送 ReloadTrigger 事件给热更新协调器
-            let (trigger_tx, trigger_rx) = tokio::sync::mpsc::channel(16);
-            let _sighup_handle = watch_sighup(trigger_tx);
-
-            // 启动热更新协调器（Phase 4 新增）
-            // 监听触发事件，收到时执行 Worker 热更新流程
-            let coordinator = HotUpdateCoordinator::new(
-                self.worker_manager.clone(),
-                trigger_rx,
-            );
-            tokio::spawn(coordinator.run());
-
-            tracing::info!("Manager 已启动（支持热更新）");
-
-            // 等待终止信号
-            tokio::signal::ctrl_c().await?;
-
-            tracing::info!("收到终止信号，停止 Manager");
-
-            // 停止崩溃检测器
-            crash_detector.stop();
-
-            // 停止 Worker
-            self.worker_manager.stop().await?;
-
-            // 停止 IPC 服务器
-            self.ipc_server.stop().await?;
-        }
-
-        Ok(())
-    }
 
     /// 启动 Manager(非阻塞)
     ///
@@ -306,7 +233,9 @@ impl Manager {
     #[cfg(unix)]
     pub async fn handle_resize_window(&self, session_id: &str, cols: u32, rows: u32) -> Result<()> {
         tracing::debug!("ResizeWindow: session_id={}, cols={}, rows={}", session_id, cols, rows);
-        self.pty_registry.resize(session_id, cols as u16, rows as u16).await
+        // 钳制而非截断：u32 溢出位回绕会把 65536+5 变成 5（审计 L4）
+        let clamp16 = |v: u32| v.min(u16::MAX as u32) as u16;
+        self.pty_registry.resize(session_id, clamp16(cols), clamp16(rows)).await
     }
 
     /// 获取 Worker 进程信息(供外部测试和监控使用)
@@ -406,12 +335,12 @@ impl Manager {
             return self.route_worker_payload(worker_payload).await.map(Some);
         }
 
-        let worker_payload = protocol_adapter::serde_to_worker_request(payload, &user_context);
-
-        // 不需要路由到 Worker 的请求,返回 None
-        let worker_payload = match worker_payload {
-            Some(p) => p,
-            None => return Ok(None),
+        // 载荷非法（如 WriteFile content 不是合法 base64）时回错误帧，
+        // 而非静默降级写坏文件（2026-11 审计 M6）
+        let worker_payload = match protocol_adapter::serde_to_worker_request(payload, &user_context) {
+            Ok(Some(p)) => p,
+            Ok(None) => return Ok(None),
+            Err(message) => return Err(anyhow::anyhow!(message)),
         };
 
         self.route_worker_payload(worker_payload).await.map(Some)
@@ -586,12 +515,4 @@ impl Manager {
         &self.pty_registry
     }
 
-    /// 获取 OrphanProcessReaper 引用(供外部清理已断开的 Session)
-    ///
-    /// 新架构：Session 进程独立运行，Manager 不再需要 waitpid 回收僵尸进程。
-    /// OrphanProcessReaper 简化为 PtyRegistry 的轻量包装，提供 cleanup_session 接口。
-    #[cfg(unix)]
-    pub fn orphan_reaper(&self) -> &Arc<OrphanProcessReaper> {
-        &self.orphan_reaper
-    }
 }

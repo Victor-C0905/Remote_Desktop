@@ -50,6 +50,10 @@ LimitNPROC=infinity
 Environment="RUST_LOG=info"
 Environment="HOME=/var/lib/quireld"
 
+# umask 显式收敛（审计 低-部署2）：/tmp 的 IPC socket 权限此前纯靠
+# 启动环境 umask（d80154d 已加显式 0600，此为纵深防御）
+UMask=0022
+
 # 日志
 StandardOutput=journal
 StandardError=journal

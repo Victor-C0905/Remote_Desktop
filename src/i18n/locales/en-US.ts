@@ -110,7 +110,6 @@ const enUS: TranslationSchema = {
   },
   errors: {
     auth: {
-      keyringUnavailableError: 'OS credential store unavailable; cannot save password/private key. Restart the app or check the credential service, then retry',
     missingCredentials: { title: 'Missing sign-in info', message: 'Required sign-in credentials were not provided', action: 'Complete the server sign-in configuration' },
       invalidKeyFormat: { title: 'Unsupported key format', message: 'This key file format is not supported', action: 'Use an OpenSSH-format key file' },
       keyParseFailed: { title: 'Cannot read key', message: 'The key file could not be parsed; it may be corrupted or the passphrase is wrong', action: 'Check the key file and passphrase' },
@@ -181,7 +180,26 @@ const enUS: TranslationSchema = {
     actionPrefix: 'Tip',
     othersConnected: 'ℹ️ {{count}} other server(s) are connected fine; only this one fails\nThis is likely a network issue between this machine and the server. Try a different network and retry',
   },
+  notify: {
+  keyringUnavailableTitle: "OS credential store unavailable",
+  keyringUnavailableAction: "Server passwords/private keys cannot be saved. Restart the app or check the credential service, then retry",
+  keyringSetFailedTitle: "Credential storage failed",
+  keyringSetFailedAction: "Credentials could not be written to the OS credential store and this edit will not persist; if you just updated the app, fully restart and save again",
+  wallpaperImportFailedTitle: "Wallpaper import failed",
+  wallpaperImportFailedAction: "Ensure the image is png/jpg/webp and under 32MB; if you just updated the app, fully restart and try again",
+  sourceCredentials: "Credentials",
+  sourceSettings: "Settings",
+    uploadFinishedTitle: 'Upload complete',
+    downloadFinishedTitle: 'Download complete',
+    uploadDone: '{{name}} uploaded',
+    downloadDone: '{{name}} downloaded',
+    retryFailedTitle: 'Failed to restart transfer',
+    retryFailedBody: 'Could not restart "{{name}}". Switch back to the server and retry manually.',
+    retryFailedAction: 'You can download the file again',
+  },
   settings: {
+    // Migrated from errors.auth to the settings namespace actually referenced by t() calls
+    keyringUnavailableError: 'OS credential store unavailable; cannot save password/private key. Restart the app or check the credential service, then retry',
     section: {
       connection: 'Connection',
       appearance: 'Appearance',
@@ -298,6 +316,7 @@ const enUS: TranslationSchema = {
     linesUnit: 'lines',
     browserTitle: 'Browser settings',
     socks5Port: 'SOCKS5 port',
+    socks5PortHint: '0 = random port each session (recommended). The local proxy listens on 127.0.0.1 without authentication — any local process can use it; a fixed port is predictable and easier for malware to probe',
     systemBrowser: 'System browser',
     browserAuto: 'Auto-detect (Edge → Chrome → Firefox)',
     builtInBrowserTitle: 'Built-in browser',
@@ -532,15 +551,6 @@ const enUS: TranslationSchema = {
       minutesOnly: '{{m}}m',
       hours: '{{h}}h {{m}}m',
       hoursOnly: '{{h}}h',
-    },
-    notify: {
-      uploadFinishedTitle: 'Upload complete',
-      downloadFinishedTitle: 'Download complete',
-      uploadDone: '{{name}} uploaded',
-      downloadDone: '{{name}} downloaded',
-      retryFailedTitle: 'Failed to restart transfer',
-      retryFailedBody: 'Could not restart "{{name}}". Switch back to the server and retry manually.',
-      retryFailedAction: 'You can download the file again',
     },
     limit: {
       title: 'Transfer settings',
@@ -815,6 +825,7 @@ const enUS: TranslationSchema = {
     copyPageUrl: 'Copy page URL',
     ctxDuplicate: 'Duplicate tab',
     ctxReopenClosed: 'Reopen closed tab',
+    ctxOpenLinkNewTab: 'Open link in new tab',
     open: 'Open',
     addBookmark: 'Add bookmark',
     removeBookmark: 'Remove bookmark',

@@ -10,6 +10,7 @@ pub mod errors;
 mod connection;
 mod credentials;
 mod fullscreen;
+mod net_frame;
 mod proxy;
 mod store_maintenance;
 mod terminal;
@@ -225,264 +226,17 @@ fn format_mode(mode: u32) -> String {
 
 /* ── PTY Management (Windows ConPTY) ────────────────────── */
 
-#[cfg(windows)]
-mod pty {
-    use base64::Engine;
-    use serde::Serialize;
-    use std::collections::HashMap;
-    use std::io::Read;
-    use std::os::windows::process::CommandExt;
-    use std::sync::Mutex;
-    use tauri::Manager;
-
-    #[derive(Serialize)]
-    pub struct SpawnResult {
-        pub pty_id: String,
-    }
-
-    /// Windows ConPTY using the `conpty` crate or raw Win32 API.
-    /// For now, we use a simplified approach: spawn a hidden console process
-    /// and pipe its I/O.
-    pub struct PtySession {
-        child: std::process::Child,
-    }
-
-    impl PtySession {
-        pub fn new(cols: u16, rows: u16) -> Result<Self, String> {
-            // Use cmd.exe as the shell on Windows
-            let child = std::process::Command::new("cmd.exe")
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .creation_flags(0x08000000) // CREATE_NO_WINDOW
-                .env("TERM", "xterm-256color")
-                .env("COLUMNS", cols.to_string())
-                .env("LINES", rows.to_string())
-                .spawn()
-                .map_err(|e| format!("启动终端失败: {}", e))?;
-
-            Ok(Self { child })
-        }
-
-        pub fn write(&mut self, data: &[u8]) -> Result<(), String> {
-            use std::io::Write;
-            let stdin = self.child.stdin.as_mut().ok_or("stdin 不可用")?;
-            stdin.write_all(data).map_err(|e| format!("写入失败: {}", e))?;
-            stdin.flush().map_err(|e| format!("flush 失败: {}", e))?;
-            Ok(())
-        }
-
-        pub fn read(&mut self, _timeout_ms: u64) -> Result<String, String> {
-            let mut buf = [0u8; 4096];
-            // Non-blocking: try to read available data
-            // On Windows, we use a simple approach with small reads
-            match self.child.stdout.as_mut() {
-                Some(stdout) => {
-                    // Set non-blocking would need platform-specific code
-                    // For simplicity, just do a small read
-                    match stdout.read(&mut buf) {
-                        Ok(0) => Ok(String::new()),
-                        Ok(n) => {
-                            Ok(base64::engine::general_purpose::STANDARD.encode(&buf[..n]))
-                        }
-                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                            Ok(String::new())
-                        }
-                        Err(e) => Err(format!("读取失败: {}", e)),
-                    }
-                }
-                None => Err("stdout 不可用".to_string()),
-            }
-        }
-
-        pub fn resize(&mut self, _cols: u16, _rows: u16) -> Result<(), String> {
-            // ConPTY resize would need Win32 API calls
-            // For now, just update env vars (limited effect)
-            Ok(())
-        }
-    }
-
-    /// Global PTY sessions store
-    pub struct PtyManager {
-        sessions: Mutex<HashMap<String, PtySession>>,
-    }
-
-    impl PtyManager {
-        pub fn new() -> Self {
-            Self {
-                sessions: Mutex::new(HashMap::new()),
-            }
-        }
-    }
-
-    // Tauri commands for PTY
-
-    #[tauri::command]
-    pub fn spawn_terminal(shell: String, cols: u16, rows: u16, app: tauri::AppHandle) -> Result<SpawnResult, String> {
-        tracing::info!("[PTY] 创建终端: shell={}", shell);
-        let _ = shell; // Use default shell (cmd.exe on Windows)
-        let session = PtySession::new(cols, rows)?;
-        let id = format!("pty-{}", uuid::Uuid::new_v4());
-
-        let manager = app.state::<PtyManager>();
-        manager.sessions.lock().unwrap().insert(id.clone(), session);
-
-        Ok(SpawnResult { pty_id: id })
-    }
-
-    #[tauri::command]
-    pub fn terminal_write(pty_id: String, data: String, app: tauri::AppHandle) -> Result<(), String> {
-        tracing::debug!("[PTY] 写入数据: pty_id={}, bytes={}", pty_id, data.len());
-        let manager = app.state::<PtyManager>();
-        let mut sessions = manager.sessions.lock().unwrap();
-        let session = sessions.get_mut(&pty_id).ok_or("PTY 会话不存在")?;
-
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(&data)
-            .map_err(|e| format!("Base64 解码失败: {}", e))?;
-
-        session.write(&bytes)
-    }
-
-    #[tauri::command]
-    pub fn terminal_read(pty_id: String, _timeout_ms: u64, app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-        tracing::debug!("[PTY] 读取数据: pty_id={}", pty_id);
-        let manager = app.state::<PtyManager>();
-        let mut sessions = manager.sessions.lock().unwrap();
-        let session = sessions.get_mut(&pty_id).ok_or("PTY 会话不存在")?;
-
-        let data = session.read(_timeout_ms)?;
-        Ok(serde_json::json!({ "data": data }))
-    }
-
-    #[tauri::command]
-    pub fn terminal_resize(pty_id: String, cols: u16, rows: u16, app: tauri::AppHandle) -> Result<(), String> {
-        tracing::debug!("[PTY] 调整大小: pty_id={}, cols={}, rows={}", pty_id, cols, rows);
-        let manager = app.state::<PtyManager>();
-        let mut sessions = manager.sessions.lock().unwrap();
-        let session = sessions.get_mut(&pty_id).ok_or("PTY 会话不存在")?;
-        session.resize(cols, rows)
-    }
-}
 
 /* ── PTY Management (Unix) ──────────────────────────────── */
 
-#[cfg(unix)]
-mod pty {
-    use base64::Engine;
-    use serde::Serialize;
-    use std::collections::HashMap;
-    use std::sync::Mutex;
-    use tauri::Manager;
-
-    #[derive(Serialize)]
-    pub struct SpawnResult {
-        pub pty_id: String,
-    }
-
-    // Unix PTY implementation using nix::pty
-    // For MVP, use a simple spawned process with pipes
-    pub struct PtySession {
-        child: std::process::Child,
-    }
-
-    impl PtySession {
-        pub fn new(cols: u16, rows: u16) -> Result<Self, String> {
-            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
-            let child = std::process::Command::new(&shell)
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .env("TERM", "xterm-256color")
-                .env("COLUMNS", cols.to_string())
-                .env("LINES", rows.to_string())
-                .spawn()
-                .map_err(|e| format!("启动终端失败: {}", e))?;
-
-            Ok(Self { child })
-        }
-
-        pub fn write(&mut self, data: &[u8]) -> Result<(), String> {
-            use std::io::Write;
-            let stdin = self.child.stdin.as_mut().ok_or("stdin 不可用")?;
-            stdin.write_all(data).map_err(|e| format!("写入失败: {}", e))?;
-            stdin.flush().map_err(|e| format!("flush 失败: {}", e))
-        }
-
-        pub fn read(&mut self, _timeout_ms: u64) -> Result<String, String> {
-            use std::io::Read;
-            let mut buf = [0u8; 4096];
-            match self.child.stdout.as_mut() {
-                Some(stdout) => match stdout.read(&mut buf) {
-                    Ok(0) => Ok(String::new()),
-                    Ok(n) => {
-                        Ok(base64::engine::general_purpose::STANDARD.encode(&buf[..n]))
-                    }
-                    Err(e) => Err(format!("读取失败: {}", e)),
-                },
-                None => Err("stdout 不可用".to_string()),
-            }
-        }
-
-        pub fn resize(&mut self, _cols: u16, _rows: u16) -> Result<(), String> {
-            // True PTY resize would use ioctl(TIOCSWINSZ)
-            Ok(())
-        }
-    }
-
-    pub struct PtyManager {
-        sessions: Mutex<HashMap<String, PtySession>>,
-    }
-
-    impl PtyManager {
-        pub fn new() -> Self {
-            Self { sessions: Mutex::new(HashMap::new()) }
-        }
-    }
-
-    #[tauri::command]
-    pub fn spawn_terminal(shell: String, cols: u16, rows: u16, app: tauri::AppHandle) -> Result<SpawnResult, String> {
-        tracing::info!("[PTY] 创建终端: shell={}", shell);
-        let _ = shell;
-        let session = PtySession::new(cols, rows)?;
-        let id = format!("pty-{}", uuid::Uuid::new_v4());
-        let manager = app.state::<PtyManager>();
-        manager.sessions.lock().unwrap().insert(id.clone(), session);
-        Ok(SpawnResult { pty_id: id })
-    }
-
-    #[tauri::command]
-    pub fn terminal_write(pty_id: String, data: String, app: tauri::AppHandle) -> Result<(), String> {
-        tracing::debug!("[PTY] 写入数据: pty_id={}, bytes={}", pty_id, data.len());
-        let manager = app.state::<PtyManager>();
-        let mut sessions = manager.sessions.lock().unwrap();
-        let session = sessions.get_mut(&pty_id).ok_or("PTY 会话不存在")?;
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(&data).map_err(|e| format!("Base64 解码失败: {}", e))?;
-        session.write(&bytes)
-    }
-
-    #[tauri::command]
-    pub fn terminal_read(pty_id: String, _timeout_ms: u64, app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-        tracing::debug!("[PTY] 读取数据: pty_id={}", pty_id);
-        let manager = app.state::<PtyManager>();
-        let mut sessions = manager.sessions.lock().unwrap();
-        let session = sessions.get_mut(&pty_id).ok_or("PTY 会话不存在")?;
-        let data = session.read(_timeout_ms)?;
-        Ok(serde_json::json!({ "data": data }))
-    }
-
-    #[tauri::command]
-    pub fn terminal_resize(pty_id: String, cols: u16, rows: u16, app: tauri::AppHandle) -> Result<(), String> {
-        tracing::debug!("[PTY] 调整大小: pty_id={}, cols={}, rows={}", pty_id, cols, rows);
-        let manager = app.state::<PtyManager>();
-        let mut sessions = manager.sessions.lock().unwrap();
-        let session = sessions.get_mut(&pty_id).ok_or("PTY 会话不存在")?;
-        session.resize(cols, rows)
-    }
-}
 
 /* ── Tauri Commands (File System) ──────────────────────── */
+
+// ── 本地文件命令组（审计 低-9 边界说明）─────────────────────
+// read_dir / stat_file / read_file_text / wallpaper_cache_write 接受任意
+// 绝对路径（文件管理器本地面板所需）。信任模型：调用方是本进程 renderer，
+// CSP（default-src 'self'）限制脚本来源——renderer 被攻破时这些命令是
+// 高价值目标，属已知接受风险；若未来 CSP 放宽需先收紧此处。
 
 #[tauri::command]
 fn read_dir(path: String) -> Result<ReadDirResponse, String> {
@@ -1003,7 +757,6 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
-        .manage(pty::PtyManager::new())
         .manage(fullscreen::FullscreenState::default())
         .manage(connection::ConnectionManager::new())
         .manage(proxy::ProxySessionManager::new())
@@ -1074,6 +827,18 @@ pub fn run() {
             // - visible(false)：页面/首帧就绪前不显示，消除启动闪现（A3）
             // - no_redirection_bitmap（tauri 2.12 新 API）：绕开透明窗口的
             //   重定向位图合成路径，根治 resize 白闪
+            // 浏览器附加参数（预计算为 String：CDP 端口运行期生成，
+            // 不能内联在 if-else 里借用临时值，审计 低-7）
+            #[cfg(target_os = "windows")]
+            let browser_args: String = if cfg!(debug_assertions) {
+                format!(
+                    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,IntensiveWakeUpThrottling --remote-debugging-port={} --disable-background-timer-throttling --disable-backgrounding-occluded-windows",
+                    9222 + (std::process::id() % 1000) as u32
+                )
+            } else {
+                "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,IntensiveWakeUpThrottling --disable-background-timer-throttling --disable-backgrounding-occluded-windows".to_string()
+            };
+
             #[cfg(target_os = "windows")]
             let builder = tauri::WebviewWindowBuilder::new(
                 app,
@@ -1108,11 +873,7 @@ pub fn run() {
             // 以 feature 名单独禁用；wry 的 background_throttling 策略仅在
             // macOS (wkwebview) 实现，WebView2 后端无消费点。仅壳页面需要；
             // tab webview（远程页）保持节流以省资源。
-            .additional_browser_args(if cfg!(debug_assertions) {
-                "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,IntensiveWakeUpThrottling --remote-debugging-port=9222 --disable-background-timer-throttling --disable-backgrounding-occluded-windows"
-            } else {
-                "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,IntensiveWakeUpThrottling --disable-background-timer-throttling --disable-backgrounding-occluded-windows"
-            });
+            .additional_browser_args(&browser_args);
 
             #[cfg(not(target_os = "windows"))]
             let builder = tauri::WebviewWindowBuilder::new(
@@ -1126,6 +887,10 @@ pub fn run() {
             .resizable(true)
             .fullscreen(false)
             .decorations(false)
+            // 非 Windows 分支（跨平台预留，当前产品仅面向 Windows/NSIS）。
+            // 注意：与 AGENTS.md §6「主窗口必须 transparent(false)」的字面
+            // 要求不一致——非 Windows 无防闪三件套体系，若未来启用非
+            // Windows 构建，须先按 docs/window-flash-rules.md 重建（审计 低-6）
             .transparent(true)
             .visible(false);
 
@@ -1387,10 +1152,6 @@ pub fn run() {
             ui_logging::log_write,
             ui_logging::get_app_version,
             ui_logging::get_build_info,
-            pty::spawn_terminal,
-            pty::terminal_write,
-            pty::terminal_read,
-            pty::terminal_resize,
             connection::remote_connect,
             connection::remote_disconnect,
             connection::remote_ping,

@@ -185,7 +185,7 @@ export function BrowserApp({ windowId }: BrowserAppProps) {
   // 诊断：未连接占位/webview 隐藏问题定位（输出当前分支判定依据，
   // 一次窗口打开对应一条；问题闭环后可整块移除）
   useEffect(() => {
-    log.info(
+    log.debug(
       `浏览器分支判定: connected=${connected} serverId=${serverId} winIsActive=${win.isActive} ` +
         `winPos=${win.position.x},${win.position.y} winSize=${win.size.width}x${win.size.height} ` +
         `serverStatuses=${servers.map((s) => `${s.name}:${s.status}`).join(" / ")}`,
@@ -201,7 +201,7 @@ export function BrowserApp({ windowId }: BrowserAppProps) {
         chain.push(`${cls || "(anon)"}=${Math.round(r.top)},${Math.round(r.height)}`);
         el = el.parentElement;
       }
-      log.info(`高度链(content→上): ${chain.join(" ← ")}`);
+      log.debug(`高度链(content→上): ${chain.join(" ← ")}`);
     });
     return () => cancelAnimationFrame(raf);
   }, [connected, serverId, win.isActive, windowId, win.size.height]);

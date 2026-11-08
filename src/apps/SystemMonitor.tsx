@@ -165,6 +165,7 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
   const [processSort, setProcessSort] = useState<ProcessSortState>(DEFAULT_PROCESS_SORT);
   // 是否已收到过真实在线数据（用于区分「从未连接」和「断连后」）
   const [hasReceivedData, setHasReceivedData] = useState(false);
+  const hasReceivedDataRef = useRef(false); // 事件回调内用 ref 判定（state 过期闭包，审计 L5）
 
   const HISTORY_LENGTH = SUBSCRIPTION_CONFIG.HISTORY_LENGTH; // 使用配置的历史长度
 
@@ -220,7 +221,8 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
             const newMetrics = event.payload.data;
             setMetrics(newMetrics);
             // 标记已收到在线数据（用于 UI 区分「从未连接」和「断连后」）
-            if (!hasReceivedData) {
+            if (!hasReceivedDataRef.current) {
+              hasReceivedDataRef.current = true;
               setHasReceivedData(true);
             }
             const now = Date.now();
@@ -277,11 +279,17 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
     };
 
     let unlistenFn: (() => void) | undefined;
+    let disposed = false; // setupListener 异步：cleanup 先于 resolve 时补注销，防监听器泄漏
     setupListener().then((fn) => {
-      unlistenFn = fn;
+      if (disposed) {
+        fn();
+      } else {
+        unlistenFn = fn;
+      }
     }).catch((e) => log.error('事件监听设置失败:', e));
 
     return () => {
+      disposed = true;
       if (unlistenFn) {
         unlistenFn();
       }

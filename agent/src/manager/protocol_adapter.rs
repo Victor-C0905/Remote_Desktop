@@ -98,123 +98,124 @@ pub fn semantic_archive_worker_request(
 /// - `user`: 用户上下文(uid/gid/username/home_dir)
 ///
 /// # 返回
-/// - `Some(manager_request::Payload)`: 需要路由到 Worker 的请求
-/// - `None`: 不需要路由到 Worker(如 Ping、Subscribe 等),由调用方直接处理
-pub fn serde_to_worker_request(payload: &Payload, user: &UserContext) -> Option<manager_request::Payload> {
+/// - `Ok(Some(manager_request::Payload))`: 需要路由到 Worker 的请求
+/// - `Ok(None)`: 不需要路由到 Worker(如 Ping、Subscribe 等),由调用方直接处理
+/// - `Err(message)`: 请求载荷非法（如 WriteFile content 不是合法 base64），
+///   调用方应回错误帧而非静默降级——base64 解码失败时把原文写盘会让
+///   文件无声损坏（2026-11 审计 M6）
+pub fn serde_to_worker_request(payload: &Payload, user: &UserContext) -> Result<Option<manager_request::Payload>, String> {
     match payload {
         Payload::ReadDirRequest { path } => {
             tracing::debug!("适配 ReadDirRequest: path={}", path);
-            Some(manager_request::Payload::ReadDir(ReadDir {
+            Ok(Some(manager_request::Payload::ReadDir(ReadDir {
                 path: path.clone(),
                 uid: user.uid,
                 gid: user.gid,
                 username: user.username.clone(),
                 home_dir: user.home_dir.clone(),
-            }))
+            })))
         }
 
         Payload::ReadFileRequest { path } => {
             tracing::debug!("适配 ReadFileRequest: path={}", path);
-            Some(manager_request::Payload::ReadFile(ReadFile {
+            Ok(Some(manager_request::Payload::ReadFile(ReadFile {
                 path: path.clone(),
                 uid: user.uid,
                 gid: user.gid,
                 username: user.username.clone(),
                 home_dir: user.home_dir.clone(),
-            }))
+            })))
         }
 
         Payload::FileInfoRequest { path } => {
             tracing::debug!("适配 FileInfoRequest: path={}", path);
-            Some(manager_request::Payload::FileInfo(FileInfo {
+            Ok(Some(manager_request::Payload::FileInfo(FileInfo {
                 path: path.clone(),
                 uid: user.uid,
                 gid: user.gid,
                 username: user.username.clone(),
                 home_dir: user.home_dir.clone(),
-            }))
+            })))
         }
 
         Payload::WriteFileRequest { path, content } => {
             tracing::debug!("适配 WriteFileRequest: path={}, content_len={}", path, content.len());
-            // 将 base64 字符串解码为原始字节
+            // 将 base64 字符串解码为原始字节。
+            // 解码失败必须报错而非静默把原文写盘：客户端本意是 base64
+            // （空白符/填充损坏时），直接落盘 = 文件无声损坏（审计 M6）
             let content_bytes = BASE64.decode(content.as_bytes())
-                .unwrap_or_else(|_| {
-                    // 如果 base64 解码失败,尝试直接转换为字节(兼容旧客户端发送原始文本)
-                    tracing::warn!("WriteFile base64 解码失败,使用原始字节: path={}", path);
-                    content.as_bytes().to_vec()
-                });
-            Some(manager_request::Payload::WriteFile(WriteFile {
+                .map_err(|e| format!("WriteFile content 不是合法的 base64 编码 (path={}): {}", path, e))?;
+            Ok(Some(manager_request::Payload::WriteFile(WriteFile {
                 path: path.clone(),
                 content: content_bytes,
                 uid: user.uid,
                 gid: user.gid,
                 username: user.username.clone(),
                 home_dir: user.home_dir.clone(),
-            }))
+            })))
         }
 
         Payload::DeleteRequest { path } => {
             tracing::debug!("适配 DeleteRequest: path={}", path);
-            Some(manager_request::Payload::Delete(Delete {
+            Ok(Some(manager_request::Payload::Delete(Delete {
                 path: path.clone(),
                 uid: user.uid,
                 gid: user.gid,
                 username: user.username.clone(),
                 home_dir: user.home_dir.clone(),
-            }))
+            })))
         }
 
         Payload::MkdirRequest { path } => {
             tracing::debug!("适配 MkdirRequest: path={}", path);
-            Some(manager_request::Payload::Mkdir(Mkdir {
+            Ok(Some(manager_request::Payload::Mkdir(Mkdir {
                 path: path.clone(),
                 uid: user.uid,
                 gid: user.gid,
                 username: user.username.clone(),
                 home_dir: user.home_dir.clone(),
-            }))
+            })))
         }
 
         Payload::RenameRequest { old_path, new_path } => {
             tracing::debug!("适配 RenameRequest: {} -> {}", old_path, new_path);
-            Some(manager_request::Payload::Rename(Rename {
+            Ok(Some(manager_request::Payload::Rename(Rename {
                 old_path: old_path.clone(),
                 new_path: new_path.clone(),
                 uid: user.uid,
                 gid: user.gid,
                 username: user.username.clone(),
                 home_dir: user.home_dir.clone(),
-            }))
+            })))
         }
 
         Payload::CopyRequest { src, dst } => {
             tracing::debug!("适配 CopyRequest: {} -> {}", src, dst);
-            Some(manager_request::Payload::Copy(Copy {
+            Ok(Some(manager_request::Payload::Copy(Copy {
                 src: src.clone(),
                 dst: dst.clone(),
                 uid: user.uid,
                 gid: user.gid,
                 username: user.username.clone(),
                 home_dir: user.home_dir.clone(),
-            }))
+            })))
         }
 
         Payload::MoveRequest { src, dst } => {
             tracing::debug!("适配 MoveRequest: {} -> {}", src, dst);
-            Some(manager_request::Payload::Move(Move {
+            Ok(Some(manager_request::Payload::Move(Move {
                 src: src.clone(),
                 dst: dst.clone(),
                 uid: user.uid,
                 gid: user.gid,
                 username: user.username.clone(),
                 home_dir: user.home_dir.clone(),
-            }))
+            })))
         }
 
         Payload::ChmodRequest { path, mode, recursive } => {
             tracing::debug!("适配 ChmodRequest: path={}, mode={:o}, recursive={}", path, mode, recursive);
-            Some(manager_request::Payload::Chmod(Chmod {
+            Ok(Some(manager_request::Payload::Chmod(Chmod {
                 path: path.clone(),
                 mode: *mode,
                 recursive: *recursive,
@@ -222,12 +223,12 @@ pub fn serde_to_worker_request(payload: &Payload, user: &UserContext) -> Option<
                 gid: user.gid,
                 username: user.username.clone(),
                 home_dir: user.home_dir.clone(),
-            }))
+            })))
         }
 
         Payload::ChownRequest { path, owner, group, recursive } => {
             tracing::debug!("适配 ChownRequest: path={}, owner={}, group={}, recursive={}", path, owner, group, recursive);
-            Some(manager_request::Payload::Chown(Chown {
+            Ok(Some(manager_request::Payload::Chown(Chown {
                 path: path.clone(),
                 owner: owner.clone(),
                 group: group.clone(),
@@ -236,18 +237,18 @@ pub fn serde_to_worker_request(payload: &Payload, user: &UserContext) -> Option<
                 gid: user.gid,
                 username: user.username.clone(),
                 home_dir: user.home_dir.clone(),
-            }))
+            })))
         }
 
         Payload::FileExistsRequest { path } => {
             tracing::debug!("适配 FileExistsRequest: path={}", path);
-            Some(manager_request::Payload::FileExists(FileExistsReq {
+            Ok(Some(manager_request::Payload::FileExists(FileExistsReq {
                 path: path.clone(),
                 uid: user.uid,
                 gid: user.gid,
                 username: user.username.clone(),
                 home_dir: user.home_dir.clone(),
-            }))
+            })))
         }
 
         Payload::ApplyDiffRequest { path, base_mtime, diffs } => {
@@ -263,7 +264,7 @@ pub fn serde_to_worker_request(payload: &Payload, user: &UserContext) -> Option<
                 old_content: d.old_content.clone().unwrap_or_default(),
                 new_content: d.new_content.clone().unwrap_or_default(),
             }).collect();
-            Some(manager_request::Payload::ApplyDiff(ApplyDiffReq {
+            Ok(Some(manager_request::Payload::ApplyDiff(ApplyDiffReq {
                 path: path.clone(),
                 base_mtime: *base_mtime,
                 diffs: proto_diffs,
@@ -271,11 +272,11 @@ pub fn serde_to_worker_request(payload: &Payload, user: &UserContext) -> Option<
                 gid: user.gid,
                 username: user.username.clone(),
                 home_dir: user.home_dir.clone(),
-            }))
+            })))
         }
 
         // 其他 payload 不路由到 Worker
-        _ => None,
+        _ => Ok(None),
     }
 }
 
@@ -482,7 +483,7 @@ mod tests {
         let payload = Payload::ReadDirRequest { path: "/home/testuser".to_string() };
         let user = test_user_context();
 
-        let result = serde_to_worker_request(&payload, &user);
+        let result = serde_to_worker_request(&payload, &user).unwrap();
 
         match result {
             Some(manager_request::Payload::ReadDir(req)) => {
@@ -501,7 +502,7 @@ mod tests {
         let payload = Payload::ReadFileRequest { path: "/home/testuser/file.txt".to_string() };
         let user = test_user_context();
 
-        let result = serde_to_worker_request(&payload, &user);
+        let result = serde_to_worker_request(&payload, &user).unwrap();
 
         match result {
             Some(manager_request::Payload::ReadFile(req)) => {
@@ -521,7 +522,7 @@ mod tests {
         };
         let user = test_user_context();
 
-        let result = serde_to_worker_request(&payload, &user);
+        let result = serde_to_worker_request(&payload, &user).unwrap();
 
         match result {
             Some(manager_request::Payload::WriteFile(req)) => {
@@ -538,7 +539,7 @@ mod tests {
         let payload = Payload::Ping { timestamp: 12345 };
         let user = test_user_context();
 
-        let result = serde_to_worker_request(&payload, &user);
+        let result = serde_to_worker_request(&payload, &user).unwrap();
         assert!(result.is_none());
     }
 
@@ -634,7 +635,7 @@ mod tests {
         let payload = Payload::DeleteRequest { path: "/home/testuser/trash.txt".to_string() };
         let user = test_user_context();
 
-        let result = serde_to_worker_request(&payload, &user);
+        let result = serde_to_worker_request(&payload, &user).unwrap();
 
         match result {
             Some(manager_request::Payload::Delete(req)) => {
@@ -694,7 +695,7 @@ mod tests {
         };
         let user = test_user_context();
 
-        let result = serde_to_worker_request(&payload, &user);
+        let result = serde_to_worker_request(&payload, &user).unwrap();
 
         match result {
             Some(manager_request::Payload::ApplyDiff(req)) => {
@@ -769,7 +770,7 @@ mod tests {
         let payload = Payload::FileInfoRequest { path: "/a.png".to_string() };
         let user = test_user_context();
 
-        let result = serde_to_worker_request(&payload, &user);
+        let result = serde_to_worker_request(&payload, &user).unwrap();
 
         match result {
             Some(manager_request::Payload::FileInfo(req)) => {
@@ -826,7 +827,7 @@ mod tests {
             timeout_secs: 600,
         };
         let user = test_user_context();
-        assert!(serde_to_worker_request(&payload, &user).is_none());
+        assert!(serde_to_worker_request(&payload, &user).unwrap().is_none());
     }
 
     #[test]
@@ -863,7 +864,7 @@ mod tests {
         };
         let user = test_user_context();
 
-        let result = serde_to_worker_request(&payload, &user);
+        let result = serde_to_worker_request(&payload, &user).unwrap();
 
         match result {
             Some(manager_request::Payload::Chmod(req)) => {
@@ -910,7 +911,7 @@ mod tests {
         };
         let user = test_user_context();
 
-        let result = serde_to_worker_request(&payload, &user);
+        let result = serde_to_worker_request(&payload, &user).unwrap();
 
         match result {
             Some(manager_request::Payload::Chown(req)) => {

@@ -1,3 +1,4 @@
+import i18n from "../i18n";
 import { createContext, useContext, useCallback, useEffect, ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -93,11 +94,11 @@ export function WallpaperProvider({ children }: { children: ReactNode }) {
       } catch (err) {
         // 静默失败 = "导入失效"的假象：任何一步出错都必须让用户看见
         useNotificationStore.getState().pushNotification({
-          title: "壁纸导入失败",
+          title: i18n.t("notify.wallpaperImportFailedTitle"),
           body: String(err),
-          action: "请确认图片为 png/jpg/webp 且不超过 32MB；若刚更新过应用，请完全重启后再试",
+          action: i18n.t("notify.wallpaperImportFailedAction"),
           urgency: "critical",
-          source: "设置",
+          source: i18n.t("notify.sourceSettings"),
         });
       }
       return;

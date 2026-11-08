@@ -84,8 +84,8 @@ impl PtyFactory {
             session_id: session_id.clone(),
             socket_name: socket_name.clone(),
             shell: shell.to_string(),
-            cols: cols as u16,
-            rows: rows as u16,
+            cols: cols.min(u16::MAX as u32) as u16,
+            rows: rows.min(u16::MAX as u32) as u16,
             working_directory: cwd.map(|s| s.to_string()),
             user: user_info.map(|u| u.to_session_context()),
         };

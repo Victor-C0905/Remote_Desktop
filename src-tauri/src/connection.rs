@@ -42,7 +42,7 @@ pub enum AuthMethod {
 }
 
 /// 认证凭据结构体（与前端 AuthCredentials 接口对应）
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Credentials {
     /// 认证方式
     pub method: AuthMethod,
@@ -57,6 +57,21 @@ pub struct Credentials {
     /// 私钥密码（可选）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub passphrase: Option<String>,
+}
+
+// 手写 Debug 脱敏（审计 低-14）：结构体含密码/私钥/passphrase，
+// derive(Debug) 会让一次顺手调试把密钥材料写进日志（文件内已有
+// 「密钥材料严禁入日志」红线，此处消除顺手 {:?} 的泄漏面）
+impl std::fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Credentials")
+            .field("method", &self.method)
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "***"))
+            .field("private_key", &self.private_key.as_ref().map(|_| "***"))
+            .field("passphrase", &self.passphrase.as_ref().map(|_| "***"))
+            .finish()
+    }
 }
 
 // ── 线上协议（单一真相源：quirel-protocol crate）──────────
@@ -602,16 +617,24 @@ pub async fn remote_connect(
                             let _ = response_tx.send(Err(AppError::new(codes::CONNECTION_LOST)));
                             break;
                         }
-                        let result = send_and_receive_quic(&conn_clone, envelope.request_id, envelope.payload).await;
-                        if result.is_err() {
-                            let _ = response_tx.send(Err(AppError::new(codes::CONNECTION_LOST)));
-                            // 通过 ConnectionLost 通知自己退出，清理逻辑只有一个入口
-                            let _ = main_tx.send(ClientRequest::ConnectionLost {
-                                source: ConnectionLostSource::SendFailed,
-                            }).await;
-                            continue;
-                        }
-                        let _ = response_tx.send(result);
+                        // 每请求独立任务并发执行：QUIC 各请求走独立
+                        // bi-stream、Agent 端本就并发处理——此前在主循环内联
+                        // await，一个 30s 慢请求把后续所有命令（含 UI 轮询）
+                        // 全部拖住（2026-11 审计 M17）
+                        let conn_for_req = conn_clone.clone();
+                        let lost_tx = main_tx.clone();
+                        tokio::spawn(async move {
+                            let result = send_and_receive_quic(&conn_for_req, envelope.request_id, envelope.payload).await;
+                            if result.is_err() {
+                                // 连接级失败：回给调用方 + 通知主循环走统一清理
+                                let _ = response_tx.send(Err(AppError::new(codes::CONNECTION_LOST)));
+                                let _ = lost_tx.send(ClientRequest::ConnectionLost {
+                                    source: ConnectionLostSource::SendFailed,
+                                }).await;
+                                return;
+                            }
+                            let _ = response_tx.send(result);
+                        });
                     }
                     ClientRequest::Disconnect => break,
                     ClientRequest::ConnectionLost { source } => {
@@ -1790,14 +1813,10 @@ pub async fn subscribe(
         let ack_result = tokio::time::timeout(
             std::time::Duration::from_secs(STREAM_TIMEOUT_SECS),
             async {
-                let mut len_buf = [0u8; 4];
-                recv.read_exact(&mut len_buf).await
-                    .map_err(|e| AppError::new(codes::RESPONSE_TIMEOUT).with_detail(format!("read ack length: {e}")))?;
-                let len = u32::from_le_bytes(len_buf) as usize;
-                let mut data_buf = vec![0u8; len];
-                recv.read_exact(&mut data_buf).await
-                    .map_err(|e| AppError::new(codes::RESPONSE_TIMEOUT).with_detail(format!("read ack data: {e}")))?;
-                Ok::<Vec<u8>, AppError>(data_buf)
+                // 长度前缀封顶校验（net_frame）
+                crate::net_frame::read_len_prefixed(&mut recv).await
+                    .map_err(|e| AppError::new(codes::RESPONSE_TIMEOUT).with_detail(format!("read ack: {e}")))?
+                    .ok_or_else(|| AppError::new(codes::RESPONSE_TIMEOUT).with_detail("read ack: stream finished early"))
             },
         )
         .await;
@@ -1827,49 +1846,40 @@ pub async fn subscribe(
             // 每条消息读取超时 60 秒，防止僵死 Stream
             let per_msg_timeout = std::time::Duration::from_secs(60);
             loop {
-                // 读取消息长度（带超时）
-                let mut len_buf = [0u8; 4];
-                let read_len_result = tokio::time::timeout(per_msg_timeout, recv.read_exact(&mut len_buf)).await;
-                match read_len_result {
-                    Ok(Ok(_)) => {
-                        let len = u32::from_le_bytes(len_buf) as usize;
-                        let mut data_buf = vec![0u8; len];
-                        // 读取消息数据（带超时）
-                        let read_data_result = tokio::time::timeout(per_msg_timeout, recv.read_exact(&mut data_buf)).await;
-                        match read_data_result {
-                            Ok(Ok(_)) => {
-                                // 解析 Event payload
-                                if let Ok(event_envelope) = Envelope::decode(&data_buf) {
-                                    if let Payload::Event { event_type, data, timestamp } = event_envelope.payload {
-                                        // 转发到前端 Tauri Event
-                                        let event_data = serde_json::json!({
-                                            "server_id": server_id_clone,
-                                            "event_type": event_type,
-                                            "data": data,
-                                            "timestamp": timestamp,
-                                        });
-
-                                        app_handle.emit("subscription_event", event_data).ok();
-                                    }
-                                }
-                            }
-                            Ok(Err(e)) => {
-                                tracing::warn!("读取事件数据失败: {}", e);
-                                break;
-                            }
-                            Err(_) => {
-                                tracing::warn!("读取事件数据超时 ({}s)", per_msg_timeout.as_secs());
-                                break;
-                            }
-                        }
+                // 读取整条消息（长度封顶校验+读体，带超时；上限见 net_frame）
+                let read_msg_result = tokio::time::timeout(
+                    per_msg_timeout,
+                    crate::net_frame::read_len_prefixed(&mut recv),
+                )
+                .await;
+                let data_buf = match read_msg_result {
+                    Ok(Ok(Some(data_buf))) => data_buf,
+                    Ok(Ok(None)) => {
+                        tracing::info!("事件流已正常结束");
+                        break;
                     }
                     Ok(Err(e)) => {
-                        tracing::warn!("读取事件长度失败: {}", e);
+                        tracing::warn!("读取事件消息失败: {}", e);
                         break;
                     }
                     Err(_) => {
-                        tracing::warn!("读取事件长度超时 ({}s)", per_msg_timeout.as_secs());
+                        tracing::warn!("读取事件消息超时 ({}s)", per_msg_timeout.as_secs());
                         break;
+                    }
+                };
+
+                // 解析 Event payload
+                if let Ok(event_envelope) = Envelope::decode(&data_buf) {
+                    if let Payload::Event { event_type, data, timestamp } = event_envelope.payload {
+                        // 转发到前端 Tauri Event
+                        let event_data = serde_json::json!({
+                            "server_id": server_id_clone,
+                            "event_type": event_type,
+                            "data": data,
+                            "timestamp": timestamp,
+                        });
+
+                        app_handle.emit("subscription_event", event_data).ok();
                     }
                 }
             }
@@ -2040,11 +2050,13 @@ fn build_quic_client_config(
     observed_fingerprint: Arc<Mutex<Option<String>>>,
 ) -> Result<quinn::ClientConfig, String> {
     // 证书钉扎：提取服务器证书指纹供后续校验（SSH known_hosts 模式）
+    // 握手签名必须真实验证（见 PinningCertVerifier 注释）——否则任意证书
+    // 都能完成握手，指纹钉扎可被中间人复制证书绕过
     let crypto = rustls::ClientConfig::builder()
         .dangerous()
-        .with_custom_certificate_verifier(std::sync::Arc::new(PinningCertVerifier {
+        .with_custom_certificate_verifier(std::sync::Arc::new(PinningCertVerifier::new(
             observed_fingerprint,
-        }))
+        )))
         .with_no_client_auth();
 
     // 传输层配置：Bbr 拥塞控制 + 大窗口 + keep_alive + idle_timeout
@@ -2082,22 +2094,30 @@ fn build_quic_client_config(
 
 /// 证书钉扎验证器（SSH known_hosts 模式）
 ///
-/// 替代无脑跳过证书验证，实现证书指纹提取：
-/// - TLS 握手时提取服务器证书的 SHA-256 指纹
-/// - 总是允许握手通过（真正的指纹校验在 remote_connect 中做）
-/// - remote_connect 根据已知指纹决定是否需要用户确认
-///
-/// 安全模型（与 SSH known_hosts 一致）：
-/// 1. 首次连接：展示指纹给用户确认，确认后存储
-/// 2. 后续连接：自动校验指纹是否匹配
-/// 3. 指纹不匹配：警告用户（可能服务器重装或 MITM），由用户决定
+/// 职责分两层：
+/// - 证书信任决策：不做链校验，仅提取服务器证书的 SHA-256 指纹交由
+///   remote_connect 按指纹钉扎（TOFU）流程裁决（首次确认/匹配/变更告警）
+/// - 握手签名验证：CertificateVerify 签名必须用证书公钥真实验证——
+///   这是「对端确实持有该证书私钥」的唯一证明。此验证缺失时，中间人
+///   可原样转发真实服务器证书完成握手，指纹比对与首次连接确认框均被
+///   欺骗（2026-11 审计 S1，旧实现因此可被 MITM）
 #[derive(Debug)]
 struct PinningCertVerifier {
     /// 回传本次握手获取的服务器证书指纹（SHA-256，纯十六进制小写）
     observed_fingerprint: Arc<Mutex<Option<String>>>,
+    /// 握手签名验证算法表（ring provider；与 rustls 默认验证行为一致）
+    signature_algorithms: rustls::crypto::WebPkiSupportedAlgorithms,
 }
 
 impl PinningCertVerifier {
+    fn new(observed_fingerprint: Arc<Mutex<Option<String>>>) -> Self {
+        Self {
+            observed_fingerprint,
+            signature_algorithms: rustls::crypto::ring::default_provider()
+                .signature_verification_algorithms,
+        }
+    }
+
     /// 计算证书 DER 数据的 SHA-256 指纹（纯十六进制小写）
     fn compute_fingerprint(cert_der: &[u8]) -> String {
         use sha2::{Sha256, Digest};
@@ -2138,35 +2158,24 @@ impl rustls::client::danger::ServerCertVerifier for PinningCertVerifier {
 
     fn verify_tls12_signature(
         &self,
-        _message: &[u8],
-        _cert: &rustls::pki_types::CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.signature_algorithms)
     }
 
     fn verify_tls13_signature(
         &self,
-        _message: &[u8],
-        _cert: &rustls::pki_types::CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        rustls::crypto::verify_tls13_signature(message, cert, dss, &self.signature_algorithms)
     }
 
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        vec![
-            rustls::SignatureScheme::RSA_PKCS1_SHA256,
-            rustls::SignatureScheme::RSA_PKCS1_SHA384,
-            rustls::SignatureScheme::RSA_PKCS1_SHA512,
-            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
-            rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
-            rustls::SignatureScheme::ECDSA_NISTP521_SHA512,
-            rustls::SignatureScheme::RSA_PSS_SHA256,
-            rustls::SignatureScheme::RSA_PSS_SHA384,
-            rustls::SignatureScheme::RSA_PSS_SHA512,
-            rustls::SignatureScheme::ED25519,
-        ]
+        self.signature_algorithms.supported_schemes()
     }
 }
 
@@ -2230,9 +2239,18 @@ async fn perform_pubkey_auth(
 
     // 检查私钥格式
     if !private_key_cleaned.starts_with("-----BEGIN") {
+        // 安全红线：私钥内容（含任何前缀片段）严禁入日志——此分支触发时
+        // 用户粘贴的多为 base64 主体，直接输出即泄漏密钥材料。
+        // 仅记录长度与首字符分类等元信息（与 parse_private_key_auto 的做法一致）
+        let first_char_class = private_key_cleaned
+            .chars()
+            .next()
+            .map(|c| if c.is_ascii_graphic() { "ASCII 可见字符" } else { "非可见字符" })
+            .unwrap_or("空内容");
         tracing::error!(
-            "[PubKeyAuth] 不支持的私钥格式（应以 -----BEGIN 开头），当前开头: {}",
-            &private_key_cleaned[..std::cmp::min(50, private_key_cleaned.len())]
+            "[PubKeyAuth] 不支持的私钥格式（应以 -----BEGIN 开头）: len={}字节, 首字符={}",
+            private_key_cleaned.len(),
+            first_char_class
         );
         return Err(ConnectError::with_detail(
             AuthErrorCode::InvalidKeyFormat,
@@ -2314,19 +2332,12 @@ async fn perform_pubkey_auth(
 
     // ── 第三步：接收挑战 ─────────────────────────────────
     let challenge_data = tokio::time::timeout(timeout_duration, async {
-        let mut len_buf = [0u8; 4];
-        recv.read_exact(&mut len_buf).await.map_err(|e| {
-            tracing::warn!("[PubKeyAuth] 读取挑战长度失败: {:?}", e);
+        // 长度前缀封顶校验（net_frame）
+        crate::net_frame::read_len_prefixed(&mut recv).await.map_err(|e| {
+            tracing::warn!("[PubKeyAuth] 读取挑战消息失败: {}", e);
             classify_auth_transport_failure(conn, ConnectError::new(AuthErrorCode::ConnectionLost))
-        })?;
-        let resp_len = u32::from_le_bytes(len_buf) as usize;
-
-        let mut data = vec![0u8; resp_len];
-        recv.read_exact(&mut data).await.map_err(|e| {
-            tracing::warn!("[PubKeyAuth] 读取挑战数据失败: {:?}", e);
-            classify_auth_transport_failure(conn, ConnectError::new(AuthErrorCode::ConnectionLost))
-        })?;
-        Ok::<Vec<u8>, ConnectError>(data)
+        })?
+        .ok_or_else(|| ConnectError::new(AuthErrorCode::ConnectionLost))
     })
     .await
     .map_err(|_| ConnectError::new(AuthErrorCode::StreamTimeout))??;
@@ -2492,19 +2503,12 @@ async fn perform_pubkey_auth(
 
     // ── 第六步：接收最终认证结果 ───────────────────────
     let final_data = tokio::time::timeout(timeout_duration, async {
-        let mut len_buf = [0u8; 4];
-        resp_recv.read_exact(&mut len_buf).await.map_err(|e| {
-            tracing::warn!("[PubKeyAuth] 读取认证结果长度失败: {:?}", e);
+        // 长度前缀封顶校验（net_frame）
+        crate::net_frame::read_len_prefixed(&mut resp_recv).await.map_err(|e| {
+            tracing::warn!("[PubKeyAuth] 读取认证结果失败: {}", e);
             classify_auth_transport_failure(conn, ConnectError::new(AuthErrorCode::ConnectionLost))
-        })?;
-        let resp_len = u32::from_le_bytes(len_buf) as usize;
-
-        let mut data = vec![0u8; resp_len];
-        resp_recv.read_exact(&mut data).await.map_err(|e| {
-            tracing::warn!("[PubKeyAuth] 读取认证结果数据失败: {:?}", e);
-            classify_auth_transport_failure(conn, ConnectError::new(AuthErrorCode::ConnectionLost))
-        })?;
-        Ok::<Vec<u8>, ConnectError>(data)
+        })?
+        .ok_or_else(|| ConnectError::new(AuthErrorCode::ConnectionLost))
     })
     .await
     .map_err(|_| ConnectError::new(AuthErrorCode::StreamTimeout))??;
@@ -2575,13 +2579,10 @@ async fn send_and_receive_quic(conn: &quinn::Connection, request_id: u32, payloa
 
     // 接收操作也需要超时
     let data = tokio::time::timeout(timeout_duration, async {
-        let mut len_buf = [0u8; 4];
-        recv.read_exact(&mut len_buf).await.map_err(|e| AppError::new(codes::NETWORK_FAILED).with_detail(format!("read response length: {e}")))?;
-        let resp_len = u32::from_le_bytes(len_buf) as usize;
-
-        let mut data = vec![0u8; resp_len];
-        recv.read_exact(&mut data).await.map_err(|e| AppError::new(codes::NETWORK_FAILED).with_detail(format!("read response data: {e}")))?;
-        Ok::<Vec<u8>, AppError>(data)
+        // 长度前缀封顶校验（net_frame）
+        crate::net_frame::read_len_prefixed(&mut recv).await
+            .map_err(|e| AppError::new(codes::NETWORK_FAILED).with_detail(format!("read response: {e}")))?
+            .ok_or_else(|| AppError::new(codes::NETWORK_FAILED).with_detail("read response: stream finished early"))
     })
     .await
     .map_err(|_| {
@@ -2862,5 +2863,52 @@ mod search_tests {
         assert_eq!(sanitize_local_filename("..\\..\\evil.html"), ".._.._evil.html");
         assert_eq!(sanitize_local_filename(".."), "download.html");
         assert_eq!(sanitize_local_filename(""), "download.html");
+    }
+}
+
+#[cfg(test)]
+mod pinning_verifier_tests {
+    use super::PinningCertVerifier;
+    use rustls::client::danger::ServerCertVerifier;
+    use std::sync::{Arc, Mutex};
+
+    /// 自签名 P-256 测试证书（DER base64，仅用于本测试文件）
+    const TEST_CERT_B64: &str = "MIIBVTCB+6ADAgECAhRyainGnmT32J0JHa0CK68/HG5e2zAKBggqhkjOPQQDAjAAMB4XDTI2MTEwODA2MTExM1oXDTI2MTEwOTA2MTExM1owADBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABOeG1/EBeGcEfX5SCMhtzKW7ErWL/UjcG+W9La9oLIh9qGAw/FfcBVbEnHeMuLTI61OKfHfY6j/4m+dxT6UHFX6jUzBRMB0GA1UdDgQWBBS1ZDvJ5UFNCyLepumcpNGkVdzFIjAfBgNVHSMEGDAWgBS1ZDvJ5UFNCyLepumcpNGkVdzFIjAPBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49BAMCA0kAMEYCIQC4l88KrK4XNA0bIi6uOV+zctAS8vUDx3vypz4q5ubERwIhAJYtMO0rVxnVaZXNO38G2HvCEN9jnXi50KeOKmw7VuvS";
+
+    /// S1 回归：TLS 1.3 握手签名必须真实验证。
+    /// 旧实现对任意签名返回 Ok——中间人复制真实服务器证书即可完成握手
+    /// （无需私钥），指纹钉扎与首次连接确认框均被欺骗；新实现必须拒绝。
+    #[test]
+    fn verify_tls13_signature_rejects_garbage() {
+        use base64::Engine as _;
+        let der = base64::engine::general_purpose::STANDARD
+            .decode(TEST_CERT_B64)
+            .expect("测试证书 base64 解码失败");
+        let cert = rustls::pki_types::CertificateDer::from(der);
+
+        let verifier = PinningCertVerifier::new(Arc::new(Mutex::new(None)));
+
+        // DigitallySignedStruct 无公开构造器（sig 字段私有），
+        // 经公开的 Codec 编解码面从线上字节构造：
+        // [u16 scheme][u16 sig_len][sig]，0x0403 = ECDSA_NISTP256_SHA256
+        use rustls::internal::msgs::codec::{Codec, Reader};
+        let mut wire = Vec::new();
+        wire.extend_from_slice(&0x0403u16.to_be_bytes());
+        wire.extend_from_slice(&64u16.to_be_bytes());
+        wire.extend_from_slice(&vec![0xAB; 64]);
+        let mut rd = Reader::init(&wire);
+        let dss = rustls::DigitallySignedStruct::read(&mut rd).expect("DSS 线上字节解码失败");
+
+        let result = rustls::crypto::verify_tls13_signature(
+            b"quirel handshake message",
+            &cert,
+            &dss,
+            &verifier.signature_algorithms,
+        );
+        assert!(result.is_err(), "伪造签名必须被拒绝，不得再无条件放行");
+
+        // supported_verify_schemes 上报 provider 算法表（非空且含 P-256）
+        let schemes = verifier.supported_verify_schemes();
+        assert!(schemes.contains(&rustls::SignatureScheme::ECDSA_NISTP256_SHA256));
     }
 }

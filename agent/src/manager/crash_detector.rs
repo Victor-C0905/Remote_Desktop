@@ -84,17 +84,34 @@ impl WorkerCrashDetector {
                     }).await;
 
                     match wait_result {
-                        Ok(Ok(WaitStatus::Exited(_pid, status))) => {
-                            // Worker 进程已退出
+                        Ok(Ok(WaitStatus::Exited(pid, status))) => {
+                            // pid 代际校验：仅当退出的是「当前记录的 Worker」
+                            // 才按其状态处理。热更新窗口期 get_info 可能已指向
+                            // 新 Worker，旧 pid 的退出事件直接忽略
+                            // （2026-11 审计 M4）
+                            let current_pid = worker_manager.get_info().await.map(|i| i.pid as i32);
+                            if current_pid != Some(pid.as_raw()) {
+                                debug!(
+                                    "已退出的 pid={} 非当前 Worker（current={:?}），忽略",
+                                    pid.as_raw(),
+                                    current_pid
+                                );
+                                tokio::time::sleep(Duration::from_millis(500)).await;
+                                continue;
+                            }
+
                             let is_graceful = worker_manager.is_graceful_shutdown().await;
 
                             if is_graceful {
                                 info!(
-                                    "Worker 优雅退出（GracefulShutdown）: status={}",
+                                    "Worker 优雅退出（热更新）: status={}，继续监控新 Worker",
                                     status
                                 );
-                                // 优雅关闭，不触发崩溃处理，退出检测循环
-                                break;
+                                // 不 break：热更新流程随后启动新 Worker，本循环
+                                // 每轮重新 get_info，自动切换到新 pid 继续监控。
+                                // 此前 break 导致热更新后新 Worker 崩溃无人重启
+                                tokio::time::sleep(Duration::from_millis(500)).await;
+                                continue;
                             } else {
                                 // 异常崩溃
                                 error!(
@@ -121,16 +138,28 @@ impl WorkerCrashDetector {
                                 }
                             }
                         }
-                        Ok(Ok(WaitStatus::Signaled(_pid, sig, _))) => {
-                            // 被信号杀死
+                        Ok(Ok(WaitStatus::Signaled(pid, sig, _))) => {
+                            // 被信号杀死（同 Exited：先做 pid 代际校验）
+                            let current_pid = worker_manager.get_info().await.map(|i| i.pid as i32);
+                            if current_pid != Some(pid.as_raw()) {
+                                debug!(
+                                    "被信号终止的 pid={} 非当前 Worker（current={:?}），忽略",
+                                    pid.as_raw(),
+                                    current_pid
+                                );
+                                tokio::time::sleep(Duration::from_millis(500)).await;
+                                continue;
+                            }
+
                             let is_graceful = worker_manager.is_graceful_shutdown().await;
 
                             if is_graceful {
                                 info!(
-                                    "Worker 被信号终止（优雅关闭）: signal={:?}",
+                                    "Worker 被信号终止（热更新优雅关闭）: signal={:?}，继续监控新 Worker",
                                     sig
                                 );
-                                break;
+                                tokio::time::sleep(Duration::from_millis(500)).await;
+                                continue;
                             } else {
                                 error!(
                                     "Worker 被信号杀死: signal={:?}, 触发自动重启",
@@ -158,8 +187,9 @@ impl WorkerCrashDetector {
                             tokio::time::sleep(Duration::from_millis(500)).await;
                         }
                         Ok(Err(nix::errno::Errno::ECHILD)) => {
-                            // 子进程不存在（可能已被回收或 Worker 未启动）
-                            debug!("waitpid 返回 ECHILD（无子进程），继续监控");
+                            // 子进程不存在（可能已被回收或 Worker 未启动）：
+                            // 空闲态常态路径，静默轮询（此前每 500ms 一条
+                            // debug 日志，长时间空转刷屏，审计 L5）
                             tokio::time::sleep(Duration::from_millis(500)).await;
                         }
                         Ok(Err(e)) => {

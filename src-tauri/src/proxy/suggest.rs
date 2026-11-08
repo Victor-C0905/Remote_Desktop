@@ -525,7 +525,11 @@ async fn request_on_stream<S: AsyncRead + AsyncWrite + Unpin>(
         let mut pos = body_start;
         read_chunked(stream, &mut buf, &mut pos).await?
     } else if let Some(len) = head.content_length {
-        let end = body_start + len as usize;
+        // checked_add：len 来自远端且为 u64，加法溢出会让 end 回绕成
+        // 小值进而 slice 越界 panic（release=abort 全进程崩溃，审计 低-2）
+        let end = body_start
+            .checked_add(len as usize)
+            .ok_or_else(|| "Content-Length 溢出".to_string())?;
         while buf.len() < end {
             read_more(stream, &mut buf).await?;
         }
@@ -662,7 +666,12 @@ async fn read_chunked<S: AsyncRead + Unpin>(
             }
             return Ok(body);
         }
-        if body.len() + size > MAX_BODY {
+        // checked_add 防溢出绕过上限检查（审计 低-2）
+        let total = body
+            .len()
+            .checked_add(size)
+            .ok_or_else(|| "响应体超限".to_string())?;
+        if total > MAX_BODY {
             return Err("响应体超限".to_string());
         }
         let chunk_start = *pos;

@@ -218,11 +218,14 @@ async fn connect_abstract(socket_name: &str) -> Result<UnixStream> {
     let retry_interval = tokio::time::Duration::from_millis(20);
 
     for attempt in 0..max_retries {
-        // 每次重试创建新 socket（旧 socket fd 在 connect 失败后已不可用）
+        // 每次重试创建新 socket（旧 socket fd 在 connect 失败后已不可用）。
+        // SOCK_NONBLOCK：Unix 域 connect 对满 backlog 返回 EAGAIN 而非阻塞——
+        // 阻塞 connect 会卡住 tokio worker（backlog 被占位时尤其如此，审计 L6），
+        // EAGAIN 走下方既有 20ms 重试；SOCK_CLOEXEC 防 fd 泄漏给子进程
         let sock = nix::sys::socket::socket(
             AddressFamily::Unix,
             SockType::Stream,
-            SockFlag::empty(),
+            SockFlag::SOCK_NONBLOCK | SockFlag::SOCK_CLOEXEC,
             None,
         )
         .context("创建 socket 失败")?;

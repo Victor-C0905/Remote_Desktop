@@ -2,7 +2,145 @@
 
 > 面向 AI/Agent 工具的活文档：每次重要迭代后更新，新条目加在最前。
 > 规则见根目录 `AGENTS.md`；图标体系设计详见 `docs/icon-system-proposals.md`。
-> 最后更新：2026-10-29（会话：失焦标题栏透明两连修——漏底收敛令牌 + 关闭态降档实色）
+> 最后更新：2026-11-08（会话：第二轮审计修复全部收尾——中危 28/28、低危 33/39；fix/audit-round1 共 64 提交待 squash）
+
+---
+
+## fix/audit-round1（2026-11-08 · 第二轮全项目安全审计修复 · 待 squash 合入 dev）
+
+**审计报告**：`docs/audits/2026-11-08-audit-report.md`（编号以该报告为准；
+修复提交信息里的「H4」= 报告 H7 审计注入）。分支自 dev 8a90f22 拉出，
+**33 个提交、一个提交一个修复、线性历史**（教训：本轮曾误开四条分支再
+cherry-pick 合并，后续所有修复一律单分支顺序提交）。
+验证基线：agent WSL `cargo test --lib` 166、src-tauri `cargo test --lib` 73、
+前端 tsc 干净 + vitest 529（全绿，2026-11-08）；每提交过 sensitive-logs 钩子。
+
+### 统计
+
+| 级别 | 发现 | 已修 | 未修 |
+|---|---|---|---|
+| 严重 | 1 | 1 | — |
+| 高危 | 7 | 6 | H4（历史密钥，产品决策） |
+| 中危 | 28 | 27 | M25（虚拟化，性能立项）；M10/M12 已收尾（见收尾记录） |
+| 低危 | 39 | 33 | 6 项缓释（清单见下「明确缓释项」） |
+
+### 收尾记录（2026-11-08 同日续，提交 f40464a…a51dc68）
+
+剩余中危 2 项与低危 33 项完成，分支累计 64 提交。映射：
+
+- **中危收尾**：M10 订阅覆盖回收+采集器句柄化 → `f40464a`；
+  M12 SOCKS5 端口默认随机化+风险提示 → `e5c8862`
+- **agent 低危**：L2 → `f144f1a`；L1 → `6fc677c`；L10 → `36872f2`；
+  L5 → `c7f3b75`；L4 → `fe03c5c`；L9 → `880aaef`；L6 → `9b6ab64`；
+  L3 → `bf71adb`；L12 → `7f2a7f9`；L11(Drop wait) → `4f2b6c7`；
+  L8 死代码清理 → `0d0b4fc`（auth/session/orphan_reaper 模块、
+  Manager::run、is_valid_socket_name）
+- **客户端低危**：低-1 → `1eca270`；低-2 → `ff555b9`；低-4 → `3f67a02`；
+  低-7 → `8f4866a`；低-8 → `8ea5e9c`；低-11 → `7d67053`；低-12 → `8818f8e`；
+  低-14 → `6b2aa9c`；低-3 → `d0e2d65`；低-9+低-6 注记 → `ed4d3e4`
+- **前端低危**：L13 → `73f6006`；L7 → `fbef639`；L3+L5+L6（同为一类
+  竞态守卫，合并一提交）→ `5235304`；L8+L9（同为 i18n 化，合并一提交）
+  → `406d3ea`；L12 → `2974749`
+- **部署**：install.sh 0600 + systemd UMask → `a51dc68`
+
+**明确缓释项**（非缺陷消失，是有意不动）：
+- H4 历史密钥：等产品决策（确认无部署后可选 filter-repo）
+- agent L7：fork 后 Command::output 的 malloc 死锁窗口——修复需重构
+  登录环境加载为预 spawn 方案，风险大于收益，记录待议
+- client 低-5（App.tsx 孤儿回收 300ms 防抖窄竞态）与低-13（SW_HIDE
+  任务栏改 ABM_SETSTATE）：行为级改动需真机验证，单独排期
+- frontend L4（useSubscription 死代码 hooks）与 L10（MutationObserver
+  成本）：L4 启用前必修；L10 属性能调优，随 M25 虚拟化一并立项
+
+### 修复映射（报告编号 → 提交，fix/audit-round1）
+
+- **严重**：S1 TLS 签名跳过 → `0bc96ee`
+- **高危**：H1 认证前无超时 → `5e05770`；H2① Session socket → `24185f5`；
+  H2② Manager IPC → `c4530c0`；H2③ fd 清理+dumpable → `c575dc1`；
+  H3 元数据拦截 → `db562cd`；H5 下载损坏 → `54cc48f`；H6 私钥日志 → `8800276`；
+  H7 审计注入 → `56d1088`
+- **agent 中危**：M1 → `70f75c7`；M2 → `6a300c2`；M3 → `a44054e`；
+  M4+M5（stop 超时 + detector 代际校验，同提交）→ `69bb807`；M6 → `b846cb9`；
+  M7 → `784f8af`；M8 → `21c405d`；M9 → `5a77fa7`
+- **客户端中危**：M11 → `c524306`；M13 → `2b4eedb`；M14 → `a7f6bbf`；
+  M15 → `1c077e4`；M16 → `6a25ab2`；M17 → `5a47fab`；M18 → `9d16ce5`；
+  M19 → `30b27e7`
+- **前端中危**：M20 → `083cb74`；M21 → `94497e8`；M22 → `b07f38b`；
+  M23 → `3c09d6a`；M24 → `e6283b8`；M26 → `3fa853b`；M27 → `b79a853`；
+  M28 → `ba725ea`
+
+### 剩余工作清单（后续 agent 从这里接手）
+
+**待产品决策**：
+- H4 历史密钥泄漏：确认无服务器仍用历史 blob 4feda9a0 的密钥 → 可选
+  `git filter-repo` 重写历史；部署文档注明该密钥作废。
+
+**中危 3 项**：
+- M10 订阅计数泄漏：`agent/src/subscription.rs:46-48` subscribe 覆盖不回收
+  type_counts → 采集器泄漏常驻；`collectors/metrics.rs:27-72` start 无防重入、
+  stop 后立即 start 双任务双倍采集。
+- M12 SOCKS5 本地无认证：`src-tauri/src/proxy/socks5.rs:21-31`（设计约束：
+  浏览器不支持认证）——最低限度固定端口模式文档化 + 默认随机端口。
+- M25 列表虚拟化：`src/apps/FileManager.tsx:2457+` 文件/进程列表无虚拟化 +
+  `selected.includes` O(n·m)，建议独立性能立项。
+
+**低危 39 项**（编号沿用各分报告）：
+- agent 基础设施（12）：
+  - L1 审计文件 0644（umask 决定）、write_all 失败静默、logrotate 后 fd 不 reopen
+  - L2 `cert.rs:42-47` 已存在旧私钥不收紧权限
+  - L3 `manager/pty_output.rs:134` 批量条件恒真退化逐帧 flush（性能）
+  - L4 resize cols/rows `u32 as u16` 截断（`manager/mod.rs:309`、`session_process.rs:464`）
+  - L5 crash_detector ECHILD 每 500ms debug 噪音（restart_count 清零已由 30b27e7 修复）
+  - L6 `manager/session_connection.rs:220` connect 用阻塞 socket，建议 SOCK_NONBLOCK
+  - L7 `session_process.rs:121` fork 后 Command::output 的 malloc 死锁窗口 + 每会话跑登录 shell 开销
+  - L8 死代码群：`manager/auth.rs` 空文件、`Manager::run` 无调用方、orphan_reaper
+    零调用、`is_valid_socket_name` 零调用、ReloadTrigger::ClientCommand 等
+    无生产者（blocked_commands 已由 21c405d 移除）
+  - L9 `manager/connection.rs:113` register_session 检查（读锁）→写入（写锁）非原子
+  - L10 `collectors/metrics.rs:68` serde_json::to_value unwrap
+  - L11 `worker_manager.rs:183` Worker spawn 不清理环境变量；Drop kill 不 wait
+  - L12 `diff.rs:66-92` Delete/Replace 不校验 old_content，过期 diff 静默错位
+- src-tauri（14）：
+  - 低-1 `credentials.rs:150` credential_delete_all 吞删除失败
+  - 低-2 `proxy/suggest.rs:527,654` HTTP 定界 body_start+len 整数溢出（checked_add）
+  - 低-3 `lib.rs:275-356` 死代码本地 PTY（阻塞读+锁跨阻塞）仍注册 invoke_handler
+  - 低-4 `transfer.rs:379` create_task 时间戳 unwrap（应 unwrap_or_default）
+  - 低-5 `src/App.tsx:17-30` 孤儿回收与 300ms 快照防抖窄竞态（beforeunload flush）
+  - 低-6 `lib.rs:1117` 非 Windows transparent(true) 与 §6 字面冲突
+  - 低-7 `lib.rs:1111` debug 构建 CDP 9222 固定端口（随机端口/开关）
+  - 低-8 `ui_logging.rs:17` 前端日志桥接可伪造日志行（加不可仿造标记）
+  - 低-9 `lib.rs:488-597` 本地文件命令无路径边界（CSP 下可接受，保持关注）
+  - 低-10 `capabilities/default.json:6` store 插件全权限（收紧到 quirel-* 专名）
+  - 低-11 `transfer.rs:185` DefaultHasher 跨版本稳定性不保证（换 SHA-256 或 manifest）
+  - 低-12 `proxy/browser_window.rs:773` RECT 坐标 i32 加法溢出（saturating_add）
+  - 低-13 `fullscreen.rs:238` SW_HIDE 任务栏，进程崩溃不还原（改 ABM_SETSTATE）
+  - 低-14 `connection.rs:45` Credentials derive(Debug)（手写脱敏 Debug）
+- 前端（11）：
+  - L3 `FileManager.tsx:655` fetchSuggestions 无竞态守卫
+  - L4 `hooks/useSubscription.ts:69` 变体 hooks 不稳定 types 数组（死代码，启用即故障）
+  - L5 `SystemMonitor.tsx:223` hasReceivedData 过期闭包（改 ref）
+  - L6 `useArchiveListing.ts:45` refresh 无 epoch
+  - L7 `FileManager.tsx:1862` 卸载未清 clickTimerRef
+  - L8 硬编码 "zh-CN" locale 四处（FileManager×2/serversStore/Desktop）
+  - L9 硬编码中文通知（credentials.ts×2、WallpaperContext.tsx）
+  - L10 `BrowserApp.tsx:272` 全局 MutationObserver 全文档 querySelector 成本
+  - L11 `BrowserNavbar.tsx:113` 地址栏前端协议白名单纵深
+  - L12 `FileManager.tsx:971` 路径导航双重请求
+  - L13 `BrowserApp.tsx:187` 诊断探针生产落盘 client.log（移除或降 debug）
+- 部署（2）：
+  - install.sh 配置文件 0644（含 limits，影响小，建议 0600）
+  - systemd 单元补 `UMask=0022`（IPC socket 权限纵深，d80154d 已加显式 chmod）
+
+### 验证与合并约定（后续 agent 必读）
+
+- agent 侧改动一律在 WSL 验证：`wsl -e bash -lc "cd /mnt/e/MyWork/Quirel/agent && cargo check --lib && cargo test --lib"`
+  （Windows host 的 cargo check 不编译 cfg(unix) 代码，验不到关键路径）
+- 每提交一个修复，`type(scope): 中文简述`；提交前 sensitive-logs 钩子自动跑
+- 客户端/前端：`npx tsc --noEmit` + `npx vitest run`；src-tauri：`cargo test --lib`（在 src-tauri/ 下）
+- 合并由用户执行：`git checkout dev && git merge --squash fix/audit-round1 && git commit`，
+  建议信息 `fix: 安全审计第二轮修复——传输认证、会话隔离、竞态与资源泄漏全链路加固`
+- 合并后 agent 侧真机冒烟：`systemctl stop quireld`（看优雅关闭日志）、
+  `kill -HUP` 热更新后 kill Worker（看自动重启）、终端开合/断连重连
 
 ---
 

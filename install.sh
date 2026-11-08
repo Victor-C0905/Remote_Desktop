@@ -16,10 +16,10 @@ echo "安装二进制文件..."
 cp target/release/quireld /usr/local/bin/
 chmod 755 /usr/local/bin/quireld
 
-# 3. 复制配置文件
+# 3. 复制配置文件（0600：配置含端口与路径等部署信息，仅 root 可读）
 echo "安装配置文件..."
 cp quireld.toml /etc/quireld/
-chmod 644 /etc/quireld/quireld.toml
+chmod 600 /etc/quireld/quireld.toml
 
 # 4. 生成自签名证书
 if [ ! -f /etc/quireld/cert.pem ]; then

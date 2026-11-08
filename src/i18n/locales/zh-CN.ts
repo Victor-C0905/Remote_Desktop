@@ -108,7 +108,6 @@ const zhCN = {
   },
   errors: {
     auth: {
-      keyringUnavailableError: '系统凭据库不可用，无法保存密码/私钥。请重启应用或检查系统凭据服务后重试',
     missingCredentials: { title: '缺少登录信息', message: '未提供所需的登录凭据', action: '请补全服务器登录配置' },
       invalidKeyFormat: { title: '密钥格式不支持', message: '该密钥文件的格式不受支持', action: '请使用 OpenSSH 格式的密钥文件' },
       keyParseFailed: { title: '密钥无法读取', message: '密钥文件无法解析，可能已损坏或密码错误', action: '请确认密钥文件与密码' },
@@ -180,7 +179,26 @@ const zhCN = {
     actionPrefix: '建议',
     othersConnected: 'ℹ️ 其他 {{count}} 台服务器连接正常，仅此台无法连接\n可能是本机与该服务器之间的网络问题，建议更换网络环境后重试',
   },
+  notify: {
+  keyringUnavailableTitle: "系统凭据库不可用",
+  keyringUnavailableAction: "服务器密码/私钥将无法保存。请重启应用或检查系统凭据服务后重试",
+  keyringSetFailedTitle: "凭据安全存储失败",
+  keyringSetFailedAction: "凭据未能写入系统凭据库，本次编辑不会保存到磁盘；若刚更新过应用，请完全重启后重新保存服务器",
+  wallpaperImportFailedTitle: "壁纸导入失败",
+  wallpaperImportFailedAction: "请确认图片为 png/jpg/webp 且不超过 32MB；若刚更新过应用，请完全重启后再试",
+  sourceCredentials: "凭据",
+  sourceSettings: "设置",
+    uploadFinishedTitle: '上传完成',
+    downloadFinishedTitle: '下载完成',
+    uploadDone: '{{name}} 上传完成',
+    downloadDone: '{{name}} 下载完成',
+    retryFailedTitle: '重新发起传输失败',
+    retryFailedBody: '「{{name}}」重新发起失败，请切回对应服务器后手动重试。',
+    retryFailedAction: '可重新下载该文件',
+  },
   settings: {
+    // 系统凭据库不可用时的表单错误（自 errors.auth 迁移至实际引用的 settings 命名空间）
+    keyringUnavailableError: '系统凭据库不可用，无法保存密码/私钥。请重启应用或检查系统凭据服务后重试',
     section: {
       connection: '连接',
       appearance: '外观',
@@ -305,6 +323,7 @@ const zhCN = {
     // 浏览器分区
     browserTitle: '浏览器设置',
     socks5Port: 'SOCKS5 端口',
+    socks5PortHint: '0 = 每次随机端口（推荐）。本地代理监听 127.0.0.1 且无认证，本机任意程序都可借用；固定端口长期不变、更易被恶意程序探测占用',
     systemBrowser: '系统浏览器',
     browserAuto: '自动探测（Edge → Chrome → Firefox）',
     builtInBrowserTitle: '内置浏览器',
@@ -542,15 +561,6 @@ const zhCN = {
       minutesOnly: '{{m}}分',
       hours: '{{h}}小时{{m}}分',
       hoursOnly: '{{h}}小时',
-    },
-    notify: {
-      uploadFinishedTitle: '上传完成',
-      downloadFinishedTitle: '下载完成',
-      uploadDone: '{{name}} 上传完成',
-      downloadDone: '{{name}} 下载完成',
-      retryFailedTitle: '重新发起传输失败',
-      retryFailedBody: '「{{name}}」重新发起失败，请切回对应服务器后手动重试。',
-      retryFailedAction: '可重新下载该文件',
     },
     limit: {
       title: '传输设置',
@@ -825,6 +835,7 @@ const zhCN = {
     copyPageUrl: '复制页面地址',
     ctxDuplicate: '重复标签页',
     ctxReopenClosed: '重新打开已关闭的标签页',
+    ctxOpenLinkNewTab: '在新标签页中打开链接',
     open: '打开',
     addBookmark: '添加书签',
     removeBookmark: '移除书签',

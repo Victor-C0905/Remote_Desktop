@@ -166,16 +166,8 @@ async fn write_frame(send: &mut quinn::SendStream, data: &[u8]) -> Result<(), St
 }
 
 async fn read_frame(recv: &mut quinn::RecvStream) -> Result<Option<Vec<u8>>, String> {
-    let mut len_buf = [0u8; 4];
-    match recv.read_exact(&mut len_buf).await {
-        Ok(()) => {}
-        Err(quinn::ReadExactError::FinishedEarly(_)) => return Ok(None),
-        Err(e) => return Err(format!("读帧头失败: {}", e)),
-    }
-    let len = u32::from_le_bytes(len_buf) as usize;
-    let mut data = vec![0u8; len];
-    recv.read_exact(&mut data).await.map_err(|e| format!("读帧失败: {}", e))?;
-    Ok(Some(data))
+    // 长度前缀封顶校验（net_frame），防恶意/失步对端触发超大分配
+    crate::net_frame::read_len_prefixed(recv).await
 }
 
 /// 单条 SOCKS5 连接的处理：握手 → 开 QUIC 代理流 → 双向透传
@@ -494,6 +486,11 @@ fn default_home_url(app: &AppHandle, server_id: &str) -> String {
 }
 
 /// 启动代理会话：SOCKS5 监听（支持固定端口）+ 内置浏览器
+///
+/// 端口策略（审计 M12）：port=None/0 → 系统随机分配（默认，settingsStore
+/// 旧默认 1080 已迁移为随机）；固定端口为显式选择——本机任意进程可
+/// 免认证借用隧道（127.0.0.1 + 浏览器不支持 SOCKS 认证），随机端口
+/// 缩小可预测性，详见 socks5::socks5_greeting 的信任模型说明。
 ///
 /// 会话状态机：
 /// - 无会话 → 全新启动（绑端口 + 创建 host）

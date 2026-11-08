@@ -97,8 +97,10 @@ const DEFAULT_SETTINGS: SettingsState = {
   // 后台标签睡眠超时（对齐 Edge sleeping tabs 的默认量级）
   browserSleepMinutes: 120,
 
-  // SOCKS5 固定端口（SOCKS 惯用端口；被占用时可在设置中更换）
-  browserProxyPort: 1080,
+  // SOCKS5 监听端口（0 = 系统随机分配，默认）。SOCKS5 本地监听无认证
+  // （浏览器握手约束），固定端口长期可预测、易被本机恶意进程探测借用
+  // （审计 M12）——默认随机，固定端口改为显式选择并在设置页提示风险
+  browserProxyPort: 0,
 
   // 系统浏览器选择：auto = 按候选顺序自动探测（Edge → Chrome → Firefox）
   browserId: "auto",
@@ -198,6 +200,17 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
     }),
     {
       name: "quirel-settings",
+      version: 1,
+      // v0→v1：browserProxyPort 旧默认 1080（固定端口）转为 0（随机）。
+      // 旧默认不是用户的主动选择，统一转随机并在设置页提示风险；
+      // 迁移后仍为 1080 的唯一途径是用户重新显式设置
+      migrate: (persisted: unknown) => {
+        const s = (persisted ?? {}) as Record<string, unknown>;
+        if (s.browserProxyPort === 1080) {
+          s.browserProxyPort = 0;
+        }
+        return s as never;
+      },
       storage: createJSONStorage(() => settingsStorage),
       // 初始化时应用设置到 DOM（在 React 渲染前提供正确的初始值，避免闪烁）
       onRehydrateStorage: () => (state) => {

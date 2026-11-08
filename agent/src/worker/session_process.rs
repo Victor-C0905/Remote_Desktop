@@ -20,7 +20,7 @@ use nix::libc::{ioctl, winsize, TIOCSCTTY, TIOCSWINSZ};
 use nix::pty::openpty;
 use nix::sys::socket::{accept, bind, listen, AddressFamily, Backlog, SockFlag, SockType};
 use nix::sys::socket::UnixAddr;
-use nix::unistd::{close, dup2, execvp, fork, setsid, ForkResult};
+use nix::unistd::{close, dup2, execvp, fork, getuid, setsid, ForkResult};
 
 use super::session_protocol::{
     msg_type, FRAME_HEADER_SIZE, MAX_FRAME_DATA_SIZE, RECONNECT_TIMEOUT_SECS,
@@ -95,6 +95,10 @@ pub fn create_session(params: SessionParams) -> Result<SessionCreatedInfo> {
             let master_fd = pty.master.into_raw_fd();
             let slave_fd = pty.slave.into_raw_fd();
 
+            // 清理继承 fd：Session 进程不应持有 Worker 侧的任何描述符
+            // （IPC UnixStream 等），降权后持 root 侧 fd 即攻击面
+            unsafe { close_inherited_fds(master_fd, slave_fd); }
+
             // 注意: fork 后 tokio runtime 已损坏，不能用 tracing
             if let Err(e) = run_session_process(params, master_fd, slave_fd) {
                 eprintln!("Session 进程错误: {}", e);
@@ -103,6 +107,27 @@ pub fn create_session(params: SessionParams) -> Result<SessionCreatedInfo> {
             std::process::exit(0);
         }
         Err(e) => Err(anyhow!("fork 失败: {}", e)),
+    }
+}
+
+/// fork 后清理继承自 Worker 的全部描述符（仅保留 stdio 与 PTY 对）
+///
+/// Session 进程 fork 自多线程的 Worker（tokio runtime）且从不 exec——
+/// Worker 的全部继承 fd（IPC UnixStream 等 root 侧描述符）被原样带入，
+/// 降权后仍然持有。这些 fd 对同 uid 用户存在两条利用路径（2026-11 审计
+/// H2）：ptrace 自家进程取 fd（yama=0 时跨用户读写他人流量）、
+/// /proc/<pid>/fd 窃取。本函数关闭 1024 以内的全部继承 fd；
+/// 更高编号的 fd 与 ptrace 路径由降权后的 PR_SET_DUMPABLE(0) 兜底
+/// （见 run_session_process）。
+///
+/// 关闭顺序先于 setuid（子进程尚未执行任何可能打开新 fd 的逻辑），
+/// close 的 EBADF（本就未打开）直接忽略。
+unsafe fn close_inherited_fds(master_fd: RawFd, slave_fd: RawFd) {
+    for fd in 3..1024 {
+        if fd == master_fd || fd == slave_fd {
+            continue;
+        }
+        libc::close(fd);
     }
 }
 
@@ -184,6 +209,14 @@ fn run_session_process(params: SessionParams, master_fd: RawFd, slave_fd: RawFd)
         if ret != 0 {
             eprintln!("setuid 失败: {}", std::io::Error::last_os_error());
             std::process::exit(1);
+        }
+
+        // 降权后不可被同 uid 用户 ptrace，/proc/<pid>/fd 亦回归 root 属主
+        // 不可读——封死「借 Session 进程持有 Worker fd 窃取/伪造他人流量」
+        // 的利用路径（yama 配置不依赖，2026-11 审计 H2）。
+        // 用户自己的 bash 是 exec 出来的新进程，dumpable 自动恢复，无感。
+        unsafe {
+            libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0);
         }
     }
 
@@ -322,6 +355,27 @@ fn create_abstract_socket(socket_name: &str) -> Result<RawFd> {
     Ok(fd.into_raw_fd())
 }
 
+/// 校验新接受的连接对端是否为 Manager
+///
+/// - Manager 以 root 运行时对端 uid == 0；
+/// - quireld 以非 root 运行（开发模式）时 session 进程 setuid 失败
+///   保持自身 uid，此时 Manager 与 session 同 uid。
+///
+/// abstract socket 名可被任意本地用户经 /proc/net/unix 枚举且 accept
+/// 谁先连上谁赢，不校验对端则终端会话可被第三方接入（2026-11 审计 H2）。
+fn verify_peer_is_manager(conn_fd: RawFd) -> bool {
+    use nix::sys::socket::{getsockopt, sockopt};
+    let own_uid = getuid().as_raw();
+    let borrowed = unsafe { BorrowedFd::borrow_raw(conn_fd) };
+    match getsockopt(&borrowed, sockopt::PeerCredentials) {
+        Ok(creds) => creds.uid() == 0 || creds.uid() == own_uid,
+        Err(e) => {
+            eprintln!("获取对端凭据失败，拒绝连接: {}", e);
+            false
+        }
+    }
+}
+
 /// Session I/O 中继主循环（单线程 poll 事件循环）
 ///
 /// 监听:
@@ -363,6 +417,21 @@ fn session_io_loop(master_fd: RawFd, sock_fd: RawFd, bash_pid: i32, session_id: 
                 }
             }
         };
+
+        // === 对端身份校验 ===
+        // abstract socket 名可被任意本地用户经 /proc/net/unix 枚举，且
+        // accept 谁先连上谁赢——不校验对端则攻击者可抢先接入，窃听/注入
+        // 终端 I/O，Manager 断线重连窗口期尤甚（2026-11 审计 H2）。
+        // 规则：Manager 以 root 运行 → 对端 uid == 0；quireld 非 root
+        // 运行（开发模式）时 session 未降权、与 Manager 同 uid。
+        if !verify_peer_is_manager(conn_fd) {
+            eprintln!(
+                "拒绝非授权连接（uid 校验失败）: session_id={}",
+                session_id
+            );
+            let _ = close(conn_fd);
+            continue;
+        }
 
         // 发送 Hello 验证
         if send_frame(conn_fd, msg_type::HELLO, session_id.as_bytes()).is_err() {
@@ -461,9 +530,10 @@ fn session_io_loop(master_fd: RawFd, sock_fd: RawFd, bash_pid: i32, session_id: 
                                 let rows = u32::from_be_bytes([
                                     data[4], data[5], data[6], data[7],
                                 ]);
+                                // 钳制而非截断（审计 L4）
                                 let ws = winsize {
-                                    ws_row: rows as u16,
-                                    ws_col: cols as u16,
+                                    ws_row: rows.min(u16::MAX as u32) as u16,
+                                    ws_col: cols.min(u16::MAX as u32) as u16,
                                     ws_xpixel: 0,
                                     ws_ypixel: 0,
                                 };

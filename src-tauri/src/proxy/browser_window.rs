@@ -770,7 +770,15 @@ impl RuntimeState {
                 if self.page_fullscreen {
                     return;
                 }
-                self.rect = RECT { left: x, top: y, right: x + w, bottom: y + h };
+                // saturating_add：x/w 经 DPI 换算后相加可溢出 i32，
+                // debug panic 静默杀 runtime 线程、release 回绕出错乱
+                // RECT（审计 低-12）
+                self.rect = RECT {
+                    left: x,
+                    top: y,
+                    right: x.saturating_add(w),
+                    bottom: y.saturating_add(h),
+                };
                 // info 级：bounds 是否到达并应用是"webview 不铺满/占位常显"
                 // 问题的关键证据链一环（与 SetVisible 同理，此前不可观测）
                 tracing::info!(
