@@ -65,3 +65,22 @@ describe("写入保护", () => {
     expect(block?.version).toBe(1);
   });
 });
+
+describe("quirel-settings 版本升级（M12 回归）", () => {
+  it("v0 文件在期望 v1 下放行（交给 persist migrate）", () => {
+    const v0 = { state: { browserProxyPort: 1080 }, version: 0 };
+    expect(evaluatePersistedValue(v0, 1)).toEqual({ ok: true });
+  });
+
+  it("v1 文件在期望 v1 下放行（不再误报 newer-version 阻断）", () => {
+    const v1 = { state: { browserProxyPort: 0 }, version: 1 };
+    expect(evaluatePersistedValue(v1, 1)).toEqual({ ok: true });
+  });
+
+  it("v2 文件（未来版本）仍然阻断保护", () => {
+    const v2 = { state: {}, version: 2 };
+    const r = evaluatePersistedValue(v2, 1);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("newer-version");
+  });
+});

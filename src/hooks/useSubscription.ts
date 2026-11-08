@@ -94,9 +94,11 @@ export function useFileChangesSubscription(
   recursive: boolean,
   onFileChange: (data: any) => void
 ) {
-  const types: SubscriptionType[] = [
+  // types 稳定化（审计 L4）：裸数组每次渲染新建，effect deps 含 types
+  // 会每渲染 unsubscribe→subscribe 循环
+  const types = useMemo<SubscriptionType[]>(() => [
     { type: 'file_changes', params: { path, recursive } },
-  ];
+  ], [path, recursive]);
 
   const handleEvent = useCallback((event: SubscriptionEvent) => {
     if (event.event_type === 'file_changes') {
@@ -112,9 +114,9 @@ export function useProcessEventsSubscription(
   serverId: string | null,
   onProcessEvent: (data: any) => void
 ) {
-  const types: SubscriptionType[] = [
+  const types = useMemo<SubscriptionType[]>(() => [
     { type: 'process_events', params: { interval_secs: 2 } },
-  ];
+  ], []);
 
   const handleEvent = useCallback((event: SubscriptionEvent) => {
     if (event.event_type === 'process_events') {
@@ -132,9 +134,9 @@ export function useAppLogsSubscription(
   level: string | undefined,
   onLog: (data: any) => void
 ) {
-  const types: SubscriptionType[] = [
+  const types = useMemo<SubscriptionType[]>(() => [
     { type: 'app_logs', params: { app_name: appName, level } },
-  ];
+  ], [appName, level]);
 
   const handleEvent = useCallback((event: SubscriptionEvent) => {
     if (event.event_type === 'app_logs') {
@@ -151,9 +153,9 @@ export function useServiceStatusSubscription(
   service: string,
   onStatusChange: (data: any) => void
 ) {
-  const types: SubscriptionType[] = [
+  const types = useMemo<SubscriptionType[]>(() => [
     { type: 'service_status', params: { service, interval_secs: 5 } },
-  ];
+  ], [service]);
 
   const handleEvent = useCallback((event: SubscriptionEvent) => {
     if (event.event_type === 'service_status') {

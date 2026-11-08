@@ -248,6 +248,7 @@ pub async fn run(
     audit_log: Arc<AuditLogger>,
     #[cfg(unix)]
     manager: Arc<crate::manager::Manager>,
+    mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
 ) -> Result<()> {
     let addr = format!("{}:{}", cfg.server.bind, cfg.server.quic_port);
     tracing::info!("🔵 QUIC 服务器监听: {}", addr);
@@ -342,7 +343,61 @@ pub async fn run(
         }
     });
 
-    while let Some(incoming) = endpoint.accept().await {
+    loop {
+        tokio::select! {
+            // 优雅关闭：向所有活动连接广播 CONNECTION_CLOSE（客户端即时
+            // 收到关闭而非等 idle 超时——此前 endpoint 静默 drop，客户端
+            // 30s 才发现服务端没了，探针实测）
+            _ = shutdown_rx.changed() => {
+                tracing::info!("收到优雅关闭信号，关闭所有 QUIC 连接");
+                endpoint.close(0u32.into(), b"server shutting down");
+                break;
+            }
+            incoming = endpoint.accept() => {
+                let Some(incoming) = incoming else { break };
+                accept_one(
+                    incoming, &unauth_connections,
+                    &cfg, &subscription_manager, &event_bus, &authenticator,
+                    &audit_log, &rate_limiter, &challenge_manager, &stats_manager,
+                    idle_timeout_secs, #[cfg(unix)] &manager,
+                ).await;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// 接受单个入站连接（含未认证并发闸；从 accept 循环拆出供 select 复用）
+#[allow(clippy::too_many_arguments)]
+async fn accept_one(
+    incoming: quinn::Incoming,
+    unauth_connections: &Arc<AtomicUsize>,
+    cfg: &AgentConfig,
+    subscription_manager: &Arc<SubscriptionManager>,
+    event_bus: &Arc<EventBus>,
+    authenticator: &Arc<CompositeAuthenticator>,
+    audit_log: &Arc<AuditLogger>,
+    rate_limiter: &Arc<AuthRateLimiter>,
+    challenge_manager: &Arc<ChallengeManager>,
+    stats_manager: &Arc<StatsManager>,
+    idle_timeout_secs: u64,
+    #[cfg(unix)] manager: &Arc<crate::manager::Manager>,
+) {
+    let cfg = cfg.clone();
+    let subscription_manager = subscription_manager.clone();
+    let event_bus = event_bus.clone();
+    let authenticator = authenticator.clone();
+    let audit_log = audit_log.clone();
+    let rate_limiter = rate_limiter.clone();
+    let challenge_manager = challenge_manager.clone();
+    let stats_manager = stats_manager.clone();
+    let timeout_secs = idle_timeout_secs;
+    #[cfg(unix)]
+    let manager = manager.clone();
+    let unauth_connections = unauth_connections.clone();
+
+    tokio::spawn(async move {
         // 未认证并发闸：超过上限直接丢弃握手（不 accept、不分配连接资源，
         // 对端可重试）。守卫在认证完成后释放
         if unauth_connections.fetch_add(1, Ordering::SeqCst) >= MAX_UNAUTHENTICATED_CONNECTIONS {
@@ -353,7 +408,7 @@ pub async fn run(
                 incoming.remote_address()
             );
             drop(incoming);
-            continue;
+            return;
         }
         let unauth_guard = UnauthConnGuard {
             counter: unauth_connections.clone(),
@@ -397,9 +452,7 @@ pub async fn run(
                 }
             }
         });
-    }
-
-    Ok(())
+    });
 }
 
 fn build_server_config(

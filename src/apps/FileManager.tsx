@@ -5,6 +5,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open, save, ask } from "@tauri-apps/plugin-dialog";
 import { useServerManager } from "../context/ServerManager";
 import i18n from "../i18n";
+import { useVirtualWindow } from "./useVirtual";
 import { PLACEHOLDER } from "../utils/offlineDefaults";
 import { useWindowManager, useWindowState } from "../window-system/WindowManagerContext";
 import { AppLayout } from "../components/app-shell";
@@ -24,7 +25,7 @@ import type { FileEntry } from './fileTypes';
 import { rangeSelection, toggleSelection, entryName } from './fileSelection';
 import { useFileTransfer } from './useFileTransfer';
 import { applyBrowseChanges, applySearchChanges, type FileViewChange } from './fileMutations';
-import { useMarquee } from './useMarquee';
+import { useMarquee, type EntryBox } from './useMarquee';
 import { ConfirmDialog } from "../components/Dialog/ConfirmDialog";
 import { Dialog } from "../components/Dialog/Dialog";
 import { useTranslation } from "react-i18next";
@@ -1161,10 +1162,102 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     [visibleEntries, entryFullPath]
   );
 
+  // 选中集合（渲染热路径判定 O(1)）：大目录下每行 .includes 是 O(n·m)
+  // （审计 M25）
+  const selectedSet = useMemo(() => new Set(selected), [selected]);
+
+  // 滚动容器 refs（虚拟窗口化的滚动源，审计 M25）
+  const listContentRef = useRef<HTMLDivElement>(null);
+  const gridRef = useRef<HTMLDivElement>(null);
+  // 行高实测（首行 offsetHeight；未测得前用经验默认）
+  const [listRowH, setListRowH] = useState(32);
+  const [gridItemH, setGridItemH] = useState(64);
+
+  // ── 列表视图窗口化（审计 M25）──────────────────────────
+  const listWin = useVirtualWindow({
+    scrollRef: listContentRef,
+    itemCount: visibleEntries.length,
+    itemHeight: listRowH,
+    enabled: viewMode === "list",
+  });
+
+  // ── 网格视图窗口化（审计 M25）：按「行」开窗（行 = cols 个卡片）────
+  // 列数与轨道宽取自浏览器解析的 grid-template-columns（auto-fill 精确值）
+  const [gridCols, setGridCols] = useState(0);
+  const [gridTrackW, setGridTrackW] = useState<number[]>([]);
+  useEffect(() => {
+    if (viewMode !== "grid") return;
+    const cont = gridRef.current;
+    if (!cont) return;
+    const tracks = getComputedStyle(cont).gridTemplateColumns.split(" ").filter(Boolean);
+    const widths = tracks.map((s) => parseFloat(s) || 0);
+    if (widths.length > 0 && widths.length !== gridCols) {
+      setGridCols(widths.length);
+      setGridTrackW(widths);
+    }
+  }, [viewMode, gridCols]); // 依赖 viewport 变化由浏览器样式重算触发，此处宽松即可
+
+  const gridRows = gridCols > 0 ? Math.ceil(visibleEntries.length / gridCols) : 0;
+  const gridWin = useVirtualWindow({
+    scrollRef: gridRef,
+    itemCount: gridRows,
+    itemHeight: gridItemH + 8, // 行高含 gap（8px）
+    enabled: viewMode === "grid" && gridCols > 0 && gridItemH > 0,
+  });
+
+  // 行高实测：首行 offsetHeight（行高由字体/内距决定，写死会漂）
+  useEffect(() => {
+    if (viewMode !== "list") return;
+    const el = listContentRef.current?.querySelector<HTMLElement>(".fm-list-row");
+    if (el && el.offsetHeight > 0 && el.offsetHeight !== listRowH) {
+      setListRowH(el.offsetHeight);
+    }
+  }, [viewMode, listRowH, visibleEntries.length]);
+  useEffect(() => {
+    if (viewMode !== "grid") return;
+    const el = gridRef.current?.querySelector<HTMLElement>(".fm-grid-item");
+    if (el && el.offsetHeight > 0 && el.offsetHeight !== gridItemH) {
+      setGridItemH(el.offsetHeight);
+    }
+  }, [viewMode, gridItemH, visibleEntries.length]);
+
+  // 展开窗口：内联重命名的行强制挂载（否则滚出视口时编辑输入框卸载、
+  // 重命名丢失）
+  const editingIdx = editingEntry
+    ? visibleEntries.findIndex((e) => e.name === editingEntry.name && e.path === editingEntry.path)
+    : -1;
+  let winStart = listWin.start;
+  let winEnd = listWin.end;
+  if (viewMode === "list" && editingIdx >= 0) {
+    if (editingIdx < winStart) winStart = editingIdx;
+    if (editingIdx >= winEnd) winEnd = editingIdx + 1;
+  }
+  const padTop = winStart * listRowH;
+  const padBottom = Math.max(0, visibleEntries.length - winEnd) * listRowH;
+  const windowedEntries =
+    viewMode === "list" ? visibleEntries.slice(winStart, winEnd) : visibleEntries;
+
+  // 网格窗口（条目区间 = 行区间 × cols，含编辑行扩展）
+  let gStartRow = gridWin.start;
+  let gEndRow = gridWin.end;
+  if (viewMode === "grid" && editingIdx >= 0 && gridCols > 0) {
+    const er = Math.floor(editingIdx / gridCols);
+    if (er < gStartRow) gStartRow = er;
+    if (er >= gEndRow) gEndRow = er + 1;
+  }
+  const gStart = gStartRow * gridCols;
+  const gEnd = Math.min(visibleEntries.length, gEndRow * gridCols);
+  const GAP = 8;
+  const gPadTop = gStartRow > 0 ? gStartRow * (gridItemH + GAP) - GAP : 0;
+  const gPadBottom =
+    gEndRow < gridRows ? (gridRows - gEndRow) * (gridItemH + GAP) - GAP : 0;
+  const windowedGridEntries =
+    viewMode === "grid" ? visibleEntries.slice(gStart, gEnd) : visibleEntries;
+
   /** 选中条目对象（可见交集）：右键批量菜单的操作对象——被筛选掉的选中项不参与 */
   const selectedEntries = useMemo(
-    () => visibleEntries.filter((e) => selected.includes(entryFullPath(e))),
-    [visibleEntries, selected, entryFullPath]
+    () => visibleEntries.filter((e) => selectedSet.has(entryFullPath(e))),
+    [visibleEntries, selectedSet, entryFullPath]
   );
 
   /** 搜索命中的相对目录展示：path 去掉 root 前缀与末段名称（root 直下命中不显示） */
@@ -1851,12 +1944,12 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     e.stopPropagation();
 
     const path = entryFullPath(entry);
-    if (selected.includes(path)) {
+    if (selectedSet.has(path)) {
       setContextMenu({ x: e.clientX + 3, y: e.clientY + 3, targets: selectedEntries });
     } else {
       setContextMenu({ x: e.clientX + 3, y: e.clientY + 3, targets: null });
     }
-  }, [selected, selectedEntries, entryFullPath]);
+  }, [selectedSet, selectedEntries, entryFullPath]);
 
   // 空白区域右键菜单
   const handleEmptyContextMenu = useCallback((e: React.MouseEvent) => {
@@ -1865,10 +1958,52 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   }, []);
 
   // 框选（marquee）状态机：按下→追踪→命中检测→抬起，Ctrl/⌘ 反选在内
+  // 框选条目盒提供者（审计 M25）：虚拟化下未挂载行不在 DOM——列表按
+  // 行高几何计算全量矩形（含滚出视口的行，框选跨屏滚动也正确）；
+  // 网格暂回退 DOM 查询（其窗口化接入后切换几何）
+  const marqueeRectsProvider = useCallback((): EntryBox[] | null => {
+    if (viewMode === "list" && listRowH > 0) {
+      const cont = listContentRef.current;
+      if (!cont) return null;
+      const crect = cont.getBoundingClientRect();
+      return visibleEntries.map((e) => ({
+        path: entryFullPath(e),
+        rect: {
+          left: crect.left,
+          right: crect.right,
+          top: crect.top + visibleEntries.indexOf(e) * listRowH - cont.scrollTop,
+          bottom: crect.top + (visibleEntries.indexOf(e) + 1) * listRowH - cont.scrollTop,
+        },
+      }));
+    }
+    if (viewMode === "grid" && gridCols > 0 && gridItemH > 0 && gridTrackW.length === gridCols) {
+      const cont = gridRef.current;
+      if (!cont) return null;
+      const crect = cont.getBoundingClientRect();
+      const padX = 4; // .fm-grid padding 4px
+      const gap = 8;
+      return visibleEntries.map((e, i) => {
+        const r = Math.floor(i / gridCols);
+        const c = i % gridCols;
+        return {
+          path: entryFullPath(e),
+          rect: {
+            left: crect.left + padX + c * (gridTrackW[c] + gap),
+            right: crect.left + padX + c * (gridTrackW[c] + gap) + gridTrackW[c],
+            top: crect.top + padX + r * (gridItemH + gap) - cont.scrollTop,
+            bottom: crect.top + padX + r * (gridItemH + gap) - cont.scrollTop + gridItemH,
+          },
+        };
+      });
+    }
+    return null; // 回退 DOM 查询
+  }, [viewMode, visibleEntries, listRowH, entryFullPath, gridCols, gridItemH, gridTrackW]);
+
   const { marquee, beginMarquee, justEndedRef: marqueeJustEndedRef } = useMarquee({
     editingEntry,
     selected,
     setSelected,
+    rectsProvider: marqueeRectsProvider,
   });
 
   // 点击空白区域取消选中（框选刚结束时跳过一次：click 事件跟在 mouseup
@@ -2104,6 +2239,12 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       const base = focusIdx < 0 ? (delta > 0 ? -1 : 0) : focusIdx;
       const next = Math.max(0, Math.min(base + delta, visibleEntries.length - 1));
       setFocusIdx(next);
+      // 焦点行/卡片跟随进可视区（虚拟化下未挂载行不在 DOM，scrollTop 数学）
+      if (viewMode === "list") {
+        listWin.ensureVisible(next);
+      } else if (viewMode === "grid" && gridCols > 0) {
+        gridWin.ensureVisible(Math.floor(next / gridCols));
+      }
       const nextPath = visiblePaths[next];
       if (e.shiftKey) {
         // Shift 扩选：锚点不动（无锚点回退目标自身 = 单选）
@@ -2505,11 +2646,16 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
               {/* ✅ 文件列表滚动容器（flex: 1 + overflow-y: auto） */}
               <div
                 className="fm-list-content"
+                ref={listContentRef}
                 onContextMenu={handleEmptyContextMenu}
                 onClick={handleEmptyClick}
                 onMouseDown={beginMarquee}
               >
-                {visibleEntries.map((entry, idx) => {
+                {/* 上下占位：撑起未挂载行的滚动高度（审计 M25） */}
+                {viewMode === "list" && padTop > 0 && (
+                  <div aria-hidden style={{ height: padTop }} />
+                )}
+                {windowedEntries.map((entry, idx) => {
                   const rowPath = entryFullPath(entry);
                   const isDropTarget = entry.is_dir && dropTargetPath === rowPath;
                   const isCut = clip?.mode === "cut" && clip.paths.includes(rowPath);
@@ -2518,9 +2664,9 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                     key={entry.path ?? entry.name}
                     data-path={rowPath}
                     data-drop-dir={entry.is_dir ? rowPath : undefined}
-                    className={`fm-list-row${selected.includes(rowPath) ? " selected" : ""}${isCut ? " fm-cut" : ""}${isDropTarget ? " drop-target" : ""}`}
+                    className={`fm-list-row${selectedSet.has(rowPath) ? " selected" : ""}${isCut ? " fm-cut" : ""}${isDropTarget ? " drop-target" : ""}`}
                     onMouseDown={(e) => handleRowMouseDown(e, entry)}
-                    onClick={(e) => handleRowClick(e, entry, idx)}
+                    onClick={(e) => handleRowClick(e, entry, winStart + idx)}
                     onDoubleClick={() => handleRowDoubleClick(entry)}
                     onContextMenu={(e) => handleContextMenu(e, entry)}
                   >
@@ -2556,16 +2702,23 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                   </div>
                   );
                 })}
+                {viewMode === "list" && padBottom > 0 && (
+                  <div aria-hidden style={{ height: padBottom }} />
+                )}
               </div>
             </div>
           ) : (
             <div
               className="fm-grid"
+              ref={gridRef}
               onContextMenu={handleEmptyContextMenu}
               onClick={handleEmptyClick}
               onMouseDown={beginMarquee}
             >
-              {visibleEntries.map((entry, idx) => {
+              {viewMode === "grid" && gPadTop > 0 && (
+                <div aria-hidden style={{ gridColumn: "1 / -1", height: gPadTop }} />
+              )}
+              {windowedGridEntries.map((entry, idx) => {
                 const rowPath = entryFullPath(entry);
                 const isDropTarget = entry.is_dir && dropTargetPath === rowPath;
                 const isCut = clip?.mode === "cut" && clip.paths.includes(rowPath);
@@ -2574,9 +2727,9 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                   key={entry.path ?? entry.name}
                   data-path={rowPath}
                   data-drop-dir={entry.is_dir ? rowPath : undefined}
-                  className={`fm-grid-item${selected.includes(rowPath) ? " selected" : ""}${isCut ? " fm-cut" : ""}${isDropTarget ? " drop-target" : ""}`}
+                  className={`fm-grid-item${selectedSet.has(rowPath) ? " selected" : ""}${isCut ? " fm-cut" : ""}${isDropTarget ? " drop-target" : ""}`}
                   onMouseDown={(e) => handleRowMouseDown(e, entry)}
-                  onClick={(e) => handleRowClick(e, entry, idx)}
+                  onClick={(e) => handleRowClick(e, entry, gStart + idx)}
                   onDoubleClick={() => handleRowDoubleClick(entry)}
                   onContextMenu={(e) => handleContextMenu(e, entry)}
                 >
@@ -2600,6 +2753,9 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                 </div>
                 );
               })}
+              {viewMode === "grid" && gPadBottom > 0 && (
+                <div aria-hidden style={{ gridColumn: "1 / -1", height: gPadBottom }} />
+              )}
             </div>
           )}
         </AppLayout>

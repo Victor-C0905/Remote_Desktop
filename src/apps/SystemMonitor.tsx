@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
+import { useVirtualWindow } from './useVirtual';
 import { useServerManager } from "../context/ServerManager";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
@@ -363,6 +364,22 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
     [processes, processSort]
   );
 
+  // 进程列表窗口化（审计 M25）：行高实测（grid 行，padding 6+6+内容）
+  const procScrollRef = useRef<HTMLDivElement>(null);
+  const [procRowH, setProcRowH] = useState(30);
+  const procWin = useVirtualWindow({
+    scrollRef: procScrollRef,
+    itemCount: sortedProcesses.length,
+    itemHeight: procRowH,
+    overscan: 10,
+  });
+  useEffect(() => {
+    const el = procScrollRef.current?.querySelector<HTMLElement>(".sm-process-row");
+    if (el && el.offsetHeight > 0 && el.offsetHeight !== procRowH) {
+      setProcRowH(el.offsetHeight);
+    }
+  }, [procRowH, sortedProcesses.length]);
+
   // ── 离线判断 ──
   const isOffline = '_offline' in metrics && (metrics as typeof OFFLINE_METRICS)._offline === true;
 
@@ -472,7 +489,7 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
                 </span>
               ))}
             </div>
-            <div className="sm-process-list">
+            <div className="sm-process-list" ref={procScrollRef}>
               {procSupported === false ? (
                 <div style={{ padding: '20px 0', color: 'var(--quirel-text-disabled)', textAlign: 'center' }}>
                   {t('monitor.processUnsupported')}
@@ -482,16 +499,20 @@ export function SystemMonitor({ windowId: _windowId }: { windowId: string }) {
                   {procError}
                 </div>
               ) : (
-                sortedProcesses.map((proc) => (
-                  <div key={proc.pid} className="sm-process-row">
-                    <span className="sm-pr-pid">{proc.pid}</span>
-                    <span className="sm-pr-name">{proc.name}</span>
-                    <span className="sm-pr-user">{proc.user}</span>
-                    <span className="sm-pr-cpu">{formatPercentSafe(proc.cpu_percent, isOffline)}</span>
-                    <span className="sm-pr-mem">{formatPercentSafe(proc.mem_percent, isOffline)}</span>
-                    <span className="sm-pr-state">{proc.state}</span>
-                  </div>
-                ))
+                <>
+                  {procWin.padTop > 0 && <div aria-hidden style={{ height: procWin.padTop }} />}
+                  {sortedProcesses.slice(procWin.start, procWin.end).map((proc) => (
+                    <div key={proc.pid} className="sm-process-row">
+                      <span className="sm-pr-pid">{proc.pid}</span>
+                      <span className="sm-pr-name">{proc.name}</span>
+                      <span className="sm-pr-user">{proc.user}</span>
+                      <span className="sm-pr-cpu">{formatPercentSafe(proc.cpu_percent, isOffline)}</span>
+                      <span className="sm-pr-mem">{formatPercentSafe(proc.mem_percent, isOffline)}</span>
+                      <span className="sm-pr-state">{proc.state}</span>
+                    </div>
+                  ))}
+                  {procWin.padBottom > 0 && <div aria-hidden style={{ height: procWin.padBottom }} />}
+                </>
               )}
             </div>
             <div className="sm-process-footer">

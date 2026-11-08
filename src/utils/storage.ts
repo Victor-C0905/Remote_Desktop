@@ -22,7 +22,9 @@ export interface StoreBlock {
  */
 const EXPECTED_STORE_VERSIONS: Record<string, number> = {
   "quirel-servers": 0,
-  "quirel-settings": 0,
+  // v1：browserProxyPort 语义变更（旧默认 1080 → 0 随机端口，M12），
+  // 旧 v0 文件由 persist migrate 升级
+  "quirel-settings": 1,
   "quirel-wallpaper": 0,
   "notifications": 0,
   "bookmarks": 0,
