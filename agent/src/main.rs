@@ -308,39 +308,33 @@ async fn run_manager_mode(args: &Args) -> Result<()> {
     #[cfg(unix)]
     manager.start().await?;
 
-    let result = {
-        #[cfg(unix)]
-        {
-            // 主路径信号处理（2026-11 审计 M5）：此前 SIGTERM 走默认行为
-            // 直接杀进程——不走 worker_manager.stop、不删 IPC socket 文件，
-            // watch_sigterm 零调用，优雅关闭链路形同虚设。现 SIGTERM 与
-            // Ctrl+C 都进入 select：放弃 QUIC accept 循环（endpoint 随
-            // future drop 关闭），走下方 manager.shutdown() 优雅收尾
-            let (sig_tx, mut sig_rx) = tokio::sync::mpsc::channel::<()>(1);
-            quireld::manager::signal_handler::watch_sigterm(sig_tx);
+    // 优雅关闭（审计 M5 收尾）：SIGTERM/Ctrl+C → shutdown 信号 →
+    // quic::run 向所有活动连接广播 CONNECTION_CLOSE 后自然返回 →
+    // manager.shutdown() 收尾。此前 endpoint 被静默 drop，客户端只能
+    // 等 idle 超时才感知服务端消失（探针实测 30s）
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
+    #[cfg(unix)]
+    {
+        let (sig_tx, mut sig_rx) = tokio::sync::mpsc::channel::<()>(1);
+        quireld::manager::signal_handler::watch_sigterm(sig_tx);
+        let sd_tx = shutdown_tx.clone();
+        tokio::spawn(async move {
             tokio::select! {
-                r = server::quic::run(
-                    cfg.clone(),
-                    cert,
-                    key,
-                    subscription_manager.clone(),
-                    event_bus.clone(),
-                    authenticator.clone(),
-                    audit_log.clone(),
-                    manager.clone(),
-                ) => r,
                 _ = sig_rx.recv() => {
-                    tracing::info!("收到 SIGTERM，开始优雅关闭 Manager");
-                    Ok(())
+                    tracing::info!("收到 SIGTERM，开始优雅关闭");
+                    let _ = sd_tx.send(true);
                 }
                 _ = tokio::signal::ctrl_c() => {
-                    tracing::info!("收到 Ctrl+C，开始优雅关闭 Manager");
-                    Ok(())
+                    tracing::info!("收到 Ctrl+C，开始优雅关闭");
+                    let _ = sd_tx.send(true);
                 }
             }
-        }
-        #[cfg(not(unix))]
+        });
+    }
+
+    let result = {
+        #[cfg(unix)]
         {
             server::quic::run(
                 cfg.clone(),
@@ -350,6 +344,23 @@ async fn run_manager_mode(args: &Args) -> Result<()> {
                 event_bus.clone(),
                 authenticator.clone(),
                 audit_log.clone(),
+                manager.clone(),
+                shutdown_rx,
+            )
+            .await
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = shutdown_tx; // 非 Unix 无信号监听，保持通道不 drop
+            server::quic::run(
+                cfg.clone(),
+                cert,
+                key,
+                subscription_manager.clone(),
+                event_bus.clone(),
+                authenticator.clone(),
+                audit_log.clone(),
+                shutdown_rx,
             )
             .await
         }

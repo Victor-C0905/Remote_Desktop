@@ -16,7 +16,7 @@ export interface MarqueeRect {
 }
 
 /** 命中检测用的条目盒（行元素实测 rect） */
-interface EntryBox {
+export interface EntryBox {
   path: string;
   rect: Rect;
 }
@@ -27,8 +27,11 @@ export function useMarquee(params: {
   /** 起拖时的选区（Ctrl 反选基准） */
   selected: string[];
   setSelected: Dispatch<SetStateAction<string[]>>;
+  /** 条目盒提供者（审计 M25）：虚拟化下未挂载行不在 DOM，调用方按
+   *  几何计算全量条目矩形；缺省回退 DOM 查询（兼容非虚拟化容器） */
+  rectsProvider?: () => EntryBox[] | null;
 }) {
-  const { editingEntry, selected, setSelected } = params;
+  const { editingEntry, selected, setSelected, rectsProvider } = params;
   const [marquee, setMarquee] = useState<MarqueeRect | null>(null);
   const rectsRef = useRef<EntryBox[] | null>(null);
   const rafRef = useRef<number | null>(null);
@@ -48,6 +51,11 @@ export function useMarquee(params: {
 
     const container = e.currentTarget as HTMLElement;
     const collectRects = () => {
+      const provided = rectsProvider?.();
+      if (provided) {
+        rectsRef.current = provided;
+        return;
+      }
       const rects: EntryBox[] = [];
       container.querySelectorAll<HTMLElement>('[data-path]').forEach((el) => {
         const p = el.dataset.path;

@@ -272,9 +272,27 @@ export function BrowserApp({ windowId }: BrowserAppProps) {
   useEffect(() => {
     const sync = () => setOverlayOpen(!!document.querySelector("[data-browser-overlay]"));
     sync();
-    const mo = new MutationObserver(sync);
+    // 回调合帧（审计 L10）：终端高输出/编辑器打字期间 body 子树高频变动，
+    // 逐次全文档 querySelector 会持续占主线程——同一帧多次变动只查一次，
+    // 且结果与上次相同则跳过 setState
+    let raf: number | null = null;
+    let last: boolean | null = null;
+    const mo = new MutationObserver(() => {
+      if (raf !== null) return;
+      raf = requestAnimationFrame(() => {
+        raf = null;
+        const now = !!document.querySelector("[data-browser-overlay]");
+        if (now !== last) {
+          last = now;
+          setOverlayOpen(now);
+        }
+      });
+    });
     mo.observe(document.body, { childList: true, subtree: true });
-    return () => mo.disconnect();
+    return () => {
+      mo.disconnect();
+      if (raf !== null) cancelAnimationFrame(raf);
+    };
   }, []);
 
   // 窗口激活态 → webview 可见性（child HWND 无法被 React z-index 遮挡）；

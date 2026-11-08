@@ -2,7 +2,72 @@
 
 > 面向 AI/Agent 工具的活文档：每次重要迭代后更新，新条目加在最前。
 > 规则见根目录 `AGENTS.md`；图标体系设计详见 `docs/icon-system-proposals.md`。
-> 最后更新：2026-11-08（会话：第二轮审计修复全部收尾——中危 28/28、低危 33/39；fix/audit-round1 共 64 提交待 squash）
+> 最后更新：2026-11-08（会话：探针扩展至 10 场景全功能面（fs/diff/processes/metrics/auth-bad），全自清理零残留；perf/list-virtualization 累计 9 提交待 squash）
+
+---
+
+## perf/list-virtualization（2026-11-08 · M25 列表虚拟化 · 待 squash 合入 dev）
+
+审计中危最后一项 M25 完成。分支自 dev 91cf9ba（第二轮审计 squash 后）拉出，
+5 个提交；验证：tsc 干净 + vitest 534（新增 computeWindow 5 例）全绿。
+
+- `d0475e5` 选中判定 O(n·m)→O(1)：selectedSet memo（行渲染/右键/交集过滤）
+- `ebc2e2f` 列表视图窗口化：自研 `src/apps/useVirtual.ts`（computeWindow 纯函数
+  + useVirtualWindow hook，无新依赖）；行高实测首行 offsetHeight 不写死；
+  内联重命名行强制挂载；键盘导航补焦点行跟随（ensureVisible scrollTop 数学）；
+  useMarquee 扩展 rectsProvider（框选命中改几何计算）
+- `82ddc12` 网格视图窗口化：按行开窗，列数/轨道宽取自浏览器解析的
+  grid-template-columns（auto-fill 精确值）；卡片高度因 gi-label max-height
+  钳制恒定；占位跨全列并扣 gap；框选 provider 网格分支（track 宽×行高几何）
+- `79df595` SystemMonitor 进程列表窗口化（overscan 10）
+- `7ab8947` computeWindow 单测（overscan/钳制/空态边界）
+
+**交互语义保持**：键盘导航（Enter/方向键）、框选（含 Ctrl 反选、跨屏滚动）、
+内联重命名、右键菜单、列宽拖拽均经验证不受窗口化影响——框选是语义级改造
+（DOM rect 快照 → 几何计算），回归测试重点在此。
+
+**给真机验收的检查单**：/usr/lib 级大目录打开流畅度；列表/网格各自滚动到
+中部后框选跨屏拖选（选中数应含滚出视口条目）；键盘方向键到未挂载行（视口
+自动跟随）；网格改列宽（窗口重算）；重命名滚出视口（输入框不丢）。
+
+
+### 探针真机自动测试（2026-11-08 同日续，提交 4d70eb6）
+
+WSL 跑 quireld（Linux 守护进程）、Windows 宿主跑协议级探针直连——复现
+「Windows 客户端 ↔ Linux 服务器」真实部署拓扑的自动测试：
+
+- **探针**：`agent/examples/probe.rs`（`cargo run --example probe`），
+  子命令 auth/readdir/terminal/transfer-down/transfer-up/smoke/hold/
+  resilience；`agent/examples/probe-deploy.sh` 一键搭 WSL 测试部署
+  （probeuser/probe-pass-2026、PAM、配置）
+- **实测结果**：smoke 5/5 全绿；SIGTERM 后客户端 4.8s 收到
+  「server shutting down」优雅关闭；kill -9 Worker 后一次
+  "response dropped" 随即自动重启恢复（M4 真机验证闭环）
+- **衍生修复**：
+  - M5 收尾——优雅关闭广播 CONNECTION_CLOSE（`agent/src/server/quic.rs`
+    run 加 shutdown watch、`main.rs` 信号任务发信号）；此前 endpoint
+    静默 drop，客户端 30s idle 超时才感知
+  - `which` 依赖移出 cfg(unix) 表（agent lib Windows 宿主编译失败，
+    此前仅 WSL 验证未暴露；探针需 Windows 编译时暴露）
+- **场景扩展（160d1d7）**：smoke 覆盖 10 场景——fs（mkdir/write/read/
+  rename/copy/chmod/move/delete 全链路 32ms）、diff（ApplyDiff 增量
+  落盘校验）、processes（158 进程采集）、metrics（订阅→事件→退订，
+  顺带验证 M10 采集器启停）、auth-bad（错误凭据正确拒绝，用不存在
+  用户避免锁定污染）。**全部自清理**：场景内建目录/文件操作结束后
+  整目录删除，实测 /tmp 零残留——探针可安全指向任意 quireld 实例
+  （含生产：仅审计日志留 upload/delete 成对可对账记录）
+- **不进发布产物的保证**：examples/ 仅在显式 `cargo run --example`
+  时编译；`build.sh --release`（生产构建）不含探针二进制——探针代码
+  随仓库保留、随源码可审计，但永不进入安装包
+- **复跑方式**：
+  1. `wsl bash agent/examples/probe-deploy.sh`（幂等）
+  2. WSL: `setsid nohup target/debug/quireld --config /var/lib/quireld-probe/quireld-probe.toml --log-dir /var/lib/quireld-probe/logs &`
+  3. Windows: `cargo run --example probe -p quireld -- smoke --host 127.0.0.1 --user probeuser --password probe-pass-2026`
+  （hold/resilience 需配合外部 kill，见探针头注释）
+
+**经验**：WSL 后台进程用 `setsid nohup ... & disown`（裸 nohup 在会话
+退出时可能被回收）；探针的隧道协议=spawn 响应唯一 envelope，此后
+输入/输出均裸字节、resize 走独立流——写探针前先读产品客户端同路径。
 
 ---
 
@@ -49,8 +114,9 @@ cherry-pick 合并，后续所有修复一律单分支顺序提交）。
   登录环境加载为预 spawn 方案，风险大于收益，记录待议
 - client 低-5（App.tsx 孤儿回收 300ms 防抖窄竞态）与低-13（SW_HIDE
   任务栏改 ABM_SETSTATE）：行为级改动需真机验证，单独排期
-- frontend L4（useSubscription 死代码 hooks）与 L10（MutationObserver
-  成本）：L4 启用前必修；L10 属性能调优，随 M25 虚拟化一并立项
+- frontend L4 与 L10 已收尾（cd1a5d7 / 92c3f46）：L4 types 数组
+  useMemo 稳定化；L10 MutationObserver rAF 合帧+同值跳过。
+  剩余缓释仅：agent L7（fork malloc 窗口）、client 低-13（任务栏 API）、H4（等你服务器排查结果）
 
 ### 修复映射（报告编号 → 提交，fix/audit-round1）
 
@@ -72,8 +138,28 @@ cherry-pick 合并，后续所有修复一律单分支顺序提交）。
 ### 剩余工作清单（后续 agent 从这里接手）
 
 **待产品决策**：
-- H4 历史密钥泄漏：确认无服务器仍用历史 blob 4feda9a0 的密钥 → 可选
-  `git filter-repo` 重写历史；部署文档注明该密钥作废。
+- H4 历史密钥泄漏（2026-11-08 取证完毕，待执行排查）：
+  - **事实**：`agent/key.pem`+`agent/cert.pem` 于 2026-05-30（4f8c994）
+    提交入库、2026-06-16（384727a）移出跟踪——历史 17 天，blob
+    （key=4feda9a0 / cert=bcfe9795）永久可从历史恢复；远程为 gitee
+    私有仓库。泄漏证书 CN="GNOME Remote Agent"（项目旧名，早期
+    dev 证书），指纹（客户端 pin 同格式）：
+    `36fe75d83810a42c3f2c94bc576f404a6da501c725eb959ac9fe654bb9ef95cd`
+  - **为何要紧**：客户端是 TOFU 指纹钉扎——持有该私钥的攻击者对
+    「仍使用此证书的服务器」可完整 MITM（同证书=pin 匹配+签名可通过
+    S1 验签），S1 修复不缓解此风险，唯一解是换钥
+  - **当前状态**：本机与 WSL 测试部署的密钥均已确认 ≠ 泄漏对
+    （哈希比对）
+  - **排查命令**（逐台服务器执行）：
+    `openssl x509 -in /etc/quireld/cert.pem -noout -fingerprint -sha256`
+    输出含 `36:FE:75:D8` 前缀 → 仍在用泄漏密钥，需轮换
+  - **轮换方法**：服务器上删除 cert.pem+key.pem → 重启 quireld
+    （自动生成新对）→ 客户端重连时弹指纹变更确认（预期 UX，确认即可）
+  - **⚠️ 关键澄清**：「换新 quireld 二进制」≠ 轮换——cert.rs 对已存在的
+    cert/key 文件原样加载，只有文件缺失才生成新对。升级二进制后泄漏
+    钥仍被使用；轮换的唯一动作是删文件+重启
+  - **历史重写**（可选）：git filter-repo 清 blob 需全协作方重新克隆
+    + gitee 侧 GC；私有仓库+完成服务器轮换后收益有限，默认不做
 
 **中危 3 项**：
 - M10 订阅计数泄漏：`agent/src/subscription.rs:46-48` subscribe 覆盖不回收
