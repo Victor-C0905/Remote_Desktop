@@ -6,8 +6,8 @@
  */
 
 import i18n from '../../i18n';
-import { useNotificationStore } from '../../stores/notificationStore';
 import { useServersStore } from '../../stores/serversStore';
+import { pushServerNotification } from '../../utils/notify';
 
 export type ArchiveFailureKind = 'extractOne' | 'extractAll';
 
@@ -31,12 +31,11 @@ export function notifyArchiveFailure(notice: ArchiveFailureNotice): void {
   if (targetDir) lines.push(targetDir);
 
   const server = useServersStore.getState().servers.find((s) => s.id === serverId);
-  useNotificationStore.getState().pushNotification({
+  pushServerNotification(serverId, {
     title,
     body: lines.join('\n'),
     action: i18n.t('archive.notify.action'),
     urgency: 'normal',
     source: server?.name || server?.host || archiveName || i18n.t('archive.notify.source'),
-    serverId,
   });
 }

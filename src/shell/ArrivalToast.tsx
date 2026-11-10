@@ -5,7 +5,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
-import { useNotificationStore } from "../stores/notificationStore";
+import { useNotificationStore, isNotificationVisible } from "../stores/notificationStore";
 import type { AppNotification, NotificationUrgency } from "../stores/notificationStore";
 import { SymbolicIcon } from "../components/symbolic";
 import "./ArrivalToast.css";
@@ -22,7 +22,14 @@ function urgencyIcon(urgency: NotificationUrgency) {
   }
 }
 
-export function ArrivalToast({ onOpen }: { onOpen: () => void }) {
+export function ArrivalToast({
+  onOpen,
+  activeServerId = null,
+}: {
+  onOpen: () => void;
+  /** 当前活动服务器：只对当前服务器的通知弹预览条（global/系统通知始终可见） */
+  activeServerId?: string | null;
+}) {
   const { t } = useTranslation();
   const notifications = useNotificationStore((s) => s.notifications);
   const [current, setCurrent] = useState<AppNotification | null>(null);
@@ -64,7 +71,9 @@ export function ArrivalToast({ onOpen }: { onOpen: () => void }) {
   // 监听新通知（store 头部插入最新）
   useEffect(() => {
     if (notifications.length === 0) return;
-    const latest = notifications[0];
+    // 按当前服务器隔离：跳过其它服务器的实时通知（静默收纳，切到该服务器后可见）
+    const latest = notifications.find((n) => isNotificationVisible(n, activeServerId));
+    if (!latest) return;
     if (shownIdRef.current === latest.id) return;
     shownIdRef.current = latest.id;
     // 静默通知（toast: false，如文件移动成功）：仅入通知中心，不弹预览条
@@ -114,7 +123,9 @@ export function ArrivalToast({ onOpen }: { onOpen: () => void }) {
         className={`at-sev at-sev-${current.urgency}`}
       />
       <span className="at-title">{current.title}</span>
-      {current.source && <span className="at-source">{current.source}</span>}
+      {(current.serverName || current.source) && (
+        <span className="at-source">{current.serverName || current.source}</span>
+      )}
       {missed > 0 && <span className="at-missed">+{missed}</span>}
       <button
         className="at-close"

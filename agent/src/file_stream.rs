@@ -25,6 +25,15 @@ pub fn generate_temp_path(path: &Path) -> String {
         .into_owned()
 }
 
+/// 是否为上传临时文件（`quireld_<uuid>.tmp`）。
+///
+/// 上传在目标目录写临时文件、完成时 rename 成正式名。目录列表与变更推送
+/// 都必须过滤它：否则上传全程（以及大文件每 100ms 一次变更）会把内部
+/// 临时文件当作用户文件展示，弱网下还会放大推送量。
+pub fn is_transfer_temp_name(name: &str) -> bool {
+    name.starts_with("quireld_") && name.ends_with(".tmp")
+}
+
 /// 查找已存在的临时文件（用于断点续传）
 ///
 /// 随机 UUID 命名后无法通过目标路径确定性反查临时文件。

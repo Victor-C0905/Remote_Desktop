@@ -418,6 +418,7 @@ const zhCN = {
     downloadFailed: '下载失败: {{message}}',
     folderDownloadUnsupported: '暂不支持文件夹下载',
     folderUploadUnsupported: '暂不支持上传文件夹：{{name}}\n\n请仅拖入文件。',
+    uploadNameIsFolder: '当前目录已存在同名文件夹「{{name}}」，无法上传同名文件。',
     pathNotFound: '路径不存在: {{path}}',
     permChangeFailed: '修改权限失败',
     ownerChangeFailed: '修改所有者失败',

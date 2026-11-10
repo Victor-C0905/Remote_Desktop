@@ -11,7 +11,7 @@ import { ServerManagerProvider, useServerManager } from "../context/ServerManage
 import { WallpaperProvider, useWallpaper, getWallpaperStyle } from "../context/WallpaperContext";
 import { useWallpaperStore } from "../stores/wallpaperStore";
 import { useSettingsStore } from "../stores/settingsStore";
-import { useNotificationStore } from "../stores/notificationStore";
+import { useNotificationStore, isNotificationVisible } from "../stores/notificationStore";
 import { useTheme } from "../hooks/useTheme";
 import { useContrastColor } from "../hooks/useContrastColor";
 import { WindowShell } from "../components/window-shell";
@@ -169,12 +169,15 @@ function DesktopContent() {
   const [overviewVisible, setOverviewVisible] = useState(false);
   const [notificationOpen, setNotificationOpen] = useState(false);
   const notifications = useNotificationStore((s) => s.notifications);
-  const unreadNotifications = notifications.filter((n) => !n.read).length;
-  const criticalNotifications = notifications.filter((n) => n.urgency === "critical" && !n.read).length;
+  const { activeServer } = useServerManager();
+  const activeServerId = activeServer?.id ?? null;
+  // 按当前服务器隔离：global/系统通知始终计入，其余只统计当前服务器的
+  const visibleNotifications = notifications.filter((n) => isNotificationVisible(n, activeServerId));
+  const unreadNotifications = visibleNotifications.filter((n) => !n.read).length;
+  const criticalNotifications = visibleNotifications.filter((n) => n.urgency === "critical" && !n.read).length;
   const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
   const [clock, setClock] = useState("");
 
-  const { activeServer } = useServerManager();
   const { wallpaper } = useWallpaper();
   const wallpaperObjectUrl = useWallpaperStore((s) => s.objectUrl);
   const { manager } = useWindowManager();
@@ -428,10 +431,11 @@ function DesktopContent() {
       <NotificationCenter
         isOpen={notificationOpen}
         onClose={() => setNotificationOpen(false)}
+        activeServerId={activeServerId}
       />
 
       {/* 新通知到达预览条（TopBar 下方居中，点击打开通知中心） */}
-      <ArrivalToast onOpen={() => setNotificationOpen(true)} />
+      <ArrivalToast onOpen={() => setNotificationOpen(true)} activeServerId={activeServerId} />
     </div>
   );
 }

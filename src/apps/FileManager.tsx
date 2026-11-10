@@ -24,12 +24,13 @@ import { ContextMenu, type ContextMenuEntry } from "../components/ContextMenu/Co
 import type { FileEntry } from './fileTypes';
 import { rangeSelection, toggleSelection, entryName } from './fileSelection';
 import { useFileTransfer } from './useFileTransfer';
-import { applyBrowseChanges, applySearchChanges, type FileViewChange } from './fileMutations';
+import { applyBrowseChanges, applySearchChanges, isTransferTempName, type FileViewChange } from './fileMutations';
+import { useFileChangesSubscription } from '../hooks/useSubscription';
 import { useMarquee, type EntryBox } from './useMarquee';
 import { ConfirmDialog } from "../components/Dialog/ConfirmDialog";
 import { Dialog } from "../components/Dialog/Dialog";
 import { useTranslation } from "react-i18next";
-import { useNotificationStore } from "../stores/notificationStore";
+import { pushServerNotification } from '../utils/notify';
 import { useSettingsStore } from '../stores/settingsStore';
 import { formatUnknownError, isPermissionDenied } from '../types/errors';
 import "./FileManager.css";
@@ -38,6 +39,11 @@ const log = createLogger('FileManager');
 
 /** 搜索下钻层数档位（0 = 仅当前目录一层，不在选项内单列；Rust 侧 clamp_search_depth 在 8 截断） */
 const SEARCH_DEPTH_OPTIONS = [1, 2, 3, 5, 8];
+
+/** 列表行间距（px）：必须与 .fm-list-content 的 row-gap 一致。
+ *  虚拟窗口按「行高 + 间距」计算占位高度，漏算会让滚动高度累计变短，
+ *  目录尾部的文件永远滚不到（审计 M25 回归） */
+const LIST_ROW_GAP = 2;
 
 interface ReadDirResponse {
   path: string;
@@ -128,7 +134,6 @@ interface FileManagerProps {
 
 export function FileManager({ windowId, preloadData }: FileManagerProps) {
   const { t } = useTranslation();
-  const pushNotification = useNotificationStore((s) => s.pushNotification);
   // ── 窗口系统集成 ─────────────────────────────────────
   // 获取窗口管理器
   const { manager } = useWindowManager();
@@ -142,6 +147,8 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   const initialData = preloadData;
 
   const { activeServerId, servers, connectServer } = useServerManager();
+  // 连接态（目录监听在断线期间不订阅；重连后 connected 变化触发重新订阅）
+  const serverConnected = servers.find((s) => s.id === activeServerId)?.status === "connected";
 
   // ── 离线状态判断 ─────────────────────────────────────
   // 无活跃连接 = 离线模式（显示服务器列表登录界面，而非空白或本地文件）
@@ -153,6 +160,9 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   /** 视图目录的即时引用：增量补丁必须按「此刻」视图目录过滤，
    *  闭包捕获的 currentPath 在逐项 await 期间会过期（审计 M21） */
   const currentPathRef = useRef("/");
+  // 目录实时监听是否生效（file_changes 订阅成功）：生效时最终条目由增量推送，
+  // 上传完成事件不必再做 remote_file_info（省每文件一次 RPC）
+  const fsWatchActiveRef = useRef(false);
   /** 最近一次权限失败的目标目录（供地址栏导航区分错误类型，审计 L12） */
   const permissionDeniedRef = useRef<string | null>(null);
   const [entries, setEntries] = useState<FileEntry[]>([]);
@@ -198,6 +208,12 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   /** 搜索下钻层数（持久化到设置存储；0 = 仅当前目录一层） */
   const fileManagerSearchDepth = useSettingsStore(s => s.fileManagerSearchDepth);
   const setFileManagerSearchDepth = useSettingsStore(s => s.setFileManagerSearchDepth);
+  // 搜索条件 ref：applyViewChanges 会被长流程（删除/移动/解压通知）异步调用，
+  // 闭包捕获的查询词可能已过期——补丁必须用「此刻」的搜索语义
+  const searchQueryRef = useRef(searchQuery);
+  const searchDepthRef = useRef(fileManagerSearchDepth);
+  useEffect(() => { searchQueryRef.current = searchQuery; }, [searchQuery]);
+  useEffect(() => { searchDepthRef.current = fileManagerSearchDepth; }, [fileManagerSearchDepth]);
   /** 搜索视图判定：查询词生效中（替代旧 searchMode 布尔，对齐 Windows 行为） */
   const activeSearch = searchQuery.length > 0;
   // 搜索范围档位（⌄ 菜单）：0 = 仅当前目录；触发按钮 title 与输入框 placeholder
@@ -261,7 +277,10 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     })
       .then((resp) => {
         if (epoch !== searchEpochRef.current) return; // 过期响应丢弃
-        setSearchResults(sortFileEntries(resp.results, sortStateRef.current));
+        setSearchResults(sortFileEntries(
+          resp.results.filter((e) => !isTransferTempName(e.name)),
+          sortStateRef.current
+        ));
         setSearchTruncated(resp.truncated);
         setSearchError(null);
       })
@@ -483,7 +502,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     return () => window.removeEventListener("mousedown", handleGlobalClick, { capture: true });
   }, []); // ❌ 不依赖 showSuggestions，让失焦功能始终工作
 
-  const loadDir = useCallback(async (path: string): Promise<boolean> => {
+  const loadDir = useCallback(async (path: string, opts?: { keepSelection?: boolean }): Promise<boolean> => {
     // 竞态守卫：快速连续导航时，先发后至的旧响应不得覆盖新目录视图
     // （与搜索的 searchEpochRef 同模式；过期响应静默丢弃并返回 false，
     // 调用方不据此推导航历史）
@@ -493,7 +512,9 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     setError(null);
     setPermissionDenied(null);
     permissionDeniedRef.current = null;
-    clearSelection();
+    // 外部刷新（目录监听/兜底重载）保留选区：仅剔除已不存在的条目；
+    // 导航（进入/返回/面包屑）仍清空
+    if (!opts?.keepSelection) clearSelection();
     setContextMenu(null);
 
     // 调试：打印当前状态
@@ -522,7 +543,17 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
 
       if (resp && resp.entries) {
         // 按当前表头排序（默认：目录优先 + 名称升序，与历史行为一致）
-        setEntries(sortFileEntries(resp.entries, sortStateRef.current));
+        // 上传临时文件（quireld_*.tmp）不是用户内容：旧 Agent 的列表也可能包含，统一过滤
+        const rows = resp.entries.filter((e) => !isTransferTempName(e.name));
+        setEntries(sortFileEntries(rows, sortStateRef.current));
+        // 保留选区：只保留仍存在的路径（目录内容变化后自动剔除已删除项）
+        if (opts?.keepSelection) {
+          const valid = new Set(
+            rows.map((e) => (path === "/" ? `/${e.name}` : `${path}/${e.name}`))
+          );
+          setSelected((prev) => prev.filter((p) => valid.has(p)));
+          setAnchorPath((prev) => (prev && valid.has(prev) ? prev : null));
+        }
       } else {
         setEntries(sortFileEntries(getDemoEntries(path), sortStateRef.current));
       }
@@ -1167,19 +1198,34 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   const selectedSet = useMemo(() => new Set(selected), [selected]);
 
   // 滚动容器 refs（虚拟窗口化的滚动源，审计 M25）
+  // ⚠️ 列表的纵向滚动已上提到外层 .fm-list（CSS overflow: auto + sticky 表头），
+  // .fm-list-content 自身不滚动——虚拟窗口必须监听 .fm-list，否则 scrollTop
+  // 永远为 0，只会渲染第一屏，滚过之后整段目录是空白（实测「文件显示不全」）。
+  // listContentRef 仅用于行高实测与框选几何（其 rect 随外层滚动一起移动）。
   const listContentRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   // 行高实测（首行 offsetHeight；未测得前用经验默认）
   const [listRowH, setListRowH] = useState(32);
   const [gridItemH, setGridItemH] = useState(64);
+  // 行步进 = 行高 + 行间距（占位/窗口计算统一口径）
+  const listRowStride = listRowH + LIST_ROW_GAP;
 
   // ── 列表视图窗口化（审计 M25）──────────────────────────
   const listWin = useVirtualWindow({
-    scrollRef: listContentRef,
+    scrollRef: listAreaRef,
     itemCount: visibleEntries.length,
-    itemHeight: listRowH,
+    itemHeight: listRowStride,
     enabled: viewMode === "list",
   });
+
+  // 切目录/切换搜索/切回列表：滚动回顶部。
+  // 修复滚动源后 .fm-list 会真正滚动，不重置会把上一个目录的滚动位置带进
+  // 新目录——首次进入时看起来像「目录开头少了一段文件」。
+  useEffect(() => {
+    if (viewMode !== "list") return;
+    const el = listAreaRef.current;
+    if (el) el.scrollTop = 0;
+  }, [currentPath, searchQuery, viewMode]);
 
   // ── 网格视图窗口化（审计 M25）：按「行」开窗（行 = cols 个卡片）────
   // 列数与轨道宽取自浏览器解析的 grid-template-columns（auto-fill 精确值）
@@ -1232,8 +1278,8 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     if (editingIdx < winStart) winStart = editingIdx;
     if (editingIdx >= winEnd) winEnd = editingIdx + 1;
   }
-  const padTop = winStart * listRowH;
-  const padBottom = Math.max(0, visibleEntries.length - winEnd) * listRowH;
+  const padTop = winStart * listRowStride;
+  const padBottom = Math.max(0, visibleEntries.length - winEnd) * listRowStride;
   const windowedEntries =
     viewMode === "list" ? visibleEntries.slice(winStart, winEnd) : visibleEntries;
 
@@ -1271,11 +1317,15 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
 
   /** 变更操作后刷新：底层目录始终重载（退出搜索即见新数据）；
    *  搜索词生效中同时重跑搜索（nonce 触发 effect）。
-   *  仅在服务器未回传权威条目（旧版 Agent）时作为兜底使用 */
+   *  仅在服务器未回传权威条目（旧版 Agent）/目录事件 resync 时作为兜底使用。
+   *
+   *  目录取「此刻」视图（currentPathRef）：长流程（批量移动/上传完成/解压）
+   *  完成时用户可能已切到别的目录，重载旧路径会把用户强行拉回（loadDir 会
+   *  setCurrentPath），必须按当前目录刷新（审计 M21 同源问题）。 */
   const refreshAfterMutation = useCallback(() => {
-    loadDir(currentPath);
+    void loadDir(currentPathRef.current, { keepSelection: true });
     setSearchNonce((n) => n + 1);
-  }, [loadDir, currentPath]);
+  }, [loadDir]);
 
   // currentPathRef 兜底同步：覆盖 loadDir 之外的 setCurrentPath 调用点
   // （初始化 preloadData、回到根目录等）
@@ -1293,9 +1343,12 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
    *  （审计 M21） */
   const applyViewChanges = useCallback((changes: FileViewChange[]) => {
     const viewPath = currentPathRef.current;
+    // 搜索条件用 ref：长流程回调的闭包可能停留在旧查询词上
+    const query = searchQueryRef.current;
+    const depth = searchDepthRef.current;
     setEntries((prev) => sortFileEntries(applyBrowseChanges(prev, viewPath, changes), sortStateRef.current));
     setSearchResults((prev) => (prev
-      ? sortFileEntries(applySearchChanges(prev, viewPath, searchQuery, fileManagerSearchDepth, changes), sortStateRef.current)
+      ? sortFileEntries(applySearchChanges(prev, viewPath, query, depth, changes), sortStateRef.current)
       : prev));
 
     // 选区/锚点同步：目录改名时其后代路径改写前缀；目录删除时其后代选中一并移除
@@ -1317,7 +1370,62 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       setSelected((prev) => prev.map(remap).filter((p) => !gone(p)));
       setAnchorPath((prev) => (prev ? (gone(remap(prev)) ? null : remap(prev)) : prev));
     }
-  }, [searchQuery, fileManagerSearchDepth]);
+  }, []);
+
+  // ── 目录实时变更（agent inotify 文件级增量）────────────────────
+  // 事件携带 upserts/removes/renames：直接打补丁（浏览 + 搜索同时更新），
+  // 不发全量请求；只有 resync（事件溢出/单批超限/stat 失败）才整目录重读。
+  // 弱网/大目录下这是避免卡顿的关键：单条变更只传约 200B。
+  const handleRemoteFsChange = useCallback((data: unknown) => {
+    const d = data as {
+      dir?: string;
+      resync?: boolean;
+      upserts?: FileEntry[];
+      removes?: string[];
+      renames?: { from: string; to: string; entry?: FileEntry }[];
+    } | null;
+    if (!d || typeof d.dir !== "string") return;
+    // 事件可能晚于导航到达：只更新“仍停留”的目录
+    if (d.dir !== currentPathRef.current) return;
+    // 内联重命名期间跳过（整行替换会让输入框卸载）；结束后下一次事件/TTL 补齐
+    if (editingEntry) return;
+
+    const join = (name: string) => (d.dir === "/" ? `/${name}` : `${d.dir}/${name}`);
+
+    if (d.resync) {
+      refreshAfterMutation();
+      return;
+    }
+
+    const changes: FileViewChange[] = [];
+    for (const entry of d.upserts ?? []) {
+      if (!entry?.name || isTransferTempName(entry.name)) continue;
+      changes.push({ kind: "upsert", path: join(entry.name), entry });
+    }
+    for (const name of d.removes ?? []) {
+      if (name) changes.push({ kind: "remove", path: join(name) });
+    }
+    for (const r of d.renames ?? []) {
+      if (!r?.from || !r?.to) continue;
+      if (isTransferTempName(r.to)) continue;
+      // 上传临时文件改名成正式文件：临时文件从未展示，等价于“新文件出现”
+      if (isTransferTempName(r.from)) {
+        if (r.entry) changes.push({ kind: "upsert", path: join(r.to), entry: r.entry });
+        continue;
+      }
+      changes.push({ kind: "rename", from: join(r.from), to: join(r.to), entry: r.entry });
+    }
+    if (changes.length > 0) applyViewChanges(changes);
+  }, [editingEntry, applyViewChanges, refreshAfterMutation]);
+
+  // 订阅当前目录（非递归）；断线时传 null 退订，重连后 serverConnected 变化会重新订阅
+  useFileChangesSubscription(
+    serverConnected ? activeServerId : null,
+    currentPath,
+    false,
+    handleRemoteFsChange,
+    (active) => { fsWatchActiveRef.current = active; }
+  );
 
   // Double-click entry
   // 双击/上下文菜单打开条目
@@ -1343,7 +1451,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     const outcome = await openRemoteFile(activeServerId, fullPath, manager, entry.size);
     if (outcome.kind === 'error') {
       log.error('打开失败:', outcome.message);
-      pushNotification({ title: t("common.error"), body: t("fileManager.openFailed", { message: outcome.message }), source: t("fileManager.source"), urgency: "normal" });
+      pushServerNotification(activeServerId, { title: t("common.error"), body: t("fileManager.openFailed", { message: outcome.message }), source: t("fileManager.source"), urgency: "normal" });
     }
   }, [entryFullPath, activeSearch, exitSearch, navigateTo, manager, activeServerId]);
 
@@ -1471,7 +1579,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       && (e.path ? e.path.slice(0, e.path.lastIndexOf("/")) || "/" : currentPath) === parentDir
     );
     if (conflict) {
-      pushNotification({ title: t("common.error"), body: t("fileManager.nameExists", { name: trimmedName }), source: t("fileManager.source"), urgency: "normal" });
+      pushServerNotification(activeServerId, { title: t("common.error"), body: t("fileManager.nameExists", { name: trimmedName }), source: t("fileManager.source"), urgency: "normal" });
       return;
     }
 
@@ -1486,7 +1594,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
           newPath
         });
       } else {
-        pushNotification({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
+        pushServerNotification(activeServerId, { title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
         setEditingEntry(null);
         setEditingName("");
         return;
@@ -1508,7 +1616,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       }
     } catch (err) {
       log.error("rename 失败:", err);
-      pushNotification({ title: t("common.error"), body: t("fileManager.renameFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
+      pushServerNotification(activeServerId, { title: t("common.error"), body: t("fileManager.renameFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
     }
 
     // 清除编辑状态
@@ -1543,7 +1651,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   // 执行删除（仅由 ConfirmDialog 确认回调调用）：批量顺序执行，逐项收集失败
   const doDelete = useCallback(async (targets: FileEntry[]) => {
     if (!activeServerId) {
-      pushNotification({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
+      pushServerNotification(activeServerId, { title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
       return;
     }
 
@@ -1563,7 +1671,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     }
 
     if (failed.length > 0) {
-      pushNotification({
+      pushServerNotification(activeServerId, {
         title: t("common.error"),
         body: t("fileManager.deleteFailedBatch", { n: failed.length, names: failed.slice(0, 3).join("、") }),
         source: t("fileManager.source"),
@@ -1588,7 +1696,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   const createEntry = useCallback(async (kind: "folder" | "file") => {
     setContextMenu(null);
     if (!activeServerId) {
-      pushNotification({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
+      pushServerNotification(activeServerId, { title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
       return;
     }
     if (activeSearch) exitSearch();  // 搜索结果视图无处落新条目：回浏览视图在当前目录创建
@@ -1627,7 +1735,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       const body = isDir
         ? t("fileManager.createFolderFailed", { message: formatUnknownError(err) })
         : t("fileManager.createFileFailed", { message: formatUnknownError(err) });
-      pushNotification({ title: t("common.error"), body, source: t("fileManager.source"), urgency: "normal" });
+      pushServerNotification(activeServerId, { title: t("common.error"), body, source: t("fileManager.source"), urgency: "normal" });
     }
   }, [activeServerId, activeSearch, exitSearch, entries, entryFullPath, currentPath, loadDir, applyViewChanges, t]);
 
@@ -1643,13 +1751,26 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
    */
   const uploadFileWithName = useCallback(async (localPath: string, fileName: string) => {
     if (!activeServerId) {
-      pushNotification({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
+      pushServerNotification(activeServerId, { title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
       return;
     }
 
     const remotePath = currentPath === "/"
       ? `/${fileName}`
       : `${currentPath}/${fileName}`;
+
+    // 同名文件夹无法用文件覆盖（Linux 中 rename 文件到已存在目录必然 EISDIR）：
+    // 直接拦截，避免传完整个文件才在落盘阶段失败。
+    // 搜索结果可能来自其它目录，不能作为本目录的同名判断，此时交给 Agent 兜底拒绝。
+    if (!activeSearch && entries.some((e) => e.name === fileName && e.is_dir)) {
+      pushServerNotification(activeServerId, {
+        title: t("common.error"),
+        body: t("fileManager.uploadNameIsFolder", { name: fileName }),
+        source: t("fileManager.source"),
+        urgency: "normal",
+      });
+      return;
+    }
 
     log.debug(`检查文件是否存在: ${remotePath}`);
 
@@ -1699,7 +1820,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       remotePath,
       localPath,
     });
-  }, [activeServerId, currentPath]);
+  }, [activeServerId, currentPath, activeSearch, entries, t]);
 
   /**
    * 上传单个本地文件（文件选择对话框与拖拽共用入口）
@@ -1709,7 +1830,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
    */
   const uploadSingleFile = useCallback(async (localPath: string) => {
     if (!activeServerId) {
-      pushNotification({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
+      pushServerNotification(activeServerId, { title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
       return;
     }
 
@@ -1741,7 +1862,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   const handleUpload = useCallback(async () => {
     // 检查是否有活跃服务器
     if (!activeServerId) {
-      pushNotification({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
+      pushServerNotification(activeServerId, { title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
       return;
     }
 
@@ -1777,7 +1898,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       setContextMenu(null);
     } catch (err) {
       log.error('上传失败:', err);
-      pushNotification({ title: t("common.error"), body: t("fileManager.uploadFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
+      pushServerNotification(activeServerId, { title: t("common.error"), body: t("fileManager.uploadFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
     }
   }, [activeServerId, uploadSingleFile]);
 
@@ -1789,7 +1910,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
    */
   const handleFilesDropped = useCallback(async (paths: string[]) => {
     if (!activeServerId) {
-      pushNotification({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
+      pushServerNotification(activeServerId, { title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
       return;
     }
     if (paths.length === 0) return;
@@ -1803,7 +1924,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         if (!isFile) {
           const name = localPath.split(/[\\/]/).pop() || localPath;
           log.warn(`拖拽项不是文件，已跳过: ${name}`);
-          pushNotification({ title: t("common.error"), body: t("fileManager.folderUploadUnsupported", { name }), source: t("fileManager.source"), urgency: "normal" });
+          pushServerNotification(activeServerId, { title: t("common.error"), body: t("fileManager.folderUploadUnsupported", { name }), source: t("fileManager.source"), urgency: "normal" });
           continue;
         }
         await uploadSingleFile(localPath);
@@ -1821,7 +1942,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   const handleUploadWithNewName = useCallback(async (localPath: string, newName: string) => {
     // 检查是否有活跃服务器
     if (!activeServerId) {
-      pushNotification({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
+      pushServerNotification(activeServerId, { title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
       return;
     }
 
@@ -1832,7 +1953,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       setContextMenu(null);
     } catch (err) {
       log.error('上传失败:', err);
-      pushNotification({ title: t("common.error"), body: t("fileManager.uploadFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
+      pushServerNotification(activeServerId, { title: t("common.error"), body: t("fileManager.uploadFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
     }
   }, [activeServerId, uploadFileWithName]);
 
@@ -1890,13 +2011,13 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   const handleDownload = useCallback(async (entry: FileEntry) => {
     // 检查是否有活跃服务器
     if (!activeServerId) {
-      pushNotification({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
+      pushServerNotification(activeServerId, { title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
       return;
     }
 
     // 文件夹不能下载
     if (entry.is_dir) {
-      pushNotification({ title: t("common.error"), body: t("fileManager.folderDownloadUnsupported"), source: t("fileManager.source"), urgency: "normal" });
+      pushServerNotification(activeServerId, { title: t("common.error"), body: t("fileManager.folderDownloadUnsupported"), source: t("fileManager.source"), urgency: "normal" });
       return;
     }
 
@@ -1930,7 +2051,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       setContextMenu(null);
     } catch (err) {
       log.error('下载失败:', err);
-      pushNotification({ title: t("common.error"), body: t("fileManager.downloadFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
+      pushServerNotification(activeServerId, { title: t("common.error"), body: t("fileManager.downloadFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
     }
   }, [activeServerId, entryFullPath]);
 
@@ -1971,8 +2092,10 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         rect: {
           left: crect.left,
           right: crect.right,
-          top: crect.top + visibleEntries.indexOf(e) * listRowH - cont.scrollTop,
-          bottom: crect.top + (visibleEntries.indexOf(e) + 1) * listRowH - cont.scrollTop,
+          // 行步进含 row-gap（与虚拟窗口同口径）；content 的 rect 随外层
+          // .fm-list 滚动一起移动，故无需再减 scrollTop
+          top: crect.top + visibleEntries.indexOf(e) * listRowStride,
+          bottom: crect.top + (visibleEntries.indexOf(e) + 1) * listRowStride,
         },
       }));
     }
@@ -2258,7 +2381,8 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   }, [visibleEntries, visiblePaths, focusIdx, anchorPath, selected, selectedEntries, clip, goUp, handleOpen, handlePaste, editingEntry, isEditingPath, headerMenu]);
 
   // ── 监听上传完成事件 ─────────────────────────────────
-  // 上传完成后定向探测该文件条目并增量插入；旧版 Agent 不返回条目时
+  // 目录监听生效时跳过（最终条目由 file_changes 增量推送，省每文件一次 RPC）；
+  // 未生效（旧 Agent/无权限）时定向探测该文件条目并增量插入，取不到条目再
   // 回退一次权威目录刷新（不做逐文件整目录读取）
   useEffect(() => {
     let unlisten: (() => void) | null = null;
@@ -2268,7 +2392,11 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       const { listen } = await import('@tauri-apps/api/event');
       const fn = await listen<{ remote_path: string; dir_path: string; file_name: string }>('upload-completed', (event) => {
         const { remote_path, dir_path } = event.payload;
-        if (!activeServerId || dir_path !== currentPath) return;
+        if (!activeServerId) return;
+        // 事件可能晚于导航到达：只处理“仍停留”的目录
+        if (dir_path !== currentPathRef.current) return;
+        // 目录监听已生效：watch 的 rename 增量会补上正式条目
+        if (fsWatchActiveRef.current) return;
 
         void (async () => {
           try {
@@ -2283,8 +2411,8 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
           } catch (e) {
             log.error('上传完成元数据探测失败:', e);
           }
-          // 旧版 Agent 未回传条目：回退一次权威目录刷新
-          loadDir(currentPath);
+          // 旧版 Agent 未回传条目：回退一次权威目录刷新（读此刻目录，防拉回旧目录）
+          refreshAfterMutation();
         })();
       });
       if (disposed) {
@@ -2302,7 +2430,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         unlisten();
       }
     };
-  }, [activeServerId, currentPath, loadDir, applyViewChanges]);
+  }, [activeServerId, applyViewChanges, refreshAfterMutation]);
 
   // ── Stats（搜索词生效中统计命中结果，否则统计当前目录）──
   const statusEntries = activeSearch ? (searchResults ?? []) : entries;

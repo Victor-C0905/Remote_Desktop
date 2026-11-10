@@ -15,7 +15,7 @@ import { useTranslation } from 'react-i18next';
 import { buildMoveTargets, entryName } from './fileSelection';
 import { assessTransferRisk, type GuardFinding } from './fileGuard';
 import type { FileEntry } from './fileTypes';
-import { useNotificationStore } from '../stores/notificationStore';
+import { pushServerNotification } from '../utils/notify';
 import { createLogger } from '../utils/logger';
 
 const log = createLogger('FileManager');
@@ -62,7 +62,6 @@ export function useFileTransfer(params: {
 }) {
   const { activeServerId, currentPath, selected, refreshAfterMutation, applyTransferResult, entryFullPath, navigateTo, editingEntry, setSelected, setAnchorPath } = params;
   const { t } = useTranslation();
-  const pushNotification = useNotificationStore((s) => s.pushNotification);
 
   // clip：应用内剪贴板（会话内有效，跨窗口不共享）；cut 项在列表中淡化显示
   const [clip, setClip] = useState<FileClip | null>(null);
@@ -122,7 +121,7 @@ export function useFileTransfer(params: {
     }
     const done = targets.length - failed.length;
     if (failed.length > 0) {
-      pushNotification({
+      pushServerNotification(activeServerId, {
         title: t('common.error'),
         body: t('fileManager.transferFailedBatch', { n: failed.length, op: mode === 'move' ? t('fileManager.opMove') : t('fileManager.opCopy'), names: failed.slice(0, 3).join('、') }),
         source: t('fileManager.source'),
@@ -132,7 +131,7 @@ export function useFileTransfer(params: {
     }
     const srcDir = targets[0].src.slice(0, targets[0].src.lastIndexOf('/')) || '/';
     const dstDir = targets[0].dst.slice(0, targets[0].dst.lastIndexOf('/')) || '/';
-    pushNotification({
+    pushServerNotification(activeServerId, {
       title: t('fileManager.source'),
       body: mode === 'move'
         ? t('fileManager.movedDoneFromTo', { n: done, src: srcDir, dst: dstDir })
@@ -169,7 +168,7 @@ export function useFileTransfer(params: {
                     }
                   }
                   if (undoFailed.length > 0) {
-                    pushNotification({
+                    pushServerNotification(activeServerId, {
                       title: t('common.error'),
                       body: t('fileManager.undoFailed', { n: undoFailed.length, names: undoFailed.slice(0, 3).join('、') }),
                       source: t('fileManager.source'),

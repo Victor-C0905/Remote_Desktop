@@ -104,8 +104,9 @@ pub struct ActiveConnection {
     tx: mpsc::Sender<ClientRequest>,
     // QUIC Connection（用于创建持久 Stream）
     pub quic_conn: Option<Arc<quinn::Connection>>,
-    // 持久 Stream 监听任务
-    subscription_task: Option<tokio::task::JoinHandle<()>>,
+    // 持久 Stream 监听任务：key 区分不同订阅（metrics / file_changes:<path>…）。
+    // 一个连接可同时订阅多种事件（系统监控 + 当前目录变更），互不覆盖。
+    subscriptions: std::collections::HashMap<String, tokio::task::JoinHandle<()>>,
     // 用户主动断开标志：remote_disconnect 置位（先于 close，避免竞态误判），
     // 统一清理块据此区分 connection-lost 事件来源，前端仅对网络断开自动重连
     pub user_initiated: Arc<AtomicBool>,
@@ -455,7 +456,7 @@ pub async fn remote_connect(
                 info: info.clone(),
                 tx: tx.clone(),
                 quic_conn: Some(Arc::new(conn.clone())),
-                subscription_task: None,
+                subscriptions: std::collections::HashMap::new(),
                 user_initiated: user_initiated.clone(),
                 capabilities: agent_capabilities,
             });
@@ -672,10 +673,10 @@ pub async fn remote_connect(
             crate::proxy::suspend_session(&app_handle, &server_id_clone);
 
             // 5. 从 ConnectionManager 移除连接条目
-            //    同时 abort subscription_task，避免被动断开时的残留读取日志
+            //    同时 abort 全部订阅监听任务，避免被动断开时的残留读取日志
             if let Ok(mut conns) = app_handle.state::<ConnectionManager>().connections.lock() {
                 if let Some(active_conn) = conns.remove(&server_id_clone) {
-                    if let Some(task) = active_conn.subscription_task {
+                    for (_, task) in active_conn.subscriptions {
                         task.abort();
                     }
                 }
@@ -1742,18 +1743,27 @@ pub async fn set_transfer_limit(server_id: String, max_file_transfer_mb: u64, ap
 pub async fn subscribe(
     server_id: String,
     types: Vec<SubscriptionType>,
+    key: Option<String>,
     app: tauri::AppHandle,
 ) -> Result<(), AppError> {
     let manager = app.state::<ConnectionManager>();
+    // 订阅唯一键：调用方可用窗口/路径区分；缺省按类型名拼接（兼容旧调用）
+    let sub_key = key.unwrap_or_else(|| {
+        types
+            .iter()
+            .map(|t| t.type_name())
+            .collect::<Vec<_>>()
+            .join(",")
+    });
 
     // 使用锁保护整个订阅流程，避免竞态条件
     let quic_conn = {
         let mut conns = manager.connections.lock().unwrap();
         if let Some(active_conn) = conns.get_mut(&server_id) {
-            // 检查是否已有订阅任务
-            if active_conn.subscription_task.is_some() {
-                tracing::info!("已有订阅任务: server_id={}", server_id);
-                return Ok(()); // 已订阅，直接返回
+            // 同 key 已有订阅任务：幂等返回
+            if active_conn.subscriptions.contains_key(&sub_key) {
+                tracing::info!("已有订阅任务: server_id={}, key={}", server_id, sub_key);
+                return Ok(());
             }
 
             // 获取 QUIC Connection
@@ -1840,30 +1850,25 @@ pub async fn subscribe(
 
         // 启动监听任务
         let task = tokio::spawn(async move {
+            // 写端随任务存活：订阅是长期流，写端一旦 drop 会立即发 FIN，
+            // 服务端（recv 读到 FIN）会误判客户端退订并释放 watch。
+            // 任务被 abort（切换目录/断开）时写端随之释放，FIN 才真正发出。
+            let _keepalive = send;
             tracing::info!("订阅成功: server_id={}", server_id_clone);
 
             // 监听 Event payload
-            // 每条消息读取超时 60 秒，防止僵死 Stream
-            let per_msg_timeout = std::time::Duration::from_secs(60);
+            // 不设单条消息读取超时：file_changes 在目录安静时可能长时间无事件，
+            // 连接级心跳/idle_timeout 已负责判定死连接
             loop {
-                // 读取整条消息（长度封顶校验+读体，带超时；上限见 net_frame）
-                let read_msg_result = tokio::time::timeout(
-                    per_msg_timeout,
-                    crate::net_frame::read_len_prefixed(&mut recv),
-                )
-                .await;
-                let data_buf = match read_msg_result {
-                    Ok(Ok(Some(data_buf))) => data_buf,
-                    Ok(Ok(None)) => {
+                // 读取整条消息（长度封顶校验+读体）；上限见 net_frame
+                let data_buf = match crate::net_frame::read_len_prefixed(&mut recv).await {
+                    Ok(Some(data_buf)) => data_buf,
+                    Ok(None) => {
                         tracing::info!("事件流已正常结束");
                         break;
                     }
-                    Ok(Err(e)) => {
+                    Err(e) => {
                         tracing::warn!("读取事件消息失败: {}", e);
-                        break;
-                    }
-                    Err(_) => {
-                        tracing::warn!("读取事件消息超时 ({}s)", per_msg_timeout.as_secs());
                         break;
                     }
                 };
@@ -1889,7 +1894,7 @@ pub async fn subscribe(
         {
             let mut conns = manager.connections.lock().unwrap();
             if let Some(active_conn) = conns.get_mut(&server_id) {
-                active_conn.subscription_task = Some(task);
+                active_conn.subscriptions.insert(sub_key, task);
             }
         }
 
@@ -1904,54 +1909,40 @@ pub async fn subscribe(
 pub async fn unsubscribe(
     server_id: String,
     types: Vec<SubscriptionType>,
+    key: Option<String>,
     app: tauri::AppHandle,
 ) -> Result<(), AppError> {
     let manager = app.state::<ConnectionManager>();
+    let sub_key = key.unwrap_or_else(|| {
+        types
+            .iter()
+            .map(|t| t.type_name())
+            .collect::<Vec<_>>()
+            .join(",")
+    });
 
-    // 停止持久 Stream 监听任务
+    // 停止对应 key 的持久 Stream 监听任务
     let task_opt = {
         let mut conns = manager.connections.lock().unwrap();
         if let Some(active_conn) = conns.get_mut(&server_id) {
-            active_conn.subscription_task.take()
+            active_conn.subscriptions.remove(&sub_key)
         } else {
             None
         }
     };
 
     if let Some(task) = task_opt {
-        // 使用 tokio::select! 等待任务完成或超时
-        use tokio::time::{sleep, Duration};
-        tokio::select! {
-            _ = task => {
-                tracing::info!("订阅监听任务已正常停止: server_id={}", server_id);
-            }
-            _ = sleep(Duration::from_secs(2)) => {
-                // 超时，强制 abort
-                tracing::warn!("订阅监听任务超时，强制停止: server_id={}", server_id);
-            }
-        }
+        // 直接 abort：任务 hold 着订阅流的读写端，abort 即 drop → 发 FIN，
+        // 服务端据此立即 remove_all 并移除目录 watch（无需等待优雅关闭）
+        task.abort();
+        tracing::info!("已停止订阅监听任务: server_id={}, key={}", server_id, sub_key);
     } else {
-        tracing::info!("未找到订阅监听任务: server_id={}", server_id);
+        tracing::info!("未找到订阅监听任务: server_id={}, key={}", server_id, sub_key);
     }
 
-    // 发送 Unsubscribe payload
-    let resp = remote_send(server_id.clone(), Payload::Unsubscribe {
-        server_id: server_id.clone(),
-        types,
-    }, app).await?;
-
-    match resp.payload {
-        Payload::UnsubscribeAck { success } => {
-            if success {
-                tracing::info!("取消订阅成功: server_id={}", server_id);
-                Ok(())
-            } else {
-                Err(AppError::new(codes::OPERATION_FAILED).with_detail("unsubscribe rejected"))
-            }
-        }
-        Payload::Error { message, .. } => Err(agent_error(message)),
-        _ => Err(AppError::new(codes::UNEXPECTED_RESPONSE)),
-    }
+    // 订阅清理以「关闭流」为准（agent 侧在流 FIN 时 remove_all 并移除 watch）。
+    // 不再发送 Unsubscribe payload：协议侧未实现会返回错误，制造无意义告警。
+    Ok(())
 }
 
 // ── QUIC 客户端 ───────────────────────────────────────

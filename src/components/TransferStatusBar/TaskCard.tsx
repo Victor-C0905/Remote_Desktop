@@ -14,7 +14,7 @@ import { TransferTask } from '../../hooks/useTransferProgress';
 import { useServerManager } from '../../context/ServerManager';
 import { SymbolicIcon } from '../symbolic';
 import { useServersStore } from '../../stores/serversStore';
-import { useNotificationStore } from '../../stores/notificationStore';
+import { pushServerNotification } from '../../utils/notify';
 import { createLogger } from '../../utils/logger';
 import './TaskCard.css';
 
@@ -152,13 +152,12 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
     } catch (error) {
       log.error('重新发起传输失败:', error);
       // 兜底路径失败是用户主动操作的直接结果，必须可见（不暴露底层错误细节）
-      useNotificationStore.getState().pushNotification({
+      pushServerNotification(task.session_id, {
         title: t('transfer.notify.retryFailedTitle'),
         body: t('transfer.notify.retryFailedBody', { name: task.file_name }),
         action: t('transfer.notify.retryFailedAction'),
         urgency: 'normal',
         source: t('transfer.source'),
-        serverId: task.session_id,
       });
     }
   };

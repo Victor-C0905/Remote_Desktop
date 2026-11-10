@@ -250,6 +250,10 @@ pub struct TransferManager {
     app_handle: AppHandle,
     /// 活动任务映射表
     tasks: Arc<Mutex<HashMap<String, TransferTask>>>,
+    /// 并发传输槽位：一次多选上传会瞬间创建 N 个任务，全部并发会打满
+    /// 客户端 QUIC 流、服务端隔离写进程与磁盘；限制同时真正执行的传输数，
+    /// 其余任务按创建顺序排队（UI 仍显示任务，只是进度暂不推进）
+    transfer_slots: Arc<tokio::sync::Semaphore>,
 }
 
 impl TransferManager {
@@ -258,6 +262,8 @@ impl TransferManager {
         let manager = Self {
             app_handle,
             tasks: Arc::new(Mutex::new(HashMap::new())),
+            // 3 个并发传输：多选上传/下载的突发由队列吸收
+            transfer_slots: Arc::new(tokio::sync::Semaphore::new(3)),
         };
 
         // 注意：start_cleanup_task() 不能在构造函数中调用
@@ -454,11 +460,9 @@ impl TransferManager {
             task.eta_secs = remaining / speed_bps;
         }
 
-        // 更新状态
-        // 注意：只有在上传时才自动完成，下载需要等待 FileTransferComplete 消息
-        if task.progress >= 100 && task.direction == "upload" {
-            task.status = TransferStatus::Completed;
-        } else if task.status == TransferStatus::Pending {
+        // 进度到 100% 不代表落盘成功：上传需要等待 Agent 的确认（单流 ack / 多流合并结果），
+        // 下载需要等待 FileTransferComplete，因此这里只做 Pending → Active。
+        if task.status == TransferStatus::Pending {
             task.status = TransferStatus::Active;
         }
 
@@ -1468,6 +1472,10 @@ pub async fn transfer_file(
     tokio::spawn(async move {
         tracing::info!(task_id = %task_id_clone, "后台任务开始执行");
 
+        // 排队获取传输槽位：一次多选 N 个文件时避免 N 路并发打满连接/服务端；
+        // permit 持有到任务结束（含失败清理）
+        let _permit = manager_clone.transfer_slots.acquire().await.ok();
+
         let result = perform_transfer(
             &conn,
             request_id,
@@ -1550,7 +1558,7 @@ async fn perform_transfer(
     };
 
     // ── 1. 握手：发送请求 + 接收响应 ──
-    let (session_id, file_size, frame_mode, mut send, mut recv) =
+    let (session_id, file_size, frame_mode, ack_upload, mut send, mut recv) =
         handshake_transfer(conn, request_id, &direction, &remote_path, &local_path, resume_from, stream_count)
             .await?;
 
@@ -1570,7 +1578,19 @@ async fn perform_transfer(
                 Arc::clone(&manager), task_id, send, recv,
             ).await
         } else {
-            run_upload_loop(&mut send, &session_id, &local_path, &manager, task_id, &frame_mode, None, None).await
+            run_upload_loop(
+                &mut send,
+                &session_id,
+                &local_path,
+                &manager,
+                task_id,
+                &frame_mode,
+                None,
+                None,
+                // 单流上传：Agent 承诺回传落盘确认时才等待（旧 Agent 不等待，保持兼容）
+                if ack_upload { Some(&mut recv) } else { None },
+            )
+            .await
         }
     } else {
         run_download_loop(&mut recv, &session_id, &local_path, file_size, resume_from, &manager, task_id, &frame_mode).await
@@ -1588,7 +1608,7 @@ async fn handshake_transfer(
     local_path: &str,
     resume_from: Option<u64>,
     stream_count: u32,
-) -> Result<(String, u64, String, quinn::SendStream, quinn::RecvStream), AppError> {
+) -> Result<(String, u64, String, bool, quinn::SendStream, quinn::RecvStream), AppError> {
     // 获取文件大小（上传时）
     let file_size = if direction == "upload" {
         Some(std::fs::metadata(local_path)
@@ -1606,6 +1626,9 @@ async fn handshake_transfer(
         resume_from,
         frame_mode: "raw".to_string(),
         stream_count: Some(stream_count),
+        // 单流上传请求落盘确认：Agent 在 rename 后回传真实结果，
+        // 避免“字节发完 = 成功”的误报（例如目标已存在同名文件夹）。
+        ack_upload: direction == "upload" && stream_count == 1,
     };
 
     // 创建 Stream
@@ -1648,12 +1671,12 @@ async fn handshake_transfer(
         .map_err(|e| net_err(format!("decode response: {}", e)))?;
 
     match response_envelope.payload {
-        Payload::FileTransferAccept { session_id, file_size, frame_mode, .. } => {
+        Payload::FileTransferAccept { session_id, file_size, frame_mode, ack_upload, .. } => {
             tracing::info!(
-                session_id, file_size, frame_mode,
+                session_id, file_size, frame_mode, ack_upload,
                 "文件传输已接受"
             );
-            Ok((session_id, file_size, frame_mode, send, recv))
+            Ok((session_id, file_size, frame_mode, ack_upload, send, recv))
         }
         Payload::Error { message, .. } => {
             Err(agent_rejected(message))
@@ -1665,10 +1688,54 @@ async fn handshake_transfer(
     }
 }
 
+/// 读取单流上传的落盘确认（Agent rename 的真实结果）
+///
+/// raw 模式：裸帧控制帧承载 JSON Envelope；json 模式：4 字节长度前缀 + JSON。
+/// 返回 None 表示对端在发送确认前关闭了流。
+async fn read_upload_ack(
+    recv: &mut quinn::RecvStream,
+    raw_mode: bool,
+) -> Result<Option<Payload>, AppError> {
+    if raw_mode {
+        let (type_byte, body_len) = match read_frame_header(recv).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("读取上传确认失败（流已关闭）: {}", e);
+                return Ok(None);
+            }
+        };
+        if type_byte != RAW_TYPE_CONTROL {
+            return Err(AppError::new(codes::TRANSFER_PROTOCOL_UNEXPECTED)
+                .with_detail(format!("upload ack: unexpected frame type {}", type_byte)));
+        }
+        let body = read_control_body(recv, body_len).await?;
+        let env = Envelope::decode(&body).map_err(|e| {
+            AppError::new(codes::TRANSFER_PROTOCOL_UNEXPECTED)
+                .with_detail(format!("decode upload ack: {}", e))
+        })?;
+        Ok(Some(env.payload))
+    } else {
+        let body = crate::net_frame::read_len_prefixed(recv)
+            .await
+            .map_err(net_err)?;
+        match body {
+            Some(bytes) => {
+                let env = Envelope::decode(&bytes).map_err(|e| {
+                    AppError::new(codes::TRANSFER_PROTOCOL_UNEXPECTED)
+                        .with_detail(format!("decode upload ack: {}", e))
+                })?;
+                Ok(Some(env.payload))
+            }
+            None => Ok(None),
+        }
+    }
+}
+
 /// 上传循环：读取本地文件 → 发送数据帧/块 → 发送 Complete
 ///
 /// - `range`: 多流并行时指定段范围 `(offset_start, offset_end)`,`None` 则读整个文件
 /// - `total_transferred`: 多流并行时的共享进度计数器,`None` 则用单流进度
+/// - `ack_recv`: 单流上传时传入同一 stream 的接收端，用于等待 Agent 落盘确认
 async fn run_upload_loop(
     send: &mut quinn::SendStream,
     session_id: &str,
@@ -1678,6 +1745,7 @@ async fn run_upload_loop(
     frame_mode: &str,
     range: Option<(u64, u64)>,
     total_transferred: Option<Arc<std::sync::atomic::AtomicU64>>,
+    ack_recv: Option<&mut quinn::RecvStream>,
 ) -> Result<(), AppError> {
     let raw_mode = frame_mode == "raw";
     let mut reader = match range {
@@ -1741,6 +1809,30 @@ async fn run_upload_loop(
 
     // 发送 FileTransferComplete
     send_complete_message(send, session_id, raw_mode).await?;
+
+    // 单流上传：等待 Agent 回传落盘结果（rename 是否成功），
+    // 避免“字节发完 = 完成”把同名文件夹等落盘失败误报为成功。
+    if let Some(recv) = ack_recv {
+        let ack = tokio::time::timeout(FILE_CHUNK_TIMEOUT, read_upload_ack(recv, raw_mode))
+            .await
+            .map_err(|_| timeout_err().with_detail("wait upload ack timed out"))??;
+        match ack {
+            Some(Payload::FileTransferComplete { success, error, .. }) => {
+                if !success {
+                    let message = error.unwrap_or_else(|| "Agent 写入最终文件失败".to_string());
+                    return Err(agent_rejected(message));
+                }
+            }
+            Some(other) => {
+                return Err(AppError::new(codes::TRANSFER_PROTOCOL_UNEXPECTED)
+                    .with_detail(format!("upload ack: unexpected payload {}", other.type_name())));
+            }
+            None => {
+                return Err(AppError::new(codes::TRANSFER_UPLOAD_INCOMPLETE)
+                    .with_detail("agent closed upload stream without ack"));
+            }
+        }
+    }
 
     // 单流模式才标记完成(多流由 run_multi_stream_upload 统一标记)
     if total_transferred.is_none() {
@@ -1809,6 +1901,7 @@ async fn run_multi_stream_upload(
             "raw",
             Some(primary_range),
             Some(primary_total),
+            None,
         ).await
     });
 
@@ -1901,6 +1994,7 @@ async fn run_multi_stream_upload(
                 "raw",
                 Some(range),
                 Some(sec_total),
+                None,
             ).await
         });
         secondary_handles.push(handle);

@@ -113,6 +113,10 @@ pub async fn handle_read_dir(req: ReadDir) -> WorkerResponse {
                 let entry = entry_result.ok()?;
                 let metadata = entry.metadata().ok()?;
                 let name = entry.file_name().to_string_lossy().to_string();
+                // 上传临时文件不属于用户可见内容（完成时 rename 为正式名）
+                if crate::file_stream::is_transfer_temp_name(&name) {
+                    return None;
+                }
                 Some(entry_from_metadata(name, &metadata, &uid_names, &gid_names))
             })
             .collect();
@@ -1149,7 +1153,7 @@ fn format_permissions(_metadata: &fs::Metadata) -> String {
 /// 跨 fork 边界回传的条目快照：protobuf 生成的 FileEntry 不实现 serde，
 /// 不能直接作为 execute_as_user_blocking 的返回类型（父进程经 pipe 反序列化）
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct FileEntryData {
+pub(crate) struct FileEntryData {
     name: String,
     is_dir: bool,
     size: u64,
@@ -1175,7 +1179,7 @@ impl From<FileEntryData> for FileEntry {
 
 /// 从 metadata 构造条目快照：mtime 为 RFC3339，permissions 为 9 字符，
 /// 属主/属组按 uid/gid 映射解析（解析失败回退数字字符串）
-fn entry_from_metadata(
+pub(crate) fn entry_from_metadata(
     name: String,
     metadata: &fs::Metadata,
     uid_names: &HashMap<u32, String>,
@@ -1278,12 +1282,12 @@ fn parse_colon_separated(file: &str) -> Vec<(String, u32)> {
 }
 
 /// 构建 uid → 用户名映射(目录列表显示属主用)
-fn build_uid_name_map() -> HashMap<u32, String> {
+pub(crate) fn build_uid_name_map() -> HashMap<u32, String> {
     parse_passwd_entries().into_iter().map(|(name, uid)| (uid, name)).collect()
 }
 
 /// 构建 gid → 组名映射(目录列表显示属组用)
-fn build_gid_name_map() -> HashMap<u32, String> {
+pub(crate) fn build_gid_name_map() -> HashMap<u32, String> {
     parse_group_entries().into_iter().map(|(name, gid)| (gid, name)).collect()
 }
 

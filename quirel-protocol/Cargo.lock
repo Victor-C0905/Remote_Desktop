@@ -25,7 +25,7 @@ dependencies = [
 
 [[package]]
 name = "quirel-protocol"
-version = "0.3.1-beta.2"
+version = "0.3.2-beta.3"
 dependencies = [
  "serde",
  "serde_json",

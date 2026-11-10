@@ -434,6 +434,11 @@ pub enum Payload {
         /// 服务端在 Accept 中回填确认的 stream_count(可能小于请求值)
         #[serde(default)]
         stream_count: Option<u32>,
+        /// 是否请求上传落盘确认(仅单流上传有意义)
+        /// true 时 Agent 在 finish(rename) 后回传 FileTransferComplete 表示真实结果;
+        /// 旧客户端不带该字段 → false,Agent 不回传,保持原有"发完即完成"行为。
+        #[serde(default)]
+        ack_upload: bool,
     },
 
     /// 文件传输接受响应（Agent → 客户端）
@@ -452,6 +457,11 @@ pub enum Payload {
         /// 客户端按此值开 N 个 bi-stream,每 stream 各发一段 offset
         #[serde(default = "one")]
         stream_count: u32,
+        /// 服务端是否会在上传完成后回传落盘确认
+        /// 仅当客户端请求了 ack_upload 且为单流上传时为 true。
+        /// 旧版 Agent 不带该字段 → false,客户端不等待确认。
+        #[serde(default)]
+        ack_upload: bool,
     },
 
     /// 文件数据块（双向传输）

@@ -320,6 +320,7 @@ async fn transfer_down_scenario(host: &str, port: u16, user: &str, password: &st
             resume_from: None,
             frame_mode: "raw".into(),
             stream_count: None,
+            ack_upload: false,
         }),
     )
     .await?;
@@ -388,6 +389,7 @@ async fn transfer_up_scenario(host: &str, port: u16, user: &str, password: &str,
             resume_from: None,
             frame_mode: "raw".into(),
             stream_count: None,
+            ack_upload: false,
         }),
     )
     .await?;
