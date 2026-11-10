@@ -28,19 +28,88 @@ pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /* ── 日志系统初始化 ───────────────────────────────────────── */
 
+/// 按北京日期（UTC+8）切分的日志文件写入器。
+///
+/// tracing-appender 的 `rolling::daily` 用 UTC 日期做文件名：北京 00:00–08:00
+/// 的日志会落到「昨天」的文件里（而内容时间戳是今天），排查问题时极易误判。
+/// 这里在每次写入前按 UTC+8 日期检查并切换文件，文件名与内容时间同一天。
+struct BeijingDailyWriter {
+    dir: std::path::PathBuf,
+    state: Arc<std::sync::Mutex<BeijingDailyState>>,
+}
+
+struct BeijingDailyState {
+    /// 当前文件对应的北京日期（YYYY-MM-DD）
+    date: String,
+    /// 当前打开的日志文件（首次写入/切日时重建）
+    file: Option<fs::File>,
+}
+
+impl BeijingDailyWriter {
+    fn new(dir: std::path::PathBuf) -> Self {
+        Self {
+            dir,
+            state: Arc::new(std::sync::Mutex::new(BeijingDailyState {
+                date: String::new(),
+                file: None,
+            })),
+        }
+    }
+}
+
+impl std::io::Write for BeijingDailyWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let date = beijing_date();
+        // 日志线程不允许因锁中毒 panic：中毒时取回内部数据继续写
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if state.file.is_none() || state.date != date {
+            let path = self.dir.join(format!("client.log.{date}"));
+            // append：进程重启/同一天多次启动都续写同一文件
+            let file = fs::OpenOptions::new().create(true).append(true).open(&path)?;
+            state.file = Some(file);
+            state.date = date;
+        }
+        let file = state
+            .file
+            .as_mut()
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "日志文件未打开"))?;
+        std::io::Write::write(file, buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(file) = state.file.as_mut() {
+            std::io::Write::flush(file)?;
+        }
+        Ok(())
+    }
+}
+
+/// 当前北京日期（YYYY-MM-DD）：固定 UTC+8，不随本机时区变化
+fn beijing_date() -> String {
+    beijing_date_of(chrono::Utc::now())
+}
+
+/// 把 UTC 时刻换算为北京日期（抽出固定时刻便于单测跨零点行为）
+fn beijing_date_of(now: chrono::DateTime<chrono::Utc>) -> String {
+    now.with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
+        .format("%Y-%m-%d")
+        .to_string()
+}
+
 /// 初始化客户端日志系统
 ///
 /// - **调试模式**（`RUST_LOG` 环境变量存在）：pretty 格式输出到 stdout
 /// - **生产模式**：紧凑格式 stdout + JSON 结构化写入日志文件（按天轮转）
-/// - 日志文件路径：`{app_data_dir}/logs/client.YYYY-MM-DD.log`
-/// - **时间格式**：北京时间（UTC+8），格式：YYYY-MM-DD HH:MM:SS.mmm
+/// - 日志文件路径：`{app_data_dir}/logs/client.log.YYYY-MM-DD`（日期为**北京时间**）
+/// - **时间格式**：stdout 为北京时间（`YYYY-MM-DD HH:MM:SS.mmm`）；JSON 落盘为
+///   带偏移的 RFC3339（`YYYY-MM-DDTHH:MM:SS.mmm+08:00`），人工可读且不丢时区
 fn init_logging(app: &tauri::App) {
-    use tracing_appender::rolling;
     use tracing_subscriber::fmt::time::FormatTime;
     use tracing_subscriber::fmt::format::Writer;
 
     // ── 北京时间格式化器 ──────────────────────────────────────
-    /// 北京时间格式化器（UTC+8）
+    /// 北京时间格式化器（UTC+8），用于 stdout 人类可读输出
     struct BeijingTime;
 
     impl FormatTime for BeijingTime {
@@ -48,6 +117,18 @@ fn init_logging(app: &tauri::App) {
             // 获取当前 UTC 时间，转换为北京时间
             let now = chrono::Utc::now().with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap());
             write!(w, "{}", now.format("%Y-%m-%d %H:%M:%S%.3f"))
+        }
+    }
+
+    /// JSON 落盘时间戳：带 +08:00 偏移的 RFC3339。
+    /// 不能复用 BeijingTime——裸本地时间字符串没有时区信息，跨时区/日志聚合
+    /// 时无法还原绝对时刻；带偏移既本地可读又不丢失时区语义。
+    struct BeijingTimeRfc3339;
+
+    impl FormatTime for BeijingTimeRfc3339 {
+        fn format_time(&self, w: &mut Writer<'_>) -> std::fmt::Result {
+            let now = chrono::Utc::now().with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap());
+            write!(w, "{}", now.format("%Y-%m-%dT%H:%M:%S%.3f+08:00"))
         }
     }
 
@@ -73,8 +154,10 @@ fn init_logging(app: &tauri::App) {
 
     let _ = fs::create_dir_all(&log_dir);
 
-    let file_appender = rolling::daily(&log_dir, "client.log");
-    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+    // 自行按北京日期切分文件：tracing-appender 的 rolling::daily 以 UTC 日期
+    // 切分，北京 00:00–08:00 的日志会写进「昨天」的文件（与落盘时间戳差 8 小时）
+    let (non_blocking, _guard) =
+        tracing_appender::non_blocking(BeijingDailyWriter::new(log_dir.clone()));
     // 泄漏 guard 使其存活到进程结束
     std::mem::forget(_guard);
 
@@ -90,6 +173,7 @@ fn init_logging(app: &tauri::App) {
             .with(
                 tracing_subscriber::fmt::layer()
                     .json()
+                    .with_timer(BeijingTimeRfc3339)
                     .with_ansi(false)
                     .with_writer(non_blocking)
                     .with_filter(tracing_subscriber::EnvFilter::new(
@@ -111,6 +195,7 @@ fn init_logging(app: &tauri::App) {
             .with(
                 tracing_subscriber::fmt::layer()
                     .json()
+                    .with_timer(BeijingTimeRfc3339)
                     .with_ansi(false)
                     .with_writer(non_blocking)
                     .with_filter(tracing_subscriber::EnvFilter::new(
@@ -1234,4 +1319,32 @@ pub fn run() {
                 proxy::cleanup_all_sessions(app);
             }
         });
+}
+
+#[cfg(test)]
+mod logging_tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn 北京日期跨零点不落后() {
+        // UTC 16:14 = 北京次日 00:14：必须算到新的一天（UTC 日期会算成 11-08）
+        let utc = chrono::DateTime::parse_from_rfc3339("2026-11-08T16:14:31Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        assert_eq!(beijing_date_of(utc), "2026-11-09");
+    }
+
+    #[test]
+    fn 日志文件名为北京日期() {
+        let dir = std::env::temp_dir().join(format!("quirel-log-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let mut writer = BeijingDailyWriter::new(dir.clone());
+        writer.write_all(b"{}\n").unwrap();
+        writer.flush().unwrap();
+        let path = dir.join(format!("client.log.{}", beijing_date()));
+        assert!(path.exists(), "日志文件未按北京日期创建: {path:?}");
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

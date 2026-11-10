@@ -112,10 +112,10 @@ pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &U
         // ===== 文件传输处理 =====
 
         // 文件传输请求
-        Payload::FileTransferRequest { direction, path, file_size, chunk_size, resume_from, frame_mode, stream_count } => {
+        Payload::FileTransferRequest { direction, path, file_size, chunk_size, resume_from, frame_mode, stream_count, ack_upload } => {
             tracing::info!("文件传输请求: direction={:?}, path={}, resume_from={:?}, frame_mode={}, stream_count={:?}", direction, path, resume_from, frame_mode, stream_count);
 
-            match handle_file_transfer_request(envelope.request_id, direction, path, *file_size, *chunk_size, *resume_from, cfg, session, audit_log.clone(), frame_mode, *stream_count).await {
+            match handle_file_transfer_request(envelope.request_id, direction, path, *file_size, *chunk_size, *resume_from, cfg, session, audit_log.clone(), frame_mode, *stream_count, *ack_upload).await {
                 Ok(response) => response,
                 Err(e) => {
                     tracing::error!("文件传输请求失败: {}", e);
@@ -442,6 +442,7 @@ pub async fn handle_file_transfer_request(
     audit_log: Arc<AuditLogger>,
     frame_mode: &str,
     stream_count: Option<u32>,
+    ack_upload: bool,
 ) -> Result<Envelope, String> {
     // 1. 生成 session_id
     let session_id = format!("transfer-{}", Uuid::new_v4());
@@ -457,6 +458,15 @@ pub async fn handle_file_transfer_request(
             // 上传：客户端上传文件到 Agent
             // 需要 file_size 参数
             let file_size = file_size.ok_or("上传文件必须提供 file_size 参数".to_string())?;
+
+            // 目标已存在同名目录：文件 rename/打开到目录在 Linux 必然失败(EISDIR)。
+            // 在建立会话前直接拒绝，避免客户端白传整个文件（大文件尤其明显）。
+            if let Ok(meta) = std::fs::metadata(path) {
+                if meta.is_dir() {
+                    tracing::warn!("上传目标已存在同名文件夹，拒绝上传: path={}", path);
+                    return Err("目标路径已存在同名文件夹，无法上传文件".to_string());
+                }
+            }
 
             // 检查文件大小限制（读全局热值：root 在设置页修改后立即生效，无需重启 Agent）
             let max_mb = crate::transfer_limit::current_mb();
@@ -543,6 +553,8 @@ pub async fn handle_file_transfer_request(
                         mtime: None,
                         frame_mode: frame_mode.to_string(),
                         stream_count,
+                        // 多流有独立的合并结果通道(MultiStreamMergeComplete)，不走单流确认
+                        ack_upload: false,
                     },
                 ))
             } else {
@@ -587,6 +599,8 @@ pub async fn handle_file_transfer_request(
                         mtime: None,
                         frame_mode: frame_mode.to_string(),
                         stream_count: 1,
+                        // 单流上传：按客户端请求回传落盘确认（rename 的真实结果）
+                        ack_upload,
                     },
                 ))
             }
@@ -648,6 +662,7 @@ pub async fn handle_file_transfer_request(
                     mtime: Some(mtime),
                     frame_mode: frame_mode.to_string(),
                     stream_count: 1,  // 下载暂不多流(下载读盘已快,瓶颈在上行)
+                    ack_upload: false,
                 },
             ))
         }

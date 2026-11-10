@@ -408,6 +408,7 @@ const enUS: TranslationSchema = {
     downloadFailed: 'Download failed: {{message}}',
     folderDownloadUnsupported: 'Folder download is not supported yet',
     folderUploadUnsupported: 'Uploading folders is not supported yet: {{name}}\n\nPlease drop files only.',
+    uploadNameIsFolder: 'A folder with the same name already exists: {{name}}. A file cannot replace it.',
     pathNotFound: 'Path not found: {{path}}',
     permChangeFailed: 'Failed to change permissions',
     ownerChangeFailed: 'Failed to change owner',

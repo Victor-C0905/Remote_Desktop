@@ -9,7 +9,7 @@
 // - ensureVisible：键盘导航把指定下标滚动进可视区（替代已不存在的
 //   scrollIntoView——未挂载的行不在 DOM 里，必须用 scrollTop 数学）
 
-import { useCallback, useEffect, useState, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useState, type RefObject } from "react";
 
 /** 窗口计算（纯函数）：返回应渲染的条目下标区间 [start, end) 与上下占位高度 */
 export function computeWindow(
@@ -49,37 +49,48 @@ export function useVirtualWindow(params: {
   const [viewportH, setViewportH] = useState(0);
   const [rafRef] = useState<{ current: number | null }>(() => ({ current: null }));
 
+  // 滚动元素身份同步：RefObject 本身永不变化，但元素可能晚于首次渲染才挂载
+  // （列表首屏是 loading/空目录分支，数据到达后 .fm-list 才出现），也可能在
+  // 刷新时先卸载再挂载。若监听 effect 只依赖 scrollRef/enabled，就会一直绑定
+  // 在「当时还不存在」的元素上：viewportH 永远为 0 → 只渲染 overscan*2 行，
+  // 目录后面全是空白（实测 12 行）。
+  // 这里每次渲染后把 ref 指向的真实元素同步进 state，元素更换时重新绑定监听。
+  const [scrollEl, setScrollEl] = useState<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    const el = enabled ? scrollRef.current : null;
+    // 仅在元素身份变化时 setState（同一元素反复渲染不会触发重渲染/死循环）
+    if (el !== scrollEl) setScrollEl(el);
+  });
+
   // 滚动：rAF 合帧（高频 scroll 只保留最新值）
   useEffect(() => {
-    const el = scrollRef.current;
-    if (!el || !enabled) return;
+    if (!scrollEl) return;
     const onScroll = () => {
       if (rafRef.current !== null) return;
       rafRef.current = requestAnimationFrame(() => {
         rafRef.current = null;
-        setScrollTop(el.scrollTop);
+        setScrollTop(scrollEl.scrollTop);
       });
     };
-    el.addEventListener("scroll", onScroll, { passive: true });
-    setScrollTop(el.scrollTop);
+    scrollEl.addEventListener("scroll", onScroll, { passive: true });
+    setScrollTop(scrollEl.scrollTop);
     return () => {
-      el.removeEventListener("scroll", onScroll);
+      scrollEl.removeEventListener("scroll", onScroll);
       if (rafRef.current !== null) {
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
       }
     };
-  }, [scrollRef, enabled]);
+  }, [scrollEl, rafRef]);
 
   // 视口高度：ResizeObserver
   useEffect(() => {
-    const el = scrollRef.current;
-    if (!el || !enabled) return;
-    const ro = new ResizeObserver(() => setViewportH(el.clientHeight));
-    ro.observe(el);
-    setViewportH(el.clientHeight);
+    if (!scrollEl) return;
+    const ro = new ResizeObserver(() => setViewportH(scrollEl.clientHeight));
+    ro.observe(scrollEl);
+    setViewportH(scrollEl.clientHeight);
     return () => ro.disconnect();
-  }, [scrollRef, enabled]);
+  }, [scrollEl]);
 
   const win = enabled
     ? computeWindow(scrollTop, viewportH, itemHeight, itemCount, overscan)

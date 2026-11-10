@@ -10,7 +10,7 @@ import {
 } from "../stores/serversStore";
 import type { ServerConfig } from "../stores/serversStore";
 import { useArchiveCapabilitiesStore } from "../stores/archiveCapabilitiesStore";
-import { useNotificationStore } from "../stores/notificationStore";
+import { pushServerNotification } from "../utils/notify";
 import { parseConnectError, getErrorInfo, buildConnectFailureText, isRetryableConnectError, AuthErrorCode } from "../types/errors";
 import { createLogger } from "../utils/logger";
 import { isTauri } from "../utils/environment";
@@ -139,15 +139,15 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
         const lostServer = useServersStore.getState().servers.find((s) => s.id === lostServerId);
         const lostInfo = code != null ? getErrorInfo(code) : null;
         // 事件监听器只注册一次（空依赖），文案经 i18n 取当前语言而非 hook 缓存
-        useNotificationStore.getState().pushNotification({
+        pushServerNotification(lostServerId, {
           title: lostInfo?.title ?? i18n.t("serverManager.lostTitle"),
           body: lostInfo?.message ?? i18n.t("serverManager.lostBody"),
           action: i18n.t("serverManager.lostAction"),
           urgency: "normal",
           source: lostServer ? lostServer.name || lostServer.host : i18n.t("serverManager.source"),
-          serverId: lostServerId,
+          // 连接可用性通知：不随当前服务器隔离，避免后台服务器掉线无人察觉
+          global: true,
         });
-
         scheduleReconnectRef.current(lostServerId, 1);
       });
 
@@ -228,7 +228,6 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
   // onRehydrateStorage 已经在 serversStore 中处理了重置逻辑
 
   // ── 连接通知派发（通知中心数据源） ──────────────────────
-  const pushNotification = useNotificationStore((s) => s.pushNotification);
 
   /** 连接失败通知（含多服务器对比提示——只读已有状态，零探测） */
   const notifyConnectFailure = useCallback((server: ServerConfig, err: unknown) => {
@@ -242,15 +241,16 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
       (others > 0
         ? `\n\n${i18n.t("errors.othersConnected", { count: others })}`
         : "");
-    pushNotification({
+    pushServerNotification(server.id, {
       title: info.title,
       body,
       action: info.action,
       urgency: info.severity,
       source: server.name || server.host,
-      serverId: server.id,
+      // 连接失败是可用性通知：始终可见
+      global: true,
     });
-  }, [pushNotification]);
+  }, []);
 
   // 连接核心逻辑：认证凭据 → remote_connect → 状态更新 → 订阅指标
   // 手动连接（connectServer）与自动重连（attemptReconnect）共用
@@ -313,7 +313,9 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
     try {
       await invoke('subscribe', {
         serverId: server.id,
-        types: [{ type: 'metrics', params: { interval_secs: 1 } }]
+        types: [{ type: 'metrics', params: { interval_secs: 1 } }],
+        // 显式 key：与文件管理器 file_changes 订阅共存（每条订阅独立流）
+        key: 'metrics',
       });
     } catch (e) {
       log.warn("系统指标订阅失败:", e);
@@ -414,12 +416,13 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
       await performConnectRef.current(server);
       log.info("自动重连成功:", serverId);
       // 重连成功通知（连接恢复）
-      useNotificationStore.getState().pushNotification({
+      pushServerNotification(serverId, {
         title: i18n.t("serverManager.reconnectRestoredTitle"),
         body: i18n.t("serverManager.reconnectRestoredBody", { name: server.name || server.host }),
         urgency: "low",
         source: server.name || server.host,
-        serverId,
+        // 恢复连接属于可用性通知：始终可见
+        global: true,
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -434,13 +437,14 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
         const display = `${i18n.t("serverManager.reconnectFailedTitle")}: ${buildConnectFailureText(err, others)}`;
         log.warn(display);
         setServerStatus(serverId, "error", parseConnectError(err));
-        useNotificationStore.getState().pushNotification({
+        pushServerNotification(serverId, {
           title: i18n.t("serverManager.reconnectFailedTitle"),
           body: buildConnectFailureText(err, others),
           action: getErrorInfo(parseConnectError(err).code).action,
           urgency: "critical",
           source: server.name || server.host,
-          serverId,
+          // 自动重连失败是可用性通知：始终可见
+          global: true,
         });
         return;
       }

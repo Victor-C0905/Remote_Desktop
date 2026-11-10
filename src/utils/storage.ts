@@ -26,7 +26,8 @@ const EXPECTED_STORE_VERSIONS: Record<string, number> = {
   // 旧 v0 文件由 persist migrate 升级
   "quirel-settings": 1,
   "quirel-wallpaper": 0,
-  "notifications": 0,
+  // v1：旧通知记录迁移为 legacy（仅「全部」视图可见），见 notificationStore
+  "notifications": 1,
   "bookmarks": 0,
   "history": 0,
 };

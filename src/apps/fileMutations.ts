@@ -27,6 +27,29 @@ export function baseNameOf(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1);
 }
 
+/** 上传临时文件（quireld_<uuid>.tmp）：内部实现细节，不属于用户可见内容。
+ *  新 Agent 的目录读取与变更推送已过滤；这里兜底旧 Agent / 历史事件，
+ *  避免上传期间或完成瞬间出现随机名临时行。 */
+export function isTransferTempName(name: string): boolean {
+  return name.startsWith("quireld_") && name.endsWith(".tmp");
+}
+
+/** 按 key 去重（保留最后一次出现，输出保持保留项的原相对顺序）。
+ *  增量补丁可能重复投递（如 rename 同时以 Both/To 事件到达），刷新能修好
+ *  说明是内存态重复——这里保证补丁本身不可能产生重复行。 */
+function dedupeTail<T>(items: T[], keyOf: (item: T) => string): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    const key = keyOf(items[i]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(items[i]);
+  }
+  out.reverse();
+  return out;
+}
+
 /** 目录直属条目：去掉 path 字段，避免浏览缓存混入绝对路径 */
 function asBrowseEntry(entry: FileEntry, name: string): FileEntry {
   return { ...entry, name, path: undefined };
@@ -51,6 +74,8 @@ export function applyBrowseChanges(
     if (change.kind === "upsert") {
       if (parentDirOf(change.path) !== currentPath) continue;
       const name = baseNameOf(change.path);
+      // 上传临时文件不进入用户视图（旧 Agent 的增量兜底）
+      if (isTransferTempName(name)) continue;
       const next = asBrowseEntry(change.entry, name);
       const idx = result.findIndex((e) => e.name === name);
       result = idx >= 0
@@ -63,30 +88,42 @@ export function applyBrowseChanges(
     const fromParent = parentDirOf(change.from);
     const toParent = parentDirOf(change.to);
     const fromName = baseNameOf(change.from);
+    const toName = baseNameOf(change.to);
+    if (isTransferTempName(toName)) continue;
 
     if (fromParent === currentPath) {
       const idx = result.findIndex((e) => e.name === fromName);
       if (toParent === currentPath) {
-        const toName = baseNameOf(change.to);
         const next = change.entry
           ? asBrowseEntry(change.entry, toName)
           : idx >= 0
             ? { ...result[idx], name: toName }
             : undefined;
         if (next) {
-          result = idx >= 0
-            ? result.map((e, i) => (i === idx ? next : e))
-            : [...result, next];
+          // 幂等：目标名已存在（同一 rename 重复投递/临时文件占位）时替换而非追加，
+          // 否则每次重复补丁都会多一行（刷新才能恢复）
+          const existingTo = result.findIndex((e) => e.name === toName);
+          if (idx >= 0) {
+            result = result.map((e, i) => (i === idx ? next : e));
+          } else if (existingTo >= 0) {
+            result = result.map((e, i) => (i === existingTo ? next : e));
+          } else {
+            result = [...result, next];
+          }
         }
       } else if (idx >= 0) {
         result = result.filter((_, i) => i !== idx);
       }
     } else if (toParent === currentPath && change.entry) {
-      result = [...result, asBrowseEntry(change.entry, baseNameOf(change.to))];
+      const existingTo = result.findIndex((e) => e.name === toName);
+      const next = asBrowseEntry(change.entry, toName);
+      result = existingTo >= 0
+        ? result.map((e, i) => (i === existingTo ? next : e))
+        : [...result, next];
     }
   }
 
-  return result;
+  return dedupeTail(result, (e) => e.name);
 }
 
 /** 搜索结果条目路径（正常由 Rust 回填完整路径；缺失时按 root 拼装兜底） */
@@ -143,6 +180,7 @@ export function applySearchChanges(
     }
 
     if (change.kind === "upsert") {
+      if (isTransferTempName(baseNameOf(change.path))) continue;
       const target = { ...change.entry, name: baseNameOf(change.path), path: change.path };
       const idx = out.findIndex((e) => searchEntryPath(e, root) === change.path);
       if (idx >= 0) {
@@ -168,10 +206,15 @@ export function applySearchChanges(
     const toName = baseNameOf(change.to);
     out = idx >= 0 ? out.filter((_, i) => i !== idx) : out;
 
-    if (source && isSearchCandidate(change.to, root, query, depth)) {
-      out = [...out, { ...source, ...(change.entry ?? {}), name: toName, path: change.to }];
+    if (source && !isTransferTempName(toName) && isSearchCandidate(change.to, root, query, depth)) {
+      const target = { ...source, ...(change.entry ?? {}), name: toName, path: change.to };
+      // 幂等：目标路径已存在时替换，避免重复 rename 补丁追加重复命中
+      const existingTo = out.findIndex((e) => searchEntryPath(e, root) === change.to);
+      out = existingTo >= 0
+        ? out.map((e, i) => (i === existingTo ? target : e))
+        : [...out, target];
     }
   }
 
-  return out;
+  return dedupeTail(out, (e) => searchEntryPath(e, root));
 }

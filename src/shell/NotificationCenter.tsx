@@ -5,8 +5,9 @@
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import "./NotificationCenter.css";
-import { useNotificationStore } from "../stores/notificationStore";
-import type { NotificationUrgency } from "../stores/notificationStore";
+import { useNotificationStore, isNotificationVisible } from "../stores/notificationStore";
+import type { AppNotification, NotificationUrgency } from "../stores/notificationStore";
+import { useServersStore, type ServerConfig } from "../stores/serversStore";
 import { SymbolicIcon } from "../components/symbolic";
 
 /* ── Utility Functions ───────────────────────────────── */
@@ -46,25 +47,37 @@ function getUrgencyClass(urgency: NotificationUrgency): string {
   return `nc-notif-urgency-${urgency}`;
 }
 
+/** 条目来源 chip：服务器名优先，系统通知回退 source */
+function originOf(n: AppNotification, servers: ServerConfig[]): string {
+  if (!n.serverId) return n.source;
+  const server = servers.find((s) => s.id === n.serverId);
+  return server ? (server.name || server.host) : (n.serverName || n.source);
+}
+
 /* ── Main Component ─────────────────────────────────── */
 
 interface NotificationCenterProps {
   isOpen: boolean;
   onClose: () => void;
+  /** 当前活动服务器；通知按它隔离（global/系统通知不受影响） */
+  activeServerId?: string | null;
 }
 
-export function NotificationCenter({ isOpen, onClose }: NotificationCenterProps) {
+export function NotificationCenter({ isOpen, onClose, activeServerId = null }: NotificationCenterProps) {
   const { t } = useTranslation();
   // 真实数据源：zustand 内存 store（连接失败/断连/恢复通知）
   const { notifications, markAsRead, dismiss, clearAll, markAllRead } = useNotificationStore();
+  const servers = useServersStore((s) => s.servers);
   const [filter, setFilter] = useState<NotificationUrgency | "all">("all");
   // 展开明细的通知 id（点击条目切换；如移动通知的逐条 src → dst）
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  const unreadCount = notifications.filter((n) => !n.read).length;
-  const criticalCount = notifications.filter((n) => n.urgency === "critical" && !n.read).length;
+  // 彻底按服务器隔离：只显示当前服务器 + 系统/连接通知
+  const visibleNotifications = notifications.filter((n) => isNotificationVisible(n, activeServerId));
+  const unreadCount = visibleNotifications.filter((n) => !n.read).length;
+  const criticalCount = visibleNotifications.filter((n) => n.urgency === "critical" && !n.read).length;
 
-  const filteredNotifications = notifications.filter((n) => {
+  const filteredNotifications = visibleNotifications.filter((n) => {
     if (filter === "all") return true;
     return n.urgency === filter;
   }).sort((a, b) => b.timestamp - a.timestamp);
@@ -80,9 +93,10 @@ export function NotificationCenter({ isOpen, onClose }: NotificationCenterProps)
   }, [isOpen, onClose]);
 
   // 打开面板即清除未读标签（badge 归零、卡片未读样式消失；期间新到通知保持未读）
+  // 只标记当前服务器可见通知为已读，其它服务器的未读状态保留
   useEffect(() => {
-    if (isOpen) markAllRead();
-  }, [isOpen, markAllRead]);
+    if (isOpen) markAllRead((n) => isNotificationVisible(n, activeServerId));
+  }, [isOpen, markAllRead, activeServerId]);
 
   if (!isOpen) return null;
 
@@ -100,11 +114,11 @@ export function NotificationCenter({ isOpen, onClose }: NotificationCenterProps)
             )}
           </div>
           <div className="nc-header-actions">
-            <button className="nc-action-btn" onClick={markAllRead} title={t('notifications.markAllReadTitle')}>
+            <button className="nc-action-btn" onClick={() => markAllRead((n) => isNotificationVisible(n, activeServerId))} title={t('notifications.markAllReadTitle')}>
               <SymbolicIcon name="emblem-ok" size={14} />
               {t('notifications.markAllRead')}
             </button>
-            <button className="nc-action-btn nc-action-danger" onClick={clearAll} title={t('notifications.clearAllTitle')}>
+            <button className="nc-action-btn nc-action-danger" onClick={() => clearAll((n) => isNotificationVisible(n, activeServerId))} title={t('notifications.clearAllTitle')}>
               <SymbolicIcon name="user-trash" size={14} />
               {t('notifications.clearAll')}
             </button>
@@ -120,28 +134,28 @@ export function NotificationCenter({ isOpen, onClose }: NotificationCenterProps)
             className={`nc-filter-btn ${filter === "all" ? "active" : ""}`}
             onClick={() => setFilter("all")}
           >
-            {t('notifications.filterAll', { count: notifications.length })}
+            {t('notifications.filterAll', { count: visibleNotifications.length })}
           </button>
           <button
             className={`nc-filter-btn ${filter === "critical" ? "active" : ""}`}
             onClick={() => setFilter("critical")}
           >
             <span className="nc-dot nc-dot-critical" />
-            {t('notifications.filterCritical', { count: notifications.filter((n) => n.urgency === "critical").length })}
+            {t('notifications.filterCritical', { count: visibleNotifications.filter((n) => n.urgency === "critical").length })}
           </button>
           <button
             className={`nc-filter-btn ${filter === "normal" ? "active" : ""}`}
             onClick={() => setFilter("normal")}
           >
             <span className="nc-dot nc-dot-normal" />
-            {t('notifications.filterNormal', { count: notifications.filter((n) => n.urgency === "normal").length })}
+            {t('notifications.filterNormal', { count: visibleNotifications.filter((n) => n.urgency === "normal").length })}
           </button>
           <button
             className={`nc-filter-btn ${filter === "low" ? "active" : ""}`}
             onClick={() => setFilter("low")}
           >
             <span className="nc-dot nc-dot-low" />
-            {t('notifications.filterLow', { count: notifications.filter((n) => n.urgency === "low").length })}
+            {t('notifications.filterLow', { count: visibleNotifications.filter((n) => n.urgency === "low").length })}
           </button>
         </div>
 
@@ -188,7 +202,7 @@ export function NotificationCenter({ isOpen, onClose }: NotificationCenterProps)
                   <div className="nc-notif-content">
                     <div className="nc-notif-header">
                       <span className="nc-notif-title">{notif.title}</span>
-                      <span className="nc-notif-source">{notif.source}</span>
+                      <span className="nc-notif-source">{originOf(notif, servers)}</span>
                     </div>
                     <div className="nc-notif-body">{notif.body}</div>
                     {notif.action && <div className="nc-notif-action">{notif.action}</div>}
