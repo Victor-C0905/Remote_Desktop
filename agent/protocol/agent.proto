@@ -118,6 +118,8 @@ message FileEntry {
     string permissions = 5;
     string owner = 6;  // 新增：属主用户名（解析失败回退 uid 数字字符串）
     string group = 7;  // 新增：属组组名（解析失败回退 gid 数字字符串）
+    bool is_symlink = 8;  // 新增：是否符号链接
+    string link_target = 9;  // 新增：符号链接目标（非链接为空）
 }
 
 message ReadFile {

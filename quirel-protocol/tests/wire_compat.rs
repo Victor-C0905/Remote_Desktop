@@ -530,13 +530,15 @@ fn read_dir_resp_with_owner_group_wire_format() {
                 permissions: "rw-r--r--".to_string(),
                 owner: "www-data".to_string(),
                 group: "www-data".to_string(),
+                is_symlink: false,
+                link_target: String::new(),
             }],
         },
     );
     let json = serde_json::to_string(&env).unwrap();
     assert_eq!(
         json,
-        r#"{"request_id":35,"payload":{"type":"read_dir_resp","data":{"path":"/srv/www","entries":[{"name":"index.html","is_dir":false,"size":1024,"mtime":"2026-09-16T00:00:00Z","permissions":"rw-r--r--","owner":"www-data","group":"www-data"}]}}}"#
+        r#"{"request_id":35,"payload":{"type":"read_dir_resp","data":{"path":"/srv/www","entries":[{"name":"index.html","is_dir":false,"size":1024,"mtime":"2026-09-16T00:00:00Z","permissions":"rw-r--r--","owner":"www-data","group":"www-data","is_symlink":false,"link_target":""}]}}}"#
     );
 }
 

@@ -118,6 +118,23 @@ export function applyThemeColors(
     root.style.setProperty('--quirel-text-disabled', colors.textDisabled);
     root.style.setProperty('--quirel-border-color', colors.borderColor);
 
+    // 旧变量名别名：查看器（Hex/PDF/图片/压缩包等）使用 --quirel-fg /
+    // --quirel-dim-fg / --quirel-error-fg，但这些变量从未定义过——浅色主题下
+    // 全部落到深色系 fallback（白字白底不可读，BUG-F-2）。统一映射到
+    // 主题文本令牌，保证随主题切换。
+    root.style.setProperty('--quirel-fg', colors.textPrimary);
+    root.style.setProperty('--quirel-dim-fg', colors.textSecondary);
+    root.style.setProperty('--quirel-error-fg', '#e01b24');
+
+    // 同类缺失别名（FileManager 悬停/输入框、查看器按钮/边框、浏览器无痕栏）：
+    // 无 fallback 时样式整条失效（悬停无高亮、内联编辑无背景）。
+    root.style.setProperty('--quirel-border', colors.borderColor);
+    root.style.setProperty('--quirel-button-bg', colors.cardBg);
+    root.style.setProperty('--quirel-button-hover-bg', colors.cardHover);
+    root.style.setProperty('--quirel-hover-bg', colors.cardHover);
+    root.style.setProperty('--quirel-input-bg', colors.viewBg);
+    root.style.setProperty('--quirel-incognito-bar', colors.headerbarBg);
+
     // 设置通知严重度圆点色板（quirel前缀，emoji 观感球体三段渐变）
     root.style.setProperty('--quirel-dot-critical-hi', colors.dotCriticalHi);
     root.style.setProperty('--quirel-dot-critical-mid', colors.dotCriticalMid);

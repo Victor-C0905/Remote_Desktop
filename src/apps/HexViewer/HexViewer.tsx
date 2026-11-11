@@ -9,6 +9,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
+import { useEscCloseWindow } from '../../window-system';
 import { createLogger } from '../../utils/logger';
 import { formatUnknownError } from '../../types/errors';
 import './HexViewer.css';
@@ -78,12 +79,15 @@ function base64ToBytes(b64: string): Uint8Array {
   return bytes;
 }
 
-export function HexViewer({ preloadData }: HexViewerProps) {
+export function HexViewer({ preloadData, windowId }: HexViewerProps) {
   const { t } = useTranslation();
   const [lines, setLines] = useState<HexLine[]>([]);
   const [fileSize, setFileSize] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // Esc 关闭窗口（BUG-VIEW-2；无内部对话框，不阻塞）
+  useEscCloseWindow(windowId);
 
   const path = preloadData?.path;
   const serverId = preloadData?.serverId;

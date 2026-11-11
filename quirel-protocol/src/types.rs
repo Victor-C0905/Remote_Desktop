@@ -68,6 +68,12 @@ pub struct FileEntry {
     /// 属组组名（如 "www-data"；旧版 Agent 响应不含此字段，必须有 default 才能向前兼容）
     #[serde(default)]
     pub group: String,
+    /// 是否符号链接（旧版 Agent 响应不含此字段，默认 false）
+    #[serde(default)]
+    pub is_symlink: bool,
+    /// 符号链接目标路径（非链接为空串；旧版 Agent 默认为空）
+    #[serde(default)]
+    pub link_target: String,
 }
 
 // 新增：文件差异类型（用于流量优化）

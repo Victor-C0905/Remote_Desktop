@@ -180,6 +180,8 @@ let _settingsStorage: TauriStorage | null = null;
 let _serversStorage: TauriStorage | null = null;
 let _secureStorage: TauriStorage | null = null;
 let _transfersStorage: TauriStorage | null = null;
+/** servers.bin 最近一次写入内容（同内容写盘跳过，见 serversStorage.setItem） */
+let _serversLastWrite: string | null = null;
 
 /**
  * 获取普通设置存储（主题、字体、壁纸等）
@@ -243,10 +245,16 @@ export const serversStorage: TauriStorage = {
     return storage.getItem(name);
   },
   setItem: async (name: string, value: string) => {
+    // 同内容跳过写盘：RTT 等高频运行时更新即使被 partialize 剥离，
+    // persist 中间件仍会高频调用 setItem；序列化结果一致时直接跳过，
+    // 避免 servers.bin 每 5 秒被无意义重写（BUG-FILES-3）。
+    if (value === _serversLastWrite) return;
+    _serversLastWrite = value;
     const storage = await getServersStorage();
     return storage.setItem(name, value);
   },
   removeItem: async (name: string) => {
+    _serversLastWrite = null;
     const storage = await getServersStorage();
     return storage.removeItem(name);
   },

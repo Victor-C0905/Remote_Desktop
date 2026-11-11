@@ -111,13 +111,19 @@ pub async fn handle_read_dir(req: ReadDir) -> WorkerResponse {
             })?
             .filter_map(|entry_result| {
                 let entry = entry_result.ok()?;
-                let metadata = entry.metadata().ok()?;
+                let lmeta = entry.metadata().ok()?;
                 let name = entry.file_name().to_string_lossy().to_string();
                 // 上传临时文件不属于用户可见内容（完成时 rename 为正式名）
                 if crate::file_stream::is_transfer_temp_name(&name) {
                     return None;
                 }
-                Some(entry_from_metadata(name, &metadata, &uid_names, &gid_names))
+                // 符号链接：保留链接标记与目标，同时按目标元数据展示类型/大小
+                //（指向目录的链接 is_dir=true，双击才能正常进入目录）
+                let (metadata, is_symlink, link_target) =
+                    resolve_entry_metadata(&entry.path(), lmeta);
+                Some(entry_from_metadata(
+                    name, &metadata, is_symlink, link_target, &uid_names, &gid_names,
+                ))
             })
             .collect();
 
@@ -190,6 +196,11 @@ pub async fn handle_read_file(req: ReadFile) -> WorkerResponse {
 
         if metadata.is_dir() {
             anyhow::bail!("这是一个目录，不能作为文件读取");
+        }
+        // 仅允许常规文件：FIFO/socket/设备文件会让 fs::read 永久阻塞
+        //（实测打开命名管道导致该 worker 线程卡死、连接掉线且需重启 agent）
+        if !metadata.file_type().is_file() {
+            anyhow::bail!("不是常规文件（管道/设备/套接字），无法读取");
         }
 
         // 10MB 大小限制
@@ -399,6 +410,13 @@ pub async fn handle_write_file(req: WriteFile) -> WorkerResponse {
                 fs::create_dir_all(parent).map_err(|e| {
                     anyhow::anyhow!("创建目录失败: {}", e)
                 })?;
+            }
+        }
+
+        // 已存在的非常规文件（FIFO/socket/设备）会让 fs::write 永久阻塞
+        if let Ok(meta) = fs::metadata(p) {
+            if !meta.file_type().is_file() {
+                anyhow::bail!("不是常规文件（管道/设备/套接字），无法写入");
             }
         }
 
@@ -1161,6 +1179,8 @@ pub(crate) struct FileEntryData {
     permissions: String,
     owner: String,
     group: String,
+    is_symlink: bool,
+    link_target: String,
 }
 
 impl From<FileEntryData> for FileEntry {
@@ -1173,8 +1193,30 @@ impl From<FileEntryData> for FileEntry {
             permissions: data.permissions,
             owner: data.owner,
             group: data.group,
+            is_symlink: data.is_symlink,
+            link_target: data.link_target,
         }
     }
+}
+
+/// 解析符号链接条目的展示元数据：返回（展示用元数据，是否链接，链接目标）。
+///
+/// DirEntry::metadata / symlink_metadata 返回 lstat（不跟随链接），
+/// 指向目录的链接会被当成普通文件、无法双击进入；这里对链接额外
+/// fs::metadata 跟随一次，用目标类型/大小展示。目标不存在（断链）
+/// 或不可访问时退回 lstat 结果，条目仍可正常显示。
+pub(crate) fn resolve_entry_metadata(
+    path: &Path,
+    lmeta: fs::Metadata,
+) -> (fs::Metadata, bool, String) {
+    if !lmeta.file_type().is_symlink() {
+        return (lmeta, false, String::new());
+    }
+    let link_target = fs::read_link(path)
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let followed = fs::metadata(path).unwrap_or(lmeta);
+    (followed, true, link_target)
 }
 
 /// 从 metadata 构造条目快照：mtime 为 RFC3339，permissions 为 9 字符，
@@ -1182,6 +1224,8 @@ impl From<FileEntryData> for FileEntry {
 pub(crate) fn entry_from_metadata(
     name: String,
     metadata: &fs::Metadata,
+    is_symlink: bool,
+    link_target: String,
     uid_names: &HashMap<u32, String>,
     gid_names: &HashMap<u32, String>,
 ) -> FileEntryData {
@@ -1216,6 +1260,8 @@ pub(crate) fn entry_from_metadata(
         permissions: format_permissions(metadata),
         owner,
         group,
+        is_symlink,
+        link_target,
     }
 }
 
@@ -1226,7 +1272,7 @@ fn stat_entry_opt(
     uid_names: &HashMap<u32, String>,
     gid_names: &HashMap<u32, String>,
 ) -> Option<FileEntryData> {
-    let metadata = match fs::metadata(path) {
+    let lmeta = match fs::symlink_metadata(path) {
         Ok(m) => m,
         Err(e) => {
             tracing::error!("构建文件条目失败（元数据不可读）: path={}, error={}", path.display(), e);
@@ -1237,7 +1283,11 @@ fn stat_entry_opt(
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
-    Some(entry_from_metadata(name, &metadata, uid_names, gid_names))
+    // 与 read_dir 同口径：链接保留标记并按目标展示类型/大小
+    let (metadata, is_symlink, link_target) = resolve_entry_metadata(path, lmeta);
+    Some(entry_from_metadata(
+        name, &metadata, is_symlink, link_target, uid_names, gid_names,
+    ))
 }
 
 // ===== 属主/属组名称解析(手写解析 /etc/passwd 与 /etc/group,不引入新依赖) =====

@@ -6,6 +6,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { WindowManager } from './WindowManager';
 import { WindowRegistry } from './WindowRegistry';
+import { computeSnapRect } from '../../components/window-shell/aeroSnap';
 import type { Window as AppWindow } from './Window';
 
 function makeRegistry() {
@@ -98,6 +99,85 @@ describe('WindowManager 会话快照', () => {
     expect(r2.preloadData).toEqual({ path: '/home/u/a.txt', serverId: 'srv1' });
     // 焦点顺序末位 = 快照时的激活窗口
     expect(m2.getActive()?.id).toBe(w2.id);
+  });
+
+  it('最大化状态随快照往返，并按恢复时工作区铺满', async () => {
+    const m1 = new WindowManager(makeRegistry());
+    const w = await m1.create('files');
+    w.setPosition({ x: 120, y: 80 });
+    w.setSize({ width: 700, height: 500 });
+    const vw = window.innerWidth;
+    const vh = window.innerHeight - 32;
+    m1.maximize(w.id, { x: 0, y: 0 }, { width: vw, height: vh });
+    flushSave(m1);
+
+    // 「刷新」：新 manager 读同一快照
+    const m2 = new WindowManager(makeRegistry());
+    m2.loadSession();
+    const r = m2.getAll()[0];
+    expect(r.maximized).toBe(true);
+    // 不沿用快照时刻的旧矩形——按恢复时工作区归一化
+    expect(r.position).toEqual({ x: 0, y: 0 });
+    expect(r.size).toEqual({ width: vw, height: vh });
+    // 最大化前几何仍可用于还原
+    expect(r.preMaximizeState).toEqual({
+      position: { x: 120, y: 80 },
+      size: { width: 700, height: 500 },
+    });
+    // 还原路径不受影响
+    m2.unmaximize(r.id);
+    expect(r.maximized).toBe(false);
+    expect(r.position).toEqual({ x: 120, y: 80 });
+    expect(r.size).toEqual({ width: 700, height: 500 });
+  });
+
+  it('吸附状态随快照往返，并按恢复时工作区重算矩形', async () => {
+    const m1 = new WindowManager(makeRegistry());
+    const w = await m1.create('files');
+    w.setPosition({ x: 100, y: 100 });
+    w.setSize({ width: 800, height: 600 });
+    const vw = window.innerWidth;
+    const vh = window.innerHeight - 32;
+    m1.snap(w.id, 'bottom-right', computeSnapRect('bottom-right', { width: vw, height: vh }));
+    flushSave(m1);
+
+    const m2 = new WindowManager(makeRegistry());
+    m2.loadSession();
+    const r = m2.getAll()[0];
+    expect(r.snapZone).toBe('bottom-right');
+    expect(r.position).toEqual({ x: vw / 2, y: vh / 2 });
+    expect(r.size).toEqual({ width: vw / 2, height: vh / 2 });
+    expect(r.preSnapState).toEqual({
+      position: { x: 100, y: 100 },
+      size: { width: 800, height: 600 },
+    });
+  });
+
+  it('旧快照缺少布局字段时按默认值恢复（向后兼容）', () => {
+    sessionStorage.setItem(
+      'wm.session',
+      JSON.stringify({
+        windows: [
+          {
+            id: 'win-old',
+            appId: 'files',
+            position: { x: 10, y: 20 },
+            size: { width: 800, height: 600 },
+            minimized: false,
+            layout: 'free',
+            preloadData: null,
+          },
+        ],
+        order: ['win-old'],
+      }),
+    );
+    const m = new WindowManager(makeRegistry());
+    m.loadSession();
+    const win = m.getAll()[0];
+    expect(win.maximized).toBe(false);
+    expect(win.snapZone).toBeNull();
+    expect(win.position).toEqual({ x: 10, y: 20 });
+    expect(win.size).toEqual({ width: 800, height: 600 });
   });
 
   it('v1 裸数组快照兼容（旧格式无损恢复）', () => {

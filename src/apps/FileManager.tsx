@@ -313,13 +313,16 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     if (isOffline) return;
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") {
+        // 仅响应活动窗口：多文件管理器窗口共存时共用 document，
+        // 否则后台窗口的搜索框会被一并抢焦点（实测同类问题）
+        if (manager.getActive()?.id !== windowId) return;
         e.preventDefault();
         searchInputRef.current?.focus();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [isOffline]);
+  }, [isOffline, manager, windowId]);
 
   // ── 表头排序（点击翻转）────────────────────────────────
   // 会话内状态：目录加载与点击表头共用；目录优先规则见 fileTable.sortFileEntries
@@ -2816,6 +2819,17 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                       ) : (
                         <>
                           <span className="fm-fn-text">{entry.name}</span>
+                          {/* 符号链接标记：目标类型已由 Agent 跟随解析（目录链接可进入） */}
+                          {entry.is_symlink && (
+                            <span
+                              className="fm-fn-link"
+                              title={entry.link_target
+                                ? t("fileManager.symlinkTo", { target: entry.link_target })
+                                : t("fileManager.symlink")}
+                            >
+                              ↗
+                            </span>
+                          )}
                           {/* 搜索命中在嵌套目录：名称后缀相对路径（Windows/Nautilus 副标题样式） */}
                           {activeSearch && entry.path && hitDirLabel(entry.path) && (
                             <span className="fm-fn-subdir">{hitDirLabel(entry.path)}</span>
@@ -2825,7 +2839,9 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                     </div>
                     <span className="fm-file-size">{entry.is_dir ? "—" : formatSize(entry.size)}</span>
                     <span className="fm-file-mtime">{formatDate(entry.mtime)}</span>
-                    <span className="fm-file-type">{typeKeyLabel(typeKeyOf(entry))}</span>
+                    <span className="fm-file-type">
+                      {entry.is_symlink ? t("fileManager.symlink") : typeKeyLabel(typeKeyOf(entry))}
+                    </span>
                     <span className="fm-file-perm">{entry.permissions}</span>
                   </div>
                   );
@@ -2861,7 +2877,19 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                   onDoubleClick={() => handleRowDoubleClick(entry)}
                   onContextMenu={(e) => handleContextMenu(e, entry)}
                 >
-                  <div className="fm-gi-icon"><AppIcon name={getFileIcon(entry)} size={36} /></div>
+                  <div className="fm-gi-icon">
+                    <AppIcon name={getFileIcon(entry)} size={36} />
+                    {entry.is_symlink && (
+                      <span
+                        className="fm-gi-link"
+                        title={entry.link_target
+                          ? t("fileManager.symlinkTo", { target: entry.link_target })
+                          : t("fileManager.symlink")}
+                      >
+                        ↗
+                      </span>
+                    )}
+                  </div>
                   {editingEntry?.name === entry.name && editingEntry?.path === entry.path ? (
                     <input
                       type="text"

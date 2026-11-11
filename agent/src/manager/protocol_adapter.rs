@@ -290,6 +290,8 @@ fn proto_file_entry_to_serde(entry: &crate::protocol::generated::FileEntry) -> F
         permissions: entry.permissions.clone(),
         owner: entry.owner.clone(),
         group: entry.group.clone(),
+        is_symlink: entry.is_symlink,
+        link_target: entry.link_target.clone(),
     }
 }
 

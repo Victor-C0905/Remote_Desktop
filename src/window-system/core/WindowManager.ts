@@ -549,13 +549,28 @@ export class WindowManager implements IWindowManager {
         const sameAppCount = restoredPerApp.get(windowData.appId) ?? 0;
         if (sameAppCount >= allowed) continue;
         const window = WindowClass.deserialize(windowData);
-        const minX = -(windowData.size.width - MIN_VISIBLE);
-        const maxX = containerWidth - MIN_VISIBLE;
-        const maxY = containerHeight - MIN_VISIBLE;
-        window.setPosition({
-          x: Math.max(minX, Math.min(windowData.position.x, maxX)),
-          y: Math.max(0, Math.min(windowData.position.y, maxY)),
-        });
+        if (window.maximized) {
+          // 最大化：按恢复时的工作区铺满，不沿用快照时刻的旧工作区尺寸
+          // （否则主窗口尺寸变化后刷新会得到「普通窗口 + 旧最大化矩形」）
+          window.setPosition({ x: 0, y: 0 });
+          window.setSize({ width: containerWidth, height: containerHeight });
+        } else if (window.snapZone) {
+          // 吸附：按恢复时的工作区重算半屏/四分之一屏矩形
+          const rect = computeSnapRect(window.snapZone, {
+            width: containerWidth,
+            height: containerHeight,
+          });
+          window.setPosition({ x: rect.x, y: rect.y });
+          window.setSize({ width: rect.width, height: rect.height });
+        } else {
+          const minX = -(windowData.size.width - MIN_VISIBLE);
+          const maxX = containerWidth - MIN_VISIBLE;
+          const maxY = containerHeight - MIN_VISIBLE;
+          window.setPosition({
+            x: Math.max(minX, Math.min(windowData.position.x, maxX)),
+            y: Math.max(0, Math.min(windowData.position.y, maxY)),
+          });
+        }
         this.windows.add(window);
         restoredPerApp.set(windowData.appId, sameAppCount + 1);
         restored.add(window.id);

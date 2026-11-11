@@ -24,6 +24,7 @@ import {
   childrenAtPath, collectExtractFiles, selectedRootNodes,
 } from './tree';
 import type { ArchiveTreeNode } from './tree';
+import { useEscCloseWindow } from '../../window-system';
 import { scanConflicts, toConflictNodes } from './conflictScan';
 import { useArchiveListing } from './hooks/useArchiveListing';
 import { useEntryActions } from './hooks/useEntryActions';
@@ -50,7 +51,7 @@ interface PendingExtract {
   bytes: number;
 }
 
-export function ArchiveViewer({ preloadData }: ArchiveViewerProps) {
+export function ArchiveViewer({ preloadData, windowId }: ArchiveViewerProps) {
   const { t } = useTranslation();
   const path = preloadData?.path;
   const serverId = preloadData?.serverId;
@@ -153,6 +154,10 @@ export function ArchiveViewer({ preloadData }: ArchiveViewerProps) {
     pending: PendingExtract;
   } | null>(null);
   const [checkingTarget, setCheckingTarget] = useState(false);
+
+  // Esc 关闭窗口（BUG-VIEW-2）；解压/冲突对话框打开时让位给对话框处理
+  const dialogBlocking = Boolean(extractDialog || conflict);
+  useEscCloseWindow(windowId, dialogBlocking);
   const archiveConflictNodes = useMemo(() => toConflictNodes(tree), [tree]);
 
   /** 读取目标目录；不存在/不可读由扫描器按无冲突跳过该子树 */

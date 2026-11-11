@@ -148,6 +148,9 @@ pub async fn handle_execute_command(req: ExecuteCommand) -> WorkerResponse {
 
             cmd.stdout(std::process::Stdio::piped());
             cmd.stderr(std::process::Stdio::piped());
+            // 远程命令无交互输入：stdin 必须置空，否则 unzip 等会继承 agent 的
+            // 终端等待密码输入，直到 300s 超时才失败（实测加密 zip 解压挂起）
+            cmd.stdin(std::process::Stdio::null());
 
             // 先 spawn 再记录 PID（供超时 kill），随后等待输出
             let child = cmd.spawn()?;

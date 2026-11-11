@@ -17,7 +17,7 @@ import { useFileManager } from '../hooks/useFileManager';
 import { TextEditorPane } from './TextEditorPane';
 import type { CursorPosition, DocStats, TextEditorPaneHandle } from './TextEditorPane';
 import { HexEditorPane } from './HexEditorPane';
-import { detectLineEnding, formatFileSize } from '../utils/format';
+import { formatFileSize } from '../utils/format';
 import '../TextEditor.css';
 
 const log = createLogger('EditorDocument');
@@ -55,6 +55,9 @@ export interface DocStatus {
 
   /** 换行符（仅文本文件） */
   eol: 'LF' | 'CRLF';
+
+  /** 源文件编码（仅文本文件，如 "utf-8" / "gb18030"） */
+  encoding: string;
 
   /** 文件大小标签（仅二进制文件，如 "1.5 KB"） */
   sizeLabel: string;
@@ -115,6 +118,7 @@ export const EditorDocument = memo(
       isLoading,
       isSaving,
       error,
+      failedPath,
       localContent,
       openFile,
       saveFile,
@@ -177,17 +181,23 @@ export const EditorDocument = memo(
 
     // 状态上报：文档任一相关状态变化时聚合上报
     // （hasUnsavedChanges 的身份随其内部依赖变化，作为依赖即可覆盖脏标记变化）
+    // EOL/编码取打开时记录的原值：内容在编辑器内部已统一为 LF，
+    // 不能再用 detectLineEnding(content) 推断（CRLF 文件会误显示 LF）
     const eol = fileState?.fileType === 'text'
-      ? detectLineEnding(fileState.content)
+      ? fileState.lineEnding
       : 'LF';
+    const encoding = fileState?.fileType === 'text' ? fileState.encoding : '';
     const sizeLabel = fileState?.fileType === 'binary'
       ? formatFileSize(fileState.binaryData.length)
       : '';
 
+    // 打开失败：路径保留在标签/状态栏，渲染只读失败态而非可编辑空文档
+    const effectivePath = fileState?.path ?? failedPath;
+
     useEffect(() => {
       onStatus(tabId, {
-        label: labelOf(fileState?.path ?? null, initialPath),
-        path: fileState?.path ?? null,
+        label: labelOf(effectivePath, initialPath),
+        path: effectivePath,
         fileType: fileState?.fileType ?? null,
         mtime: fileState?.mtime ?? 0,
         dirty: hasUnsavedChanges(),
@@ -198,11 +208,12 @@ export const EditorDocument = memo(
         docStats,
         hexMode,
         eol,
+        encoding,
         sizeLabel,
       });
     }, [
-      onStatus, tabId, initialPath, fileState, hasUnsavedChanges,
-      isLoading, isSaving, error, cursor, docStats, hexMode, eol,
+      onStatus, tabId, initialPath, fileState, failedPath, effectivePath, hasUnsavedChanges,
+      isLoading, isSaving, error, cursor, docStats, hexMode, eol, encoding,
     ]);
 
     // 命令句柄：菜单栏直连当前文档（fm 经 ref 取最新值）
@@ -271,6 +282,19 @@ export const EditorDocument = memo(
         return (
           <div className="te-loading">
             <div className="te-spinner" aria-hidden="true" />
+          </div>
+        );
+      }
+
+      // 打开失败：保留失败态（文件名 + 错误），不再回退成可编辑空白文档。
+      // 之前失败后 fileState=null 会走「未命名新文件」分支，用户看到的是
+      // 一个可编辑空文档 + 状态栏「未命名文件」，容易误以为文件已打开。
+      if (failedPath) {
+        return (
+          <div className="te-open-failed" role="alert">
+            <div className="te-open-failed-title">{i18n.t('textEditor.openFailedTitle')}</div>
+            <div className="te-open-failed-path" title={failedPath}>{failedPath}</div>
+            <div className="te-open-failed-hint">{i18n.t('textEditor.openFailedHint')}</div>
           </div>
         );
       }

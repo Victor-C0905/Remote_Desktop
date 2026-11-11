@@ -12,7 +12,7 @@
 import { useState, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import i18n from '../../../i18n';
-import type { FileState, ApplyDiffResponse } from '../types/editor';
+import type { FileState, ApplyDiffResponse, TextEncoding } from '../types/editor';
 import { calculateDiff, convertToTauriFormat } from '../utils/diff';
 import { createLogger } from '../../../utils/logger';
 import { formatUnknownError } from '../../../types/errors';
@@ -27,6 +27,8 @@ interface ReadFileResult {
   content: string;
   mtime: number; // 文件修改时间（Unix timestamp）
   size: number;
+  /** 内容解码所用编码（"utf-8" / "gb18030"；旧版后端可能不返回） */
+  encoding?: string;
 }
 
 /**
@@ -53,6 +55,9 @@ interface UseFileManagerReturn {
 
   /** 错误信息（如果有） */
   error: string | null;
+
+  /** 打开失败的文件路径（失败后不再回退成可编辑空文档） */
+  failedPath: string | null;
 
   /** 本地缓存的内容（用于新文件） */
   localContent: string;
@@ -99,6 +104,27 @@ async function calculateChecksum(content: string): Promise<string> {
   const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 
   return hashHex;
+}
+
+/**
+ * 统一换行符为 LF（编辑器内部表示）
+ *
+ * CodeMirror 文档以 LF 分行，CRLF 原文若直接进入编辑会被规范化，
+ * 导致打开即与源校验和不一致（误报未保存）。打开时先归一化，
+ * 保存时再按 lineEnding 还原。
+ */
+function normalizeLineEndings(text: string): string {
+  return text.replace(/\r\n/g, '\n');
+}
+
+/** 按源文件换行符还原文本（保存前调用） */
+function applyLineEnding(text: string, lineEnding: 'LF' | 'CRLF'): string {
+  return lineEnding === 'CRLF' ? text.replace(/\n/g, '\r\n') : text;
+}
+
+/** 归一化后端返回的编码名（未知值按 UTF-8 处理） */
+function normalizeEncoding(encoding: string | undefined): TextEncoding {
+  return encoding?.toLowerCase() === 'gb18030' ? 'gb18030' : 'utf-8';
 }
 
 /**
@@ -162,6 +188,9 @@ export function useFileManager(): UseFileManagerReturn {
   // 错误状态
   const [error, setError] = useState<string | null>(null);
 
+  // 打开失败的文件路径（失败后渲染只读失败态，不再回退成可编辑空文档）
+  const [failedPath, setFailedPath] = useState<string | null>(null);
+
   // 原始校验和（用于检测是否有未保存的变更）
   const [originalChecksum, setOriginalChecksum] = useState<string>('');
 
@@ -188,6 +217,7 @@ export function useFileManager(): UseFileManagerReturn {
 
     // 清除之前的错误
     setError(null);
+    setFailedPath(null);
     setIsLoading(true);
 
     try {
@@ -198,6 +228,8 @@ export function useFileManager(): UseFileManagerReturn {
         checksum: '',
         isLocked: false,
         fileType: 'loading',
+        encoding: 'utf-8',
+        lineEnding: 'LF',
       });
 
       // 调用 Tauri API 读取远程文件
@@ -206,8 +238,14 @@ export function useFileManager(): UseFileManagerReturn {
         path,
       });
 
+      // 记录源换行符/编码，内容统一为 LF 再入编辑器：
+      // 否则 CodeMirror 会把 CRLF 规范化，打开即触发脏标记；
+      // 保存时按原换行符/编码还原，避免静默改写源文件
+      const lineEnding = result.content.includes('\r\n') ? 'CRLF' : 'LF';
+      const content = normalizeLineEndings(result.content);
+
       // 计算校验和
-      const checksum = await calculateChecksum(result.content);
+      const checksum = await calculateChecksum(content);
 
       // 创建文件状态（使用真实的 mtime）
       setFileState({
@@ -216,11 +254,13 @@ export function useFileManager(): UseFileManagerReturn {
         checksum,
         isLocked: false,
         fileType: 'text',
-        content: result.content,
+        content,
+        encoding: normalizeEncoding(result.encoding),
+        lineEnding,
       });
 
       // 缓存原始内容（用于差异计算）
-      setOriginalContent(result.content);
+      setOriginalContent(content);
 
       setOriginalChecksum(checksum);
     } catch (err) {
@@ -229,6 +269,8 @@ export function useFileManager(): UseFileManagerReturn {
       setError(i18n.t('textEditor.err.openFile', { path, message: errorMessage }));
       setFileState(null);
       setOriginalChecksum('');
+      // 记录失败路径：渲染层据此显示只读失败态，而不是可编辑的空白文档
+      setFailedPath(path);
     } finally {
       setIsLoading(false);
     }
@@ -264,9 +306,12 @@ export function useFileManager(): UseFileManagerReturn {
       return;
     }
 
-    // 自动选择保存策略
+    // 自动选择保存策略：
+    // - 差异同步只适用于 UTF-8 + LF（Agent 端按 UTF-8 行文本应用差异）
+    // - 非 UTF-8 或 CRLF 文件必须全量写回，否则会转码/丢换行
     const content = fileState.content || '';
-    const shouldUseDiffSync = useDiffSync ?? (content.length >= 1024);
+    const diffCompatible = fileState.encoding === 'utf-8' && fileState.lineEnding === 'LF';
+    const shouldUseDiffSync = diffCompatible && (useDiffSync ?? (content.length >= 1024));
 
     if (shouldUseDiffSync && fileState.path) {
       // 差异同步保存
@@ -400,15 +445,19 @@ export function useFileManager(): UseFileManagerReturn {
     try {
       log.info('开始全量保存:', fileState.path);
 
+      // 按源换行符/编码写回：编辑器内部统一 LF，直接写回会让 CRLF 变 LF；
+      // encoding 由 Rust 侧用于把文本编码成源文件字节（GB18030 等）
+      const contentToWrite = applyLineEnding(fileState.content, fileState.lineEnding);
       const result = await invoke<WriteFileResult>('remote_write_file', {
         serverId,
         path: fileState.path,
-        content: fileState.content,
+        content: contentToWrite,
+        encoding: fileState.encoding,
       });
 
       log.info('保存成功:', result);
 
-      // 重新计算校验和
+      // 重新计算校验和（编辑器内部内容仍为 LF，与 originalContent 对齐）
       const newChecksum = await calculateChecksum(fileState.content);
 
       // 更新文件状态
@@ -425,6 +474,9 @@ export function useFileManager(): UseFileManagerReturn {
         };
       });
 
+      // 全量保存后当前内容即新的基线：不回填会让后续差异保存以打开时的
+      // 旧内容为基准，产生多余的删除/插入差异
+      setOriginalContent(fileState.content);
       setOriginalChecksum(newChecksum);
     } catch (err) {
       const errorMessage = formatUnknownError(err);
@@ -441,8 +493,14 @@ export function useFileManager(): UseFileManagerReturn {
    * @param serverId - 服务器 ID
    */
   const saveWithDiff = useCallback(async (serverId: string): Promise<void> => {
+    // 非 UTF-8 / CRLF 文件无法在 Agent 端按 UTF-8 行文本应用差异，
+    // 显式要求差异保存时降级为全量保存（内容仍按源编码/换行写回）
+    if (fileState && (fileState.encoding !== 'utf-8' || fileState.lineEnding !== 'LF')) {
+      await saveFile(serverId, false);
+      return;
+    }
     await saveWithDiffInternal(serverId);
-  }, [saveWithDiffInternal]);
+  }, [fileState, saveFile, saveWithDiffInternal]);
 
   /**
    * 保存到指定路径（用于新文件）
@@ -470,11 +528,12 @@ export function useFileManager(): UseFileManagerReturn {
     setIsSaving(true);
 
     try {
-      // 调用 Tauri API 保存远程文件
+      // 调用 Tauri API 保存远程文件（新文件固定以 UTF-8 写入）
       const result = await invoke<WriteFileResult>('remote_write_file', {
         serverId,
         path,
         content: localContent,
+        encoding: 'utf-8',
       });
 
       // 计算校验和
@@ -488,6 +547,8 @@ export function useFileManager(): UseFileManagerReturn {
         isLocked: false,
         fileType: 'text',
         content: localContent,
+        encoding: 'utf-8',
+        lineEnding: 'LF',
       };
 
       setFileState(newFileState);
@@ -513,6 +574,7 @@ export function useFileManager(): UseFileManagerReturn {
     setFileState(null);
     setOriginalChecksum('');
     setError(null);
+    setFailedPath(null);
     setIsLoading(false);
     setIsSaving(false);
     setLocalContent(''); // 清空本地缓存
@@ -604,6 +666,7 @@ export function useFileManager(): UseFileManagerReturn {
     isLoading,
     isSaving,
     error,
+    failedPath,
     localContent,
     openFile,
     saveFile,

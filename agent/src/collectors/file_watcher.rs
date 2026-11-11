@@ -24,7 +24,8 @@ use crate::auth::{UserExecutor, UserSession};
 use crate::event_bus::EventBus;
 use crate::file_stream::is_transfer_temp_name;
 use crate::worker::handlers::file::{
-    build_gid_name_map, build_uid_name_map, entry_from_metadata, FileEntryData,
+    build_gid_name_map, build_uid_name_map, entry_from_metadata, resolve_entry_metadata,
+    FileEntryData,
 };
 
 /// 单次增量推送的条目上限：超过（典型是解压几千个文件）直接 resync，
@@ -469,11 +470,16 @@ async fn stat_as_user(
             let base = Path::new(&dir_str);
             let mut out: Vec<(String, FileEntryData)> = Vec::new();
             for name in names {
-                // 与 read_dir 口径一致：DirEntry::metadata 不跟随符号链接
-                if let Ok(md) = std::fs::symlink_metadata(base.join(&name)) {
+                // 与 read_dir 口径一致：lstat 识别链接后再按目标补全展示元数据
+                let entry_path = base.join(&name);
+                if let Ok(lmd) = std::fs::symlink_metadata(&entry_path) {
+                    let (md, is_symlink, link_target) =
+                        resolve_entry_metadata(&entry_path, lmd);
                     out.push((
                         name.clone(),
-                        entry_from_metadata(name, &md, &uid_names, &gid_names),
+                        entry_from_metadata(
+                            name, &md, is_symlink, link_target, &uid_names, &gid_names,
+                        ),
                     ));
                 }
             }

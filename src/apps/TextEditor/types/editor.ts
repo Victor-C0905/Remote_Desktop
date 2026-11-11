@@ -5,6 +5,11 @@
  */
 
 /**
+ * 文本编码（保存时按源编码写回）
+ */
+export type TextEncoding = 'utf-8' | 'gb18030';
+
+/**
  * 文件状态
  *
  * 表示一个打开的文件的完整状态，包括文件路径、内容、元数据和锁定信息
@@ -32,6 +37,12 @@ export type FileState = {
 
   /** 内部版本号（用于防止竞态条件，仅在文本文件编辑时使用） */
   _updateVersion?: number;
+
+  /** 源文件编码（打开时由 Agent 探测；保存时按原编码写回） */
+  encoding: TextEncoding;
+
+  /** 源文件换行符（保存时按原换行符写回） */
+  lineEnding: 'LF' | 'CRLF';
 } & (
   | {
       /** 文件类型：文本文件 */

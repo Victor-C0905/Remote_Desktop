@@ -10,5 +10,7 @@ export interface FileEntry {
   permissions: string;
   owner?: string;  // 所有者（旧版 Agent 不下发时为 undefined，显示回退 "—"）
   group?: string;  // 所属组（同上）
+  is_symlink?: boolean;  // 符号链接标记（旧版 Agent 不下发）
+  link_target?: string;  // 符号链接目标（非链接为空）
   path?: string;   // 搜索命中自带完整路径（嵌套目录定位依据）；普通浏览为 undefined
 }

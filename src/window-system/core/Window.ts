@@ -15,6 +15,11 @@ export interface PersistedWindowData {
   layout: LayoutType;
   /** 应用上下文（文件管理器目录、编辑器路径等；纯 JSON 深拷贝） */
   preloadData: any;
+  /** 运行时布局状态（刷新恢复时保留；旧快照缺省为默认值） */
+  maximized?: boolean;
+  snapZone?: SnapZone | null;
+  preMaximizeState?: { position: { x: number; y: number }; size: { width: number; height: number } } | null;
+  preSnapState?: { position: { x: number; y: number }; size: { width: number; height: number } } | null;
 }
 
 /**
@@ -234,11 +239,29 @@ export class Window {
       minimized: this._minimized,
       layout: this._layout,
       preloadData,
+      // 布局状态随快照往返：否则刷新后最大化窗口会变成「普通窗口 + 旧工作区
+      // 尺寸」——表现为最大化丢失且几何停在旧工作区（第二轮视觉测试 F2-A
+      // 的同类症状；旧快照无这些字段时按默认值恢复，向后兼容）
+      maximized: this._maximized,
+      snapZone: this._snapZone,
+      preMaximizeState: this._preMaximizeState
+        ? {
+            position: { ...this._preMaximizeState.position },
+            size: { ...this._preMaximizeState.size },
+          }
+        : null,
+      preSnapState: this._preSnapState
+        ? {
+            position: { ...this._preSnapState.position },
+            size: { ...this._preSnapState.size },
+          }
+        : null,
     };
   }
 
   /**
-   * 从会话快照反序列化。运行时状态（最大化/snap/preMaximize）一律回默认；
+   * 从会话快照反序列化。几何与最大化/吸附状态照快照恢复（最大化/吸附的
+   * 实际矩形由 WindowManager 按恢复时的工作区重新归一化，不沿用旧尺寸）；
    * preloadData 存在时置 ready——应用挂载即拿到上下文（文件管理器目录、
    * 编辑器路径等），不重走加载态。
    */
@@ -246,6 +269,20 @@ export class Window {
     const window = new Window(data.id, data.appId, data.position, data.size);
     window._minimized = data.minimized;
     window._layout = data.layout;
+    window._maximized = data.maximized === true;
+    window._snapZone = data.snapZone ?? null;
+    window._preMaximizeState = data.preMaximizeState
+      ? {
+          position: { ...data.preMaximizeState.position },
+          size: { ...data.preMaximizeState.size },
+        }
+      : null;
+    window._preSnapState = data.preSnapState
+      ? {
+          position: { ...data.preSnapState.position },
+          size: { ...data.preSnapState.size },
+        }
+      : null;
     if (data.preloadData != null) {
       window._preloadData = data.preloadData;
       window._preloadState = 'ready';

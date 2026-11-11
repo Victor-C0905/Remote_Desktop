@@ -607,6 +607,25 @@ export function WindowShell({
     return () => el.removeEventListener('mousedown', onDown);
   }, [onFocus]);
 
+  // ── 活动窗口切换时释放他窗焦点（键盘隔离）─────────────
+  // 所有窗口共用同一 document：点击标题栏/经 Dock 激活只改窗口层级，
+  // 浏览器焦点仍留在原窗口的输入框或终端隐藏 textarea 上，键盘输入会继续
+  // 进入非活动窗口（实测：hex 查看器激活时仍可向后台终端执行命令）。
+  // 激活时只释放「属于其它窗口」的焦点；失活时释放「属于本窗口」的焦点。
+  // 均限定在 [data-window-id] 内，避免波及 portal 到 body 的对话框/菜单。
+  useEffect(() => {
+    const el = windowRef.current;
+    if (!el) return;
+    const ae = document.activeElement;
+    if (!(ae instanceof HTMLElement) || ae === document.body) return;
+    const aeShell = ae.closest('[data-window-id]');
+    if (isActive) {
+      if (aeShell && aeShell !== el) ae.blur();
+    } else if (aeShell === el) {
+      ae.blur();
+    }
+  }, [isActive]);
+
   // ── 标题栏拖拽/双击最大化：原生监听（理由同上）────────
   useEffect(() => {
     if (mode === 'frameless') return;
@@ -670,6 +689,11 @@ export function WindowShell({
       ref={windowRef}
       className={`${styles.windowShell}${isActive ? ` ${styles.windowShellActive}` : ` ${styles.windowShellNotActive}`}${isDragging ? ` ${styles.windowShellDragging}` : ` ${styles.windowShellNotDragging}`}${isMaximized ? ` ${styles.windowShellMaximized}` : ''}`}
       data-window-id={windowId}
+      // 布局状态可读化：最大化/吸附是运行时状态，控制按钮 title 却是静态文案
+      // （WindowControls 恒为「最大化」），自动化只能用这两个属性判定，避免
+      // 把吸附窗口误判成「最大化丢失」（第二轮视觉测试 F2-A 的误报来源）
+      data-maximized={isMaximized ? 'true' : 'false'}
+      data-snap-zone={snapZone ?? ''}
       data-resizing={isResizing ? 'true' : 'false'} // ✅ 新增：用于 CSS 禁用动画
       style={{
         left: 0,

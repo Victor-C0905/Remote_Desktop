@@ -12,6 +12,7 @@ export { WindowEventBus } from './events/WindowEventBus';
 // Hook exports
 export { useWindowManager } from './hooks/useWindowManager';
 export { useWindowEvent } from './hooks/useWindowEvent';
+export { useEscCloseWindow } from './hooks/useEscCloseWindow';
 
 // Context exports
 export {
