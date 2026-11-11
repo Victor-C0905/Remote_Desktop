@@ -2038,16 +2038,30 @@ async fn run_multi_stream_upload(
 
     // 7. 等待 MultiStreamMergeComplete (主 stream recv)
     tracing::info!(task_id, "所有段上传完成,等待合并结果");
-    // 合并结果用 4字节len + JSON(和 agent write_message 一致,不是 raw 帧)
-    // 长度前缀封顶校验（net_frame）+ 超时兜底（同 ACK 读取，审计 M13）
-    let merge_body = tokio::time::timeout(
+    // 合并结果为裸控制帧：[4B len][1B type=0x01][JSON]
+    // （agent/src/server/quic.rs 用 raw_frame::write_control_frame 发送）。
+    // 不能按 [4B len][JSON] 读：帧类型字节会被当作 JSON 首字节，
+    // serde 必然报 "expected value at line 1 column 1"，
+    // 导致 ≥10MB 上传在 100% 后误报 transfer_protocol_unexpected。
+    // 帧头长度校验（≤10MB）+ 超时兜底（同 ACK 读取，审计 M13）
+    let (merge_type, merge_len) = tokio::time::timeout(
         FILE_CHUNK_TIMEOUT,
-        crate::net_frame::read_len_prefixed(&mut primary_recv),
+        read_frame_header(&mut primary_recv),
     )
     .await
     .map_err(|_| timeout_err().with_detail("read merge result timed out"))?
-    .map_err(net_err)?
-    .ok_or_else(|| net_err("merge result stream finished early"))?;
+    .map_err(net_err)?;
+    if merge_type != RAW_TYPE_CONTROL {
+        return Err(AppError::new(codes::TRANSFER_PROTOCOL_UNEXPECTED)
+            .with_detail(format!("merge result: unexpected frame type {}", merge_type)));
+    }
+    let merge_body = tokio::time::timeout(
+        FILE_CHUNK_TIMEOUT,
+        read_control_body(&mut primary_recv, merge_len),
+    )
+    .await
+    .map_err(|_| timeout_err().with_detail("read merge result body timed out"))?
+    .map_err(net_err)?;
     let merge_env = Envelope::decode(&merge_body).map_err(|e| {
         AppError::new(codes::TRANSFER_PROTOCOL_UNEXPECTED)
             .with_detail(format!("decode merge result: {}", e))
