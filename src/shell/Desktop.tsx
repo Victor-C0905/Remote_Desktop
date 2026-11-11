@@ -94,12 +94,9 @@ const DesktopWindow = memo(function DesktopWindow({
   if (!win || !app || !windowState) return null;
 
 
-  // 最大化尺寸（工作区占满屏幕）
-  const maxWindowSize = {
-    width: window.innerWidth,
-    height: window.innerHeight - 32, // 减去 TopBar 高度
-  };
-  const maxWindowPosition = { x: 0, y: 0 }; // 工作区内 y=0
+  // 最大化几何不在此处缓存：视口变化后的窗口自适应有 120ms 防抖，
+  // render 时快照在主窗口刚缩放完立刻点最大化时会落到过期工作区
+  // （第二轮视觉测试 F2-A 的可疑竞态）。onMaximize 内点击时现取。
 
   return (
     <WindowShell
@@ -123,7 +120,11 @@ const DesktopWindow = memo(function DesktopWindow({
         if (windowState.maximized) {
           manager.unmaximize(windowId);
         } else {
-          manager.maximize(windowId, maxWindowPosition, maxWindowSize);
+          manager.maximize(
+            windowId,
+            { x: 0, y: 0 }, // 工作区内 y=0
+            { width: window.innerWidth, height: window.innerHeight - 32 }, // 减去 TopBar
+          );
         }
       }}
       // ✅ Aero Snap 新增回调
@@ -342,6 +343,7 @@ function DesktopContent() {
         criticalNotifications={criticalNotifications}
         onActivitiesClick={() => setOverviewVisible((v) => !v)}
         onNotificationClick={() => setNotificationOpen(true)}
+        onConnectionClick={() => createApp("settings")}
       />
 
       {/* Workspace: TopBar 下方的工作区 */}

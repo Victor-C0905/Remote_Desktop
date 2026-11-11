@@ -331,6 +331,45 @@
   opacity: 0.8;
 }
 
+/* ── 打开失败态 ──────────────────────────────────────────── */
+/* 读取失败后不再回退成可编辑空白文档：保留文件名与失败提示，
+   避免用户误以为文件已打开并在空缓冲区里编辑 */
+.te-open-failed {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 60px 40px;
+  background: var(--quirel-window-bg);
+  text-align: center;
+}
+
+.te-open-failed-title {
+  font-family: var(--font-ui);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--quirel-text-primary);
+}
+
+.te-open-failed-path {
+  max-width: 80%;
+  font-family: var(--font-mono);
+  font-size: var(--font-small);
+  color: var(--quirel-text-secondary);
+  word-break: break-all;
+}
+
+.te-open-failed-hint {
+  max-width: 80%;
+  font-family: var(--font-ui);
+  font-size: var(--font-small);
+  color: var(--quirel-text-secondary);
+  opacity: 0.8;
+  line-height: 1.5;
+}
+
 /* ── 内联错误横幅 ────────────────────────────────────────── */
 /* 出错时出现在编辑区上方（danger 语义令牌），内容区保持可用 */
 .te-error-banner {

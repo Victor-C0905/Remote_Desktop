@@ -140,8 +140,15 @@ export const useServersStore = create<ServersState & ServersActions>()(
       // 落盘前无条件剥离凭据：keyring 未就绪时保留明文等于把密码/私钥
       // 写在磁盘上（审计 M18）。代价是 keyring 故障期间新编辑的凭据仅存
       // 内存不落盘——secretsSet 失败通知会明确告知用户修复后重新保存
+      // 同时剥离 rttMs：RTT 是纯运行时数据（~5s 一次的 server_rtt 事件
+      // 持续改写内存态），不剥离会让 persist 每 5 秒全量写盘 servers.bin
+      //（BUG-FILES-3）。RTT 不参与任何持久化语义，重水合后本就归零。
       partialize: (state) => ({
-        servers: state.servers.map(stripSecrets),
+        servers: state.servers.map((s) => {
+          const { rttMs, ...rest } = stripSecrets(s);
+          void rttMs;
+          return rest;
+        }),
         activeServerId: state.activeServerId,
       }),
       // 加载时重置所有服务器状态为 disconnected；随后从 keyring 装配凭据

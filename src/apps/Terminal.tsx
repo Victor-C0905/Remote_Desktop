@@ -30,11 +30,21 @@ const log = createLogger('Terminal');
 
 // ── Adwaita Terminal 主题 ────────────────────────────────────────────
 const ADWAITA_TERMINAL_THEME = {
-  background: '#1e1e1e',
-  foreground: '#ffffff',
+  background: '#1e1e1e',  foreground: '#ffffff',
   cursor: '#4ec9b0',
   cursorAccent: '#1e1e1e',
   selectionBackground: '#264f78',
+};
+
+// ── 搜索高亮装饰配色（SearchAddon decorations）─────────────────────
+// 显式传入 decoration 配色：不传时 addon 退回「选中高亮」路径，在 WebGL
+// 渲染器下实测无可见反馈（BUG-TERM-1）。装饰层为 DOM overlay，与渲染器无关。
+const SEARCH_DECORATIONS = {
+  matchBackground: 'rgba(83, 139, 208, 0.40)',
+  activeMatchBackground: 'rgba(255, 152, 0, 0.55)',
+  matchOverviewRuler: '#538bd0',
+  activeMatchOverviewRuler: '#ff9800',
+  activeMatchColorOverviewRuler: '#ff9800',
 };
 
 // ── Tab 元数据 ────────────────────────────────────────────────────
@@ -543,6 +553,20 @@ function TerminalInstance({
     try { fitAddonRef.current?.fit(); } catch (e) { log.debug('fit 调整失败:', e); }
   }, [fontSize, cursorBlink, osMinimized]);
 
+  // onTerminalReady 以 ref 持有：下方 isActive 同步 effect 不随父组件重渲染重跑
+  const onTerminalReadyRef = useRef(onTerminalReady);
+  useEffect(() => { onTerminalReadyRef.current = onTerminalReady; });
+
+  // isActive 翻转 / 会话重建时同步父组件的「活动终端」refs：
+  // onTerminalReady 只在实例创建时回调，父组件 refs 会滞留在最后创建的
+  // tab 上——切回旧 tab 后搜索/复制仍作用于不可见终端（BUG-TERM-1）。
+  useEffect(() => {
+    const addon = searchAddonRef.current;
+    if (isActive && terminalRef.current && addon) {
+      onTerminalReadyRef.current?.(terminalRef.current, sessionIdRef.current, addon);
+    }
+  }, [isActive, terminalEpoch]);
+
   // 渲染容器 div
   return (
     <div
@@ -839,6 +863,11 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
   const [fontSize, setFontSize] = useState(14);
   const [cursorBlink, setCursorBlink] = useState(true);
   const [searchText, setSearchText] = useState('');
+  /** 搜索结果统计（onDidChangeResults）；null=尚未搜索 */
+  const [searchStats, setSearchStats] = useState<{ index: number; count: number } | null>(null);
+  /** 最近一次查找是否无结果（用于「无结果」提示） */
+  const [searchMiss, setSearchMiss] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   // ── OS 最小化闸门（Tier1）────────────────────────────────────
   // 透明窗口破坏 WebView2 遮挡检测：最小化后页面仍被判定"可见"，PTY 输出
@@ -866,6 +895,8 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
   const activeTerminalRef = useRef<Terminal | null>(null);
   const activeSessionIdRef = useRef<string | null>(null);
   const activeSearchAddonRef = useRef<SearchAddon | null>(null);
+  /** 搜索结果事件注销句柄（addon 随 tab 重建，旧监听需先 dispose） */
+  const resultEventDisposableRef = useRef<{ dispose: () => void } | null>(null);
 
   // ── 首次打开：创建第一个 tab ─────────────────────────
   // 记录初始 tab id：initialCommand 仅对它生效（新建 tab 不重复执行脚本）
@@ -981,40 +1012,75 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
   };
 
   // ── 搜索功能 ────────────────────────────────────────────────
+  // 注意：必须显式传 decorations（见 SEARCH_DECORATIONS 注释）。
+  // 查找后把焦点还给输入框：点击按钮会让 input 失焦，连按查找/回车才可持续。
+  const focusSearchInput = () => searchInputRef.current?.focus();
+
   const handleSearch = () => {
     const searchAddon = activeSearchAddonRef.current;
     if (searchAddon && searchText) {
       try {
-        searchAddon.findNext(searchText, {
+        const found = searchAddon.findNext(searchText, {
           caseSensitive: false,
           wholeWord: false,
+          decorations: SEARCH_DECORATIONS,
         });
-        log.info('✅ 搜索:', searchText);
+        setSearchMiss(!found);
+        log.info('✅ 搜索:', searchText, found ? '(命中)' : '(无结果)');
       } catch (e) {
         log.warn('❌ 搜索失败:', e);
+        setSearchMiss(true);
       }
+    } else {
+      setSearchMiss(Boolean(searchText));
     }
     setContextMenu(null);
+    focusSearchInput();
   };
 
   // ── 搜索上一个/下一个 ────────────────────────────────────────
   const handleSearchPrev = () => {
     const searchAddon = activeSearchAddonRef.current;
     if (searchAddon && searchText) {
-      searchAddon.findPrevious(searchText, { caseSensitive: false, wholeWord: false });
+      try {
+        const found = searchAddon.findPrevious(searchText, {
+          caseSensitive: false,
+          wholeWord: false,
+          decorations: SEARCH_DECORATIONS,
+        });
+        setSearchMiss(!found);
+      } catch (e) {
+        log.warn('❌ 搜索失败:', e);
+        setSearchMiss(true);
+      }
     }
+    focusSearchInput();
   };
 
   const handleSearchNext = () => {
     const searchAddon = activeSearchAddonRef.current;
     if (searchAddon && searchText) {
-      searchAddon.findNext(searchText, { caseSensitive: false, wholeWord: false });
+      try {
+        const found = searchAddon.findNext(searchText, {
+          caseSensitive: false,
+          wholeWord: false,
+          decorations: SEARCH_DECORATIONS,
+        });
+        setSearchMiss(!found);
+      } catch (e) {
+        log.warn('❌ 搜索失败:', e);
+        setSearchMiss(true);
+      }
     }
+    focusSearchInput();
   };
 
   // ── 快捷键系统 ────────────────────────────────────────────────
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // 仅响应活动窗口：多终端窗口共存时共用 document，否则一次
+      // Ctrl+Shift+W 会关闭后台窗口的标签并杀掉其正在运行的任务（实测同类问题）
+      if (manager.getActive()?.id !== windowId) return;
       // Ctrl+Shift+C: 复制
       if (e.ctrlKey && e.shiftKey && e.key.toUpperCase() === 'C') {
         e.preventDefault();
@@ -1069,16 +1135,25 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [tabs, activeTabId, activeServerId, searchText]);
+  }, [tabs, activeTabId, activeServerId, searchText, manager, windowId]);
 
   // ── 窗口事件监听（窗口系统集成）───────────────────────────────────────
   // 监听窗口获得焦点事件：自动聚焦活动的终端
-  // 注意：若活动终端正在 IME 合成中，跳过 focus() 以避免 compositionEnd 丢失导致输入卡死
+  // 注意：若活动终端正在 IME 合成中，跳过 focus() 以避免 compositionEnd 丢失导致输入卡死；
+  // 若用户正与输入框交互（搜索栏等），同样跳过——否则终端会把焦点从搜索框抢走，
+  // 搜索框键盘编辑失效（BUG-TERM-1 关联问题）
   useWindowEvent('window:focused', (event) => {
     if (event.windowId === windowId) {
+      const ae = document.activeElement;
+      const userInInput = ae instanceof HTMLElement &&
+        (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable);
       const terminal = activeTerminalRef.current;
       if (terminal && (terminal as any).__isComposing) {
         log.debug('窗口获得焦点，但终端正在 IME 合成，跳过 focus()');
+        return;
+      }
+      if (userInInput) {
+        log.debug('窗口获得焦点，但用户正与输入框交互，跳过 focus()');
         return;
       }
       log.debug('窗口获得焦点，自动聚焦终端');
@@ -1141,19 +1216,26 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
         <div className="terminal-search-bar">
           <span className="terminal-search-label">{t('terminal.searchLabel')}</span>
           <input
+            ref={searchInputRef}
             className="terminal-search-input"
             value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
+            onChange={(e) => { setSearchText(e.target.value); setSearchMiss(false); setSearchStats(null); }}
             onKeyDown={(e) => {
               if (e.key === 'Enter') handleSearch();
             }}
             autoFocus
             placeholder={t('terminal.searchPlaceholder')}
           />
+          {searchStats && (
+            <span className="terminal-search-stats">{searchStats.index + 1}/{searchStats.count}</span>
+          )}
+          {searchMiss && (
+            <span className="terminal-search-miss">{t('terminal.searchNoResult')}</span>
+          )}
           <button className="terminal-search-button" onClick={handleSearchPrev} title={t('terminal.searchPrev')}>↑</button>
           <button className="terminal-search-button" onClick={handleSearchNext} title={t('terminal.searchNext')}>↓</button>
           <button className="terminal-search-button" onClick={handleSearch}>{t('terminal.searchFind')}</button>
-          <button className="terminal-search-button" onClick={() => setShowSearch(false)}>{t('terminal.close')}</button>
+          <button className="terminal-search-button" onClick={() => { setShowSearch(false); setSearchStats(null); setSearchMiss(false); }}>{t('terminal.close')}</button>
         </div>
       )}
 
@@ -1187,6 +1269,14 @@ export function TerminalApp({ windowId, preloadData }: TerminalAppProps) {
                 activeTerminalRef.current = terminal;
                 activeSessionIdRef.current = sessionId;
                 activeSearchAddonRef.current = searchAddon;
+                // 搜索结果统计（N/M 反馈）：addon 每次查找后 fire；卸载时注销
+                resultEventDisposableRef.current?.dispose();
+                resultEventDisposableRef.current = searchAddon.onDidChangeResults(
+                  (r: { resultIndex: number; resultCount: number }) => {
+                    setSearchStats(r.resultCount > 0 ? { index: r.resultIndex, count: r.resultCount } : null);
+                    if (r.resultCount === 0) setSearchMiss(true);
+                  },
+                );
               }}
             />
           </div>

@@ -10,6 +10,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
+import { useEscCloseWindow } from '../../window-system';
 import { createLogger } from '../../utils/logger';
 import { formatUnknownError } from '../../types/errors';
 import './PDFViewer.css';
@@ -63,7 +64,7 @@ function base64ToBytes(b64: string): Uint8Array {
   return bytes;
 }
 
-export function PDFViewer({ preloadData }: PDFViewerProps) {
+export function PDFViewer({ preloadData, windowId }: PDFViewerProps) {
   const { t } = useTranslation();
   const [numPages, setNumPages] = useState(0);
   const [pageNum, setPageNum] = useState(1);
@@ -74,6 +75,9 @@ export function PDFViewer({ preloadData }: PDFViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   // 渲染任务引用（防止快速翻页时旧渲染覆盖新页面）
   const renderTaskRef = useRef<{ cancel: () => void; promise: Promise<void> } | null>(null);
+
+  // Esc 关闭窗口（BUG-VIEW-2；无内部对话框，不阻塞）
+  useEscCloseWindow(windowId);
 
   const path = preloadData?.path;
   const serverId = preloadData?.serverId;

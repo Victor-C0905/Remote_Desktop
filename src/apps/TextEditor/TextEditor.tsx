@@ -29,6 +29,7 @@ import { ChromeTabStrip } from '../../components/ChromeTabStrip/ChromeTabStrip';
 import { isDialogOpen } from '../../components/Dialog/Dialog';
 import { ConfirmDialog } from '../../components/Dialog/ConfirmDialog';
 import { useServerManager } from '../../context/ServerManager';
+import { useServersStore } from '../../stores/serversStore';
 import { useWindowManager } from '../../window-system/WindowManagerContext';
 import { EditorDocument } from './components/EditorDocument';
 import type { DocStatus, EditorDocumentHandle } from './components/EditorDocument';
@@ -133,6 +134,14 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? tabs[0];
   const activeStatus: DocStatus | null = tabStatuses[activeTab.id] ?? null;
 
+  // 页签绑定服务器：已打开文件固定回其来源服务器。切换活动服务器后
+  // 若沿用 activeServerId 保存，会把旧服务器的内容写到新服务器同路径
+  // 文件（跨服串台/覆盖，已实测复现）；未命名页签无来源，跟随活动服务器。
+  const servers = useServersStore((s) => s.servers);
+  const tabServerId = activeTab.initialServerId ?? activeServerId;
+  const tabServer = tabServerId ? (servers.find((s) => s.id === tabServerId) ?? null) : null;
+  const tabServerName = tabServer?.name ?? (tabServerId === activeServerId ? (activeServer?.name ?? null) : null);
+
   /** 文档状态上报（引用稳定，避免 EditorDocument memo 失效） */
   const handleStatus = useCallback((tabId: string, status: DocStatus) => {
     setTabStatuses((prev) => ({ ...prev, [tabId]: status }));
@@ -180,11 +189,14 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
     const handleKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key === 's') {
         event.preventDefault();
+        // 仅响应活动窗口：多编辑器窗口共存时共用 document，
+        // 否则一次 Ctrl+S 会让后台窗口的脏文档一并保存/弹另存为（实测）
+        if (manager.getActive()?.id !== windowId) return;
         // 模态弹窗（保存/目录选择）打开期间，宿主快捷键让位
         if (isDialogOpen()) return;
-        if (activeServerId) {
+        if (tabServerId) {
           if (activeStatus?.path) {
-            docRefs.current.get(activeTab.id)?.save(activeServerId);
+            docRefs.current.get(activeTab.id)?.save(tabServerId);
           } else {
             // 未命名文件：走另存为流程
             setShowSaveDialog(true);
@@ -195,7 +207,7 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeServerId, activeStatus, activeTab, handleStatus]);
+  }, [tabServerId, activeStatus, activeTab, handleStatus, manager, windowId]);
 
   // ── 渲染：标题栏页签条（chrome-tabs 库；空白区域可拖拽窗口）──
 
@@ -248,8 +260,8 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
                 shortcut: 'Ctrl+S',
                 disabled: !canSave,
                 onClick: () => {
-                  if (activeServerId && activeStatus?.path) {
-                    docRefs.current.get(activeTab.id)?.save(activeServerId);
+                  if (tabServerId && activeStatus?.path) {
+                    docRefs.current.get(activeTab.id)?.save(tabServerId);
                   } else {
                     // 未命名文件：走另存为流程
                     setShowSaveDialog(true);
@@ -296,9 +308,9 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
         {/* 路径面包屑（仅已打开文件时显示分段） */}
         {activeStatus?.path && (
           <div className="te-breadcrumb" title={activeStatus.path}>
-            {activeServer && (
+            {tabServerName && (
               <>
-                <span className="te-crumb te-crumb-server">{activeServer.name}</span>
+                <span className="te-crumb te-crumb-server">{tabServerName}</span>
                 <span className="te-crumb-sep">›</span>
               </>
             )}
@@ -397,12 +409,12 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
         </AppLayout>
       </div>
 
-      <StatusBar status={activeStatus} serverName={activeServer?.name ?? null} />
+      <StatusBar status={activeStatus} serverName={tabServerName} />
 
       {/* 另存为对话框（绑定活动页签） */}
       <SaveDialog
         isOpen={showSaveDialog}
-        serverId={activeServerId ?? ''}
+        serverId={tabServerId ?? ''}
         defaultDirectory={
           activeStatus?.path
             ? parentRemotePath(activeStatus.path)
@@ -412,8 +424,12 @@ export function TextEditor({ windowId, preloadData }: TextEditorProps) {
         }
         defaultFileName={activeStatus?.path ? pathTail(activeStatus.path) : 'untitled.txt'}
         onSave={async (path) => {
-          if (activeServerId) {
-            await docRefs.current.get(activeTab.id)?.saveAs(activeServerId, path);
+          if (tabServerId) {
+            await docRefs.current.get(activeTab.id)?.saveAs(tabServerId, path);
+            // 另存为后页签绑定新路径的目标服务器（否则后续 Ctrl+S 仍回旧服务器）
+            setTabs((prev) => prev.map((t) => (
+              t.id === activeTab.id ? { ...t, initialServerId: tabServerId, initialPath: path } : t
+            )));
           }
           setShowSaveDialog(false);
         }}

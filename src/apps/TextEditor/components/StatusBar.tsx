@@ -51,7 +51,9 @@ export function StatusBar({ status, serverName }: StatusBarProps): React.ReactEl
     );
   }
 
-  const isText = status.fileType === 'text' || status.fileType === null; // 未命名新文件等同文本编辑
+  // 打开失败态：路径存在但 fileType 为 null（不再伪装成可编辑文本）
+  const failed = status.fileType === null && status.path !== null;
+  const isText = status.fileType === 'text' || (status.fileType === null && !failed);
   const isBinary = status.fileType === 'binary';
   const untitled = status.path === null;
 
@@ -86,15 +88,15 @@ export function StatusBar({ status, serverName }: StatusBarProps): React.ReactEl
       </span>,
     );
   }
-  leftItems.push(
-    <span key="size" className="te-status-item">
-      {isBinary
-        ? status.sizeLabel
-        : isText
-          ? t('textEditor.chars', { count: status.docStats?.chars ?? 0 })
-          : t('textEditor.chars', { count: 0 })}
-    </span>,
-  );
+  if (isText || isBinary) {
+    leftItems.push(
+      <span key="size" className="te-status-item">
+        {isBinary
+          ? status.sizeLabel
+          : t('textEditor.chars', { count: status.docStats?.chars ?? 0 })}
+      </span>,
+    );
+  }
 
   // 右组：文件属性（语言 / 编码 / 换行符 / 保存状态 / 修改时间 / 服务器）
   const rightItems: React.ReactNode[] = [];
@@ -105,10 +107,10 @@ export function StatusBar({ status, serverName }: StatusBarProps): React.ReactEl
       </span>,
     );
   }
-  if (!untitled || isBinary) {
+  if ((!untitled || isBinary) && !failed) {
     rightItems.push(
       <span key="enc" className="te-status-item">
-        {isBinary ? t('textEditor.binary') : 'UTF-8'}
+        {isBinary ? t('textEditor.binary') : (status.encoding || 'utf-8').toUpperCase()}
       </span>,
     );
   }

@@ -77,6 +77,24 @@
   outline-offset: -2px;
 }
 
+/* 搜索结果统计（N/M）与无结果提示 */
+.terminal-search-stats {
+  color: var(--quirel-text-secondary);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.terminal-search-miss {
+  color: var(--quirel-danger-fg);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 .terminal-search-button {
   padding: 4px 12px;
   border: none;

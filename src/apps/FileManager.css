@@ -655,6 +655,15 @@
   white-space: nowrap;
 }
 
+/* 符号链接标记（列表）：出现在文件名后，title 显示链接目标 */
+.fm-list .fm-list-row .fm-file-name .fm-fn-link {
+  flex-shrink: 0;
+  margin-left: 4px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--quirel-accent-bg);
+}
+
 /* Inline Editing Input (List View) */
 .fm-list .fm-list-row .fm-file-name .fm-fn-edit-input {
   /* 移除固定宽度，使用 inline style 的动态宽度 */
@@ -722,9 +731,23 @@
 }
 
 .fm-grid .fm-grid-item .fm-gi-icon {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* 符号链接标记（网格）：图标右下角角标 */
+.fm-grid .fm-grid-item .fm-gi-link {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  padding: 0 3px;
+  border-radius: 50%;
+  background: var(--quirel-card-bg);
+  color: var(--quirel-accent-bg);
+  font-size: 11px;
+  line-height: 1.2;
 }
 
 .fm-grid .fm-grid-item .fm-gi-label {

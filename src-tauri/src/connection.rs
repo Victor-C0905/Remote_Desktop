@@ -1152,18 +1152,19 @@ pub async fn remote_read_file(server_id: String, path: String, app: tauri::AppHa
                 })?;
             // UTF-8 优先；失败时回退 GB18030（GBK 超集，覆盖中文服务器常见编码）
             // 注：二进制文件不会走到这里——FileOpener 先经 file_info 路由，is_text=false 不进编辑器
-            let content_text = match String::from_utf8(content_bytes) {
-                Ok(s) => s,
+            // encoding 随内容一起回传：保存时按原编码写回，避免 GBK 文件被静默转成 UTF-8
+            let (content_text, encoding) = match String::from_utf8(content_bytes) {
+                Ok(s) => (s, "utf-8".to_string()),
                 Err(e) => {
                     let (decoded, _, had_errors) = encoding_rs::GB18030.decode(e.as_bytes());
                     if had_errors {
                         return Err(AppError::new(codes::FILE_NOT_UTF8).with_detail(e.to_string()));
                     }
                     tracing::info!("[ReadFile] UTF-8 解码失败，已按 GB18030 回退解码");
-                    decoded.into_owned()
+                    (decoded.into_owned(), "gb18030".to_string())
                 }
             };
-            Ok(RemoteReadFileResponse { path, content: content_text, mtime, size })
+            Ok(RemoteReadFileResponse { path, content: content_text, mtime, size, encoding })
         }
         Payload::Error { message, .. } => Err(agent_error(message)),
         _ => Err(AppError::new(codes::UNEXPECTED_RESPONSE)),
@@ -1176,6 +1177,8 @@ pub struct RemoteReadFileResponse {
     pub content: String,
     pub mtime: u64, // 文件修改时间（Unix timestamp）
     pub size: u64,
+    /// 内容解码时使用的编码（"utf-8" / "gb18030"）；保存时按此编码写回
+    pub encoding: String,
 }
 
 /// 文件格式探测结果（camelCase 序列化，与前端风格对齐）
@@ -1443,12 +1446,34 @@ pub async fn remote_open_locally(
 
 #[tauri::command]
 #[tracing::instrument(skip(content, app), fields(server_id = %server_id, path = %path))]
-pub async fn remote_write_file(server_id: String, path: String, content: String, app: tauri::AppHandle) -> Result<RemoteWriteFileResponse, AppError> {
+pub async fn remote_write_file(
+    server_id: String,
+    path: String,
+    content: String,
+    encoding: Option<String>,
+    app: tauri::AppHandle,
+) -> Result<RemoteWriteFileResponse, AppError> {
     tracing::info!("[WriteFile] server_id={}, path={}", server_id, path);
     // Agent 协议要求 content 为 base64 编码（支持二进制文件）
-    // 前端传入的是 UTF-8 文本，这里编码为 base64
+    // 前端传入的是已解码的文本；按源文件编码写回（默认 UTF-8），
+    // 避免 GBK 等非 UTF-8 文件在保存时被静默转码
     use base64::Engine;
-    let content_b64 = base64::engine::general_purpose::STANDARD.encode(content.as_bytes());
+    let encoding = encoding.unwrap_or_else(|| "utf-8".to_string());
+    let content_bytes: Vec<u8> = match encoding.as_str() {
+        "utf-8" | "UTF-8" | "" => content.into_bytes(),
+        "gb18030" | "GB18030" | "gbk" | "GBK" => {
+            let (bytes, _, had_errors) = encoding_rs::GB18030.encode(&content);
+            // encode() 会把不可表示的字符替换掉；宁可直接失败也不静默损坏内容
+            if had_errors {
+                return Err(agent_error(
+                    "当前文件编码 GB18030 无法表示新增字符，请改用 UTF-8 另存".to_string(),
+                ));
+            }
+            bytes.into_owned()
+        }
+        other => return Err(agent_error(format!("不支持的文本编码: {other}"))),
+    };
+    let content_b64 = base64::engine::general_purpose::STANDARD.encode(content_bytes);
     let resp = remote_send(server_id, Payload::WriteFileRequest { path, content: content_b64 }, app).await?;
     match resp.payload {
         Payload::WriteFileResponse { path, mtime, size, entry } => Ok(RemoteWriteFileResponse { path, mtime, size, entry }),

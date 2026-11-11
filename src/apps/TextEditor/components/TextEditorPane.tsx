@@ -363,6 +363,24 @@ export const TextEditorPane = forwardRef<TextEditorPaneHandle, TextEditorPanePro
     });
     viewRef.current = view;
 
+    // 初始统计：updateListener 只在 docChanged/selectionSet 时触发，初次创建
+    // （文件内容随初始 state 进入）不触发——状态栏会一直显示 0 行 0 字符
+    //（BUG-EDIT-1）。创建后立即补推一次光标与统计。
+    {
+      const doc = view.state.doc;
+      const sel = view.state.selection.main;
+      const headLine = doc.lineAt(sel.head);
+      callbacksRef.current.onCursorChange?.({
+        line: headLine.number,
+        column: sel.head - headLine.from + 1,
+      });
+      callbacksRef.current.onStatsChange?.({
+        lines: doc.lines,
+        chars: doc.length,
+        selected: sel.to - sel.from,
+      });
+    }
+
     // cleanup 只调度延迟销毁（假重跑的 setup 会取消它；真实卸载照常执行）
     return scheduleViewDestroy;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅挂载时创建一次

@@ -33,6 +33,8 @@ interface TopBarProps {
   criticalNotifications: number;
   onActivitiesClick: () => void;
   onNotificationClick: () => void;
+  /** 点击连接状态指示：打开设置-连接页（BUG-SHELL-1，纯展示不可点曾是反直觉点） */
+  onConnectionClick?: () => void;
 }
 
 export const TopBar = memo(function TopBar({
@@ -42,6 +44,7 @@ export const TopBar = memo(function TopBar({
   criticalNotifications,
   onActivitiesClick,
   onNotificationClick,
+  onConnectionClick,
 }: TopBarProps) {
   const { t } = useTranslation();
   const { activeServer, servers } = useServerManager();
@@ -131,7 +134,12 @@ export const TopBar = memo(function TopBar({
         {t('topbar.activities')}
       </button>
       <div className={styles.separator} />
-      <div className={styles.connectionIndicator}>
+      <div
+        className={styles.connectionIndicator}
+        onClick={onConnectionClick}
+        role={onConnectionClick ? "button" : undefined}
+        title={onConnectionClick ? t('topbar.openConnectionSettings') : undefined}
+      >
         <div
           className={styles.connectionDot}
           style={{ background: statusServer ? getStatusColor(statusServer.status) : "#9a9996" }}

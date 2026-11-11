@@ -9,6 +9,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
+import { useEscCloseWindow } from '../../window-system';
 import { createLogger } from '../../utils/logger';
 import { formatUnknownError } from '../../types/errors';
 import './ImageViewer.css';
@@ -33,7 +34,7 @@ interface RemoteBinaryFile {
   size: number;
 }
 
-export function ImageViewer({ preloadData }: ImageViewerProps) {
+export function ImageViewer({ preloadData, windowId }: ImageViewerProps) {
   const { t } = useTranslation();
   const [dataUri, setDataUri] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -43,6 +44,9 @@ export function ImageViewer({ preloadData }: ImageViewerProps) {
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   // 拖拽状态
   const dragRef = useRef<{ startX: number; startY: number; baseX: number; baseY: number } | null>(null);
+
+  // Esc 关闭窗口（BUG-VIEW-2；无内部对话框，不阻塞）
+  useEscCloseWindow(windowId);
 
   const path = preloadData?.path;
   const serverId = preloadData?.serverId;

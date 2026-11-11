@@ -130,6 +130,9 @@ webpack-cache/
 *.old
 *.orig
 
+# ── 可视化测试证据（截图/帧序列/控制台日志：体积大且可再生）──
+docs/testing/evidence-*/
+
 # ── 证书和密钥（敏感信息）─
 *.pem
 *.key

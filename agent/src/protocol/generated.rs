@@ -215,6 +215,12 @@ pub struct FileEntry {
     /// 新增：属组组名（解析失败回退 gid 数字字符串）
     #[prost(string, tag = "7")]
     pub group: ::prost::alloc::string::String,
+    /// 新增：是否符号链接
+    #[prost(bool, tag = "8")]
+    pub is_symlink: bool,
+    /// 新增：符号链接目标（非链接为空）
+    #[prost(string, tag = "9")]
+    pub link_target: ::prost::alloc::string::String,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

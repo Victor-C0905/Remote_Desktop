@@ -310,8 +310,8 @@
 /* ── Server List ────────────────────────────────────── */
 .st-server-list {
   display: grid; /* ✅ 核心修改：grid布局，所有列表项共享同一套列宽度标准 */
-  grid-template-columns: 15px minmax(100px, 1.2fr) minmax(120px, 0.8fr) minmax(60px, 1fr) auto; /* ✅ 修改：状态点固定15px，名称/地址/时间列最小宽度收紧 */
-  gap: 4px 12px; /* ✅ 行间距4px，列间距12px */
+  grid-template-columns: 12px minmax(80px, 1.2fr) minmax(90px, 0.8fr) minmax(48px, 0.8fr) auto; /* 最小宽度收紧：窄卡片（~410px）下 hover 的编辑/删除按钮不再溢出裁切（BUG-FILES-5） */
+  gap: 4px 8px; /* 行间距4px，列间距8px */
   width: 100%; /* ✅ 新增：确保列表宽度完全填充父容器 */
   box-sizing: border-box; /* ✅ 新增：确保宽度计算正确 */
 }
@@ -1148,6 +1148,7 @@
 /* 强调色选择 */
 .st-accent-options {
   display: flex;
+  flex-wrap: wrap;  /* 窄窗口换行而非溢出裁切（BUG-SET-1：图标主题第二张卡片曾被切掉） */
   gap: 8px;
 }
 

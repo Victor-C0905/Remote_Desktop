@@ -33,6 +33,18 @@
   --quirel-text-disabled:    rgba(0, 0, 0, 0.38);
   --quirel-text-on-accent:   #ffffff;
 
+  /* 旧变量名别名（查看器使用）：缺省时各查看器落到深色系 fallback，
+     浅色主题白字白底不可读（BUG-F-2）。applyThemeColors 会在运行时覆盖。 */
+  --quirel-fg:               rgba(0, 0, 0, 0.87);
+  --quirel-dim-fg:           rgba(0, 0, 0, 0.60);
+  --quirel-error-fg:         #e01b24;
+  --quirel-border:           #d5d0c4;
+  --quirel-button-bg:        #ffffff;
+  --quirel-button-hover-bg:  rgba(0, 0, 0, 0.06);
+  --quirel-hover-bg:         rgba(0, 0, 0, 0.06);
+  --quirel-input-bg:         #f5efe6;
+  --quirel-incognito-bar:    #4a4458;
+
   /* Status Colors */
   --quirel-success-color:    #26a269;      /* Adwaita Green - 成功状态 */
   --quirel-error-color:      #e01b24;      /* Adwaita Red - 错误状态 */
@@ -251,4 +263,13 @@ html:not([data-frosted="on"]) {
   --ic-hi: rgba(255, 255, 255, 0.2);
   --ic-paper-1: var(--quirel-card-bg); --ic-paper-2: color-mix(in srgb, var(--quirel-view-bg) 75%, var(--quirel-card-bg));
   --ic-paper-fold: var(--quirel-sidebar-border); --ic-paper-edge: color-mix(in srgb, var(--quirel-sidebar-border) 70%, var(--quirel-text-secondary)); --ic-paper-text: var(--quirel-text-secondary);
+}
+
+/* ── Dark 主题补充变量 ──────────────────────────────────── */
+/* sidebar-fg 未包含在 themes.ts 的运行时注入中，暗色主题下仍是
+   浅色值 #3f3f3f，与 sidebarBg #303030 对比度约 1.13:1（几乎不可读）。
+   亮暗标记挂在 <html data-icon-scheme>（themeUtils.applyThemeColors 写入），
+   此处按该标记覆盖为暗色前景（白字 87% 对 #303030 约 8.9:1，WCAG AA 达标）。 */
+[data-icon-scheme='dark'] {
+  --quirel-sidebar-fg: rgba(255, 255, 255, 0.87);
 }
