@@ -2863,6 +2863,8 @@ mod search_tests {
                 permissions: "rw-r--r--".into(),
                 owner: "root".into(),
                 group: "root".into(),
+                is_symlink: false,
+                link_target: String::new(),
             },
             path: "/home/user/a.txt".into(),
         };

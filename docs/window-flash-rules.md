@@ -1,7 +1,7 @@
 # 窗口坏帧体系：根因、修复决策与生命周期红线
 
 > 面向所有会触碰**窗口创建 / resize / 壁纸 / 全屏 / webview bounds** 相关代码的人
-> 与 AI 会话。帧级实验证据与探针数据见根目录 `debug-maximize-black-flash.md`；
+> 与 AI 会话。帧级实验证据与探针数据见 `docs/audits/debug-maximize-black-flash.md`；
 > 本文回答「为什么是现在这套方案」以及「改什么必回归」。
 > 定稿提交：`2862b6b`（实验 G，fix/20261026）。
 
@@ -143,7 +143,7 @@ release 合成路径）**不能替代安装包验收**。
 
 ## 8. 关联材料
 
-- `debug-maximize-black-flash.md`：探针数据、逐帧图像分析、踩坑记录
+- `docs/audits/debug-maximize-black-flash.md`：探针数据、逐帧图像分析、踩坑记录
 - 提交：`2862b6b`（实验 G 修复）、`f1bb4f5`（无边框定稿 + resize 子类）、
   `6617adc`（渐变 CSP 发黑——同类「坏帧显形」问题的另一分支）
 - PROGRESS.md「Agent 必读的技术坑」§7 / AGENTS.md §6 指向本文

@@ -1016,7 +1016,7 @@ pub fn run() {
             // 实验 F+G：resize 防闪三件套（Win32 教科书组合）。
             // 1) 主窗口 subclass 拦 WM_ERASEBKGND：实验 F 原样「声称已擦不擦」
             //    时，最大化放大的背衬面新增区域是坏帧且无刷子可擦 → 纯黑
-            //    （探针实测高刷屏 2~5 帧，见 debug-maximize-black-flash.md）。
+            //    （探针实测高刷屏 2~5 帧，见 docs/audits/debug-maximize-black-flash.md）。
             //    改为以壁纸平均色填充暴露区（data=1 区分），坏帧不再是黑。
             // 2) 窗口类背景刷置 NULL（系统层不再有刷子可擦）
             // 3) 对全部子窗口（WebView2 宿主链）装同样拦截——但维持「不擦」：

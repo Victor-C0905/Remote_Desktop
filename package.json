@@ -14,7 +14,11 @@
     "test:run": "vitest run",
     "release": "node scripts/release.mjs",
     "prepare": "husky",
-    "check:sensitive-logs": "node scripts/check-sensitive-logs.mjs"
+    "check:sensitive-logs": "node scripts/check-sensitive-logs.mjs",
+    "verify": "node scripts/verify.mjs quick",
+    "verify:fe": "node scripts/verify.mjs fe",
+    "verify:rust": "node scripts/verify.mjs rust",
+    "verify:full": "node scripts/verify.mjs full"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",

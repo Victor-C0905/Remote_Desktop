@@ -203,3 +203,4 @@ pnpm-debug.log*
 
 # ZCode 会话产物（计划草稿等）
 .zcode/
+.superpowers/

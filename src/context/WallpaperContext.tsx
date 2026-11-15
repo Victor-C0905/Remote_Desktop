@@ -35,7 +35,7 @@ export function WallpaperProvider({ children }: { children: ReactNode }) {
   // 主窗口背景色同步：当前壁纸 64×64 平均色 → Rust（暴露区 WM_ERASEBKGND
   // 填充 + WebView2 DefaultBackgroundColor）。最大化/缩放的坏帧窗口在
   // WebView2 新帧就位前不可避免，以其内容主色填充后从「闪黑」退化为
-  // 与壁纸几乎不可分的色差（探针实测与方案见 debug-maximize-black-flash.md）。
+  // 与壁纸几乎不可分的色差（探针实测与方案见 docs/audits/debug-maximize-black-flash.md）。
   // asset 协议图会污染 canvas（SecurityError），失败保持上次颜色。
   useEffect(() => {
     if (!isTauri()) return;

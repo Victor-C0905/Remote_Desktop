@@ -561,6 +561,8 @@ mod tests {
                     permissions: "rw-r--r--".to_string(),
                     owner: "testuser".to_string(),
                     group: "testuser".to_string(),
+                    is_symlink: false,
+                    link_target: String::new(),
                 }],
             })),
         };

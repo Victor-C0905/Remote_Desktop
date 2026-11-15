@@ -1,6 +1,6 @@
 # 用户数据存储与清除策略
 
-> 实测基准：Windows 11，Tauri 2（NSIS 安装）。最后核对：2026-10-25。
+> 实测基准：Windows 11，Tauri 2（NSIS 安装）。最后核对：2026-11-15。
 
 ## 一、数据地图
 
@@ -8,7 +8,8 @@
 
 | 文件/目录 | 内容 | 敏感度 |
 |---|---|---|
-| `servers.bin` | 服务器列表：host/port/username/certFingerprint/状态 + **auth 凭据（私钥/密码，当前为明文 JSON）** | 🔴 高 |
+| `servers.bin` | 服务器列表：host/port/username/certFingerprint/状态（**不含凭据**，2026-10 起凭据独立加密存储） | 🟠 中 |
+| `credentials/` | 每服务器 `<serverId>.bin`：凭据载荷（密码/私钥/口令）经主密钥 AES-256-GCM 信封加密（nonce‖密文）；主密钥存 OS 凭据库 | 🔴 高 |
 | `settings.bin` | UI 设置：主题/强调色/字号/图标主题/壁纸配置/语言/浏览器选择 | 🟡 低 |
 | `windows.bin` | 桌面会话恢复（窗口布局） | 🟡 低 |
 | `transfers.bin` | 传输任务历史 | 🟡 低 |
@@ -39,44 +40,46 @@
 
 手动完全清除 = 退出应用后删除上述 A、B 两个目录。
 
-## 三、已实施的清除体系（2026-10-25）
+## 三、已实施的清除体系（2026-10-25 起，2026-11 复核）
 
-1. **🔴→✅ 凭据安全化（成熟形态）**：SSH 私钥/密码/口令**唯一持久化形态 = OS 凭据管理器**
-   (keyring crate：Windows Credential Manager / macOS Keychain / Linux keyutils，
-   service=quirel-server-credentials，account=serverId)。完整防线：
-   - **启动探测**：boot 时写/读/删探针验证链路；不可用立即通知（credential_probe）
+1. **🔴→✅ 凭据安全化（信封加密形态）**：OS 凭据管理器（keyring：Windows Credential
+   Manager / macOS Keychain / Linux keyutils）只存 32 字节**主密钥**
+   （service=quirel-server-credentials，account=__master__；dev 构建 identifier 不同，
+   用 quirel-server-credentials-dev）；凭据载荷 AES-256-GCM 加密落盘
+   `app_data_dir/credentials/<serverId>.bin`（见 `src-tauri/src/credentials.rs`）。完整防线：
+   - **启动探测**：boot 时验证主密钥生成/读取 + AES-GCM 加解密往返 + 凭据目录可写；不可用立即通知（credential_probe）
    - **表单前置拦截**：凭据库不可用时，含密码/私钥的服务器表单阻止提交（不允许静默降级明文）
-   - **强一致保存**：secretsSet 失败可见（通知），isKeyringReady 门控落盘剥离——
-     写入确认成功前明文保留（防两头落空蒸发，曾出过事故已根治）
-   - **启动装配**：keyring 凭据合并回内存 state（连接逻辑零改动）；旧明文自动迁移（成功即剥离）
+   - **强一致保存**：secretsSet 失败可见（通知）；落盘前无条件剥离（审计 M18）——
+     keyring 故障期间新凭据仅存内存，修复后需重新保存
+   - **启动装配**：credentials/<serverId>.bin 解密后合并回内存 state（连接逻辑零改动）；旧明文自动迁移（成功即剥离）
    - 注意：**系统凭据库不随数据目录删除**，完全清除时须先 credential_delete_all
 
 2. **🟠→✅ 应用内完全清除**：设置 → 关于 → 「数据与隐私」→ 红色危险按钮 → 确认对话框。
-   执行序列：删除系统凭据库（按 serverId）→ 写 `%TEMP%\quirel-pending-wipe` 标记 →
+   执行序列：credential_delete_all——删 credentials/*.bin（按 serverId）与系统凭据库主密钥 → 写 `%TEMP%\quirel-pending-wipe` 标记 →
    拉起新进程 → 旧进程退出 → 新进程启动早期（webview 创建前，文件无锁）删除：
    `%APPDATA%\{id}`（全部 bin/日志/壁纸缓存）、`%LOCALAPPDATA%\{id}`（WebView2/内置浏览器全部数据）、
    `%TEMP%\quirel-view`（下载残留）、`%TEMP%\quirel-test-browser-settings`，随后自动重启为初始状态。
-3. **🟠→✅ 卸载清除**：`tauri.conf.json` → `bundle.windows.nsis.deleteAppDataOnUninstall: true`
-   ——NSIS 卸载器删除应用数据目录。注意：卸载器不触及**系统凭据库**与 **%TEMP% 残留**，
-   完全清除的权威路径是应用内入口（先删凭据再 wipe）；手动兜底路径见下。
+3. **🟠→⬜ 卸载清除（未实施）**：`deleteAppDataOnUninstall` 未设置（默认 false），卸载保留全部应用数据（A、B 约 3.1GB）；完全清除权威路径是应用内入口（先删凭据再 wipe）。是否实施该配置属产品决策，暂未实施。
 4. **🟡→✅ WebView .bak 自动清理**：启动早期维护自动删除数据目录下 `*.bak` 残留
    （2026-10-25 手动清理过一次 547MB，此后自动化）。
 
 ## 四、残留清单（卸载后手动兜底）
 
-NSIS 卸载 + 应用内清除双通道之后，理论上残留仅剩：
+应用内完全清除之后（NSIS 卸载不清应用数据），理论上残留仅剩：
 
 | 残留 | 位置 | 说明 |
 |---|---|---|
-| 系统凭据库条目 | Windows 凭据管理器（`quirel-server-credentials`） | 卸载器不清；应用内清除会删；手动：控制面板→凭据管理器→Windows 凭据中按前缀删除 |
+| 主密钥条目（service=`quirel-server-credentials`，account=`__master__`；dev 为 `quirel-server-credentials-dev`） | Windows 凭据管理器 | 卸载器不清；应用内清除会删；手动：控制面板→凭据管理器→Windows 凭据中按前缀删除 |
 | %TEMP% 偶发残留 | `%TEMP%\quirel-view` 等 | 应用内清除会删；OS 磁盘清理兜底 |
 | WebView2 Runtime | 系统级组件 | 与其他应用共享，不属于本项目，不应卸载 |
 | 远程 quireld | 服务器上 | 独立卸载：`agent/deploy/uninstall.sh`（参数对齐安装时） |
 | 注册表卸载键/开始菜单 | — | NSIS 卸载器负责删除 ✓ |
 
-**完全清除手动路径**（终极兜底）：卸载 → 删 `%APPDATA%\com.quirel.app`、`%LOCALAPPDATA%\com.quirel.app`、`%TEMP%\quirel-*` → 凭据管理器删 `quirel-server-credentials` 条目 → （远程）执行 quireld 卸载脚本。
+**完全清除手动路径**（终极兜底）：卸载 → 删 `%APPDATA%\com.quirel.app`、`%LOCALAPPDATA%\com.quirel.app`、`%TEMP%\quirel-*` → 凭据管理器删 `quirel-server-credentials`（dev 构建为 `quirel-server-credentials-dev`）条目 → （远程）执行 quireld 卸载脚本。
 
 ## 五、历史记录
 
 - 2026-10-25：手动清除 `EBWebView.bak`（547MB，验证依据：mtime 停在 10-20、无 lockfile、目录结构与现用目录同源）。
-- 2026-10-25：落地凭据 keyring 化 + 应用内完全清除 + NSIS 卸载删除数据 + .bak 自动清理（feature/new_ui 分支）。
+- 2026-10-25：落地凭据 keyring 化 + 应用内完全清除 + .bak 自动清理（feature/new_ui 分支；提交信息所称「NSIS 卸载删除数据」未实施，见上 3）。
+- 2026-10-26：信封加密形态合入当前分支（feature/new_ui 450ff6b → fd2bcd2）。
+- 2026-11：落盘前无条件剥离（审计 M18）与 credential_delete_all 聚合错误修复合入当前分支（fix/audit-round1 9d16ce5/1eca270 → 91cf9ba）、dev service 隔离（ff67591）；本文档凭据章节按信封加密形态重写。
