@@ -7,7 +7,7 @@
 import { useCallback, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
-import { useBookmarksStore } from "../../stores/bookmarksStore";
+import { useBookmarksStore, selectBookmarks } from "../../stores/bookmarksStore";
 import { ContextMenu, type ContextMenuEntry } from "../../components/ContextMenu/ContextMenu";
 import { createLogger } from "../../utils/logger";
 import "./BookmarksBar.css";
@@ -22,7 +22,7 @@ interface BookmarksBarProps {
 
 export function BookmarksBar({ serverId, onNavigate }: BookmarksBarProps) {
   const { t } = useTranslation();
-  const bookmarks = useBookmarksStore((s) => s.bookmarks);
+  const bookmarks = useBookmarksStore((s) => selectBookmarks(s.bookmarksByServer, serverId));
   const barVisible = useBookmarksStore((s) => s.barVisible);
   const removeBookmark = useBookmarksStore((s) => s.removeBookmark);
 
@@ -40,8 +40,9 @@ export function BookmarksBar({ serverId, onNavigate }: BookmarksBarProps) {
       { label: t("browser.copyPageUrl"), onClick: () => navigator.clipboard.writeText(menu.url) },
       { separator: true },
       { label: t("browser.removeBookmark"), danger: true, onClick: () => {
-        const target = useBookmarksStore.getState().bookmarks.find((b) => b.url === menu.url);
-        if (target) removeBookmark(target.id);
+        const target = selectBookmarks(useBookmarksStore.getState().bookmarksByServer, serverId)
+          .find((b) => b.url === menu.url);
+        if (target) removeBookmark(serverId, target.id);
       } },
     ];
   })();

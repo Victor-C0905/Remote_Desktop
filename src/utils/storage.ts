@@ -28,8 +28,9 @@ const EXPECTED_STORE_VERSIONS: Record<string, number> = {
   "quirel-wallpaper": 0,
   // v1：旧通知记录迁移为 legacy（仅「全部」视图可见），见 notificationStore
   "notifications": 1,
-  "bookmarks": 0,
-  "history": 0,
+  // v1：书签/历史从全局扁平改为按服务器隔离，旧数据进入 legacy 等待认领
+  "bookmarks": 1,
+  "history": 1,
   // 文件管理器目录访问统计（侧边栏「常用」分组）
   // v1：frecency 模型（score/scoreAt），旧 count/lastUsed 由 persist migrate 折算
   "filemanager-path-usage": 1,

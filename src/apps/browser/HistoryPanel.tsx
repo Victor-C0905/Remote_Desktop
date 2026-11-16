@@ -5,7 +5,7 @@
 
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useHistoryStore } from "../../stores/historyStore";
+import { useHistoryStore, selectHistory } from "../../stores/historyStore";
 import { ContextMenu, type ContextMenuEntry } from "../../components/ContextMenu/ContextMenu";
 import "./HistoryPanel.css";
 
@@ -27,6 +27,8 @@ function formatVisited(ts: number): string {
 
 interface HistoryPanelProps {
   open: boolean;
+  /** 绑定窗口的服务器：历史按服务器隔离展示与增删 */
+  serverId: string | null;
   onClose(): void;
   /** 当前页签导航 */
   onNavigate(url: string): void;
@@ -34,9 +36,9 @@ interface HistoryPanelProps {
   onNewTab(url: string): void;
 }
 
-export function HistoryPanel({ open, onClose, onNavigate, onNewTab }: HistoryPanelProps) {
+export function HistoryPanel({ open, serverId, onClose, onNavigate, onNewTab }: HistoryPanelProps) {
   const { t } = useTranslation();
-  const entries = useHistoryStore((s) => s.entries);
+  const entries = useHistoryStore((s) => selectHistory(s.entriesByServer, serverId));
   const remove = useHistoryStore((s) => s.remove);
   const clear = useHistoryStore((s) => s.clear);
 
@@ -69,7 +71,7 @@ export function HistoryPanel({ open, onClose, onNavigate, onNewTab }: HistoryPan
       { label: t("browser.ctxOpenLinkNewTab"), onClick: () => onNewTab(menu.url) },
       { label: t("browser.copyPageUrl"), onClick: () => navigator.clipboard.writeText(menu.url) },
       { separator: true },
-      { label: t("browser.removeHistoryEntry"), danger: true, onClick: () => remove(menu.url) },
+      { label: t("browser.removeHistoryEntry"), danger: true, onClick: () => remove(serverId, menu.url) },
     ];
   })();
 
@@ -86,7 +88,7 @@ export function HistoryPanel({ open, onClose, onNavigate, onNewTab }: HistoryPan
             type="button"
             className="br-history-clear"
             onClick={() => {
-              clear();
+              clear(serverId);
               onClose();
             }}
           >

@@ -353,7 +353,7 @@ export function BrowserApp({ windowId }: BrowserAppProps) {
         const p = event.payload;
         if (p.server_id !== serverId) return;
         if (p.loading !== false || !p.url) return;
-        useHistoryStore.getState().record(p.url, p.title ?? "");
+        useHistoryStore.getState().record(serverId, p.url, p.title ?? "");
       });
       if (disposed) {
         fn();

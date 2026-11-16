@@ -14,7 +14,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { useSettingsStore } from "../../stores/settingsStore";
-import { useBookmarksStore, isBookmarked } from "../../stores/bookmarksStore";
+import { useBookmarksStore, selectBookmarks, isBookmarked } from "../../stores/bookmarksStore";
 import { SymbolicIcon } from "../../components/symbolic";
 import { createLogger } from "../../utils/logger";
 import type { TabInfo } from "./useBrowserTabs";
@@ -141,8 +141,8 @@ export function BrowserNavbar({
   const [menuOpen, setMenuOpen] = useState(false);
   // 历史面板开合（时钟按钮下方锚定下拉）
   const [historyOpen, setHistoryOpen] = useState(false);
-  // 星标（书签）：直接读写 bookmarksStore，无需经 props 钻透
-  const bookmarks = useBookmarksStore((s) => s.bookmarks);
+  // 星标（书签）：按窗口绑定的服务器读写，无需经 props 钻透
+  const bookmarks = useBookmarksStore((s) => selectBookmarks(s.bookmarksByServer, serverId));
   const addBookmark = useBookmarksStore((s) => s.addBookmark);
   const removeBookmark = useBookmarksStore((s) => s.removeBookmark);
   const barVisible = useBookmarksStore((s) => s.barVisible);
@@ -155,10 +155,11 @@ export function BrowserNavbar({
   const toggleBookmark = () => {
     if (!currentUrl || !bookmarkable) return;
     if (bookmarked) {
-      const target = useBookmarksStore.getState().bookmarks.find((b) => b.url === currentUrl);
-      if (target) removeBookmark(target.id);
+      const target = selectBookmarks(useBookmarksStore.getState().bookmarksByServer, serverId)
+        .find((b) => b.url === currentUrl);
+      if (target) removeBookmark(serverId, target.id);
     } else {
-      addBookmark(currentUrl, activeTab?.title || currentUrl);
+      addBookmark(serverId, currentUrl, activeTab?.title || currentUrl);
     }
   };
   const menuRef = useRef<HTMLDivElement>(null);
@@ -359,6 +360,7 @@ export function BrowserNavbar({
         </button>
         <HistoryPanel
           open={historyOpen}
+          serverId={serverId}
           onClose={() => setHistoryOpen(false)}
           onNavigate={onNavigate}
           onNewTab={(url) => {

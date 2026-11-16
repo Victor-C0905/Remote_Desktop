@@ -28,6 +28,16 @@ export async function purgeServerData(serverId: string): Promise<void> {
         (await import("../stores/archiveCapabilitiesStore")).useArchiveCapabilitiesStore.getState().clearServer(serverId),
     },
     {
+      label: "书签",
+      run: async () =>
+        (await import("../stores/bookmarksStore")).useBookmarksStore.getState().clearServer(serverId),
+    },
+    {
+      label: "历史",
+      run: async () =>
+        (await import("../stores/historyStore")).useHistoryStore.getState().clearServer(serverId),
+    },
+    {
       label: "传输任务",
       run: async () => (await import("./transferStorage")).transferStorage.removeServer(serverId),
     },

@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   purgeServer: vi.fn(),
   clearUsage: vi.fn(),
   clearCapabilities: vi.fn(),
+  clearBookmarks: vi.fn(),
+  clearHistory: vi.fn(),
   removeServerTasks: vi.fn(),
 }));
 
@@ -17,6 +19,12 @@ vi.mock("../stores/filePathUsageStore", () => ({
 }));
 vi.mock("../stores/archiveCapabilitiesStore", () => ({
   useArchiveCapabilitiesStore: { getState: () => ({ clearServer: mocks.clearCapabilities }) },
+}));
+vi.mock("../stores/bookmarksStore", () => ({
+  useBookmarksStore: { getState: () => ({ clearServer: mocks.clearBookmarks }) },
+}));
+vi.mock("../stores/historyStore", () => ({
+  useHistoryStore: { getState: () => ({ clearServer: mocks.clearHistory }) },
 }));
 vi.mock("./transferStorage", () => ({
   transferStorage: { removeServer: mocks.removeServerTasks },
@@ -35,6 +43,8 @@ describe("purgeServerData", () => {
     expect(mocks.purgeServer).toHaveBeenCalledWith("s1");
     expect(mocks.clearUsage).toHaveBeenCalledWith("s1");
     expect(mocks.clearCapabilities).toHaveBeenCalledWith("s1");
+    expect(mocks.clearBookmarks).toHaveBeenCalledWith("s1");
+    expect(mocks.clearHistory).toHaveBeenCalledWith("s1");
     expect(mocks.removeServerTasks).toHaveBeenCalledWith("s1");
     expect(invokeMock).toHaveBeenCalledWith("browser_purge_server_data", { serverId: "s1" });
   });
@@ -50,6 +60,8 @@ describe("purgeServerData", () => {
 
     expect(mocks.purgeServer).toHaveBeenCalledWith("s2");
     expect(mocks.clearUsage).toHaveBeenCalledWith("s2");
+    expect(mocks.clearBookmarks).toHaveBeenCalledWith("s2");
+    expect(mocks.clearHistory).toHaveBeenCalledWith("s2");
     expect(invokeMock).toHaveBeenCalledWith("browser_purge_server_data", { serverId: "s2" });
   });
 });
