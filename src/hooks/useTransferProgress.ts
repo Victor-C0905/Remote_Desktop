@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import i18n from '../i18n';
-import { transferStorage } from '../utils/transferStorage';
+import { transferStorage, TRANSFER_PURGE_SERVER_EVENT } from '../utils/transferStorage';
 import { createLogger } from '../utils/logger';
 
 const log = createLogger('TransferProgress');
@@ -117,6 +117,8 @@ export function useTransferProgress(connectionId?: string) {
   const [transfers, setTransfers] = useState<TransferTask[]>([]);
   // Store 加载完成标志：加载完成前不 save，避免空数组覆盖持久化数据
   const loadedRef = useRef(false);
+  // 已删除的服务器：加载/事件到达时兜底过滤（清理与异步加载可能交错）
+  const purgedServersRef = useRef<Set<string>>(new Set());
 
   // 异步从 Tauri Store 加载历史传输任务，只保留最近24小时的
   useEffect(() => {
@@ -127,6 +129,7 @@ export function useTransferProgress(connectionId?: string) {
       const now = Date.now();
       const oneDayMs = 24 * 60 * 60 * 1000;
       const filtered = saved.filter(task => {
+        if (purgedServersRef.current.has(task.session_id)) return false;
         const age = now - task.start_time;
         return age < oneDayMs;
       });
@@ -179,6 +182,27 @@ export function useTransferProgress(connectionId?: string) {
         void transferStorage.save(transfersRef.current);
       }
     };
+  }, []);
+
+  // 服务器删除：统一清理入口已过滤落盘数据，这里同步移除已挂载实例的内存态，
+  // 并取消节流中的旧快照保存，避免把刚删除的任务再次写回
+  useEffect(() => {
+    const onPurge = (event: Event) => {
+      const serverId = (event as CustomEvent<string>).detail;
+      purgedServersRef.current.add(serverId);
+      const current = transfersRef.current;
+      const next = current.filter((t) => t.session_id !== serverId);
+      if (next.length === current.length) return;
+      transfersRef.current = next;
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+      setTransfers(next);
+      void transferStorage.save(next);
+    };
+    window.addEventListener(TRANSFER_PURGE_SERVER_EVENT, onPurge);
+    return () => window.removeEventListener(TRANSFER_PURGE_SERVER_EVENT, onPurge);
   }, []);
 
   useEffect(() => {

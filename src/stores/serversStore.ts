@@ -80,10 +80,8 @@ export const useServersStore = create<ServersState & ServersActions>()(
         const servers = get().servers.filter((s) => s.id !== id);
         const activeServerId = get().activeServerId === id ? null : get().activeServerId;
         set({ servers, activeServerId });
-        // 联动清理该服务器的持久化通知（跨 store 单向调用，无循环）
-        void import("./notificationStore").then((m) => m.useNotificationStore.getState().purgeServer(id));
-        // 联动清理该服务器的目录访问统计（侧边栏「常用」分组）
-        void import("./filePathUsageStore").then((m) => m.useFilePathUsageStore.getState().clearServer(id));
+        // 其余按服务器隔离的数据统一由 ServerManager.removeServerWithCleanup →
+        // purgeServerData 清理（先停浏览器会话再删 profile，不能在此提前执行）
       },
 
       updateServer: (id, updates) => {

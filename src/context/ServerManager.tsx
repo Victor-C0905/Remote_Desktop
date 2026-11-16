@@ -15,6 +15,7 @@ import { parseConnectError, getErrorInfo, buildConnectFailureText, isRetryableCo
 import { createLogger } from "../utils/logger";
 import { isTauri } from "../utils/environment";
 import { parseSessionMirror, serializeSessionMirror } from "../utils/sessionMirror";
+import { purgeServerData } from "../utils/serverCleanup";
 import i18n from "../i18n";
 
 /* ── Types ─────────────────────────────────────────────── */
@@ -566,8 +567,9 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
     })();
   }, [servers, setServerStatus, setActiveServerId]);
 
-  /** 删除服务器前先断开其连接 + 全量停止其浏览器会话（防孤儿：连接与
-   *  浏览器会话都随服务器移除而终止，不留 UI 无法触达的残留） */
+  /** 删除服务器：先断开连接 + 停止浏览器会话，再走统一清理入口清除该服务器的
+   *  全部按服务器隔离数据（通知/常用路径/压缩能力/传输任务/浏览器 profile），
+   *  不留 UI 无法触达的孤儿数据 */
   const removeServerWithCleanup = useCallback(
     (id: string) => {
       void (async () => {
@@ -581,6 +583,8 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
         } catch {
           /* 浏览器会话不存在 */
         }
+        // 浏览器会话停止后再删 profile（WebView2 句柄需先释放）
+        await purgeServerData(id);
       })();
       removeServer(id);
     },

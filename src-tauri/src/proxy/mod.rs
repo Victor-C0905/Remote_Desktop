@@ -728,6 +728,52 @@ pub async fn proxy_stop_session(server_id: String, app: AppHandle) -> Result<(),
     Ok(())
 }
 
+/// 删除服务器时清除其浏览器持久数据（profile/cookie/settings/缓存）与无痕目录。
+///
+/// 调用前必须先 proxy_stop_session：WebView2 的 Environment 销毁是异步的，
+/// 文件句柄释放可能滞后，因此删除失败时短暂重试。单个目录失败不阻断其它
+/// 目录，最终返回聚合错误供前端记录（服务器移除本身不被阻断）。
+#[tauri::command]
+pub async fn browser_purge_server_data(server_id: String, app: AppHandle) -> Result<(), String> {
+    let root = browser_data_root(&app).map_err(|e| e.to_string())?;
+    let safe = safe_server_id(&server_id);
+    let dirs = [root.join(&safe), root.join(format!("{safe}-incognito"))];
+
+    let mut errors = Vec::new();
+    for dir in dirs {
+        if let Err(e) = purge_dir_with_retry(&dir).await {
+            errors.push(e);
+        }
+    }
+    if errors.is_empty() {
+        tracing::info!("[Browser] 已清除服务器浏览器数据: server_id={}", server_id);
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+/// 删除目录（最多 5 次、间隔 200ms），吸收 WebView2 句柄释放延迟
+async fn purge_dir_with_retry(dir: &PathBuf) -> Result<(), String> {
+    const ATTEMPTS: u32 = 5;
+    for attempt in 0..ATTEMPTS {
+        if !dir.exists() {
+            return Ok(());
+        }
+        let target = dir.clone();
+        match tokio::task::spawn_blocking(move || std::fs::remove_dir_all(&target)).await {
+            Ok(Ok(())) => return Ok(()),
+            Ok(Err(e)) if attempt + 1 < ATTEMPTS => {
+                tracing::debug!("[Browser] 数据目录删除失败，重试: {} err={}", dir.display(), e);
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            Ok(Err(e)) => return Err(format!("删除 {} 失败: {e}", dir.display())),
+            Err(e) => return Err(format!("删除 {} 任务异常: {e}", dir.display())),
+        }
+    }
+    Ok(())
+}
+
 /// 会话状态（proxy_session_status 返回）
 #[derive(serde::Serialize)]
 pub struct ProxySessionStatus {
@@ -752,4 +798,16 @@ pub fn proxy_session_status(server_id: String, app: AppHandle) -> Option<ProxySe
         listener_alive: s.listener_alive,
         browser_alive: s.host.lock().unwrap().is_some(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::safe_server_id;
+
+    #[test]
+    fn 服务器id路径片段_净化路径分隔符与穿越字符() {
+        assert_eq!(safe_server_id("srv-1_a"), "srv-1_a");
+        assert_eq!(safe_server_id("../../etc"), "______etc");
+        assert_eq!(safe_server_id("a/b\\c:d"), "a_b_c_d");
+    }
 }

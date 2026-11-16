@@ -1276,6 +1276,7 @@ pub fn run() {
             proxy::proxy_start_session,
             proxy::browser_open,
             proxy::proxy_stop_session,
+            proxy::browser_purge_server_data, // 删除服务器时清除其浏览器 profile/无痕目录
             proxy::proxy_session_status,
             proxy::browser_window::browser_close_window,
             proxy::browser_window::browser_close_all_windows,
