@@ -157,6 +157,7 @@ export function TaskCard({ task, onRemove }: TaskCardProps) {
         body: t('transfer.notify.retryFailedBody', { name: task.file_name }),
         action: t('transfer.notify.retryFailedAction'),
         urgency: 'normal',
+        kind: 'transfer',
         source: t('transfer.source'),
       });
     }

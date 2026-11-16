@@ -36,6 +36,7 @@ export function notifyArchiveFailure(notice: ArchiveFailureNotice): void {
     body: lines.join('\n'),
     action: i18n.t('archive.notify.action'),
     urgency: 'normal',
+    kind: 'archive',
     source: server?.name || server?.host || archiveName || i18n.t('archive.notify.source'),
   });
 }

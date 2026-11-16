@@ -155,6 +155,7 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
           body: lostInfo?.message ?? i18n.t("serverManager.lostBody"),
           action: i18n.t("serverManager.lostAction"),
           urgency: "normal",
+          kind: "connection",
           source: lostServer ? lostServer.name || lostServer.host : i18n.t("serverManager.source"),
           // 连接可用性通知：不随当前服务器隔离，避免后台服务器掉线无人察觉
           global: true,
@@ -257,6 +258,7 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
       body,
       action: info.action,
       urgency: info.severity,
+      kind: "connection",
       source: server.name || server.host,
       // 连接失败是可用性通知：始终可见
       global: true,
@@ -431,6 +433,7 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
         title: i18n.t("serverManager.reconnectRestoredTitle"),
         body: i18n.t("serverManager.reconnectRestoredBody", { name: server.name || server.host }),
         urgency: "low",
+        kind: "connection",
         source: server.name || server.host,
         // 恢复连接属于可用性通知：始终可见
         global: true,
@@ -454,6 +457,7 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
           body: buildConnectFailureText(err, others),
           action: getErrorInfo(parseConnectError(err).code).action,
           urgency: "critical",
+          kind: "connection",
           source: server.name || server.host,
           // 自动重连失败是可用性通知：始终可见
           global: true,

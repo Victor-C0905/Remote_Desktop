@@ -65,4 +65,18 @@ describe("ArrivalToast", () => {
     expect(screen.queryByText("通知 A")).toBeNull();
     expect(screen.getByText("+1")).toBeInTheDocument();
   });
+
+  it("窗口内同源通知合并为一条，预览条显示 ×N 并重置计时", () => {
+    const { container } = render(<ArrivalToast onOpen={() => {}} />);
+    act(() => push("通知 A"));
+    act(() => push("通知 A")); // 同 source+title → 合并，同 id 计数刷新
+    expect(screen.getByText("通知 A")).toBeInTheDocument();
+    expect(screen.getByText("×2")).toBeInTheDocument();
+    expect(container.querySelector(".at-toast")).not.toBeNull();
+    // 合并更新重置停留计时：再等 3.4s 仍在显示，累计到 3.5s 才进入退出动画
+    act(() => vi.advanceTimersByTime(3400));
+    expect(container.querySelector(".at-toast")).not.toBeNull();
+    act(() => vi.advanceTimersByTime(100));
+    expect(container.querySelector(".at-toast-leaving")).not.toBeNull();
+  });
 });

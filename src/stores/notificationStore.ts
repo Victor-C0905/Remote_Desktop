@@ -4,6 +4,9 @@ import { notificationsStorage } from "../utils/storage";
 
 /* ── Types ─────────────────────────────────────────────── */
 
+/** 通知类别（聚合键组成之一；旧记录缺省 other） */
+export type NotificationKind = "connection" | "transfer" | "file" | "archive" | "system" | "other";
+
 /** 通知严重度（与错误映射表 severity 对齐） */
 export type NotificationUrgency = "low" | "normal" | "critical";
 
@@ -23,6 +26,10 @@ export interface AppNotification {
   serverId?: string;
   /** 服务器名快照：推送时记录，服务器改名/删除后仍能辨认归属 */
   serverName?: string;
+  /** 通知类别：聚合键组成之一，按类别组织时使用；旧记录缺省 other */
+  kind?: NotificationKind;
+  /** 同源聚合条数（同键 60s 窗口内合并；缺省 1） */
+  count?: number;
   /** 全局可见：连接建立/断开/重连等可用性通知不随当前服务器过滤 */
   global?: boolean;
   /** 旧版本落盘、无法判断归属的记录：永久隐藏（不参与任何通知视图） */
@@ -93,6 +100,45 @@ let nextId = 0;
 /** 持久化条目上限（写入时裁剪最旧） */
 const NOTIFICATION_CAP = 100;
 
+/** 同源合并窗口：窗口内同键未读通知合并计数，防止重复事件刷屏 */
+export const MERGE_WINDOW_MS = 60_000;
+/** 合并后明细行上限（与 NotificationCenter 展示上限一致） */
+const MERGE_DETAILS_CAP = 30;
+
+/**
+ * 同源合并判定：键相同（serverId+kind+source+title）、existing 未读且在窗口内
+ * → 返回合并后的 existing 副本（保留原 id，count+1，时间/正文/级别取最新）；
+ * 否则返回 null（调用方作为新条目插入）。带 onAction 的通知永不合并——
+ * 合并会用新闭包覆盖撤销动作。
+ */
+export function mergeIncoming(
+  existing: AppNotification,
+  incoming: AppNotification,
+): AppNotification | null {
+  if (existing.onAction) return null;
+  if (existing.read) return null;
+  if (existing.serverId !== incoming.serverId) return null;
+  if ((existing.kind ?? "other") !== (incoming.kind ?? "other")) return null;
+  if (existing.source !== incoming.source) return null;
+  if (existing.title !== incoming.title) return null;
+  if (incoming.timestamp - existing.timestamp >= MERGE_WINDOW_MS) return null;
+
+  const hasDetails = existing.details != null || incoming.details != null;
+  const details = hasDetails
+    ? [...new Set([...(existing.details ?? []), ...(incoming.details ?? [])])].slice(-MERGE_DETAILS_CAP)
+    : undefined;
+  return {
+    ...existing,
+    timestamp: incoming.timestamp,
+    body: incoming.body,
+    urgency: incoming.urgency,
+    count: (existing.count ?? 1) + 1,
+    live: true,
+    ...(incoming.action ? { action: incoming.action } : {}),
+    ...(details ? { details } : {}),
+  };
+}
+
 /* ── Store ─────────────────────────────────────────────── */
 
 // 通知按服务器持久化（notifications.bin；serverId 标记归属，删除服务器时
@@ -103,12 +149,24 @@ export const useNotificationStore = create<NotificationState>()(
     (set) => ({
       notifications: [],
       pushNotification: (n) =>
-        set((s) => ({
-          notifications: [
-            { ...n, id: `notif-${Date.now()}-${nextId++}`, timestamp: Date.now(), read: false, live: true },
-            ...s.notifications,
-          ].slice(0, NOTIFICATION_CAP),
-        })),
+        set((s) => {
+          const incoming: AppNotification = {
+            ...n,
+            id: `notif-${Date.now()}-${nextId++}`,
+            timestamp: Date.now(),
+            read: false,
+            live: true,
+            count: 1,
+          };
+          // 同源降噪：窗口内同键未读通知合并进已有条目（保留原 id），并置顶刷新
+          const idx = s.notifications.findIndex((e) => mergeIncoming(e, incoming) !== null);
+          if (idx >= 0) {
+            const merged = mergeIncoming(s.notifications[idx], incoming)!;
+            const rest = s.notifications.filter((_, i) => i !== idx);
+            return { notifications: [merged, ...rest].slice(0, NOTIFICATION_CAP) };
+          }
+          return { notifications: [incoming, ...s.notifications].slice(0, NOTIFICATION_CAP) };
+        }),
       markAsRead: (id) =>
         set((s) => ({
           notifications: s.notifications.map((n) => (n.id === id ? { ...n, read: true } : n)),

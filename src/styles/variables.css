@@ -159,6 +159,8 @@
 
   /* Layer 80: 全局弹窗层（通知中心、全局菜单）               */
   --z-notification:     80;
+  /* Layer 82: 通知中心内部模态（其确认弹窗须盖住通知面板本体） */
+  --z-notification-modal: 82;
   --z-global-menu:      85;
 
   /* Layer 90: 最高层级（紧急系统提示、全局遮罩）             */

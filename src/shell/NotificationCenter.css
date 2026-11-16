@@ -468,3 +468,27 @@
   color: var(--quirel-text-secondary);
   word-break: break-all;
 }
+
+/* 搜索框：筛选行下方单行输入 */
+.nc-search {
+  padding: 0 12px 8px;
+}
+.nc-search input {
+  width: 100%;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--quirel-border-color);
+  border-radius: var(--radius-xs);
+  background: var(--quirel-view-bg);
+  color: var(--quirel-text-primary);
+  font-size: var(--font-small);
+  outline: none;
+}
+.nc-search input:focus {
+  border-color: var(--quirel-accent-bg);
+}
+
+/* 聚合徽标在时间行内与文本的间距（视觉复用 nc-badge 胶囊） */
+.nc-notif-count {
+  margin-left: 6px;
+}

@@ -8,7 +8,13 @@ import "./NotificationCenter.css";
 import { useNotificationStore, isNotificationVisible } from "../stores/notificationStore";
 import type { AppNotification, NotificationUrgency } from "../stores/notificationStore";
 import { useServersStore, type ServerConfig } from "../stores/serversStore";
+import { ConfirmDialog } from "../components/Dialog/ConfirmDialog";
 import { SymbolicIcon } from "../components/symbolic";
+import {
+  applyNotificationFilters,
+  buildClearFilter,
+  type NotificationFilter,
+} from "./notificationFilter";
 
 /* ── Utility Functions ───────────────────────────────── */
 
@@ -68,7 +74,11 @@ export function NotificationCenter({ isOpen, onClose, activeServerId = null }: N
   // 真实数据源：zustand 内存 store（连接失败/断连/恢复通知）
   const { notifications, markAsRead, dismiss, clearAll, markAllRead } = useNotificationStore();
   const servers = useServersStore((s) => s.servers);
-  const [filter, setFilter] = useState<NotificationUrgency | "all" | "other">("all");
+  const [filter, setFilter] = useState<NotificationFilter>("all");
+  // 搜索词：与严重度 chip AND 叠加；搜索不参与清空范围（见 buildClearFilter）
+  const [query, setQuery] = useState("");
+  // 清空二次确认（ConfirmDialog；确认文案动态说明作用域与条数）
+  const [confirmClear, setConfirmClear] = useState(false);
   // 展开明细的通知 id（点击条目切换；如移动通知的逐条 src → dst）
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -82,23 +92,27 @@ export function NotificationCenter({ isOpen, onClose, activeServerId = null }: N
     (n) => n.urgency !== "critical" && n.urgency !== "normal" && n.urgency !== "low"
   ).length;
 
-  const filteredNotifications = visibleNotifications.filter((n) => {
-    if (filter === "all") return true;
-    if (filter === "other") {
-      return n.urgency !== "critical" && n.urgency !== "normal" && n.urgency !== "low";
-    }
-    return n.urgency === filter;
+  const filteredNotifications = applyNotificationFilters(visibleNotifications, {
+    filter,
+    query,
+    originOf: (x) => originOf(x, servers),
   }).sort((a, b) => b.timestamp - a.timestamp);
+
+  // 清空作用域条数（severity，不含搜索词）：确认文案展示
+  const clearScopeCount = visibleNotifications.filter(buildClearFilter({ filter })).length;
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape" && isOpen) {
+        // 模态顺序：确认弹窗打开时 Esc 先关弹窗（Dialog 自带 Esc 监听），
+        // 此处不得同时关闭通知中心，否则弹窗随宿主一起消失
+        if (confirmClear) return;
         onClose();
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, onClose]);
+  }, [isOpen, onClose, confirmClear]);
 
   // 打开面板即清除未读标签（badge 归零、卡片未读样式消失；期间新到通知保持未读）
   // 只标记当前服务器可见通知为已读，其它服务器的未读状态保留
@@ -122,11 +136,9 @@ export function NotificationCenter({ isOpen, onClose, activeServerId = null }: N
             )}
           </div>
           <div className="nc-header-actions">
-            <button className="nc-action-btn" onClick={() => markAllRead((n) => isNotificationVisible(n, activeServerId))} title={t('notifications.markAllReadTitle')}>
-              <SymbolicIcon name="emblem-ok" size={14} />
-              {t('notifications.markAllRead')}
-            </button>
-            <button className="nc-action-btn nc-action-danger" onClick={() => clearAll((n) => isNotificationVisible(n, activeServerId))} title={t('notifications.clearAllTitle')}>
+            {/* 无「全部已读」按钮：打开面板即把当前服务器可见通知标为已读，
+                按钮与该 effect 作用域完全重叠，永远无事可做 */}
+            <button className="nc-action-btn nc-action-danger" onClick={() => setConfirmClear(true)} title={t('notifications.clearAllTitle')}>
               <SymbolicIcon name="user-trash" size={14} />
               {t('notifications.clearAll')}
             </button>
@@ -175,6 +187,15 @@ export function NotificationCenter({ isOpen, onClose, activeServerId = null }: N
           )}
         </div>
 
+        {/* 搜索：title/body/来源子串，与严重度 chips 叠加 */}
+        <div className="nc-search">
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t('notifications.searchPlaceholder')}
+          />
+        </div>
+
         {/* Notification List */}
         <div className="nc-list">
           {filteredNotifications.length === 0 ? (
@@ -193,9 +214,14 @@ export function NotificationCenter({ isOpen, onClose, activeServerId = null }: N
                   if (notif.details?.length) setExpandedId((cur) => (cur === notif.id ? null : notif.id));
                 }}
               >
-                {/* 卡片头部行：时间（左上）+ 关闭按钮（右上） */}
+                {/* 卡片头部行：时间（左上）+ 聚合徽标 + 关闭按钮（右上） */}
                 <div className="nc-notif-top">
-                  <span className="nc-notif-time">{formatTime(t, notif.timestamp)}</span>
+                  <span className="nc-notif-time">
+                    {formatTime(t, notif.timestamp)}
+                    {(notif.count ?? 1) > 1 && (
+                      <span className="nc-badge nc-notif-count">×{notif.count}</span>
+                    )}
+                  </span>
                   <button
                     className="nc-notif-dismiss"
                     onClick={(e) => {
@@ -267,6 +293,23 @@ export function NotificationCenter({ isOpen, onClose, activeServerId = null }: N
           </span>
         </div>
       </div>
+
+      {/* 清空二次确认：作用域跟随当前筛选视图（chips ∧ 未读），文案动态说明条数 */}
+      {confirmClear && (
+        <ConfirmDialog
+          danger
+          overlayZIndex="var(--z-notification-modal)"
+          title={t("notifications.clearConfirmTitle")}
+          message={t("notifications.clearConfirmMessage", { count: clearScopeCount })}
+          detail={t("notifications.clearConfirmDetail")}
+          onConfirm={() => {
+            const inScope = buildClearFilter({ filter });
+            clearAll((n) => isNotificationVisible(n, activeServerId) && inScope(n));
+            setConfirmClear(false);
+          }}
+          onCancel={() => setConfirmClear(false)}
+        />
+      )}
     </div>
   );
 }

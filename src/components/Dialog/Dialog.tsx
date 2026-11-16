@@ -24,6 +24,12 @@ interface DialogProps {
    * 点遮罩不关闭（Esc 仍可取消）
    */
   dismissOnOverlay?: boolean;
+  /**
+   * 覆盖遮罩层级（CSS z-index 值，可用 var(--z-*) 令牌）。
+   * 默认 --z-app-modal(70)；宿主层级高于 70 的场景（如通知中心 Layer 80
+   * 内开确认弹窗）必须传更高令牌，否则弹窗被宿主盖住
+   */
+  overlayZIndex?: string;
   children: ReactNode;
 }
 
@@ -50,7 +56,7 @@ export function isDialogOpen(): boolean {
 }
 
 export function Dialog({
-  onClose, disableDismiss, width = 420, draggable, dismissOnOverlay = true, children,
+  onClose, disableDismiss, width = 420, draggable, dismissOnOverlay = true, overlayZIndex, children,
 }: DialogProps) {
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
@@ -155,6 +161,7 @@ export function Dialog({
     <div
       className="dg-overlay"
       data-browser-overlay
+      style={overlayZIndex ? { zIndex: overlayZIndex } : undefined}
       /* e.target 判断：点遮罩本身才关闭，点卡片内容冒泡上来不关闭；
          dismissOnOverlay=false 时遮罩只拦截宿主交互，不关闭弹窗 */
       onClick={(e) => {

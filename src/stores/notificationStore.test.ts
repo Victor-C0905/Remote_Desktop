@@ -5,7 +5,10 @@
 import { describe, it, expect } from "vitest";
 import {
   isNotificationVisible,
+  mergeIncoming,
+  MERGE_WINDOW_MS,
   migrateNotificationState,
+  useNotificationStore,
   type AppNotification,
 } from "./notificationStore";
 
@@ -67,5 +70,63 @@ describe("migrateNotificationState", () => {
     expect(migrateNotificationState(null)).toEqual({ notifications: [] });
     expect(migrateNotificationState({})).toEqual({ notifications: [] });
     expect(migrateNotificationState({ notifications: "bad" })).toEqual({ notifications: [] });
+  });
+});
+
+describe("mergeIncoming（同源聚合）", () => {
+  const existing = n({ id: "n-old", count: 2, timestamp: 1000, body: "旧正文" });
+
+  it("窗口内同 serverId/kind/source/title 且未读 → 合并：count+1、时间正文刷新、保留原 id", () => {
+    const merged = mergeIncoming(existing, n({ timestamp: 1000 + MERGE_WINDOW_MS - 1 }));
+    expect(merged).not.toBeNull();
+    expect(merged!.id).toBe("n-old");
+    expect(merged!.count).toBe(3);
+    expect(merged!.timestamp).toBe(1000 + MERGE_WINDOW_MS - 1);
+    expect(merged!.body).toBe("b");
+    expect(merged!.live).toBe(true);
+  });
+
+  it("超窗 / 已读 / onAction / kind 不同 / 跨服务器 → 不合并", () => {
+    expect(mergeIncoming(existing, n({ timestamp: 1000 + MERGE_WINDOW_MS }))).toBeNull();
+    expect(mergeIncoming(n({ ...existing, read: true }), n({ timestamp: 1500 }))).toBeNull();
+    expect(
+      mergeIncoming(n({ ...existing, onAction: { label: "撤销", run: () => {} } }), n({ timestamp: 1500 })),
+    ).toBeNull();
+    // existing 无 kind（other）与 kind: archive 不同键
+    expect(mergeIncoming(existing, n({ timestamp: 1500, kind: "archive" }))).toBeNull();
+    expect(mergeIncoming(existing, n({ timestamp: 1500, serverId: "srv-b" }))).toBeNull();
+  });
+
+  it("details 追加去重，保留最近 30 行（溢出丢最旧）", () => {
+    const merged = mergeIncoming(
+      n({ ...existing, details: ["a"] }),
+      n({ timestamp: 1500, details: ["a", "b"] }),
+    );
+    expect(merged!.details).toEqual(["a", "b"]);
+
+    const full = n({ ...existing, details: Array.from({ length: 30 }, (_, i) => `d${i}`) });
+    const overflow = mergeIncoming(full, n({ timestamp: 1500, details: ["d0", "new"] }));
+    expect(overflow!.details).toHaveLength(30);
+    expect(overflow!.details).toContain("new");
+    expect(overflow!.details).not.toContain("d0");
+  });
+
+  it("pushNotification：60s 内同键未读通知合并为一条，原 id 保留", () => {
+    useNotificationStore.setState({ notifications: [] });
+    const { pushNotification } = useNotificationStore.getState();
+    pushNotification({
+      title: "连接中断", body: "第一次", urgency: "normal",
+      source: "prod-1", kind: "connection", serverId: "srv-a",
+    });
+    const firstId = useNotificationStore.getState().notifications[0].id;
+    pushNotification({
+      title: "连接中断", body: "第二次", urgency: "normal",
+      source: "prod-1", kind: "connection", serverId: "srv-a",
+    });
+    const list = useNotificationStore.getState().notifications;
+    expect(list).toHaveLength(1);
+    expect(list[0].id).toBe(firstId);
+    expect(list[0].count).toBe(2);
+    expect(list[0].body).toBe("第二次");
   });
 });

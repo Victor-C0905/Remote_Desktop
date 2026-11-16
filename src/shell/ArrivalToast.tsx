@@ -37,6 +37,7 @@ export function ArrivalToast({
   const [visible, setVisible] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const shownIdRef = useRef<string | null>(null);
+  const shownKeyRef = useRef<string>("");
   const hideTimerRef = useRef<number | null>(null);
   const leaveTimerRef = useRef<number | null>(null);
 
@@ -74,8 +75,21 @@ export function ArrivalToast({
     // 按当前服务器隔离：跳过其它服务器的实时通知（静默收纳，切到该服务器后可见）
     const latest = notifications.find((n) => isNotificationVisible(n, activeServerId));
     if (!latest) return;
-    if (shownIdRef.current === latest.id) return;
+    if (shownIdRef.current === latest.id) {
+      // 同 id 合并更新（同源降噪）：键变化（count/timestamp）→ 刷新内容与 ×N、重置停留计时。
+      // 键而非裸时间戳：测试/连发场景两次 push 可能落在同一毫秒，count 变化同样要刷新
+      const key = `${latest.id}|${latest.count ?? 1}|${latest.timestamp}`;
+      if (shownKeyRef.current !== key) {
+        shownKeyRef.current = key;
+        setCurrent(latest);
+        setLeaving(false);
+        setVisible(true);
+        scheduleHide();
+      }
+      return;
+    }
     shownIdRef.current = latest.id;
+    shownKeyRef.current = `${latest.id}|${latest.count ?? 1}|${latest.timestamp}`;
     // 静默通知（toast: false，如文件移动成功）：仅入通知中心，不弹预览条
     if (latest.toast === false) return;
     // 存量记录（持久化恢复的通知，无 live 标记）：不弹，仅保留在通知中心。
@@ -126,6 +140,7 @@ export function ArrivalToast({
       {(current.serverName || current.source) && (
         <span className="at-source">{current.serverName || current.source}</span>
       )}
+      {(current.count ?? 1) > 1 && <span className="at-missed">×{current.count}</span>}
       {missed > 0 && <span className="at-missed">+{missed}</span>}
       <button
         className="at-close"

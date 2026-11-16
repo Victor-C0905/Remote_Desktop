@@ -126,6 +126,7 @@ export function useFileTransfer(params: {
         body: t('fileManager.transferFailedBatch', { n: failed.length, op: mode === 'move' ? t('fileManager.opMove') : t('fileManager.opCopy'), names: failed.slice(0, 3).join('、') }),
         source: t('fileManager.source'),
         urgency: 'normal',
+        kind: 'file',
       });
       return;
     }
@@ -138,6 +139,7 @@ export function useFileTransfer(params: {
         : t('fileManager.copiedDoneFromTo', { n: done, src: srcDir, dst: dstDir }),
       source: t('fileManager.source'),
       urgency: 'normal',
+      kind: 'file',
       toast: false,
       details: donePairs.map((p) => `${p.src} → ${p.dst}`),
       ...(mode === 'move' && donePairs.length > 0
@@ -173,6 +175,7 @@ export function useFileTransfer(params: {
                       body: t('fileManager.undoFailed', { n: undoFailed.length, names: undoFailed.slice(0, 3).join('、') }),
                       source: t('fileManager.source'),
                       urgency: 'normal',
+                      kind: 'file',
                     });
                   }
                 })();

@@ -17,6 +17,8 @@ interface ConfirmDialogProps {
   cancelLabel?: string;
   /** 破坏性操作：红色警示图标 + 初始焦点落在"取消"上防回车误触 */
   danger?: boolean;
+  /** 覆盖遮罩层级（透传 Dialog；宿主层级高于 --z-app-modal 时必须传更高令牌） */
+  overlayZIndex?: string;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -32,7 +34,7 @@ function renderMessage(message: string, highlight?: string): React.ReactNode {
 
 export function ConfirmDialog({
   title, message, highlight, detail,
-  confirmLabel, cancelLabel, danger,
+  confirmLabel, cancelLabel, danger, overlayZIndex,
   onConfirm, onCancel,
 }: ConfirmDialogProps) {
   const { t } = useTranslation();
@@ -40,7 +42,7 @@ export function ConfirmDialog({
   const confirmText = confirmLabel ?? t("common.confirm");
   const cancelText = cancelLabel ?? t("common.cancel");
   return (
-    <Dialog onClose={onCancel}>
+    <Dialog onClose={onCancel} overlayZIndex={overlayZIndex}>
       {/* 图标头部：danger 红色警示 / 普通询问 accent 圆标 */}
       <div className="dg-header">
         <div className={`dg-header-icon ${danger ? "dg-header-icon-danger" : "dg-header-icon-default"}`}>

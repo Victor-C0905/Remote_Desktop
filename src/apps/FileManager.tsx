@@ -382,7 +382,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   const activeServerIdRef = useRef(activeServerId);
   activeServerIdRef.current = activeServerId;
   const notifyActionError = useCallback((n: Parameters<typeof pushServerNotification>[1]) => {
-    pushServerNotification(activeServerIdRef.current, n);
+    pushServerNotification(activeServerIdRef.current, { ...n, kind: n.kind ?? "file" });
     setActionError(n.body ?? null);
   }, []);
   // 就地提示 6s 自动消退（长期展示走通知中心）

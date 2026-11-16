@@ -71,6 +71,7 @@ export async function probeKeyring(): Promise<void> {
         body: String(e),
         action: i18n.t("notify.keyringUnavailableAction"),
         urgency: "critical",
+        kind: "system",
         source: i18n.t("notify.sourceCredentials"),
       });
     } catch { /* 通知不可用时仅日志 */ }
@@ -108,6 +109,7 @@ export async function secretsSet(serverId: string, auth: Partial<ServerConfig["a
         body: String(e),
         action: i18n.t("notify.keyringSetFailedAction"),
         urgency: "critical",
+        kind: "system",
         source: i18n.t("notify.sourceCredentials"),
       });
     } catch { /* 通知不可用时仅日志 */ }

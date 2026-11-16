@@ -98,6 +98,7 @@ export function WallpaperProvider({ children }: { children: ReactNode }) {
           body: String(err),
           action: i18n.t("notify.wallpaperImportFailedAction"),
           urgency: "critical",
+          kind: "system",
           source: i18n.t("notify.sourceSettings"),
         });
       }
