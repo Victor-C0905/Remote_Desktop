@@ -7,6 +7,8 @@ pub mod auth;
 pub mod audit;
 pub mod cert;
 pub mod collectors;
+#[cfg(unix)]
+pub mod instance_lock;
 pub mod config;
 pub mod event_bus;
 pub mod file_stream;

@@ -18,6 +18,7 @@ import { StatsPanel } from '../components/StatsPanel';
 import { TransferLimitCard } from "../components/TransferLimitCard";
 import { ArchiveCapabilityCard } from "../components/ArchiveCapabilityCard";
 import { SymbolicIcon } from '../components/symbolic';
+import { InfoTip } from '../components/InfoTip/InfoTip';
 import { getServerErrorInfo } from '../stores/serversStore';
 import { getSettingsStorage } from '../utils/storage';
 import { RESOURCES, type Locale } from "../i18n";
@@ -59,7 +60,7 @@ interface AddServerModalProps {
   onAdd: (name: string, host: string, port: number, auth: any) => void;
 }
 
-function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
+export function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
   const { t } = useTranslation();
   const [name, setName] = useState("");
   const [host, setHost] = useState("");
@@ -78,6 +79,12 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    // R11-02：必填校验显式内联报错——此前空名称/主机静默跳过整个提交块，
+    // 对话框保持打开且无任何提示，用户不知道为什么存不上
+    if (!name.trim() || !host.trim()) {
+      setFormError(t("settings.errors.requiredFields"));
+      return;
+    }
     if (name && host) {
       // 安全前置拦截：本表单含持久化凭据，系统凭据库不可用时阻止提交
       // （凭据唯一持久化形态是 OS 凭据库——不允许静默降级明文保存）
@@ -100,7 +107,7 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
         }),
       };
 
-      onAdd(name, host, port, auth);
+      onAdd(name.trim(), host.trim(), port, auth);
       setFormError(null);
       setName("");
       setHost("");
@@ -232,18 +239,16 @@ function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
           {authMethod === AuthMethod.PUBKEY && (
             <>
               <div className="st-form-row">
-                <label className="st-form-label">{t("settings.privateKeyFile")}</label>
+                <label className="st-form-label">
+                  {t("settings.privateKeyFile")}
+                  <InfoTip tip={t("settings.privateKeyTip")} />
+                </label>
                 <input
                   type="file"
                   className="st-form-input"
                   onChange={handlePrivateKeySelect}
                   accept=".pem,.key,id_rsa,id_ed25519,id_ecdsa,id_dsa"
                 />
-                <span className="st-form-hint">
-                  {t("settings.privateKeyHint1")}<br/>
-                  {t("settings.privateKeyHint2")}<br/>
-                  {t("settings.privateKeyHint3")}
-                </span>
               </div>
               {privateKeyFile && (
                 <div className="st-form-row">
@@ -282,7 +287,7 @@ interface EditServerModalProps {
   server: { id: string; name: string; host: string; port: number; auth?: any } | null;
 }
 
-function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalProps) {
+export function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalProps) {
   const { t } = useTranslation();
   // 凭据状态/回退取 store 实时值而非打开时快照：keyring 装配是异步的，
   // 快照可能早于装配（显示"未配置"且回退空值清空凭据）
@@ -326,6 +331,11 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    // R11-02：必填校验显式内联报错（同 AddServerModal——此前静默跳过）
+    if (!name.trim() || !host.trim()) {
+      setFormError(t("settings.errors.requiredFields"));
+      return;
+    }
     if (name && host) {
       // 安全前置拦截：本表单含持久化凭据，系统凭据库不可用时阻止提交
       // （凭据唯一持久化形态是 OS 凭据库——不允许静默降级明文保存）
@@ -351,7 +361,7 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
         }),
       };
 
-      onSave(server.id, name, host, port, auth);
+      onSave(server.id, name.trim(), host.trim(), port, auth);
       onClose();
     }
   };
@@ -473,7 +483,10 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
           {authMethod === AuthMethod.PUBKEY && (
             <>
               <div className="st-form-row">
-                <label className="st-form-label">{t("settings.privateKeyFile")}</label>
+                <label className="st-form-label">
+                  {t("settings.privateKeyFile")}
+                  <InfoTip tip={t("settings.privateKeyTip")} />
+                </label>
                 <input
                   type="file"
                   className="st-form-input"
@@ -484,11 +497,6 @@ function EditServerModal({ isOpen, onClose, onSave, server }: EditServerModalPro
                 {liveAuth?.privateKey && !privateKeyFile && (
                   <span className="st-form-hint st-key-configured">{t("settings.keyConfigured")}</span>
                 )}
-                <span className="st-form-hint">
-                  {t("settings.privateKeyHint1")}<br/>
-                  {t("settings.privateKeyHint2")}<br/>
-                  {t("settings.privateKeyHint3")}
-                </span>
               </div>
               {privateKeyFile && (
                 <div className="st-form-row">
@@ -698,7 +706,7 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
               <div className="st-current-connection">
                 <div className="st-conn-row">
                   <span className="st-conn-label text-label">{t("settings.connHost")}</span>
-                  <span className="st-conn-value st-conn-value-host">
+                  <span className="st-conn-value st-conn-value-host" title={cardServer?.host || undefined}>
                     {cardServer?.host || <span className="st-conn-placeholder">{t("settings.notConnected")}</span>}
                   </span>
                 </div>
@@ -811,8 +819,8 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                           server.status === "error" ? t("settings.statusError") : undefined
                         }
                       />
-                      <span className="st-server-name">{server.name}</span>
-                      <span className="st-server-host">{server.host}</span>
+                      <span className="st-server-name" title={server.name}>{server.name}</span>
+                      <span className="st-server-host" title={server.host}>{server.host}</span>
                       <span className="st-server-time" title={t("settings.lastConnectedTitle")}>
                         {formatLastConnected(server.lastConnected)}
                       </span>
@@ -826,6 +834,7 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                               className="st-server-action-btn"
                               onClick={(e) => { e.stopPropagation(); handleOpenEditModal(server); }}
                               title={t("settings.editTip")}
+                              aria-label={t("settings.editTip")}
                             >
                               <SymbolicIcon name="document-edit" size={16} />
                             </button>
@@ -833,6 +842,7 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                               className="st-server-action-btn st-server-action-danger"
                               onClick={(e) => { e.stopPropagation(); handleRemove(server); }}
                               title={t("settings.deleteTip")}
+                              aria-label={t("settings.deleteTip")}
                             >
                               <AppIcon name="trash" size={16} />
                             </button>
@@ -1256,7 +1266,10 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
             <div className="st-section-title text-heading">{t("settings.browserTitle")}</div>
 
             <div className="st-card">
-              <div className="st-card-header text-title">{t("settings.builtInBrowserTitle")}</div>
+              <div className="st-card-header text-title">
+                {t("settings.builtInBrowserTitle")}
+                <InfoTip tip={t("settings.browserTip")} />
+              </div>
               {/* 系统浏览器选择：供"在系统浏览器中打开"使用（流量走隧道，
                   与旧版浏览器功能对齐；自定义路径填可执行文件全路径） */}
               <div className="st-option-row">
@@ -1278,7 +1291,10 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                 </select>
               </div>
               <div className="st-option-row">
-                <span className="st-option-label text-body">{t("settings.socks5Port")}</span>
+                <span className="st-option-label text-body">
+                  {t("settings.socks5Port")}
+                  <InfoTip tip={t("settings.socks5PortTip")} />
+                </span>
                 <input
                   type="number"
                   className="st-input"
@@ -1295,7 +1311,6 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                   style={{ width: 100 }}
                 />
               </div>
-              <div className="st-option-hint text-caption">{t("settings.socks5PortHint")}</div>
               <div className="st-option-row">
                 <span className="st-option-label text-body">{t("settings.browserSleepTitle")}</span>
                 <select
@@ -1307,9 +1322,6 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                     <option key={o.value} value={o.value}>{t(o.labelKey)}</option>
                   ))}
                 </select>
-              </div>
-              <div className="st-hint">
-                {t("settings.browserHint")}
               </div>
             </div>
           </div>

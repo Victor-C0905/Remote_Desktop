@@ -9,6 +9,9 @@
   position: absolute;
   background: transparent; /* 让标题栏毛玻璃能模糊到壁纸 */
   border-radius: var(--radius-md); /* 12px */
+  /* R12-FM-4：统一 1px 淡色描边增强立体感——由 border-color 派生半透明，
+     亮暗主题自动跟随（box-sizing: border-box 全局基线，不改变窗口几何） */
+  border: 1px solid color-mix(in srgb, var(--quirel-border-color) 70%, transparent);
   box-shadow: var(--shadow-popup);
   display: flex;
   flex-direction: column;

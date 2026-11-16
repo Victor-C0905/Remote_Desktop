@@ -129,3 +129,23 @@
 .notificationBtn:hover {
   background: var(--quirel-border-color);
 }
+/* ── 窄窗收缩策略（R11-04）：视口 = 窗口宽度，媒体查询随窗口实时生效。
+   丢弃优先级：指标区（MEM/CPU）→ 服务器名（保状态点）→ 时钟最后 ── */
+@media (max-width: 980px) {
+  .topBar .metrics,
+  .topBar .separator {
+    display: none;
+  }
+}
+
+@media (max-width: 840px) {
+  .topBar .serverName {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .topBar .clock {
+    display: none;
+  }
+}

@@ -12,7 +12,13 @@ export function useSubscription(
   serverId: string | null,
   types: SubscriptionType[],
   onEvent: (event: SubscriptionEvent) => void,
-  options?: { key?: string; revision?: string | number; onStatus?: (active: boolean) => void }
+  options?: {
+    key?: string;
+    revision?: string | number;
+    onStatus?: (active: boolean) => void;
+    /** 订阅请求失败时回调（旧版 Agent 不支持该类型等）——区别于正常退订的 onStatus(false) */
+    onSubscribeError?: (e: unknown) => void;
+  }
 ) {
   // 使用 ref 来跟踪订阅状态
   const subscribedRef = useRef(false);
@@ -29,6 +35,10 @@ export function useSubscription(
   // 订阅成功/失败回调（同样走 ref：调用方内联箭头函数不会触发重订阅）
   const onStatusRef = useRef(options?.onStatus);
   onStatusRef.current = options?.onStatus;
+  // 订阅请求本身失败（旧版 Agent 不支持该类型等）：与「正常退订的 onStatus(false)」
+  // 区分开，调用方可据此做一次性降级提示而不必在卸载路径里甄别
+  const onSubscribeErrorRef = useRef(options?.onSubscribeError);
+  onSubscribeErrorRef.current = options?.onSubscribeError;
 
   useEffect(() => {
     if (!serverId || types.length === 0) return;
@@ -56,6 +66,7 @@ export function useSubscription(
         log.warn('订阅失败:', e);
         subscribedRef.current = false;
         onStatusRef.current?.(false);
+        onSubscribeErrorRef.current?.(e);
       }
     };
 
@@ -106,7 +117,8 @@ export function useFileChangesSubscription(
   path: string,
   recursive: boolean,
   onFileChange: (data: any) => void,
-  onStatus?: (active: boolean) => void
+  onStatus?: (active: boolean) => void,
+  onSubscribeError?: (e: unknown) => void
 ) {
   // types 稳定化（审计 L4）：裸数组每次渲染新建，effect deps 含 types
   // 会每渲染 unsubscribe→subscribe 循环
@@ -122,7 +134,7 @@ export function useFileChangesSubscription(
     }
   }, [onFileChange]);
 
-  useSubscription(serverId, types, handleEvent, { onStatus });
+  useSubscription(serverId, types, handleEvent, { onStatus, onSubscribeError });
 }
 
 // 新增：进程事件订阅 Hook

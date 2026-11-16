@@ -5,6 +5,8 @@ import { createLogger } from "../utils/logger";
 import { Dialog } from "../components/Dialog/Dialog";
 import { useTranslation } from "react-i18next";
 import { formatUnknownError } from "../types/errors";
+import { clearSessionMirrors } from "../utils/sessionMirror";
+import { isTauri } from "../utils/environment";
 
 const log = createLogger('StorageInitializer');
 
@@ -14,7 +16,7 @@ interface StorageInitializerProps {
 
 /**
  * 存储初始化组件
- * 
+ *
  * 在应用启动时预加载所有 Tauri Store，
  * 确保 Zustand persist 中间件能够正确读取数据
  */
@@ -25,9 +27,34 @@ export function StorageInitializer({ children }: StorageInitializerProps) {
 
   useEffect(() => {
     const initializeStorage = async () => {
+      // ── 进程纪元校验（会话镜像的生命周期闸门）──────────
+      // WebView2 的 sessionStorage 会在进程重启后存活（Chromium 崩溃恢复，
+      // 同 user-data + 同源即保留）——纪元不一致 = 进程已重启，清空上一
+      // 世代的会话镜像（窗口快照 wm.session / 连接镜像 sm.session / 挂载
+      // 代际 browser.mountGen.*），保证「关闭项目 = 干净桌面」；
+      // 纪元一致（仅页面刷新）→ 镜像保留，窗口/连接/通知照常恢复。
+      // ⚠️ 闸门独立于下方存储预加载的 try：此前预加载/preflight 抛错会连带
+      //    跳过镜像清理，上一世代的 sm.session 泄进新进程，表现为
+      //    「启动自动重连时有时无」（R8-N2/R9-N3）。fail-closed：纪元读取
+      //    失败 = 无法证明同一进程 → 无条件清镜像（丢一次恢复 ≠ 跨世代泄漏）。
+      // 纯浏览器调试模式无进程纪元概念，整体跳过（reload 本就同源同 store）。
+      if (isTauri()) {
+        try {
+          const epoch = await invoke<string>("app_process_epoch");
+          if (sessionStorage.getItem("app.epoch") !== epoch) {
+            clearSessionMirrors(sessionStorage);
+            sessionStorage.setItem("app.epoch", epoch);
+            log.info("检测到进程重启，已清空上一世代的会话镜像");
+          }
+        } catch (e) {
+          log.error("进程纪元读取失败，按新进程处理并清空会话镜像:", e);
+          clearSessionMirrors(sessionStorage);
+        }
+      }
+
       try {
         log.info('开始预加载存储...');
-        
+
         // 预加载所有存储
         await Promise.all([
           getSettingsStorage(),
@@ -35,26 +62,6 @@ export function StorageInitializer({ children }: StorageInitializerProps) {
           getNotificationsStorage(),
         ]);
 
-        // ── 进程纪元校验（会话镜像的生命周期闸门）──────────
-        // WebView2 的 sessionStorage 会在进程重启后存活（Chromium 崩溃恢复，
-        // 同 user-data + 同源即保留）——纪元不一致 = 进程已重启，清空上一
-        // 世代的会话镜像（窗口快照 wm.session / 连接镜像 sm.session / 挂载
-        // 代际 browser.mountGen.*），保证「关闭项目 = 干净桌面」；
-        // 纪元一致（仅页面刷新）→ 镜像保留，窗口/连接/通知照常恢复。
-        const epoch = await invoke<string>("app_process_epoch");
-        if (sessionStorage.getItem("app.epoch") !== epoch) {
-          sessionStorage.removeItem("wm.session");
-          sessionStorage.removeItem("sm.session");
-          const stale: string[] = [];
-          for (let i = 0; i < sessionStorage.length; i++) {
-            const k = sessionStorage.key(i);
-            if (k?.startsWith("browser.mountGen.")) stale.push(k);
-          }
-          stale.forEach((k) => sessionStorage.removeItem(k));
-          sessionStorage.setItem("app.epoch", epoch);
-          log.info("检测到进程重启，已清空上一世代的会话镜像");
-        }
-        
         // 磁盘契约预检：版本过高/结构损坏 → 阻断进入主界面，阻止任何写回
         const blocked = await preflightStores();
         if (blocked.length > 0) {

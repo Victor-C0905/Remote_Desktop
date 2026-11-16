@@ -93,7 +93,8 @@ export const StatsPanel: React.FC<StatsPanelProps> = ({ serverId, isRoot }) => {
 
   return (
     <div className="stats-panel">
-      <h2>{t('stats.title')}</h2>
+      {/* 页面级标题由 Settings 的 st-section-title 提供（settings.section.stats），
+          此处不再重复渲染同名 h2（R12-SP-2 观感整改） */}
 
       {/* 认证统计（仅root可见） */}
       {isRoot && stats.auth && (

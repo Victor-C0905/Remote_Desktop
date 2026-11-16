@@ -1,0 +1,18 @@
+/* InfoTip：行内 ⓘ。悬停/聚焦显示原生 title tooltip（规范见组件注释） */
+.info-tip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 6px;
+  color: var(--quirel-text-disabled);
+  cursor: help;
+  border-radius: var(--radius-sm);
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.info-tip:hover,
+.info-tip:focus-visible {
+  color: var(--quirel-accent-fg);
+  outline: 1px solid var(--quirel-border-focus);
+  outline-offset: 2px;
+}

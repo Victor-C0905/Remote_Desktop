@@ -35,7 +35,10 @@
 }
 
 .ctx-item:hover:not(:disabled) {
-  background: var(--quirel-card-hover);
+  /* R12-FM-6：聚焦色此前用 card-hover（与弹层 view-bg 仅差 2 个色阶，
+     视觉不可见）。改用 border-color 实色——与 fm-toolbar-btn 悬停同源，
+     亮暗主题均清晰 */
+  background: var(--quirel-border-color);
 }
 
 .ctx-item:disabled {

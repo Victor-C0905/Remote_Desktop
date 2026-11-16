@@ -54,6 +54,22 @@ pub struct MountInfo {
     pub used_bytes: u64,
 }
 
+/// 服务器标准位置（文件管理器侧边栏「位置」分组）
+///
+/// 由 Agent 按当前会话用户的实际磁盘布局计算：
+/// 家目录下真实存在的标准目录（优先读 XDG user-dirs，含本地化目录名）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommonLocation {
+    /// 所属分组："home"（家目录标准目录）
+    pub group: String,
+    /// 稳定语义 key（前端据此选图标，如 "documents"；未知 key 用文件夹图标兜底）
+    pub key: String,
+    /// 展示名称：真实目录名（如「文档」）
+    pub label: String,
+    /// 绝对路径
+    pub path: String,
+}
+
 /// 文件条目
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileEntry {

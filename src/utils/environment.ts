@@ -8,6 +8,7 @@
  *
  * 通过探测 Tauri v2 注入的 `window.__TAURI_INTERNALS__` 判断。
  */
+import { createLogger } from './logger';
 
 /** 是否运行在 Tauri WebView 中 */
 export function isTauri(): boolean {
@@ -37,5 +38,36 @@ export function suppressTauriBridgeErrors(): void {
     if (TAURI_BRIDGE_PATTERNS.some((p) => text.includes(p))) {
       e.preventDefault(); // 阻止 console 的 "Uncaught (in promise)" 报错
     }
+  });
+}
+
+/* ── 全局未捕获错误捕获（诊断）───────────────────────────
+ * R8-N1 教训：终端 teardown 的 uncaught TypeError 只留下消息
+ * （`r is not a function`，来自依赖预打包 chunk），无 stack 无法归因。
+ * 此钩子把 uncaught error 的完整 stack 记入日志（经 logger 落盘
+ * client.log），保证下一次出现可直接定位；不改变错误本身的传播。 */
+const globalErrorLog = createLogger('GlobalErrors');
+
+/** 全局 error 上报的默认出口：logger.error（console + client.log） */
+function defaultErrorReport(detail: string): void {
+  globalErrorLog.error('未捕获异常:', detail);
+}
+
+/**
+ * 安装全局 `error` 监听。report/target 参数仅测试注入用。
+ * 注意：此钩子只记录，不 preventDefault——原样保留 console 的
+ * Uncaught 报错与既有调试习惯。
+ */
+export function installGlobalErrorReporting(
+  report: (detail: string) => void = defaultErrorReport,
+  target: Pick<Window, 'addEventListener'> = window,
+): void {
+  target.addEventListener('error', (e) => {
+    const err = e.error;
+    const detail =
+      err instanceof Error && err.stack
+        ? err.stack
+        : `${e.message}（${e.filename}:${e.lineno}:${e.colno}）`;
+    report(detail);
   });
 }

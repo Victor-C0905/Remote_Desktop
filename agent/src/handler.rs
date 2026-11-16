@@ -1,5 +1,5 @@
 use crate::config::AgentConfig;
-use crate::protocol::{Envelope, MetricsSnapshot, MountInfo, Payload};
+use crate::protocol::{CommonLocation, Envelope, MetricsSnapshot, MountInfo, Payload};
 use crate::protocol::serde::StatsResponse; // 统计响应（quirel-protocol newtype 变体所复用的结构体）
 use crate::transfer_session::{TransferSession, TransferStatus};
 use crate::file_stream::{PipeFileStreamReader, PipeFileStreamWriter, generate_temp_path};
@@ -7,11 +7,12 @@ use crate::auth::{UserSession, UserExecutor, StatsManager}; // 新增：用户�
 use crate::auth::stats::ConnectionStatsSnapshot; // 新增：连接统计快照类型
 use crate::audit::AuditLogger; // 新增：审计日志记录器
 use std::fs;
+use std::path::{Path, PathBuf};
 
 use std::time::{SystemTime, UNIX_EPOCH, Instant};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 // 全局传输会话管理器
@@ -73,12 +74,27 @@ pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &U
         Payload::GetCurrentUser => {
             tracing::info!("获取当前用户请求");
             let username = handle_get_current_user(session);
-            tracing::info!("当前用户: {}, home={}", username, session.home_dir.display());
+            // 标准位置探测含配置文件读取与多次 stat，移入阻塞线程池避免占用 runtime worker
+            let home = session.home_dir.clone();
+            let common_locations = match tokio::task::spawn_blocking(move || collect_common_locations(&home)).await {
+                Ok(locations) => locations,
+                Err(e) => {
+                    tracing::warn!("标准位置探测线程异常: {}", e);
+                    Vec::new()
+                }
+            };
+            tracing::info!(
+                "当前用户: {}, home={}, 标准位置={}",
+                username,
+                session.home_dir.display(),
+                common_locations.len()
+            );
             Envelope::new(
                 envelope.request_id,
                 Payload::CurrentUserResponse {
                     username,
                     home_dir: session.home_dir.to_string_lossy().to_string(),
+                    common_locations,
                 },
             )
         }
@@ -345,6 +361,95 @@ pub async fn handle_envelope(envelope: &Envelope, cfg: &AgentConfig, session: &U
 /// 登录用户名（如"vic"）
 fn handle_get_current_user(session: &UserSession) -> String {
     session.username.clone()
+}
+
+/// 家目录标准目录：XDG 配置键 → 前端语义 key → 无 XDG 配置时的英文默认目录名
+///
+/// XDG 配置存在时优先使用（值可为本地化目录名，如 `$HOME/文档`）；
+/// 配置文件缺失或未声明某项时，回退探测英文默认目录。
+const XDG_HOME_DIRS: [(&str, &str, &str); 8] = [
+    ("XDG_DESKTOP_DIR", "desktop", "Desktop"),
+    ("XDG_DOCUMENTS_DIR", "documents", "Documents"),
+    ("XDG_DOWNLOAD_DIR", "downloads", "Downloads"),
+    ("XDG_PICTURES_DIR", "pictures", "Pictures"),
+    ("XDG_MUSIC_DIR", "music", "Music"),
+    ("XDG_VIDEOS_DIR", "videos", "Videos"),
+    ("XDG_PUBLICSHARE_DIR", "public", "Public"),
+    ("XDG_TEMPLATES_DIR", "templates", "Templates"),
+];
+
+/// 计算服务器标准位置（家目录下真实存在的标准目录）
+///
+/// 仅返回目录（不返回文件/断链），并按会话用户家目录去重：
+/// 家目录被 XDG 配置指向自身（用户禁用某项）时不重复展示。
+fn collect_common_locations(home: &Path) -> Vec<CommonLocation> {
+    let xdg = parse_xdg_user_dirs(home);
+    let mut seen = HashSet::new();
+    seen.insert(home.to_path_buf());
+    let mut locations = Vec::new();
+
+    for (xdg_key, key, fallback_name) in XDG_HOME_DIRS {
+        let path = xdg
+            .get(xdg_key)
+            .cloned()
+            .unwrap_or_else(|| home.join(fallback_name));
+        if !path.is_absolute() || path == home || !path.is_dir() || !seen.insert(path.clone()) {
+            continue;
+        }
+        let label = path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_else(|| fallback_name.to_string());
+        locations.push(CommonLocation {
+            group: "home".to_string(),
+            key: key.to_string(),
+            label,
+            path: path.to_string_lossy().to_string(),
+        });
+    }
+
+    locations
+}
+
+/// 解析 `~/.config/user-dirs.dirs`（XDG user-dirs），返回 XDG 键 → 展开后的绝对路径
+///
+/// 支持 `"$HOME/文档"`、`"${HOME}/文档"` 与绝对路径三种取值；
+/// 读取失败（文件不存在/非 UTF-8）时返回空表，由调用方回退英文默认目录。
+fn parse_xdg_user_dirs(home: &Path) -> HashMap<String, PathBuf> {
+    let mut dirs = HashMap::new();
+    let config_path = home.join(".config").join("user-dirs.dirs");
+    let content = match fs::read_to_string(&config_path) {
+        Ok(content) => content,
+        Err(_) => return dirs,
+    };
+
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((raw_key, raw_value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = raw_key.trim();
+        if !key.starts_with("XDG_") || !key.ends_with("_DIR") {
+            continue;
+        }
+        let value = raw_value.trim().trim_matches('"').trim();
+        if value.is_empty() {
+            continue;
+        }
+        let path = if let Some(rest) = value.strip_prefix("${HOME}") {
+            home.join(rest.trim_start_matches('/'))
+        } else if let Some(rest) = value.strip_prefix("$HOME") {
+            home.join(rest.trim_start_matches('/'))
+        } else {
+            PathBuf::from(value)
+        };
+        dirs.insert(key.to_string(), path);
+    }
+
+    dirs
 }
 
 fn handle_get_mounts() -> Vec<MountInfo> {
@@ -1019,4 +1124,51 @@ async fn handle_cancel_file_transfer(
             success: true,
         },
     ))
+}
+
+#[cfg(test)]
+mod common_locations_tests {
+    use super::*;
+
+    fn write_user_dirs(home: &Path, body: &str) {
+        let config_dir = home.join(".config");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(config_dir.join("user-dirs.dirs"), body).unwrap();
+    }
+
+    #[test]
+    fn parse_xdg_expands_home_prefix() {
+        let temp = tempfile::tempdir().unwrap();
+        write_user_dirs(
+            temp.path(),
+            "XDG_DOCUMENTS_DIR=\"$HOME/文档\"\nXDG_MUSIC_DIR=\"${HOME}/音乐\"\nXDG_VIDEOS_DIR=\"/srv/videos\"\n# 注释与空行忽略\n",
+        );
+
+        let dirs = parse_xdg_user_dirs(temp.path());
+        assert_eq!(dirs.get("XDG_DOCUMENTS_DIR"), Some(&temp.path().join("文档")));
+        assert_eq!(dirs.get("XDG_MUSIC_DIR"), Some(&temp.path().join("音乐")));
+        assert_eq!(dirs.get("XDG_VIDEOS_DIR"), Some(&PathBuf::from("/srv/videos")));
+    }
+
+    #[test]
+    fn collect_home_locations_only_returns_existing_dirs() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        fs::create_dir(home.join("文档")).unwrap();
+        fs::create_dir(home.join("Downloads")).unwrap();
+        // XDG 指向自身 = 用户禁用该目录；Downloads 未声明 → 回退英文名探测
+        write_user_dirs(home, "XDG_DOCUMENTS_DIR=\"$HOME/文档\"\nXDG_DESKTOP_DIR=\"$HOME/\"\n");
+
+        let locations = collect_common_locations(home);
+        let home_locations: Vec<_> = locations.iter().filter(|loc| loc.group == "home").collect();
+
+        assert_eq!(home_locations.len(), 2);
+        assert_eq!(home_locations[0].key, "documents");
+        assert_eq!(home_locations[0].label, "文档");
+        assert_eq!(home_locations[0].path, home.join("文档").to_string_lossy().to_string());
+        assert!(home_locations
+            .iter()
+            .any(|loc| loc.key == "downloads" && loc.label == "Downloads"));
+        assert!(!home_locations.iter().any(|loc| loc.key == "desktop"));
+    }
 }

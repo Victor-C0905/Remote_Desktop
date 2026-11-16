@@ -58,9 +58,29 @@ fn current_user_resp_without_home_dir_compat() {
     let raw = r#"{"request_id":1,"payload":{"type":"current_user_resp","data":{"username":"root"}}}"#;
     let env: Envelope = serde_json::from_str(raw).expect("旧格式必须可解码");
     match env.payload {
-        Payload::CurrentUserResponse { username, home_dir } => {
+        Payload::CurrentUserResponse { username, home_dir, common_locations } => {
             assert_eq!(username, "root");
             assert_eq!(home_dir, "");
+            assert!(common_locations.is_empty());
+        }
+        _ => panic!("变体不匹配"),
+    }
+}
+
+#[test]
+fn current_user_resp_with_common_locations() {
+    // common_locations 为后加字段：新 Agent 返回家目录标准位置，前端据此生成「位置」分组；
+    // 旧 Agent 缺省时回退空数组（上一个用例锁死）
+    let raw = r#"{"request_id":1,"payload":{"type":"current_user_resp","data":{"username":"vic","home_dir":"/home/vic","common_locations":[{"group":"home","key":"documents","label":"文档","path":"/home/vic/文档"},{"group":"home","key":"downloads","label":"下载","path":"/home/vic/下载"}]}}}"#;
+    let env: Envelope = serde_json::from_str(raw).expect("新格式必须可解码");
+    match env.payload {
+        Payload::CurrentUserResponse { common_locations, .. } => {
+            assert_eq!(common_locations.len(), 2);
+            assert_eq!(common_locations[0].group, "home");
+            assert_eq!(common_locations[0].key, "documents");
+            assert_eq!(common_locations[0].label, "文档");
+            assert_eq!(common_locations[0].path, "/home/vic/文档");
+            assert_eq!(common_locations[1].key, "downloads");
         }
         _ => panic!("变体不匹配"),
     }

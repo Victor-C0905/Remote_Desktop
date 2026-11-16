@@ -74,7 +74,6 @@
 }
 
 .fm-toolbar-nav,
-.fm-toolbar-actions,
 .fm-toolbar-view {
   display: flex;
   gap: 4px;
@@ -146,6 +145,10 @@
   padding: 3px 5px;
   border-radius: var(--radius-xs);
   white-space: nowrap;
+  /* R11-04：单段超长时省略号截断（完整路径在 title；层级溢出由「…」收拢） */
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   transition: background var(--duration-fast) var(--ease-out),
               color var(--duration-fast) var(--ease-out);
 }
@@ -153,6 +156,17 @@
 .fm-breadcrumb .fm-crumb:hover,
 .fm-breadcrumb-segment:hover {
   background: var(--quirel-hover-bg);
+  color: var(--quirel-text-primary);
+}
+
+/* 「…」收拢段：代表被隐藏的上级层级，点击弹出回跳菜单 */
+.fm-breadcrumb-segment.fm-crumb-ellipsis {
+  color: var(--quirel-text-secondary);
+  min-width: 26px;
+  max-width: none;
+}
+
+.fm-breadcrumb-segment.fm-crumb-ellipsis:hover {
   color: var(--quirel-text-primary);
 }
 
@@ -386,6 +400,19 @@
   white-space: nowrap;
 }
 
+/* 挂载项容量使用率（右侧弱化显示，悬停查看已用/总量） */
+.fm-sidebar .fm-sidebar-item .fm-si-meta {
+  flex-shrink: 0;
+  font-size: var(--font-small);
+  color: var(--quirel-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.fm-sidebar .fm-sidebar-item.fm-sidebar-item-active .fm-si-meta {
+  color: inherit;
+  opacity: 0.8;
+}
+
 /* ── File List / Grid Area ───────────────────────────── */
 
 /* List View - 重构为 flex 布局（模仿 SystemMonitor） */
@@ -394,6 +421,13 @@
   flex-direction: column;
   height: 100%;  /* ✅ 填满父容器 */
   min-height: 0;  /* ✅ 建立 flex 约束链 */
+  /* R12-FM-6：补全缝隙——列表区此前无背景，透出 fm-app 的近白底
+     （250,250,250），与侧栏/工具栏的暖纸色（245,240,230）形成一条
+     竖向色差带（用户指出的「缝隙」）。补 view-bg 与工具栏同源 */
+  background: var(--quirel-view-bg);
+  /* R12-FM-3：两侧留白——边缘可起手框选/拖放（对齐 Explorer）；表头与行
+     同在滚动容器内，padding 同步内移，列对齐不受影响 */
+  padding: 0 6px;
   /* 滚动上提：列总和超出容器宽时整体横滚（表头与行同滚，对齐 Explorer）；
      行多时纵滚（表头 sticky 顶部保持可见）。此前 content 独立滚动 + 横向 hidden，
      列超宽只能裁剪，导致拖拽必须锁上限、占满后所有列互相锁死 */
@@ -433,6 +467,9 @@
   cursor: pointer;
   user-select: none;
   overflow: visible;       /* 手柄跨列间隙，不被裁剪 */
+  /* 建立列头内部层叠上下文：下方 ::before 高亮遮罩用负 z-index
+     落到文字之下（不透明主题色也不会盖住列头文字） */
+  isolation: isolate;
   transition: color var(--duration-fast) var(--ease-out);
 }
 
@@ -457,12 +494,14 @@
 
 /* 聚焦背景基座：伪元素右扩 8px 盖住列间 gap——高亮块与右邻列头无缝相接
    （背景直接画在盒上会让 gap 露缝；删 grid gap 则表头轨道与行错位，不可取）。
-   ::before 按树序最先绘制，文字与拖拽手柄均在其上，不受影响 */
+   定位伪元素默认绘制在普通内容之上；必须用负 z-index 压到文字下方，
+   否则排序列的不透明高亮会遮住列头文字（只剩排序箭头可见） */
 .fm-list .fm-list-header .fm-col-header::before {
   content: "";
   position: absolute;
   inset: 0 -8px 0 0;
   background: transparent;
+  z-index: -1;
 }
 
 /* 尾列右邻是表头外缘，无 gap 可盖，扩出反而引起 8px 横滚 → 收回 */
@@ -626,9 +665,13 @@
   background: var(--quirel-card-bg);
 }
 
+/* R12-FM-2（按 Win 资管基准重做）：全宽淡化强调底 + 1px 强调系内描边。
+   描边用 inset box-shadow——不参与布局（列对齐零偏移）且绘制在文字之下；
+   相邻选中行之间由行距（LIST_ROW_GAP 2px）自然分隔出边界 */
 .fm-list .fm-list-row.selected {
-  background: var(--quirel-accent-bg);
-  color: var(--quirel-accent-fg);
+  background: color-mix(in srgb, var(--quirel-accent-bg) 20%, var(--quirel-view-bg));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--quirel-accent-bg) 60%, var(--quirel-text-primary));
+  color: var(--quirel-text-primary);
 }
 
 .fm-list .fm-list-row .fm-file-name {
@@ -699,7 +742,7 @@
 .fm-list .fm-list-row.selected .fm-file-mtime,
 .fm-list .fm-list-row.selected .fm-file-type,
 .fm-list .fm-list-row.selected .fm-file-perm {
-  color: rgba(255, 255, 255, 0.75);
+  color: var(--quirel-text-secondary);  /* 淡化强调底下恢复次级文字色（原白系） */
 }
 
 /* Grid View */
@@ -725,9 +768,11 @@
   background: var(--quirel-card-bg);
 }
 
+/* 同列表行：淡化强调底 + inset 描边（不遮内容、零几何偏移） */
 .fm-grid .fm-grid-item.selected {
-  background: var(--quirel-accent-bg);
-  color: var(--quirel-accent-fg);
+  background: color-mix(in srgb, var(--quirel-accent-bg) 20%, var(--quirel-view-bg));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--quirel-accent-bg) 60%, var(--quirel-text-primary));
+  color: var(--quirel-text-primary);
 }
 
 .fm-grid .fm-grid-item .fm-gi-icon {
@@ -1851,4 +1896,40 @@
 body[data-drag-cursor="1"],
 body[data-drag-cursor="1"] * {
   cursor: grabbing !important;
+}
+
+/* ── 操作失败就地提示横幅（R6：失败反馈除通知中心外同屏显示）── */
+.fm-action-error {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: color-mix(in srgb, var(--quirel-error-color, #c01c28) 12%, var(--quirel-view-bg));
+  border-bottom: 1px solid var(--quirel-border-color);
+  color: var(--quirel-text-primary);
+  font-family: var(--font-ui);
+  font-size: 12px;
+}
+.fm-action-error-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+.fm-action-error-close {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--quirel-text-primary);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+.fm-action-error-close:hover {
+  background: var(--quirel-border-color);
 }

@@ -110,6 +110,38 @@ pub fn create_session(params: SessionParams) -> Result<SessionCreatedInfo> {
     }
 }
 
+/// 终止整个终端会话：遍历 /proc，SIGKILL 会话（SID）内的全部进程
+///
+/// bash 经 setsid 成为会话首进程（SID=bash_pid）。作业控制下前台子进程
+/// （sleep/vim/top 等）拥有独立 PGID，`kill(-PGID)` 只能命中 bash 自身，
+/// 子进程会被孤儿化（R5/R6 终端孤儿根因）。按 SID 扫描 /proc 最确定。
+/// 自身（Session 进程）的 SID 继承自 Worker，不会被误杀。
+fn kill_session_processes(bash_pid: i32) {
+    let entries = match std::fs::read_dir("/proc") {
+        Ok(entries) => entries,
+        Err(e) => {
+            eprintln!("kill_session_processes: 读取 /proc 失败: {e}");
+            return;
+        }
+    };
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let Some(pid_str) = file_name.to_str() else { continue };
+        let Ok(pid) = pid_str.parse::<i32>() else { continue };
+        if pid <= 1 || pid == std::process::id() as i32 {
+            continue; // 跳过 init 与自身
+        }
+        // /proc/<pid>/stat 第 6 字段为 session id；comm 可能含空格/括号，
+        // 以最后一个 ')' 为界解析其后字段（fields[3] = sid）
+        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else { continue };
+        let Some(idx) = stat.rfind(')') else { continue };
+        let fields: Vec<&str> = stat[idx + 1..].split_whitespace().collect();
+        if fields.len() > 3 && fields[3].parse::<i32>().ok() == Some(bash_pid) {
+            unsafe { libc::kill(pid, libc::SIGKILL); }
+        }
+    }
+}
+
 /// fork 后清理继承自 Worker 的全部描述符（仅保留 stdio 与 PTY 对）
 ///
 /// Session 进程 fork 自多线程的 Worker（tokio runtime）且从不 exec——
@@ -406,9 +438,11 @@ fn session_io_loop(master_fd: RawFd, sock_fd: RawFd, bash_pid: i32, session_id: 
                         "Session 重连超时 ({}秒), 终止 bash: pid={}",
                         RECONNECT_TIMEOUT_SECS, bash_pid
                     );
+                    // 同 Close 路径：按会话（SID）全杀，防前台子进程孤儿化
                     unsafe {
-                        libc::kill(bash_pid, libc::SIGHUP);
+                        libc::kill(-bash_pid, libc::SIGHUP);
                     }
+                    kill_session_processes(bash_pid);
                     let mut status: i32 = 0;
                     unsafe {
                         libc::waitpid(bash_pid, &mut status, 0);
@@ -585,16 +619,21 @@ fn session_io_loop(master_fd: RawFd, sock_fd: RawFd, bash_pid: i32, session_id: 
         }
 
         if close_requested {
-            // 显式 Close：立即终止 bash，区别于断线后的 30 秒重连窗口
+            // 显式 Close：立即终止 bash，区别于断线后的 30 秒重连窗口。
+            // 终止整个「会话」而非单个进程/进程组：bash 开启作业控制时，前台
+            // 子进程（sleep/vim 等）拥有独立 PGID，kill(-PGID) 只能杀到 bash，
+            // 子进程会被孤儿化（R5/R6 终端孤儿根因）。bash 经 setsid 成为
+            // 会话首进程，SID=bash_pid——按 SID 扫 /proc 全杀最确定。
             unsafe {
-                libc::kill(bash_pid, libc::SIGHUP);
+                libc::kill(-bash_pid, libc::SIGHUP);
             }
+            kill_session_processes(bash_pid);
             let mut status: i32 = 0;
             unsafe {
                 libc::waitpid(bash_pid, &mut status, 0);
             }
             eprintln!(
-                "Session 收到 Close，终止 bash: session_id={}, bash_pid={}, status={}",
+                "Session 收到 Close，终止会话: session_id={}, bash_pid={}, status={}",
                 session_id, bash_pid, status
             );
             return Ok(());

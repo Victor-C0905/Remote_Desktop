@@ -84,7 +84,7 @@ impl std::fmt::Debug for Credentials {
 #[allow(unused_imports)]
 pub use quirel_protocol::{
     Envelope, Payload, SubscriptionType,
-    FileDiff, DiffType, FileEntry, MetricsSnapshot, DiskInfo, MountInfo, ProcessEntry,
+    FileDiff, DiffType, FileEntry, MetricsSnapshot, DiskInfo, MountInfo, ProcessEntry, CommonLocation,
     AuthStatsSnapshot, ConnectionStatsSnapshot, PerformanceStatsSnapshot,
     ResponseTimePercentiles, StatsResponse,
     AuthErrorCode,
@@ -923,9 +923,9 @@ pub struct RemoteSearchResponse {
     pub truncated: bool,
 }
 
-/// 搜索命中：大小写不敏感前缀匹配（输入 a 只命中 a***，对齐命令行 tab 补全直觉）
+/// 搜索命中：大小写不敏感子串匹配（对齐主流文件管理器，2026-11-12 由前缀语义改出）
 fn search_name_matches(name: &str, needle_lower: &str) -> bool {
-    name.to_lowercase().starts_with(needle_lower)
+    name.to_lowercase().contains(needle_lower)
 }
 
 /// 远程 Linux 路径拼接：root "/" 特判避免双斜杠（目录路径均以 / 分隔）
@@ -1077,9 +1077,14 @@ pub async fn remote_get_current_user(server_id: String, app: tauri::AppHandle) -
         }
     };
     match resp.payload {
-        Payload::CurrentUserResponse { username, home_dir } => {
-            tracing::debug!("[GetCurrentUser] 成功: username={}, home_dir={}", username, home_dir);
-            Ok(CurrentUser { username, home_dir })
+        Payload::CurrentUserResponse { username, home_dir, common_locations } => {
+            tracing::debug!(
+                "[GetCurrentUser] 成功: username={}, home_dir={}, 常用位置={}",
+                username,
+                home_dir,
+                common_locations.len()
+            );
+            Ok(CurrentUser { username, home_dir, common_locations })
         }
         Payload::Error { message, .. } => {
             tracing::warn!("[GetCurrentUser] Agent 返回错误: message={}", message);
@@ -1097,6 +1102,8 @@ pub async fn remote_get_current_user(server_id: String, app: tauri::AppHandle) -
 pub struct CurrentUser {
     pub username: String,
     pub home_dir: String,
+    /// 服务器常用位置（旧版 Agent 返回空数组，前端回退原有硬编码布局）
+    pub common_locations: Vec<CommonLocation>,
 }
 
 #[tauri::command]
@@ -2827,7 +2834,7 @@ mod search_tests {
 
     /// 名称匹配：大小写不敏感前缀语义（输入 a 只命中 a***，不命中中缀/后缀）
     #[test]
-    fn search_name_matches_is_case_insensitive_prefix() {
+    fn search_name_matches_is_case_insensitive_substring() {
         assert!(search_name_matches("ReadMe.MD", "readme"));
         assert!(search_name_matches("config", ""));
         // 输入的自身必须命中：a*** 的 glob 语义包含 a 本身（空前缀后缀）
@@ -2836,8 +2843,9 @@ mod search_tests {
         assert!(search_name_matches("Apple.txt", "apple")); // needle 由调用方 to_lowercase 后传入
         assert!(search_name_matches("readme.md", "read"));
         assert!(search_name_matches(".hidden", "."));
-        assert!(!search_name_matches("中文文件.txt", "文件")); // 中缀不命中
-        assert!(!search_name_matches("data.log", "a")); // 子串命中已废弃：前缀不符
+        assert!(search_name_matches("中文文件.txt", "文件")); // 子串命中（2026-11-12 由前缀语义改为子串）
+        assert!(search_name_matches("data.log", "a")); // 子串命中
+        assert!(search_name_matches("a.txt", "txt")); // 子串命中：后缀也算
         assert!(!search_name_matches("a.txt", "ab"));
         assert!(!search_name_matches("readme.md", "xyz"));
         assert!(!search_name_matches("readme.md", "READ")); // needle 未小写化则不命中（调用方负责小写化）

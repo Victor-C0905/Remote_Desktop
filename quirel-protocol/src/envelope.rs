@@ -16,7 +16,8 @@ use crate::archive::{ArchiveCapabilities, ArchiveExtractPolicy};
 use crate::stats::StatsResponse;
 use crate::subscription::SubscriptionType;
 use crate::types::{
-    default_frame_mode, one, FileDiff, FileEntry, MetricsSnapshot, MountInfo, ProcessEntry,
+    default_frame_mode, one, CommonLocation, FileDiff, FileEntry, MetricsSnapshot, MountInfo,
+    ProcessEntry,
 };
 
 /// 认证/连接错误码（客户端↔Agent 线上协议的组成部分）
@@ -393,6 +394,10 @@ pub enum Payload {
         username: String,
         #[serde(default)]
         home_dir: String,
+        // 服务器常用位置为后加字段：旧版 Agent 响应不含此字段，
+        // 前端回退到原有硬编码布局（default 保证旧包可解码）
+        #[serde(default)]
+        common_locations: Vec<CommonLocation>,
     },
 
     // ===== SOCKS5 代理协议（服务器视角浏览）=====

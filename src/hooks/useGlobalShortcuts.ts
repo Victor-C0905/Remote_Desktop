@@ -30,6 +30,16 @@ export function useGlobalShortcuts(
     (e: KeyboardEvent) => {
       if (!enabled) return;
 
+      // 输入态守卫：焦点在输入框/可编辑区时屏蔽全局快捷键，
+      // 避免输入组合键（如中文输入候选、Ctrl+W 习惯）误触发窗口动作
+      const ae = document.activeElement;
+      if (
+        ae instanceof HTMLElement &&
+        (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" || ae.isContentEditable)
+      ) {
+        return;
+      }
+
       for (const shortcut of shortcuts) {
         const keyMatch = e.key.toLowerCase() === shortcut.key.toLowerCase();
         const ctrlMatch = shortcut.ctrl ? e.ctrlKey : !e.ctrlKey;

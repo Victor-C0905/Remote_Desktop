@@ -68,7 +68,7 @@ export function NotificationCenter({ isOpen, onClose, activeServerId = null }: N
   // 真实数据源：zustand 内存 store（连接失败/断连/恢复通知）
   const { notifications, markAsRead, dismiss, clearAll, markAllRead } = useNotificationStore();
   const servers = useServersStore((s) => s.servers);
-  const [filter, setFilter] = useState<NotificationUrgency | "all">("all");
+  const [filter, setFilter] = useState<NotificationUrgency | "all" | "other">("all");
   // 展开明细的通知 id（点击条目切换；如移动通知的逐条 src → dst）
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -76,9 +76,17 @@ export function NotificationCenter({ isOpen, onClose, activeServerId = null }: N
   const visibleNotifications = notifications.filter((n) => isNotificationVisible(n, activeServerId));
   const unreadCount = visibleNotifications.filter((n) => !n.read).length;
   const criticalCount = visibleNotifications.filter((n) => n.urgency === "critical" && !n.read).length;
+  // 防御性兜底：未来若出现三类紧急度之外的条目，提供「其他」归类入口
+  //（R6 实测 88≠68 的历史瞬时差异后未再复现；chip 计数为 0 时自动隐藏）
+  const otherCount = visibleNotifications.filter(
+    (n) => n.urgency !== "critical" && n.urgency !== "normal" && n.urgency !== "low"
+  ).length;
 
   const filteredNotifications = visibleNotifications.filter((n) => {
     if (filter === "all") return true;
+    if (filter === "other") {
+      return n.urgency !== "critical" && n.urgency !== "normal" && n.urgency !== "low";
+    }
     return n.urgency === filter;
   }).sort((a, b) => b.timestamp - a.timestamp);
 
@@ -157,6 +165,14 @@ export function NotificationCenter({ isOpen, onClose, activeServerId = null }: N
             <span className="nc-dot nc-dot-low" />
             {t('notifications.filterLow', { count: visibleNotifications.filter((n) => n.urgency === "low").length })}
           </button>
+          {otherCount > 0 && (
+            <button
+              className={`nc-filter-btn ${filter === "other" ? "active" : ""}`}
+              onClick={() => setFilter("other")}
+            >
+              {t('notifications.filterOther', { count: otherCount })}
+            </button>
+          )}
         </div>
 
         {/* Notification List */}

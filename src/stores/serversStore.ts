@@ -82,6 +82,8 @@ export const useServersStore = create<ServersState & ServersActions>()(
         set({ servers, activeServerId });
         // 联动清理该服务器的持久化通知（跨 store 单向调用，无循环）
         void import("./notificationStore").then((m) => m.useNotificationStore.getState().purgeServer(id));
+        // 联动清理该服务器的目录访问统计（侧边栏「常用」分组）
+        void import("./filePathUsageStore").then((m) => m.useFilePathUsageStore.getState().clearServer(id));
       },
 
       updateServer: (id, updates) => {

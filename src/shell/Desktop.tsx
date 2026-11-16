@@ -21,6 +21,7 @@ import { AppDefinition } from "../window-system/types";
 import { listen } from "@tauri-apps/api/event";
 import { createLogger } from "../utils/logger";
 import { isTauri } from "../utils/environment";
+import { resolveDockClickAction, DOCK_TOGGLE_GRACE_MS } from "./dockAction";
 import "./Desktop.css";
 
 const log = createLogger('Desktop');
@@ -185,6 +186,11 @@ function DesktopContent() {
 
   // ✅ Dock ref - 用于对比色计算
   const dockRef = useRef<HTMLDivElement>(null);
+  // ✅ 应用创建中防重入集合（openApp 异步创建窗口期间忽略重复触发）
+  const creatingAppsRef = useRef<Set<string>>(new Set());
+  // ✅ 创建宽限期（R6-?-02）：create 同步完成，双击第二下会走「已聚焦→最小化」
+  // 把刚开的窗口藏成 display:none；宽限期内最小化降级为聚焦（dockAction.ts）
+  const createdAtRef = useRef<Map<string, number>>(new Map());
 
   // ✅ 根据 dock 背景色自动选择高对比度文本颜色
   // ✅ 使用主题的文本颜色 (--quirel-text-primary)
@@ -262,35 +268,51 @@ function DesktopContent() {
   }, [activeServer?.id]);
 
   /**
-   * ✅ Dock 激活/最小化逻辑
+   * ✅ Dock 激活/最小化逻辑（动作矩阵见 dockAction.ts）
    * - 如果应用没有打开：创建新窗口
    * - 如果应用已最小化：恢复并聚焦
    * - 如果应用已打开但未聚焦：聚焦该窗口
-   * - 如果应用已激活（在前台）：最小化该窗口
+   * - 如果应用已激活（在前台）：最小化该窗口（创建宽限期内除外——R6-?-02）
    */
   const openApp = useCallback(async (appId: string) => {
+    // 创建中防重入：create 是异步的，窗口注册前重复触发会走「已存在且聚焦 → 最小化」
+    // 分支，把刚创建的窗口藏掉（R6-?-02 首窗 display:none 竞态）
+    if (creatingAppsRef.current.has(appId)) return;
+
     setOverviewVisible(false);
 
     const existingWindows = manager.getByAppId(appId);
-    if (existingWindows.length > 0) {
-      const existing = existingWindows[0];
-      const activeWindowId = globalState.activeWindowId;
+    const existing = existingWindows[0];
+    const createdAt = createdAtRef.current.get(appId);
+    const action = resolveDockClickAction({
+      hasWindow: existingWindows.length > 0,
+      minimized: existing?.minimized ?? false,
+      isActive: existing !== undefined && existing.id === globalState.activeWindowId,
+      withinCreationGrace:
+        createdAt !== undefined && Date.now() - createdAt < DOCK_TOGGLE_GRACE_MS,
+    });
 
-      if (existing.minimized) {
-        // 窗口已最小化 → 恢复并聚焦
-        manager.restore(existing.id);
-        manager.focus(existing.id);
-      } else if (existing.id !== activeWindowId) {
-        // 窗口已打开但未聚焦 → 聚焦
-        manager.focus(existing.id);
-      } else {
-        // 窗口已打开且已聚焦 → 最小化
-        manager.minimize(existing.id);
+    if (action === 'create') {
+      creatingAppsRef.current.add(appId);
+      try {
+        await manager.create(appId, { serverId: activeServer?.id });
+        // 记录创建时刻：宽限期内吞掉双击第二下的误最小化（R6-?-02）
+        createdAtRef.current.set(appId, Date.now());
+      } finally {
+        creatingAppsRef.current.delete(appId);
       }
       return;
     }
-
-    await manager.create(appId, { serverId: activeServer?.id });
+    if (action === 'restore') {
+      manager.restore(existing.id);
+      manager.focus(existing.id);
+      return;
+    }
+    if (action === 'focus') {
+      manager.focus(existing.id);
+      return;
+    }
+    manager.minimize(existing.id);
   }, [manager, activeServer?.id, setOverviewVisible, globalState.activeWindowId]);
 
   /**

@@ -28,7 +28,7 @@ pub mod serde;
 // 默认导出 Serde 类型（当前实现）
 pub use serde::{
     Envelope, Payload, SubscriptionType, MetricsSnapshot,
-    MountInfo, FileEntry, DiskInfo, ProcessEntry,
+    MountInfo, FileEntry, DiskInfo, ProcessEntry, CommonLocation,
     AuthErrorCode,
     ArchiveCapabilities, ArchiveFormatCapability, ArchiveHostOs, ArchiveTool,
 };

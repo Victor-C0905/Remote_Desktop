@@ -42,12 +42,14 @@ export function useMarquee(params: {
   /** 框选刚结束标记：容器 click 跟在 mouseup 之后触发，需跳过一次以防误清选区 */
   const justEndedRef = useRef(false);
 
-  /** 框选入口：绑在列表/网格容器的 onMouseDown（空白处左键） */
-  const beginMarquee = useCallback((e: React.MouseEvent) => {
-    // 仅左键、且起点不在条目上（条目点击/拖拽走各自的处理器）
+  /** 框选入口：绑在列表/网格容器的 onMouseDown（空白处左键）。
+   *  opts.onEntry：允许从条目行上起手（R12-FM-3 对齐 Explorer——指针不在
+   *  文件名/图标上时，行内空白列左键拖拽 = 框选；调用方自行完成路由） */
+  const beginMarquee = useCallback((e: React.MouseEvent, opts?: { onEntry?: boolean }) => {
+    // 仅左键；起点不在条目上（除非调用方已路由并显式放行）
     if (e.button !== 0 || editingEntry) return;
     const target = e.target as HTMLElement;
-    if (target.closest('.fm-list-row') || target.closest('.fm-grid-item')) return;
+    if (!opts?.onEntry && (target.closest('.fm-list-row') || target.closest('.fm-grid-item'))) return;
 
     const container = e.currentTarget as HTMLElement;
     const collectRects = () => {

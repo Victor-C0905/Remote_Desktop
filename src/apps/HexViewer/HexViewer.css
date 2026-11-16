@@ -89,7 +89,8 @@
 }
 
 .hv-ascii {
-  color: var(--quirel-accent-fg, #99c1f1);
+  /* R3-P2 修复：accent-fg 在浅色主题下对比度不足，ASCII 列改用正文前景令牌 */
+  color: var(--quirel-fg, #1b1b1b);
 }
 
 .hv-truncated {

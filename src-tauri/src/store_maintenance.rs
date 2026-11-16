@@ -16,6 +16,7 @@ const ALLOWED_STORES: &[&str] = &[
     "transfers.bin",
     "notifications.bin",
     "browser-data.bin",
+    "filemanager.bin",
 ];
 
 const MAX_BACKUPS_PER_STORE: usize = 3;

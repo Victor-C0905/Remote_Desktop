@@ -267,6 +267,31 @@ async fn run_manager_mode(args: &Args) -> Result<()> {
 
     init_logging(&args, &cfg);
 
+    // ── Manager 单实例锁（R6-?-01）────────────────────────
+    // SO_REUSEADDR（restart 端口释放延迟的既有方案）在 Linux 下允许第二个
+    // 进程静默绑定同一 UDP 端口：陈旧实例继续服务客户端连接（探测返回陈旧
+    // 数据），新实例空转，日志无异常表现。锁文件置于配置同目录（transfer_limit
+    // 的配置写回已保证可写）、按端口命名；flock 随持有进程死亡由内核自动释放。
+    // 不同端口的多实例（测试探针场景）互不影响；Worker 模式不取锁（由
+    // Manager 生命周期管理）。
+    #[cfg(unix)]
+    let _instance_guard = {
+        let config_dir = std::path::Path::new(&args.config)
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        match quireld::instance_lock::acquire(&config_dir, cfg.server.quic_port) {
+            Ok(guard) => {
+                tracing::info!("实例锁已获取（QUIC 端口 {}）", cfg.server.quic_port);
+                guard
+            }
+            Err(e) => {
+                tracing::error!("实例锁获取失败，退出（需人工介入处理旧实例）: {e}");
+                anyhow::bail!("{e}");
+            }
+        }
+    };
+
     let (cert, key) = cert::ensure_certificate(&cfg)?;
 
     // 日志模式标识

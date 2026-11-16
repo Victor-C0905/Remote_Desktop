@@ -21,6 +21,7 @@ import { useWindowEvent } from '../window-system/hooks/useWindowEvent';
 import { useWindowManager } from '../window-system/WindowManagerContext';
 import { describeTerminalFailure, formatUnknownError } from '../types/errors';
 import { escapeHtml } from '../utils/escapeHtml';
+import { safeUnlistenAll } from '../utils/unlisten';
 import { useTranslation } from 'react-i18next';
 import i18n from '../i18n';
 import { createLogger } from '../utils/logger';
@@ -164,8 +165,9 @@ function TerminalInstance({
       cancelAnimationFrame(initRafIdRef.current);
       initRafIdRef.current = null;
     }
-    // 清理所有监听器和观察器
-    unlistenRefs.current.forEach(fn => fn());
+    // 清理所有监听器和观察器（逐个吞错：单个 unlisten 抛错不得中断清理链，
+    // 更不得升级为 uncaught 异常——R8-N1）
+    safeUnlistenAll(unlistenRefs.current, 'teardown');
     unlistenRefs.current = [];
 
     // 关闭远程终端会话
@@ -180,8 +182,10 @@ function TerminalInstance({
     terminalRef.current = null;
     fitAddonRef.current = null;
     // WebGL addon 已随 terminal.dispose 释放，清引用避免残留指向旧实例；
+    // searchAddon 同理（残留引用会指向已释放实例，父组件搜索路径可触达）；
     // 同步释放输出缓冲与冲刷句柄（会话已销毁，缓冲数据作废）
     webglAddonRef.current = null;
+    searchAddonRef.current = null;
     pendingOutputRef.current = null;
     flushOutputRef.current = null;
 
@@ -372,7 +376,7 @@ function TerminalInstance({
               }
               // connectRemotePty 在 cleanup 之后 resolve，其注册的输出/断连
               // 监听器来不及进 cleanup 的清空批次，这里补清
-              unlistenRefs.current.forEach(fn => fn());
+              safeUnlistenAll(unlistenRefs.current, 'ghost-session');
               unlistenRefs.current = [];
               return;
             }
@@ -643,9 +647,19 @@ async function connectRemotePty(
     flushRef.current = flushPendingOutput;
   }
 
+  // 会话死亡标记（R8-N1）：teardownNow / 断连回调的清理链会调用本 setter。
+  // unlisten 是异步 invoke——清理发起后，Rust 侧早已发出的事件仍可能送达
+  // JS（飞行中事件），不得再 write 已销毁的终端（xterm 内部结构已失效，
+  // 依赖 chunk 内抛 TypeError 且无人接住）。守卫于两个事件回调入口。
+  let sessionDead = false;
+  unlistenRefs.current.push(() => {
+    sessionDead = true;
+  });
+
   const unlistenOutput = await listen<{ session_id: string; data: number[] }>(
     'terminal-output',
     (event) => {
+      if (sessionDead) return;
       if (event.payload.session_id !== sessionId) return;
       const bytes = new Uint8Array(event.payload.data);
       if (minimizedRef?.current && pendingRef?.current) {
@@ -674,9 +688,12 @@ async function connectRemotePty(
     'terminal-disconnected',
     (event) => {
       if (event.payload.session_id === sessionId) {
+        // 会话已死（teardown 已跑）则什么都不做：清理由 teardown 负责，
+        // banner 也不得写入已销毁终端
+        if (sessionDead) return;
         terminal.write(`\r\n\x1b[31m${i18n.t('terminal.disconnectedBanner')}\x1b[0m\r\n`);
-        // 移除所有监听器
-        unlistenRefs.current.forEach(fn => fn());
+        // 移除所有监听器（含本监听器自身与 sessionDead 标记 setter）
+        safeUnlistenAll(unlistenRefs.current, 'terminal-disconnected');
         unlistenRefs.current = [];
         sessionIdRef.current = null;
         (terminal as any).__sessionId = null;

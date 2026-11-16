@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from "react";
+import React, { useState, useEffect, useLayoutEffect, useReducer, useCallback, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -9,9 +9,11 @@ import { useVirtualWindow } from "./useVirtual";
 import { PLACEHOLDER } from "../utils/offlineDefaults";
 import { useWindowManager, useWindowState } from "../window-system/WindowManagerContext";
 import { AppLayout } from "../components/app-shell";
+import { clampSidebarWidth, SIDEBAR_DEFAULT_WIDTH } from "../components/app-shell/sidebarWidth";
 import { TransferStatusBar } from "../components/TransferStatusBar";
 import { createLogger } from '../utils/logger';
 import { openRemoteFile } from './openRemoteFile';
+import { planCrumbLayout } from './fmCrumbLayout';
 import { FOLDER_ICON, getFileIconForName } from './fileIcons';
 import { AppIcon, type AppIconName } from '../components/AppIcon';
 import { parsePermissions, matrixToOctal, octalToPermString } from './permissions';
@@ -22,6 +24,10 @@ import { SymbolicIcon } from "../components/symbolic";
 import { ToolbarMenu, type MenuEntry } from "../components/ToolbarMenu/ToolbarMenu";
 import { ContextMenu, type ContextMenuEntry } from "../components/ContextMenu/ContextMenu";
 import type { FileEntry } from './fileTypes';
+import { buildSidebarSections } from './fileSidebar';
+import type { CommonLocation, SidebarSection } from './fileSidebar';
+import { selectFrequentPaths, useFilePathUsageStore } from '../stores/filePathUsageStore';
+import type { VisitSource } from '../stores/filePathUsageStore';
 import { rangeSelection, toggleSelection, entryName } from './fileSelection';
 import { useFileTransfer } from './useFileTransfer';
 import { applyBrowseChanges, applySearchChanges, isTransferTempName, type FileViewChange } from './fileMutations';
@@ -57,30 +63,7 @@ interface SearchResponse {
   truncated: boolean;
 }
 
-// 挂载点信息
-interface MountInfo {
-  mount_point: string;
-  device: string;
-  filesystem: string;
-  total_bytes: number;
-  used_bytes: number;
-}
-
-// 侧边栏项（labelKey: 预置书签词典 key，渲染处 t()；label: 动态标签如挂载点）
-interface SidebarItem {
-  icon: import('../components/AppIcon').AppIconName;
-  labelKey?: string;
-  label?: string;
-  path: string;
-  type: "bookmark" | "mount" | "network";
-}
-
-// 侧边栏部分（titleKey: 词典 key，渲染处 t()）
-interface SidebarSection {
-  titleKey?: string;
-  title?: string;
-  items: SidebarItem[];
-}
+// 挂载点信息 / 侧边栏结构定义见 ./fileSidebar（与 usePreloader 共用）
 
 /* ── Icon Map（已提取至 ./fileIcons，与 TextEditor 共用） ── */
 
@@ -163,6 +146,8 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   // 目录实时监听是否生效（file_changes 订阅成功）：生效时最终条目由增量推送，
   // 上传完成事件不必再做 remote_file_info（省每文件一次 RPC）
   const fsWatchActiveRef = useRef(false);
+  // 降级提示去重：每个 serverId 只提示一次（会话内）
+  const fsWatchDegradeNotifiedRef = useRef<Set<string>>(new Set());
   /** 最近一次权限失败的目标目录（供地址栏导航区分错误类型，审计 L12） */
   const permissionDeniedRef = useRef<string | null>(null);
   const [entries, setEntries] = useState<FileEntry[]>([]);
@@ -384,7 +369,32 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
 
   // 侧边栏状态
   const [sidebarSections, setSidebarSections] = useState<SidebarSection[]>([]);
-  const [mounts, setMounts] = useState<MountInfo[]>([]);
+  // 服务器标准位置（Agent 返回；空数组 = 家目录下无 XDG 目录，仅展示主目录）
+  const [commonLocations, setCommonLocations] = useState<CommonLocation[]>([]);
+  // 常用路径：本机按服务器统计的目录访问次数（侧边栏「常用」分组）
+  const pathUsageByServer = useFilePathUsageStore((s) => s.byServer);
+  const recordPathVisit = useFilePathUsageStore((s) => s.recordVisit);
+  const removePathVisit = useFilePathUsageStore((s) => s.removePath);
+  // 操作失败就地提示：通知中心之外在列表顶部同屏显示（R6，失败反馈容易被错过）。
+  // activeServerId 经 ref 读取：本回调以恒定身份被多处 useCallback 引用，
+  // 服务器切换后旧闭包也能归属到最新连接（避免跨服误归属）
+  const [actionError, setActionError] = useState<string | null>(null);
+  const activeServerIdRef = useRef(activeServerId);
+  activeServerIdRef.current = activeServerId;
+  const notifyActionError = useCallback((n: Parameters<typeof pushServerNotification>[1]) => {
+    pushServerNotification(activeServerIdRef.current, n);
+    setActionError(n.body ?? null);
+  }, []);
+  // 就地提示 6s 自动消退（长期展示走通知中心）
+  useEffect(() => {
+    if (!actionError) return;
+    const timer = setTimeout(() => setActionError(null), 6000);
+    return () => clearTimeout(timer);
+  }, [actionError]);
+  const frequentPaths = useMemo(
+    () => selectFrequentPaths(pathUsageByServer, activeServerId),
+    [pathUsageByServer, activeServerId]
+  );
 
   // 路径输入框状态
   const [pathInput, setPathInput] = useState(currentPath);
@@ -505,6 +515,12 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     return () => window.removeEventListener("mousedown", handleGlobalClick, { capture: true });
   }, []); // ❌ 不依赖 showSuggestions，让失焦功能始终工作
 
+  /** 拉取目录列表（远程模式走 QUIC；离线返回 null → 演示数据） */
+  const fetchEntries = useCallback(async (path: string): Promise<ReadDirResponse | null> => {
+    if (!activeServerId) return null;
+    return invoke<ReadDirResponse>("remote_read_dir", { serverId: activeServerId, path });
+  }, [activeServerId]);
+
   const loadDir = useCallback(async (path: string, opts?: { keepSelection?: boolean }): Promise<boolean> => {
     // 竞态守卫：快速连续导航时，先发后至的旧响应不得覆盖新目录视图
     // （与搜索的 searchEpochRef 同模式；过期响应静默丢弃并返回 false，
@@ -533,10 +549,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       if (activeServerId) {
         // 远程模式：通过 QUIC 从 Agent 获取
         log.debug("远程模式，调用 remote_read_dir");
-        resp = await invoke<ReadDirResponse>("remote_read_dir", {
-          serverId: activeServerId,
-          path,
-        });
+        resp = await fetchEntries(path);
       } else {
         // 离线模式：不加载本地数据
         resp = null;
@@ -581,6 +594,33 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       } else {
         setError(errMsg);
         setEntries([]);
+        // 目录确认不存在：从「常用」剔除，避免僵尸条目常驻侧边栏（R6-P2-01 后续）
+        if (/not found|no such file/i.test(errMsg)) {
+          removePathVisit(activeServerId, path);
+        }
+        // 失败的目录不改变当前位置；但列表已被清空——回读上一目录内容，
+        // 避免「路径显示 A、内容为空」的误导态（prev===path 时不回读，防连锁）
+        const prev = currentPathRef.current;
+        if (prev && prev !== path) {
+          try {
+            const prevResp = await fetchEntries(prev);
+            if (epoch !== dirEpochRef.current) return false; // 回读期间用户已导航走
+            if (prevResp?.entries) {
+              setEntries(sortFileEntries(
+                prevResp.entries.filter((e) => !isTransferTempName(e.name)),
+                sortStateRef.current,
+              ));
+              setError(null);
+            }
+          } catch { /* 上一目录同样失败：保留错误与空态 */ }
+          // 失败原因走通知中心（就地错误横幅随回读消失，容易被错过）
+          notifyActionError({
+            title: t("common.error"),
+            body: t("fileManager.openDirFailed", { message: errMsg }),
+            source: t("fileManager.source"),
+            urgency: "normal",
+          });
+        }
       }
       return false;
     } finally {
@@ -589,7 +629,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         setLoading(false);
       }
     }
-  }, [activeServerId]);
+  }, [activeServerId, fetchEntries, removePathVisit]);
 
   /* ── 表头排序：点击翻转 ────────────────────────────────── */
 
@@ -799,7 +839,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       setHomeDir(initialData.homeDir);
       setCurrentPath(initialData.currentPath);
       setEntries(initialData.entries);
-      setMounts(initialData.mounts);
+      setCommonLocations(initialData.commonLocations ?? []);
       setSidebarSections(initialData.sidebarSections);
       setHistory([initialData.currentPath]);
       setPathInput(initialData.currentPath);
@@ -814,10 +854,11 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     if (activeServerId) {
       // 连接建立后，获取用户名和真实家目录
       log.debug("调用 remote_get_current_user, serverId:", activeServerId);
-      invoke<{ username: string; home_dir: string }>("remote_get_current_user", { serverId: activeServerId })
+      invoke<{ username: string; home_dir: string; common_locations?: CommonLocation[] }>("remote_get_current_user", { serverId: activeServerId })
         .then((user) => {
-          log.info("获取用户信息成功:", user);
+          log.info("获取用户信息成功:", user.username, user.home_dir, "标准位置:", user.common_locations?.length ?? 0);
           setUsername(user.username);
+          setCommonLocations(user.common_locations ?? []);
           // 旧版 Agent 不返回 home_dir（空串）：按 Linux 惯例回退推导初始目录
           const fallback = user.username === "root" ? "/root" : `/home/${user.username}`;
           setHomeDir(user.home_dir || fallback);
@@ -826,11 +867,18 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
           log.error("获取用户信息失败:", err);
           setUsername("user");  // 默认值
           setHomeDir(null);
+          setCommonLocations([]);
+          // 失败必须可见：homeDir 为 null 会跳过初始加载（等待用户信息），
+          // 若同时收掉 loading 会落入 entries=[]/loading=false 的假空态
+          // （看起来像目录被清空，R9-N2）。就地错误 + 收掉 loading
+          setError(formatUnknownError(err));
+          setLoading(false);
         });
     } else {
       // 离线模式：清空用户名
       setUsername(null);
       setHomeDir(null);
+      setCommonLocations([]);
     }
   }, [activeServerId, initialData]);
 
@@ -853,85 +901,16 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   // 获取挂载点列表
   useEffect(() => {
     if (initialData) return; // 有注入数据时跳过，已通过 initialData 初始化
-    log.debug("获取挂载点 useEffect, activeServerId:", activeServerId);
-    if (activeServerId) {
-      // 远程模式：获取挂载点列表
-      log.debug("调用 remote_get_mounts, serverId:", activeServerId);
-      invoke<MountInfo[]>("remote_get_mounts", { serverId: activeServerId })
-        .then((mounts) => {
-          log.debug("获取挂载点成功:", mounts);
-          setMounts(mounts);
-        })
-        .catch(err => {
-          log.error("获取挂载点失败:", err);
-          setMounts([]);  // 默认空列表
-        });
-    } else {
-      // 离线模式：清空挂载点
-      setMounts([]);
-    }
-  }, [activeServerId, initialData]);
-
-  // 生成侧边栏
-  useEffect(() => {
-    if (initialData) return; // 有注入数据时跳过，已通过 initialData 初始化
-    log.debug("生成侧边栏 useEffect, activeServerId:", activeServerId, "username:", username, "homeDir:", homeDir, "mounts:", mounts.length);
-    if (activeServerId && username && homeDir) {
-      // 远程模式：使用服务端返回的真实家目录生成侧边栏
-      const sections: SidebarSection[] = [
-        {
-          title: t("fileManager.location"),
-          items: [
-            { icon: "home", label: t("fileManager.home"), path: homeDir, type: "bookmark" },
-            { icon: "documents", label: t("fileManager.documents"), path: `${homeDir}/Documents`, type: "bookmark" },
-            { icon: "download", label: t("fileManager.downloads"), path: `${homeDir}/Downloads`, type: "bookmark" },
-            { icon: "pictures", label: t("fileManager.pictures"), path: `${homeDir}/Pictures`, type: "bookmark" },
-            { icon: "music", label: t("fileManager.music"), path: `${homeDir}/Music`, type: "bookmark" },
-            { icon: "videos", label: t("fileManager.videos"), path: `${homeDir}/Videos`, type: "bookmark" },
-          ]
-        },
-        {
-          title: t("fileManager.devices"),
-          items: mounts.map(m => ({
-            icon: "disk",
-            label: m.mount_point,
-            path: m.mount_point,
-            type: "mount"
-          }))
-        },
-        {
-          title: t("fileManager.otherLocations"),
-          items: [
-            { icon: "network", label: t("fileManager.network"), path: "/network", type: "network" }
-          ]
-        }
-      ];
-      log.debug("远程侧边栏生成完成:", sections);
-      setSidebarSections(sections);
-    } else {
-      // 离线模式：使用默认 Linux 侧边栏（保持 UI 结构一致）
-      const sections: SidebarSection[] = [
-        {
-          title: t("fileManager.location"),
-          items: [
-            { icon: "home", label: t("fileManager.home"), path: "/home", type: "bookmark" },
-            { icon: "documents", label: t("fileManager.documents"), path: "/home/Documents", type: "bookmark" },
-            { icon: "download", label: t("fileManager.downloads"), path: "/home/Downloads", type: "bookmark" },
-            { icon: "pictures", label: t("fileManager.pictures"), path: "/home/Pictures", type: "bookmark" },
-            { icon: "music", label: t("fileManager.music"), path: "/home/Music", type: "bookmark" },
-            { icon: "videos", label: t("fileManager.videos"), path: "/home/Videos", type: "bookmark" },
-          ]
-        },
-        {
-          title: t("fileManager.otherLocations"),
-          items: [
-            { icon: "network", label: t("fileManager.network"), path: "/network", type: "network" }
-          ]
-        },
-      ];
-      setSidebarSections(sections);
-    }
-  }, [activeServerId, username, homeDir, mounts, initialData, t]);
+    log.debug("生成侧边栏 useEffect, activeServerId:", activeServerId, "username:", username, "homeDir:", homeDir, "标准位置:", commonLocations.length, "常用:", frequentPaths.length);
+    const sections = buildSidebarSections({
+      username,
+      homeDir,
+      activeServerId,
+      commonLocations,
+      frequentPaths,
+    });
+    setSidebarSections(sections);
+  }, [activeServerId, username, homeDir, commonLocations, frequentPaths, initialData]);
 
   // ── 断连即时响应 ─────────────────────────────────────
   // 当 activeServerId 从有值变为 null（断连），立即清空数据并显示离线占位符
@@ -961,11 +940,14 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       setEntries([]);
       setError(null);
       setPermissionDenied(null);
-      setLoading(false);
+      // 置加载中而非 false：重连恢复链（get_current_user → loadDir）走完前的
+      // 窗口内 entries 为空，若 loading=false 会渲染「空目录」占位——用户误以为
+      // 文件丢失（R9-N2 重连后 ~3s 假空态）。spinner 由 loadDir finally 收掉
+      setLoading(true);
       clearSelection();
       setContextMenu(null);
       setUsername(null);  // 清空，让 username useEffect 重新获取
-      setMounts([]);
+      setCommonLocations([]);
       setSidebarSections([]);
       // 重置路径为 Linux 根目录（避免 C:\ 残留，真实家目录由后续 homeDir useEffect 加载）
       setCurrentPath("/");
@@ -1046,7 +1028,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       // 直接 loadDir，失败按错误类型分流提示——此前先 remote_read_dir
       // 探测再 navigateTo→loadDir，同一目录读两次（审计 L12）。
       // loadDir 已区分权限/不存在并暴露 ok 返回值
-      const ok = await navigateTo(cleanPath);
+      const ok = await navigateTo(cleanPath, "address");
       pathInputRef.current?.blur();
       if (!ok && !permissionDeniedRef.current) {
         // loadDir 失败已 setError/权限提示；路径不存在类错误补弹窗引导
@@ -1103,6 +1085,72 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     return segments;
   }, []);
 
+  // ── 面包屑溢出收缩（R11-04）─────────────────────────
+  // 深层路径在窄容器下此前中间段与当前段被硬裁在栏外（当前目录不可见、
+  // 被裁层级无处回跳）。策略：每次渲染后测量段宽 → planCrumbLayout 规划 →
+  // 从最旧中间段开始收拢为「…」（首段🏠与当前段恒可见）；「…」点击弹出
+  // 被收拢层级的回跳菜单。宽度缓存让已收拢段在窗口变宽时能准确还原。
+  const breadcrumbRef = useRef<HTMLDivElement | null>(null);
+  const crumbWidthCacheRef = useRef<Map<string, number>>(new Map());
+  /** [1..crumbHiddenTo] 的段被收拢；-1 = 全部可见 */
+  const [crumbHiddenTo, setCrumbHiddenTo] = useState(-1);
+  const [, bumpCrumbLayout] = useReducer((x: number) => x + 1, 0);
+  const [crumbMenu, setCrumbMenu] = useState<{
+    x: number;
+    y: number;
+    paths: Array<{ name: string; path: string }>;
+  } | null>(null);
+
+  useLayoutEffect(() => {
+    const el = breadcrumbRef.current;
+    if (!el || isEditingPath) return;
+    const segments = parsePathSegments(currentPath);
+    const buttons = el.querySelectorAll<HTMLButtonElement>('.fm-breadcrumb-segment');
+    const widths = segments.map((seg, i) => {
+      const b = buttons[i];
+      if (b) {
+        // 自然宽度：flex 挤压后的 offsetWidth 只反映剩余空间，scrollWidth
+        // 才是未截断的文本宽——规划器必须用自然宽，否则永远「放得下」
+        const w = Math.max(b.offsetWidth, b.scrollWidth);
+        crumbWidthCacheRef.current.set(seg.path, w);
+        return w;
+      }
+      // 已收拢段不可测：读缓存，缺失时按字符数估算（收敛后会被实测覆盖）
+      return crumbWidthCacheRef.current.get(seg.path) ?? seg.name.length * 9 + 26;
+    });
+    const plan = planCrumbLayout(el.clientWidth, widths);
+    const target = plan.hiddenFrom > plan.hiddenTo ? -1 : plan.hiddenTo;
+    setCrumbHiddenTo((prev) => (prev === target ? prev : target));
+  });
+
+  // 容器尺寸变化（窗口/工作区缩放）触发重规划
+  useEffect(() => {
+    const el = breadcrumbRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => bumpCrumbLayout());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [currentPath, isEditingPath]);
+
+  // ── 侧栏可调宽（R12-FM-1）────────────────────────────
+  // 对齐 Windows 资源管理器：侧栏宽度可拖拽调整并持久化（localStorage，
+  // 轻量 UI 偏好——不入 servers/filemanager 业务仓）。双击分隔柄重置默认。
+  const SIDEBAR_WIDTH_KEY = "fm.sidebarWidth";
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    try {
+      const v = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
+      if (Number.isFinite(v) && v > 0) return clampSidebarWidth(v);
+    } catch { /* localStorage 不可用（隐私模式等）走默认宽 */ }
+    return SIDEBAR_DEFAULT_WIDTH;
+  });
+  const handleSidebarWidthChange = useCallback((w: number) => {
+    setSidebarWidth(w);
+    try { localStorage.setItem(SIDEBAR_WIDTH_KEY, String(w)); } catch { /* 同上 */ }
+  }, []);
+  const handleSidebarReset = useCallback(() => {
+    handleSidebarWidthChange(SIDEBAR_DEFAULT_WIDTH);
+  }, [handleSidebarWidthChange]);
+
   // 路径格式化函数：确保路径格式正确
   const normalizePath = useCallback((path: string): string => {
     // 移除多余的斜杠
@@ -1130,14 +1178,17 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   };
 
   // ── Navigation ──────────────────────────────────────
-  const navigateTo = useCallback(async (path: string): Promise<boolean> => {
+  /** source 决定本次导航的 frecency 权重：面包屑/上级/前进后退传 none 不计分 */
+  const navigateTo = useCallback(async (path: string, source: VisitSource = "none"): Promise<boolean> => {
     // 格式化路径
     const cleanPath = normalizePath(path);
 
-    log.debug("navigateTo: 输入路径:", path, "清理后:", cleanPath);
+    log.debug("navigateTo: 输入路径:", path, "清理后:", cleanPath, "来源:", source);
 
     const success = await loadDir(cleanPath);
     if (success) {
+      // 只有明确目的地的成功导航才计分（刷新/轮询/路过型导航不计）
+      recordPathVisit(activeServerId, cleanPath, source);
       // 成功后才更新导航历史
       const newHistory = history.slice(0, historyIdx + 1);
       newHistory.push(cleanPath);
@@ -1145,7 +1196,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       setHistoryIdx(newHistory.length - 1);
     }
     return success;
-  }, [history, historyIdx, loadDir, normalizePath]);
+  }, [activeServerId, history, historyIdx, loadDir, normalizePath, recordPathVisit]);
 
   // 跳转到指定路径（面包屑导航使用）
   const handleBreadcrumbClick = useCallback((path: string) => {
@@ -1156,17 +1207,18 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     setPathInput(suggestion);
     setShowSuggestions(false);
     // 不在此处 setIsEditingPath(false)，与 Enter 保持一致：通过 blur() 统一清理
-    navigateTo(suggestion).then(() => {
+    navigateTo(suggestion, "address").then(() => {
       // 导航完成后主动失焦，由 handlePathInputBlur 统一处理
       pathInputRef.current?.blur();
     });
   }, [navigateTo]);
 
-  const goBack = useCallback(() => {
+  const goBack = useCallback(async () => {
     if (historyIdx > 0) {
       exitSearch(); // 任何导航都离开搜索视图（Nautilus 语义：搜索绑定当前目录）
+      const target = history[historyIdx - 1];
       setHistoryIdx(historyIdx - 1);
-      loadDir(history[historyIdx - 1]);
+      await loadDir(target); // 历史回放不计入「常用」
     }
   }, [history, historyIdx, loadDir, exitSearch]);
 
@@ -1175,11 +1227,12 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     navigateTo(parent);
   }, [currentPath, navigateTo]);
 
-  const goForward = useCallback(() => {
+  const goForward = useCallback(async () => {
     if (historyIdx < history.length - 1) {
       exitSearch(); // 同 goBack：导航离开搜索视图
+      const target = history[historyIdx + 1];
       setHistoryIdx(historyIdx + 1);
-      loadDir(history[historyIdx + 1]);
+      await loadDir(target); // 历史回放不计入「常用」
     }
   }, [history, historyIdx, loadDir, exitSearch]);
 
@@ -1427,7 +1480,20 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     currentPath,
     false,
     handleRemoteFsChange,
-    (active) => { fsWatchActiveRef.current = active; }
+    (active) => { fsWatchActiveRef.current = active; },
+    (e) => {
+      // 订阅被拒（旧版 Agent 不支持 file_changes）：一次性降级提示，
+      // 避免用户以为实时刷新坏了（R3 遗留：静默降级无提示）
+      if (fsWatchDegradeNotifiedRef.current.has(activeServerId || '')) return;
+      fsWatchDegradeNotifiedRef.current.add(activeServerId || '');
+      pushServerNotification(activeServerId, {
+        title: t("common.error"),
+        body: t("fileManager.fileChangesDegraded"),
+        source: t("fileManager.source"),
+        urgency: "low",
+      });
+      log.warn('file_changes 订阅被拒，降级为手动刷新:', e);
+    }
   );
 
   // Double-click entry
@@ -1438,8 +1504,10 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
 
     // 目录：保持原有导航逻辑（搜索词生效中先清空，回到常规浏览）
     if (entry.is_dir) {
+      // 搜索命中目录视为明确目的地；普通列表双击可能是逐层浏览，权重更低
+      const source: VisitSource = activeSearch ? "search" : "doubleclick";
       if (activeSearch) exitSearch();
-      navigateTo(fullPath);
+      navigateTo(fullPath, source);
       return;
     }
 
@@ -1454,7 +1522,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     const outcome = await openRemoteFile(activeServerId, fullPath, manager, entry.size);
     if (outcome.kind === 'error') {
       log.error('打开失败:', outcome.message);
-      pushServerNotification(activeServerId, { title: t("common.error"), body: t("fileManager.openFailed", { message: outcome.message }), source: t("fileManager.source"), urgency: "normal" });
+      notifyActionError({ title: t("common.error"), body: t("fileManager.openFailed", { message: outcome.message }), source: t("fileManager.source"), urgency: "normal" });
     }
   }, [entryFullPath, activeSearch, exitSearch, navigateTo, manager, activeServerId]);
 
@@ -1582,7 +1650,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       && (e.path ? e.path.slice(0, e.path.lastIndexOf("/")) || "/" : currentPath) === parentDir
     );
     if (conflict) {
-      pushServerNotification(activeServerId, { title: t("common.error"), body: t("fileManager.nameExists", { name: trimmedName }), source: t("fileManager.source"), urgency: "normal" });
+      notifyActionError({ title: t("common.error"), body: t("fileManager.nameExists", { name: trimmedName }), source: t("fileManager.source"), urgency: "normal" });
       return;
     }
 
@@ -1597,7 +1665,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
           newPath
         });
       } else {
-        pushServerNotification(activeServerId, { title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
+        notifyActionError({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
         setEditingEntry(null);
         setEditingName("");
         return;
@@ -1619,7 +1687,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       }
     } catch (err) {
       log.error("rename 失败:", err);
-      pushServerNotification(activeServerId, { title: t("common.error"), body: t("fileManager.renameFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
+      notifyActionError({ title: t("common.error"), body: t("fileManager.renameFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
     }
 
     // 清除编辑状态
@@ -1654,7 +1722,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   // 执行删除（仅由 ConfirmDialog 确认回调调用）：批量顺序执行，逐项收集失败
   const doDelete = useCallback(async (targets: FileEntry[]) => {
     if (!activeServerId) {
-      pushServerNotification(activeServerId, { title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
+      notifyActionError({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
       return;
     }
 
@@ -1674,7 +1742,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     }
 
     if (failed.length > 0) {
-      pushServerNotification(activeServerId, {
+      notifyActionError({
         title: t("common.error"),
         body: t("fileManager.deleteFailedBatch", { n: failed.length, names: failed.slice(0, 3).join("、") }),
         source: t("fileManager.source"),
@@ -1699,7 +1767,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   const createEntry = useCallback(async (kind: "folder" | "file") => {
     setContextMenu(null);
     if (!activeServerId) {
-      pushServerNotification(activeServerId, { title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
+      notifyActionError({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
       return;
     }
     if (activeSearch) exitSearch();  // 搜索结果视图无处落新条目：回浏览视图在当前目录创建
@@ -1738,7 +1806,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       const body = isDir
         ? t("fileManager.createFolderFailed", { message: formatUnknownError(err) })
         : t("fileManager.createFileFailed", { message: formatUnknownError(err) });
-      pushServerNotification(activeServerId, { title: t("common.error"), body, source: t("fileManager.source"), urgency: "normal" });
+      notifyActionError({ title: t("common.error"), body, source: t("fileManager.source"), urgency: "normal" });
     }
   }, [activeServerId, activeSearch, exitSearch, entries, entryFullPath, currentPath, loadDir, applyViewChanges, t]);
 
@@ -1754,7 +1822,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
    */
   const uploadFileWithName = useCallback(async (localPath: string, fileName: string) => {
     if (!activeServerId) {
-      pushServerNotification(activeServerId, { title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
+      notifyActionError({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
       return;
     }
 
@@ -1766,7 +1834,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     // 直接拦截，避免传完整个文件才在落盘阶段失败。
     // 搜索结果可能来自其它目录，不能作为本目录的同名判断，此时交给 Agent 兜底拒绝。
     if (!activeSearch && entries.some((e) => e.name === fileName && e.is_dir)) {
-      pushServerNotification(activeServerId, {
+      notifyActionError({
         title: t("common.error"),
         body: t("fileManager.uploadNameIsFolder", { name: fileName }),
         source: t("fileManager.source"),
@@ -1833,7 +1901,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
    */
   const uploadSingleFile = useCallback(async (localPath: string) => {
     if (!activeServerId) {
-      pushServerNotification(activeServerId, { title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
+      notifyActionError({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
       return;
     }
 
@@ -1865,7 +1933,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   const handleUpload = useCallback(async () => {
     // 检查是否有活跃服务器
     if (!activeServerId) {
-      pushServerNotification(activeServerId, { title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
+      notifyActionError({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
       return;
     }
 
@@ -1901,7 +1969,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       setContextMenu(null);
     } catch (err) {
       log.error('上传失败:', err);
-      pushServerNotification(activeServerId, { title: t("common.error"), body: t("fileManager.uploadFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
+      notifyActionError({ title: t("common.error"), body: t("fileManager.uploadFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
     }
   }, [activeServerId, uploadSingleFile]);
 
@@ -1913,7 +1981,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
    */
   const handleFilesDropped = useCallback(async (paths: string[]) => {
     if (!activeServerId) {
-      pushServerNotification(activeServerId, { title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
+      notifyActionError({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
       return;
     }
     if (paths.length === 0) return;
@@ -1927,7 +1995,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         if (!isFile) {
           const name = localPath.split(/[\\/]/).pop() || localPath;
           log.warn(`拖拽项不是文件，已跳过: ${name}`);
-          pushServerNotification(activeServerId, { title: t("common.error"), body: t("fileManager.folderUploadUnsupported", { name }), source: t("fileManager.source"), urgency: "normal" });
+          notifyActionError({ title: t("common.error"), body: t("fileManager.folderUploadUnsupported", { name }), source: t("fileManager.source"), urgency: "normal" });
           continue;
         }
         await uploadSingleFile(localPath);
@@ -1945,7 +2013,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   const handleUploadWithNewName = useCallback(async (localPath: string, newName: string) => {
     // 检查是否有活跃服务器
     if (!activeServerId) {
-      pushServerNotification(activeServerId, { title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
+      notifyActionError({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
       return;
     }
 
@@ -1956,7 +2024,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       setContextMenu(null);
     } catch (err) {
       log.error('上传失败:', err);
-      pushServerNotification(activeServerId, { title: t("common.error"), body: t("fileManager.uploadFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
+      notifyActionError({ title: t("common.error"), body: t("fileManager.uploadFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
     }
   }, [activeServerId, uploadFileWithName]);
 
@@ -2014,13 +2082,13 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   const handleDownload = useCallback(async (entry: FileEntry) => {
     // 检查是否有活跃服务器
     if (!activeServerId) {
-      pushServerNotification(activeServerId, { title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
+      notifyActionError({ title: t("common.error"), body: t("fileManager.notConnected"), source: t("fileManager.source"), urgency: "normal" });
       return;
     }
 
     // 文件夹不能下载
     if (entry.is_dir) {
-      pushServerNotification(activeServerId, { title: t("common.error"), body: t("fileManager.folderDownloadUnsupported"), source: t("fileManager.source"), urgency: "normal" });
+      notifyActionError({ title: t("common.error"), body: t("fileManager.folderDownloadUnsupported"), source: t("fileManager.source"), urgency: "normal" });
       return;
     }
 
@@ -2054,7 +2122,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       setContextMenu(null);
     } catch (err) {
       log.error('下载失败:', err);
-      pushServerNotification(activeServerId, { title: t("common.error"), body: t("fileManager.downloadFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
+      notifyActionError({ title: t("common.error"), body: t("fileManager.downloadFailed", { message: formatUnknownError(err) }), source: t("fileManager.source"), urgency: "normal" });
     }
   }, [activeServerId, entryFullPath]);
 
@@ -2067,12 +2135,14 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     e.preventDefault();
     e.stopPropagation();
 
+    // R12-FM-5（用户语义）：路由基准 = 该行是否在选区——
+    // 未选中行：刷新菜单（不改选区）；选中行：文件菜单作用于整个选区
     const path = entryFullPath(entry);
-    if (selectedSet.has(path)) {
-      setContextMenu({ x: e.clientX + 3, y: e.clientY + 3, targets: selectedEntries });
-    } else {
+    if (!selectedSet.has(path)) {
       setContextMenu({ x: e.clientX + 3, y: e.clientY + 3, targets: null });
+      return;
     }
+    setContextMenu({ x: e.clientX + 3, y: e.clientY + 3, targets: selectedEntries });
   }, [selectedSet, selectedEntries, entryFullPath]);
 
   // 空白区域右键菜单
@@ -2090,11 +2160,12 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       const cont = listContentRef.current;
       if (!cont) return null;
       const crect = cont.getBoundingClientRect();
+      const padX = 6; // .fm-list 两侧留白（R12-FM-3），与容器 padding 同步
       return visibleEntries.map((e) => ({
         path: entryFullPath(e),
         rect: {
-          left: crect.left,
-          right: crect.right,
+          left: crect.left + padX,
+          right: crect.right - padX,
           // 行步进含 row-gap（与虚拟窗口同口径）；content 的 rect 随外层
           // .fm-list 滚动一起移动，故无需再减 scrollTop
           top: crect.top + visibleEntries.indexOf(e) * listRowStride,
@@ -2147,6 +2218,12 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   /** 行单击（列表/网格共用）：Ctrl 切换 / Shift 范围 / 普通单击；
    *  单击已选中项延迟 200ms 触发重命名（防双击误触，Adwaita 惯例） */
   const handleRowClick = useCallback((e: React.MouseEvent, entry: FileEntry, idx: number) => {
+    // R12-FM-5：框选（起手可在未选中行上）结束后的 click 跳过——否则会
+    // 用单击选中覆盖掉刚框选出的选区（与 handleEmptyClick 同款守卫）
+    if (marqueeJustEndedRef.current) {
+      marqueeJustEndedRef.current = false;
+      return;
+    }
     if (clickTimerRef.current) {
       clearTimeout(clickTimerRef.current);
       clickTimerRef.current = null;
@@ -2475,6 +2552,10 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       )}
       {/* ✅ 使用AppLayout抽象层，简化CSS层级 */}
       <AppLayout
+        sidebarWidth={sidebarWidth}
+        sidebarResizable
+        onSidebarWidthChange={handleSidebarWidthChange}
+        onSidebarReset={handleSidebarReset}
         sidebar={
           /* Sidebar */
           <div className="fm-sidebar">
@@ -2482,15 +2563,15 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
               <div key={sectionIdx} className="fm-sidebar-section">
                 <div className="fm-sidebar-section-title">{section.titleKey ? t(section.titleKey) : section.title}</div>
                 {section.items.map((item, itemIdx) => {
-                  // 书签/挂载点可作拖拽放置目标（网络项非本机路径不接）
-                  const droppable = item.type === "bookmark" || item.type === "mount";
-                  const isDropTarget = droppable && dropTargetPath === item.path;
+                  // 书签（常用/位置）可作拖拽放置目标
+                  const isDropTarget = dropTargetPath === item.path;
                   return (
                   <div
                     key={`${sectionIdx}-${itemIdx}`}
                     className={`fm-sidebar-item${currentPath === item.path ? " fm-sidebar-item-active" : ""}${isDropTarget ? " drop-target" : ""}`}
-                    data-drop-dir={droppable ? item.path : undefined}
-                    onClick={() => navigateTo(item.path)}
+                    data-drop-dir={item.path}
+                    title={item.title}
+                    onClick={() => navigateTo(item.path, "sidebar")}
                   >
                     <span className="fm-si-icon"><AppIcon name={item.icon} size={16} /></span>
                     <span className="fm-si-label">{item.labelKey ? t(item.labelKey) : item.label}</span>
@@ -2513,9 +2594,11 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
 
             {/* Path Input */}
             <div className="fm-toolbar-path">
-              {/* 面包屑导航：始终可见（搜索框在地址栏右侧，不再替换地址栏） */}
+              {/* 面包屑导航：始终可见（搜索框在地址栏右侧，不再替换地址栏）。
+                  溢出收缩见 crumbHiddenTo：中间段收拢为「…」，点击弹出回跳菜单 */}
               {!isEditingPath && (
                 <div
+                  ref={breadcrumbRef}
                   className="fm-breadcrumb"
                   onClick={() => {
                     setIsEditingPath(true);
@@ -2523,11 +2606,45 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                     setTimeout(() => pathInputRef.current?.focus(), 0);
                   }}
                 >
-                  {parsePathSegments(currentPath).map((segment, index, array) => {
-                    const isLast = index === array.length - 1;
-                    return (
-                      <React.Fragment key={segment.path}>
+                  {(() => {
+                    const segments = parsePathSegments(currentPath);
+                    const nodes: React.ReactNode[] = [];
+                    // 分隔符规则（与旧实现一致）：🏠 与 seg1 之间无分隔符，
+                    // 自 seg2 起每段前有 ▸；「…」替代 seg1..k 时同 seg 规则
+                    // （替代 seg1 → 紧跟 🏠；替代 seg2 起 → 前置分隔符）
+                    const pushSep = (key: string) =>
+                      nodes.push(<span key={key} className="fm-breadcrumb-separator">▸</span>);
+                    segments.forEach((segment, idx) => {
+                      const isCollapsed = idx >= 1 && idx <= crumbHiddenTo;
+                      const isLast = idx === segments.length - 1;
+                      if (isCollapsed) {
+                        if (idx === 1) {
+                          if (crumbHiddenTo >= 2) pushSep('sep-ell');
+                          nodes.push(
+                            <button
+                              key="crumb-ellipsis"
+                              className="fm-breadcrumb-segment fm-crumb-ellipsis"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                                setCrumbMenu({
+                                  x: rect.left,
+                                  y: rect.bottom + 4,
+                                  paths: segments.slice(1, crumbHiddenTo + 1),
+                                });
+                              }}
+                              title={t("fileManager.crumbCollapsedTip")}
+                            >
+                              …
+                            </button>,
+                          );
+                        }
+                        return;
+                      }
+                      if (idx >= 2) pushSep(`sep-${idx}`);
+                      nodes.push(
                         <button
+                          key={segment.path}
                           className={`fm-breadcrumb-segment ${isLast ? 'fm-crumb-current' : ''}${dropTargetPath === segment.path ? ' drop-target' : ''}`}
                           data-drop-dir={segment.path}
                           data-spring=""
@@ -2538,14 +2655,11 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                           title={segment.path}
                         >
                           {segment.name}
-                        </button>
-                        {/* 根目录后不显示分隔符，其他分段之间显示分隔符（除了最后一个） */}
-                        {index >= 1 && index < array.length - 1 && (
-                          <span className="fm-breadcrumb-separator">▸</span>
-                        )}
-                      </React.Fragment>
-                    );
-                  })}
+                        </button>,
+                      );
+                    });
+                    return nodes;
+                  })()}
                 </div>
               )}
 
@@ -2614,18 +2728,16 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
               />
             </div>
 
-            {/* Actions */}
-            <div className="fm-toolbar-actions">
+            {/* Actions + View Toggle：同一图标按钮簇（内部 4px，与左侧导航组
+                节奏一致——此前新建文件夹独占一层 wrapper，与视图切换组之间
+                被 toolbar 的 8px 组间隔开，同排出现 8/4 不齐，R12-SP-1） */}
+            <div className="fm-toolbar-view">
               <button
                 className="fm-toolbar-btn"
                 onClick={() => createEntry("folder")}
                 title={t("fileManager.newFolder")}
                 disabled={!activeServerId}
               ><AppIcon name="folder-plus" size={15} /></button>
-            </div>
-
-            {/* View Toggle */}
-            <div className="fm-toolbar-view">
               <button
                 className={`fm-toolbar-btn ${viewMode === "list" ? "active" : ""}`}
                 onClick={() => setViewMode("list")}
@@ -2722,6 +2834,19 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
               ref={listAreaRef}
               style={{ "--fm-cols": buildGridTemplate(columnWidths) } as React.CSSProperties}
             >
+              {/* 操作失败就地提示（R6：重命名/删除等失败此前仅通知中心，容易被错过） */}
+              {actionError && (
+                <div className="fm-action-error" role="alert">
+                  <span className="fm-action-error-text">{actionError}</span>
+                  <button
+                    className="fm-action-error-close"
+                    onClick={() => setActionError(null)}
+                    aria-label="×"
+                  >
+                    ×
+                  </button>
+                </div>
+              )}
               {/* ✅ 表头固定（flex-shrink: 0），不参与滚动
                   点击列头翻转排序；列间手柄拖拽调宽（宽度经 --fm-cols 下发给表头与行） */}
               <div className="fm-list-header">
@@ -2796,12 +2921,20 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                     data-path={rowPath}
                     data-drop-dir={entry.is_dir ? rowPath : undefined}
                     className={`fm-list-row${selectedSet.has(rowPath) ? " selected" : ""}${isCut ? " fm-cut" : ""}${isDropTarget ? " drop-target" : ""}`}
-                    onMouseDown={(e) => handleRowMouseDown(e, entry)}
+                    onMouseDown={(e) => {
+                      // R12-FM-5（用户语义）：路由基准 = 该行是否在选区——
+                      // 选中行：左键拖拽=移动文件；未选中行：左键拖拽=框选划框
+                      if (e.button === 0 && !selectedSet.has(rowPath)) {
+                        beginMarquee(e, { onEntry: true });
+                        return;
+                      }
+                      handleRowMouseDown(e, entry);
+                    }}
                     onClick={(e) => handleRowClick(e, entry, winStart + idx)}
                     onDoubleClick={() => handleRowDoubleClick(entry)}
                     onContextMenu={(e) => handleContextMenu(e, entry)}
                   >
-                    <div className="fm-file-name" title={activeSearch ? entry.path : undefined}>
+                    <div className="fm-file-name" title={activeSearch ? entry.path : entry.name}>
                       <span className="fm-fn-icon"><AppIcon name={getFileIcon(entry)} size={16} /></span>
                       {editingEntry?.name === entry.name && editingEntry?.path === entry.path ? (
                         <input
@@ -2849,6 +2982,12 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                 {viewMode === "list" && padBottom > 0 && (
                   <div aria-hidden style={{ height: padBottom }} />
                 )}
+                {viewMode === "list" && (
+                  /* R12-FM-3：列表尾部拖拽留白——最后一条之后仍有可起手
+                     框选/拖放的空白区（对齐 Windows 资源管理器）。固定
+                     高度垫片不影响行几何（框选按 i*stride 定位行） */
+                  <div aria-hidden style={{ height: 28 }} />
+                )}
               </div>
             </div>
           ) : (
@@ -2872,7 +3011,14 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                   data-path={rowPath}
                   data-drop-dir={entry.is_dir ? rowPath : undefined}
                   className={`fm-grid-item${selectedSet.has(rowPath) ? " selected" : ""}${isCut ? " fm-cut" : ""}${isDropTarget ? " drop-target" : ""}`}
-                  onMouseDown={(e) => handleRowMouseDown(e, entry)}
+                  onMouseDown={(e) => {
+                    // 网格同列表：路由基准 = 是否在选区
+                    if (e.button === 0 && !selectedSet.has(rowPath)) {
+                      beginMarquee(e, { onEntry: true });
+                      return;
+                    }
+                    handleRowMouseDown(e, entry);
+                  }}
                   onClick={(e) => handleRowClick(e, entry, gStart + idx)}
                   onDoubleClick={() => handleRowDoubleClick(entry)}
                   onContextMenu={(e) => handleContextMenu(e, entry)}
@@ -2904,7 +3050,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                       onDoubleClick={(e) => e.stopPropagation()}  // 阻止双击事件冒泡
                     />
                   ) : (
-                    <div className="fm-gi-label" title={activeSearch ? entry.path : undefined}>{entry.name}</div>
+                    <div className="fm-gi-label" title={activeSearch ? entry.path : entry.name}>{entry.name}</div>
                   )}
                 </div>
                 );
@@ -3039,6 +3185,18 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
           pos={{ x: contextMenu.x, y: contextMenu.y }}
           items={contextMenuItems}
           onClose={() => setContextMenu(null)}
+        />
+      )}
+
+      {/* 面包屑「…」回跳菜单：被收拢的上级层级（R11-04） */}
+      {crumbMenu && (
+        <ContextMenu
+          pos={{ x: crumbMenu.x, y: crumbMenu.y }}
+          items={crumbMenu.paths.map((p) => ({
+            label: p.name,
+            onClick: () => handleBreadcrumbClick(p.path),
+          }))}
+          onClose={() => setCrumbMenu(null)}
         />
       )}
 

@@ -515,16 +515,14 @@
   padding: 8px 0;
 }
 
-.st-option-hint {
-  margin-top: -4px;
-  font-size: var(--font-small);
-  color: var(--quirel-text-disabled);
-}
+/* R3-P2 历史注记：本处曾有 .st-option-hint 长提示样式，其截切问题
+   （text-caption 工具类 nowrap + 注入顺序）已随「文字墙 → InfoTip」
+   信息架构整改移除——多行解释一律收进 InfoTip，界面不再铺说明段落 */
 
 .st-option-label {
 }
 
-/* 下拉（自绘箭头，去原生外观）：hover 边框强调色、focus 光环 */
+/* ── 下拉（自绘箭头，去原生外观）：hover 边框强调色、focus 光环 */
 .st-select {
   appearance: none;
   padding: 6px 30px 6px 12px;

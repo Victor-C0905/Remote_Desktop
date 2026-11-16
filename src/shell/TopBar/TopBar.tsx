@@ -152,7 +152,7 @@ export const TopBar = memo(function TopBar({
         </span>
         {/* 服务器名槽位常驻：连接瞬间才插入该字段会让按钮宽度跳变、
             挤压顶栏布局；未连接时以占位符占位（宽度由 CSS 固定） */}
-        <span className={styles.serverName}>
+        <span className={styles.serverName} title={statusServer ? statusServer.name || statusServer.host : undefined}>
           {statusServer ? statusServer.name || statusServer.host : "—"}
         </span>
       </div>

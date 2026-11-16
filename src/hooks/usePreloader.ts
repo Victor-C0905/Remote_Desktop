@@ -2,6 +2,9 @@ import { useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { createLogger } from "../utils/logger";
 import { formatUnknownError } from "../types/errors";
+import { buildSidebarSections } from "../apps/fileSidebar";
+import type { CommonLocation, SidebarSection } from "../apps/fileSidebar";
+import { selectFrequentPaths, useFilePathUsageStore } from "../stores/filePathUsageStore";
 
 const log = createLogger('Preloader');
 
@@ -15,30 +18,6 @@ export interface FileEntry {
   permissions: string;
 }
 
-export interface MountInfo {
-  mount_point: string;
-  device: string;
-  filesystem: string;
-  total_bytes: number;
-  used_bytes: number;
-}
-
-export interface SidebarItem {
-  icon: import('../components/AppIcon').AppIconName;
-  /** 预置书签用词典 key（渲染处 t()，P7）；动态标签（挂载点）用 label */
-  labelKey?: string;
-  label?: string;
-  path: string;
-  type: "bookmark" | "mount" | "network";
-}
-
-export interface SidebarSection {
-  /** 分区标题词典 key（渲染处 t()，P7） */
-  titleKey?: string;
-  title?: string;
-  items: SidebarItem[];
-}
-
 /**
  * FileManager 预加载所需的全部初始数据
  * 由 Desktop 父级通过 usePreloader 获取后注入 FileManager 组件
@@ -48,7 +27,8 @@ export interface FileManagerInitialData {
   homeDir: string | null;  // 用户真实家目录（root 为 /root，普通用户从 /etc/passwd 读取）
   currentPath: string;
   entries: FileEntry[];
-  mounts: MountInfo[];
+  /** 服务器标准位置（空数组 = 家目录下无 XDG 目录，侧边栏仅展示主目录） */
+  commonLocations: CommonLocation[];
   sidebarSections: SidebarSection[];
 }
 
@@ -62,70 +42,12 @@ interface PreloaderResult {
   reset: () => void;
 }
 
-/* ── Helper: 构建侧边栏数据（仅远程模式） ──────────────── */
-
-function buildSidebarSections(
-  username: string | null,
-  homeDir: string | null,
-  mounts: MountInfo[],
-  activeServerId: string | null,
-): SidebarSection[] {
-  if (activeServerId && username && homeDir) {
-    // 远程模式侧边栏：使用服务端返回的真实家目录（标签只存词典 key，渲染处 t()）
-    return [
-      {
-        titleKey: "fileManager.location",
-        items: [
-          { icon: "home", labelKey: "fileManager.home", path: homeDir, type: "bookmark" },
-          { icon: "documents", labelKey: "fileManager.documents", path: `${homeDir}/Documents`, type: "bookmark" },
-          { icon: "download", labelKey: "fileManager.downloads", path: `${homeDir}/Downloads`, type: "bookmark" },
-          { icon: "pictures", labelKey: "fileManager.pictures", path: `${homeDir}/Pictures`, type: "bookmark" },
-          { icon: "music", labelKey: "fileManager.music", path: `${homeDir}/Music`, type: "bookmark" },
-          { icon: "videos", labelKey: "fileManager.videos", path: `${homeDir}/Videos`, type: "bookmark" },
-        ],
-      },
-      {
-        titleKey: "fileManager.devices",
-        items: mounts.map((m) => ({
-          icon: "disk",
-          label: m.mount_point,
-          path: m.mount_point,
-          type: "mount" as const,
-        })),
-      },
-      {
-        titleKey: "fileManager.otherLocations",
-        items: [{ icon: "network", labelKey: "fileManager.network", path: "/network", type: "network" as const }],
-      },
-    ];
-  }
-
-  // 离线模式：使用默认 Linux 侧边栏（保持 UI 结构一致）
-  return [
-    {
-      titleKey: "fileManager.location",
-      items: [
-        { icon: "home", labelKey: "fileManager.home", path: "/home", type: "bookmark" as const },
-        { icon: "documents", labelKey: "fileManager.documents", path: "/home/Documents", type: "bookmark" as const },
-        { icon: "download", labelKey: "fileManager.downloads", path: "/home/Downloads", type: "bookmark" as const },
-        { icon: "pictures", labelKey: "fileManager.pictures", path: "/home/Pictures", type: "bookmark" as const },
-        { icon: "music", labelKey: "fileManager.music", path: "/home/Music", type: "bookmark" as const },
-        { icon: "videos", labelKey: "fileManager.videos", path: "/home/Videos", type: "bookmark" as const },
-      ],
-    },
-    {
-      titleKey: "fileManager.otherLocations",
-      items: [{ icon: "network", labelKey: "fileManager.network", path: "/network", type: "network" as const }],
-    },
-  ];
-}
-
 /* ── Hook 实现 ───────────────────────────────────────── */
 
 /**
  * FileManager 数据预加载 Hook（仅远程模式）
  *
- * 封装 FileManager 所需的全部异步数据获取逻辑（用户名、目录列表、挂载点、侧边栏），
+ * 封装 FileManager 所需的全部异步数据获取逻辑（用户名、目录列表、侧边栏），
  * 由 Desktop 父级在窗口创建时调用，数据就绪后注入 FileManager 组件，
  * 避免组件内部的串行加载导致的页面闪动。
  *
@@ -149,13 +71,13 @@ export function usePreloader(): PreloaderResult {
     setData(null);
 
     try {
-      // 并行获取用户信息和 mounts
-      const [user, mounts] = await Promise.all([
-        invoke<{ username: string; home_dir: string }>("remote_get_current_user", { serverId })
-          .catch((e) => { log.warn('获取用户信息失败，使用 / 作为回退:', e); return { username: "user", home_dir: "/" }; }),
-        invoke<MountInfo[]>("remote_get_mounts", { serverId })
-          .catch((e) => { log.warn('获取挂载点失败，返回空数组:', e); return []; }),
-      ]);
+      const user = await invoke<{ username: string; home_dir: string; common_locations?: CommonLocation[] }>(
+        "remote_get_current_user",
+        { serverId }
+      ).catch((e) => {
+        log.warn('获取用户信息失败，使用 / 作为回退:', e);
+        return { username: "user", home_dir: "/", common_locations: [] };
+      });
 
       // 用服务端返回的真实家目录加载初始目录
       const homePath = user.home_dir;
@@ -170,13 +92,24 @@ export function usePreloader(): PreloaderResult {
       });
 
       // 组装完整数据
-      const sidebarSections = buildSidebarSections(user.username, user.home_dir, mounts, serverId);
+      const commonLocations = user.common_locations ?? [];
+      const frequentPaths = selectFrequentPaths(
+        useFilePathUsageStore.getState().byServer,
+        serverId
+      );
+      const sidebarSections = buildSidebarSections({
+        username: user.username,
+        homeDir: user.home_dir,
+        activeServerId: serverId,
+        commonLocations,
+        frequentPaths,
+      });
       const result: FileManagerInitialData = {
         username: user.username,
         homeDir: user.home_dir,
         currentPath: homePath,
         entries,
-        mounts,
+        commonLocations,
         sidebarSections,
       };
 

@@ -14,6 +14,7 @@ import { pushServerNotification } from "../utils/notify";
 import { parseConnectError, getErrorInfo, buildConnectFailureText, isRetryableConnectError, AuthErrorCode } from "../types/errors";
 import { createLogger } from "../utils/logger";
 import { isTauri } from "../utils/environment";
+import { parseSessionMirror, serializeSessionMirror } from "../utils/sessionMirror";
 import i18n from "../i18n";
 
 /* ── Types ─────────────────────────────────────────────── */
@@ -61,10 +62,19 @@ type ServerManagerContextType = ServerManagerState & ServerManagerActions;
 
 const log = createLogger('ServerManager');
 
-/* ── 自动重连策略（硬性约束：最多 3 次、5 秒间隔） ───────── */
+/* ── 自动重连策略（2026-11-12：指数退避持续重试，直到手动断开/服务器删除） ─────────
+ * 1s→2s→4s→…封顶 30s，无上限次数——服务端短暂重启/网络抖动后自动恢复
+ *（R5-待确认：原 3 次×5s 数秒内耗尽，服务端恢复后永远无法自动恢复）。
+ * 确定性失败（认证被拒/证书被拒等）仍立即停止（isRetryableConnectError），
+ * 避免反复撞密码触发服务端认证失败锁定（5 次失败锁定 15 分钟）。 */
 
-const MAX_RECONNECT_ATTEMPTS = 3;
-const RECONNECT_INTERVAL_MS = 5000;
+const RECONNECT_BASE_INTERVAL_MS = 1000;
+const RECONNECT_MAX_INTERVAL_MS = 30000;
+
+/** 第 attempt 次（从 1 起）重连前的等待时间：指数退避并封顶 */
+function reconnectDelayMs(attempt: number): number {
+  return Math.min(RECONNECT_BASE_INTERVAL_MS * Math.pow(2, attempt - 1), RECONNECT_MAX_INTERVAL_MS);
+}
 
 // 可重试判定由 errors.ts 的映射表接管（isRetryableConnectError）：
 // 认证被拒/证书被拒等确定性失败不重试，避免反复撞密码
@@ -411,7 +421,7 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
     if (state.activeServerId && state.activeServerId !== serverId) return;
     if (state.servers.some((s) => s.id !== serverId && s.status === "connected")) return;
 
-    log.info(`自动重连第 ${attempt}/${MAX_RECONNECT_ATTEMPTS} 次:`, serverId);
+    log.info(`自动重连第 ${attempt} 次:`, serverId);
     try {
       await performConnectRef.current(server);
       log.info("自动重连成功:", serverId);
@@ -426,11 +436,12 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      log.warn(`自动重连失败 (${attempt}/${MAX_RECONNECT_ATTEMPTS}):`, msg);
+      log.warn(`自动重连失败 (第 ${attempt} 次):`, msg);
 
       // 确定性失败（认证被拒/证书被拒等）不重试，避免触发服务端认证锁定
-      // 门控从字符串白名单升级为映射表查表（isRetryableConnectError 来自 errors.ts）
-      if (!isRetryableConnectError(err) || attempt >= MAX_RECONNECT_ATTEMPTS) {
+      // 门控从字符串白名单升级为映射表查表（isRetryableConnectError 来自 errors.ts）。
+      // 可重试失败（网络类）无次数上限：持续指数退避直到成功或用户手动断开
+      if (!isRetryableConnectError(err)) {
         const others = useServersStore
           .getState()
           .servers.filter((s) => s.id !== serverId && s.status === "connected").length;
@@ -459,7 +470,7 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
 
     window.setTimeout(() => {
       void attemptReconnect(serverId, attempt);
-    }, RECONNECT_INTERVAL_MS);
+    }, reconnectDelayMs(attempt));
   }, [attemptReconnect]);
 
   // 持有最新调度引用（connection-lost 监听器空依赖，需通过 ref 访问）
@@ -501,14 +512,21 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
 
   // 启动恢复标记（每轮页面生命周期一次；镜像写入依赖它放行）
   const restoredRef = useRef(false);
+  // 本进程纪元（镜像消费与写入的统一时间源；restore 时一次性读取）
+  const epochRef = useRef<string | null>(null);
 
-  // 在线状态变化即写镜像。
+  // 在线状态变化即写镜像（自动盖纪元戳）。
   // ⚠️ 必须等恢复流程消费完快照才放行写入：挂载时状态是注水后的全离线，
-  // 若立即写入会把「刷新前」的快照覆盖成空，恢复读到空 = 在线记录丢失
+  // 若立即写入会把「刷新前」的快照覆盖成空，恢复读到空 = 在线记录丢失。
+  // 纪元缺失（app_process_epoch 读取失败的降级路径）→ 不写镜像：宁可本轮
+  // 刷新不恢复，不可写出无法自证世代的镜像（R8-N2 fail-closed）
   useEffect(() => {
-    if (!restoredRef.current) return;
+    if (!restoredRef.current || !epochRef.current) return;
     const connected = servers.filter((s) => s.status === "connected").map((s) => s.id);
-    sessionStorage.setItem("sm.session", JSON.stringify({ active: activeServerId, connected }));
+    sessionStorage.setItem(
+      "sm.session",
+      serializeSessionMirror(epochRef.current, { active: activeServerId, connected }),
+    );
   }, [activeServerId, servers]);
 
   // 启动恢复（每轮页面生命周期一次）
@@ -516,12 +534,17 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
     if (restoredRef.current || servers.length === 0) return;
     restoredRef.current = true;
     void (async () => {
-      let snap: { active: string | null; connected: string[] } = { active: null, connected: [] };
+      // 纪元读取失败 → fail-closed：不消费旧镜像也不写新镜像（本轮放弃恢复，
+      // 防跨世代泄漏）。正常路径下镜像由纪元戳双重把关：启动闸门清上一世代
+      // 镜像（StorageInitializer），此处再拒一次不一致纪元（纵深防御）
       try {
-        snap = JSON.parse(sessionStorage.getItem("sm.session") ?? "null") ?? snap;
-      } catch {
-        // 镜像损坏视同无快照
+        epochRef.current = await invoke<string>("app_process_epoch");
+      } catch (e) {
+        log.warn("进程纪元读取失败，本轮跳过会话镜像恢复:", e);
+        return;
       }
+      const snap = parseSessionMirror(sessionStorage.getItem("sm.session"), epochRef.current);
+      if (!snap) return;
       for (const id of snap.connected) {
         if (!servers.some((s) => s.id === id)) continue; // 服务器已被删除
         try {

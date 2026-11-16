@@ -30,6 +30,9 @@ const EXPECTED_STORE_VERSIONS: Record<string, number> = {
   "notifications": 1,
   "bookmarks": 0,
   "history": 0,
+  // 文件管理器目录访问统计（侧边栏「常用」分组）
+  // v1：frecency 模型（score/scoreAt），旧 count/lastUsed 由 persist migrate 折算
+  "filemanager-path-usage": 1,
 };
 
 /** 直接存放业务 JSON 的文件（非 zustand persist 的 {state, version} 包装） */
@@ -327,6 +330,25 @@ export const notificationsStorage: TauriStorage = {
   removeItem: async (name) => (await getNotificationsStorage()).removeItem(name),
 };
 
+let _fileManagerStorage: TauriStorage | null = null;
+
+/**
+ * 获取文件管理器数据存储（目录访问统计等）
+ */
+export async function getFileManagerStorage(): Promise<TauriStorage> {
+  if (!_fileManagerStorage) {
+    _fileManagerStorage = await createTauriStorage("filemanager.bin");
+  }
+  return _fileManagerStorage;
+}
+
+// 异步存储对象（用于 Zustand persist）
+export const fileManagerStorage: TauriStorage = {
+  getItem: async (name) => (await getFileManagerStorage()).getItem(name),
+  setItem: async (name, value) => (await getFileManagerStorage()).setItem(name, value),
+  removeItem: async (name) => (await getFileManagerStorage()).removeItem(name),
+};
+
 /* ── 启动预检 ───────────────────────────────────────────── */
 
 /** 关键 store 文件与其中的数据键：预检必须在渲染子组件前完成 */
@@ -339,6 +361,7 @@ const PREFLIGHT_GROUPS: Array<{
   { path: "settings.bin", getStorage: getSettingsStorage, keys: ["quirel-settings", "quirel-wallpaper"] },
   { path: "notifications.bin", getStorage: getNotificationsStorage, keys: ["notifications"] },
   { path: "browser-data.bin", getStorage: getBrowserDataStorage, keys: ["bookmarks", "history"] },
+  { path: "filemanager.bin", getStorage: getFileManagerStorage, keys: ["filemanager-path-usage"] },
   { path: "transfers.bin", getStorage: getTransfersStorage, keys: ["quirel-transfers"] },
 ];
 

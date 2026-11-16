@@ -6,6 +6,7 @@
 
 export { AppLayout } from "./AppLayout";
 export type { AppLayoutProps } from "./AppLayout";
+export { clampSidebarWidth, SIDEBAR_DEFAULT_WIDTH } from "./sidebarWidth";
 
 export { AppTopbar } from "./AppTopbar";
 export type { AppTopbarProps } from "./AppTopbar";

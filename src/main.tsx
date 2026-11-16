@@ -2,12 +2,17 @@ import "./i18n";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
-import { isTauri, suppressTauriBridgeErrors } from "./utils/environment";
+import { isTauri, suppressTauriBridgeErrors, installGlobalErrorReporting } from "./utils/environment";
 import { invoke } from "@tauri-apps/api/core";
 import { probeKeyring } from "./utils/credentials";
 import { useSettingsStore } from "./stores/settingsStore";
 import { useWallpaperStore } from "./stores/wallpaperStore";
 import { installUiRefreshGuard } from "./utils/uiRefreshGuard";
+
+// 全局未捕获错误捕获（诊断）：uncaught error 的完整 stack 经 logger 落盘
+// client.log。R8-N1（终端 teardown 的 `r is not a function`）只剩消息无法
+// 归因的教训——只记录，不改变错误传播。
+installGlobalErrorReporting();
 
 // 浏览器调试模式（无 Tauri 运行时）：静默桥接类报错，桌面会显示「浏览器模式」横幅
 if (!isTauri()) {
