@@ -6,6 +6,8 @@ import { useServersStore } from '../stores/serversStore';
 import type { ServerConfig } from "../stores/serversStore";
 import { AppBadge } from '../components/AppBadge';
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { pushServerNotification } from "../utils/notify";
 import { useServerManager, formatLastConnected, getStatusColor } from "../context/ServerManager";
 import { useWallpaper, getWallpaperStyle } from "../context/WallpaperContext";
 import { useWallpaperStore, BUILTIN_WALLPAPERS } from "../stores/wallpaperStore";
@@ -52,19 +54,53 @@ const SIDEBAR_ITEMS: SidebarItem[] = [
   { id: "about", icon: "about", labelKey: "settings.section.about" },
 ];
 
-/* ── Add Server Modal ───────────────────────────────── */
+/* ── Add Server Modal（含 quireld 自动安装向导）──────── */
 
 interface AddServerModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onAdd: (name: string, host: string, port: number, auth: any) => void;
 }
 
-export function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) {
+/** provision_detect 返回结构（Rust provision.rs serde camelCase） */
+interface ProvisionDetectResult {
+  installState: "notInstalled" | "installed" | "broken";
+  existing: { version: string; quicPort: number; certPath: string } | null;
+  sudoMode: "none" | "passwordless" | "password" | "unsupported";
+  /** sudo 不可用的具体原因（unsupported 时非空） */
+  sudoBlockReason: "no_sudo" | "doas_only" | "sudo_requires_password" | null;
+  arch: string;
+  isRoot: boolean;
+  systemdOk: boolean;
+  username: string;
+  homeDir: string;
+  hostKeyFingerprint: string;
+  /** 客户端期望的 quireld 版本（lockstep，Rust 侧注入） */
+  targetVersion: string;
+  /** 已装版本是否需要升级（Rust 侧比较结果） */
+  needsUpgrade: boolean;
+}
+
+/** provision_server 返回结构 */
+interface ProvisionOutcome {
+  status: "installed" | "degraded";
+  certFingerprint: string | null;
+  hostKeyFingerprint: string;
+  quireldPort: number | null;
+  installCommand: string | null;
+  reason: string | null;
+}
+
+type WizardStep = "form" | "detecting" | "confirm" | "installing" | "degraded";
+
+export function AddServerModal({ isOpen, onClose }: AddServerModalProps) {
   const { t } = useTranslation();
   const [name, setName] = useState("");
   const [host, setHost] = useState("");
-  const [port, setPort] = useState(8443);
+  const [port, setPort] = useState(9443);
+  // SSH 端口（自动安装通道；与 QUIC 端口相互独立）
+  const [sshPort, setSshPort] = useState(22);
+  // 自动安装开关（默认开启——首次运行即达到"开箱即用"目标）
+  const [autoInstall, setAutoInstall] = useState(true);
 
   // 认证配置状态
   const [authMethod, setAuthMethod] = useState<AuthMethod>(AuthMethod.PASSWORD);
@@ -75,54 +111,204 @@ export function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) 
   // 表单内联错误（替代系统 alert）
   const [formError, setFormError] = useState<string | null>(null);
 
+  // 自动安装向导状态机：form → detecting → confirm → installing → (degraded)
+  const [step, setStep] = useState<WizardStep>("form");
+  const [serverId, setServerId] = useState<string | null>(null);
+  const [detect, setDetect] = useState<ProvisionDetectResult | null>(null);
+  const [progress, setProgress] = useState({ percent: 0, detail: "" });
+  const [degradedOutcome, setDegradedOutcome] = useState<ProvisionOutcome | null>(null);
+  const [copied, setCopied] = useState(false);
+  const { connectServer } = useServerManager();
+  const { updateServer } = useServersStore();
+
+  // 关闭时重置向导（保留表单内容，仅回退到表单步骤）
+  useEffect(() => {
+    if (!isOpen) {
+      setStep("form");
+      setServerId(null);
+      setDetect(null);
+      setDegradedOutcome(null);
+      setProgress({ percent: 0, detail: "" });
+      setFormError(null);
+    }
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    // R11-02：必填校验显式内联报错——此前空名称/主机静默跳过整个提交块，
-    // 对话框保持打开且无任何提示，用户不知道为什么存不上
+  const resetForm = () => {
+    setName("");
+    setHost("");
+    setPort(9443);
+    setSshPort(22);
+    setAutoInstall(true);
+    setAuthMethod(AuthMethod.PASSWORD);
+    setUsername("");
+    setPassword("");
+    setPrivateKeyFile("");
+    setPassphrase("");
+    setFormError(null);
+  };
+
+  const buildAuth = () => ({
+    method: authMethod,
+    username,
+    ...(authMethod === AuthMethod.PASSWORD && { password }),
+    ...(authMethod === AuthMethod.PUBKEY && {
+      privateKey: privateKeyFile,
+      ...(passphrase && { passphrase }), // 只在密码非空时才添加
+    }),
+  });
+
+  const validateForm = (): boolean => {
     if (!name.trim() || !host.trim()) {
       setFormError(t("settings.errors.requiredFields"));
-      return;
+      return false;
     }
-    if (name && host) {
-      // 安全前置拦截：本表单含持久化凭据，系统凭据库不可用时阻止提交
-      // （凭据唯一持久化形态是 OS 凭据库——不允许静默降级明文保存）
-      const health = getKeyringHealth();
-      const hasCredential =
-        (authMethod === AuthMethod.PASSWORD && password) ||
-        (authMethod === AuthMethod.PUBKEY && (privateKeyFile || passphrase));
-      if (hasCredential && health.status === "unavailable") {
-        setFormError(t("settings.keyringUnavailableError"));
-        return;
-      }
-      // 构建认证配置对象
-      const auth = {
-        method: authMethod,
-        username,
-        ...(authMethod === AuthMethod.PASSWORD && { password }),
-        ...(authMethod === AuthMethod.PUBKEY && {
-          privateKey: privateKeyFile,
-          ...(passphrase && { passphrase }), // 只在密码非空时才添加
-        }),
-      };
+    // 安全前置拦截：本表单含持久化凭据，系统凭据库不可用时阻止提交
+    // （凭据唯一持久化形态是 OS 凭据库——不允许静默降级明文保存）
+    const health = getKeyringHealth();
+    const hasCredential =
+      (authMethod === AuthMethod.PASSWORD && password) ||
+      (authMethod === AuthMethod.PUBKEY && (privateKeyFile || passphrase));
+    if (hasCredential && health.status === "unavailable") {
+      setFormError(t("settings.keyringUnavailableError"));
+      return false;
+    }
+    return true;
+  };
 
-      onAdd(name.trim(), host.trim(), port, auth);
-      setFormError(null);
-      setName("");
-      setHost("");
-      setPort(8443);
-      // 重置认证配置
-      setAuthMethod(AuthMethod.PASSWORD);
-      setUsername("");
-      setPassword("");
-      setPrivateKeyFile("");
-      setPassphrase("");
-      onClose();
+  /** 提交：先保存配置（凭据入 keyring）→ 自动安装开则探测 */
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!validateForm()) return;
+    try {
+      // 直接调 store 拿 id（自动安装向导需要 id 触发 provision_detect/server）
+      const id = useServersStore.getState().addServer({
+        name: name.trim(),
+        host: host.trim(),
+        port,
+        auth: buildAuth() as any,
+        sshPort,
+      });
+      setServerId(id);
+      if (autoInstall) {
+        void runDetect(id);
+      } else {
+        resetForm();
+        onClose();
+      }
+    } catch (err) {
+      setFormError(String(err));
     }
   };
 
-  // 处理私钥文件选择（AddServerModal）
+  // 安装进度事件（provision_server 内部 emit；installing 步骤显示实时进度）
+  useEffect(() => {
+    if (step !== "installing") return;
+    let unlisten: (() => void) | undefined;
+    const setup = async () => {
+      const fn = await listen<{ serverId: string; step: string; detail: string; percent: number }>(
+        "provision-progress",
+        (event) => {
+          setProgress({ percent: event.payload.percent, detail: event.payload.detail });
+        }
+      );
+      unlisten = fn;
+    };
+    setup().catch((e) => log.error("provision 进度监听失败:", e));
+    return () => { unlisten?.(); };
+  }, [step]);
+
+  /** 探测：SSH 连接 + 环境判定（只读，不改服务器状态） */
+  const runDetect = async (id: string) => {
+    setStep("detecting");
+    setFormError(null);
+    try {
+      const result = await invoke<ProvisionDetectResult>("provision_detect", {
+        params: { serverId: id, host: host.trim(), sshPort, username, authMethod },
+      });
+      setDetect(result);
+      setStep("confirm");
+    } catch (err) {
+      setStep("form");
+      setFormError(`${t("settings.provision.detectFailed")}: ${formatProvisionError(err)}`);
+    }
+  };
+
+  /** 执行安装（confirm 确认后）；成功自动保存指纹并连接 */
+  const startInstall = async () => {
+    if (!serverId || !detect) return;
+    setStep("installing");
+    setProgress({ percent: 5, detail: t("settings.provision.installing") });
+    try {
+      const outcome = await invoke<ProvisionOutcome>("provision_server", {
+        params: { serverId, host: host.trim(), sshPort, username, authMethod },
+        options: {
+          installState: detect.installState,
+          existing: detect.existing,
+          quireldPort: port,
+          hostKeyFingerprint: detect.hostKeyFingerprint,
+          homeDir: detect.homeDir,
+          arch: detect.arch,
+          sudoBlockReason: detect.sudoBlockReason,
+        },
+      });
+      if (outcome.status === "degraded") {
+        setDegradedOutcome(outcome);
+        setStep("degraded");
+        return;
+      }
+      // 成功：保存预钉扎指纹与供应元数据（凭据已存 keyring，QUIC 连接直接复用）
+      updateServer(serverId, {
+        certFingerprint: outcome.certFingerprint ?? undefined,
+        quireldPort: outcome.quireldPort ?? undefined,
+        provisionedAt: Date.now(),
+        provisionMethod: "auto",
+        sshHostKeyFingerprint: outcome.hostKeyFingerprint,
+      });
+      pushServerNotification(serverId, {
+        title: t("settings.provision.doneNotifyTitle"),
+        body: t("settings.provision.doneNotifyBody", { name: name.trim(), port: outcome.quireldPort ?? port }),
+        urgency: "normal",
+        kind: "system",
+        source: name.trim(),
+      });
+      resetForm();
+      onClose();
+      // 自动连接（指纹已预钉扎，QUIC 首连无确认弹窗）
+      void connectServer(serverId);
+    } catch (err) {
+      setStep("confirm");
+      setFormError(`${t("settings.provision.installFailed")}: ${formatProvisionError(err)}`);
+      pushServerNotification(serverId, {
+        title: t("settings.provision.failedNotifyTitle"),
+        body: formatProvisionError(err),
+        urgency: "critical",
+        kind: "system",
+        source: name.trim(),
+      });
+    }
+  };
+
+  /** 手动降级路径：用户在服务器执行命令后立即连接 */
+  const connectAfterManual = () => {
+    if (!serverId) return;
+    updateServer(serverId, { provisionMethod: "manual", provisionedAt: Date.now(), sshPort });
+    resetForm();
+    onClose();
+    void connectServer(serverId);
+  };
+
+  const copyInstallCommand = async () => {
+    if (!degradedOutcome?.installCommand) return;
+    try {
+      await navigator.clipboard.writeText(degradedOutcome.installCommand);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch { /* 剪贴板不可用时静默（命令本身可见可手抄） */ }
+  };
+
+  // 处理私钥文件选择（向导表单步骤；保留原有校验链）
   const handlePrivateKeySelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -145,135 +331,476 @@ export function AddServerModal({ isOpen, onClose, onAdd }: AddServerModalProps) 
 
         // 检查是否加密
         if (content.includes('ENCRYPTED') && !passphrase) {
-          console.log('检测到加密私钥，用户需要在密码字段输入密码');
+          log.info('检测到加密私钥，用户需要在密码字段输入密码');
         }
 
         setPrivateKeyFile(content);
         log.info('Private key file loaded:', file.name);
       } catch (error) {
-        console.error("读取私钥文件失败:", error);
+        log.error("读取私钥文件失败:", error);
         setFormError(t('settings.errors.readKeyFailed'));
       }
     }
   };
 
-  return (
-    <div className="st-modal-overlay">
-      <div className="st-modal">
-        <div className="st-modal-header">
-          <span className="st-modal-title">{t("settings.addServerTitle")}</span>
-          <button className="st-modal-close" onClick={onClose}>×</button>
-        </div>
-        <form className="st-modal-body" onSubmit={handleSubmit}>
-          <div className="st-form-row">
-            <label className="st-form-label text-label">{t("settings.serverName")}</label>
-            <input
-              type="text"
-              className="st-form-input"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder={t("settings.serverNamePlaceholder")}
-              autoFocus
-            />
-          </div>
-          <div className="st-form-row">
-            <label className="st-form-label text-label">{t("settings.host")}</label>
-            <input
-              type="text"
-              className="st-form-input"
-              value={host}
-              onChange={(e) => setHost(e.target.value)}
-              placeholder={t("settings.hostPlaceholder")}
-            />
-          </div>
-          <div className="st-form-row">
-            <label className="st-form-label">{t("settings.port")}</label>
-            <input
-              type="number"
-              className="st-form-input"
-              value={port}
-              onChange={(e) => setPort(parseInt(e.target.value) || 8443)}
-              placeholder="8443"
-            />
-          </div>
+  // ── 渲染 ─────────────────────────────────────────────
 
-          {/* 认证配置 */}
-          <div className="st-form-row">
-            <label className="st-form-label">{t("settings.authMethod")}</label>
-            <select
-              className="st-form-input"
-              value={authMethod}
-              onChange={(e) => setAuthMethod(e.target.value as AuthMethod)}
-            >
-              <option value={AuthMethod.PASSWORD}>{t("settings.authPassword")}</option>
-              <option value={AuthMethod.PUBKEY}>{t("settings.authPubkey")}</option>
-            </select>
+  // 表单步骤（form/detecting 共用表单布局；detecting 时按钮禁用）
+  if (step === "form" || step === "detecting") {
+    return (
+      <div className="st-modal-overlay">
+        <div className="st-modal">
+          <div className="st-modal-header">
+            <span className="st-modal-title">{t("settings.addServerTitle")}</span>
+            <button className="st-modal-close" onClick={onClose}>×</button>
           </div>
-
-          <div className="st-form-row">
-            <label className="st-form-label">{t("settings.username")}</label>
-            <input
-              type="text"
-              className="st-form-input"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder={t("settings.usernamePlaceholder")}
-            />
-          </div>
-
-          {/* 密码认证字段 */}
-          {authMethod === AuthMethod.PASSWORD && (
+          <form className="st-modal-body" onSubmit={handleSubmit}>
             <div className="st-form-row">
-              <label className="st-form-label">{t("settings.password")}</label>
+              <label className="st-form-label text-label">{t("settings.serverName")}</label>
               <input
-                type="password"
+                type="text"
                 className="st-form-input"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder={t("settings.passwordPlaceholder")}
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder={t("settings.serverNamePlaceholder")}
+                autoFocus
               />
             </div>
-          )}
+            <div className="st-form-row">
+              <label className="st-form-label text-label">{t("settings.host")}</label>
+              <input
+                type="text"
+                className="st-form-input"
+                value={host}
+                onChange={(e) => setHost(e.target.value)}
+                placeholder={t("settings.hostPlaceholder")}
+              />
+            </div>
+            <div className="st-form-row">
+              <label className="st-form-label">{t("settings.port")}</label>
+              <input
+                type="number"
+                className="st-form-input"
+                value={port}
+                onChange={(e) => setPort(parseInt(e.target.value) || 9443)}
+                placeholder="9443"
+              />
+            </div>
 
-          {/* 公钥认证字段 */}
-          {authMethod === AuthMethod.PUBKEY && (
-            <>
-              <div className="st-form-row">
-                <label className="st-form-label">
-                  {t("settings.privateKeyFile")}
-                  <InfoTip tip={t("settings.privateKeyTip")} />
-                </label>
+            {/* 自动安装区块（SSH 通道 + 开关） */}
+            <div className="st-form-row">
+              <label className="st-form-label">{t("settings.provision.sshPort")}</label>
+              <input
+                type="number"
+                className="st-form-input"
+                value={sshPort}
+                onChange={(e) => setSshPort(parseInt(e.target.value) || 22)}
+                placeholder="22"
+              />
+            </div>
+            <div className="st-form-row">
+              <label className="st-form-label">
                 <input
-                  type="file"
-                  className="st-form-input"
-                  onChange={handlePrivateKeySelect}
-                  accept=".pem,.key,id_rsa,id_ed25519,id_ecdsa,id_dsa"
+                  type="checkbox"
+                  checked={autoInstall}
+                  onChange={(e) => setAutoInstall(e.target.checked)}
                 />
-              </div>
-              {privateKeyFile && (
-                <div className="st-form-row">
-                  <span className="st-form-hint">{t("settings.keyPreview", { key: privateKeyFile.split('\n')[0].substring(0, 50) })}</span>
-                </div>
-              )}
+                {" "}
+                {t("settings.provision.autoInstall")}
+              </label>
+              <span className="st-form-hint">{t("settings.provision.autoInstallHint")}</span>
+            </div>
+
+            {/* 认证配置 */}
+            <div className="st-form-row">
+              <label className="st-form-label">{t("settings.authMethod")}</label>
+              <select
+                className="st-form-input"
+                value={authMethod}
+                onChange={(e) => setAuthMethod(e.target.value as AuthMethod)}
+              >
+                <option value={AuthMethod.PASSWORD}>{t("settings.authPassword")}</option>
+                <option value={AuthMethod.PUBKEY}>{t("settings.authPubkey")}</option>
+              </select>
+            </div>
+
+            <div className="st-form-row">
+              <label className="st-form-label">{t("settings.username")}</label>
+              <input
+                type="text"
+                className="st-form-input"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder={t("settings.usernamePlaceholder")}
+              />
+            </div>
+
+            {/* 密码认证字段 */}
+            {authMethod === AuthMethod.PASSWORD && (
               <div className="st-form-row">
-                <label className="st-form-label">{t("settings.passphrase")}</label>
+                <label className="st-form-label">{t("settings.password")}</label>
                 <input
                   type="password"
                   className="st-form-input"
-                  value={passphrase}
-                  onChange={(e) => setPassphrase(e.target.value)}
-                  placeholder={t("settings.passphrasePlaceholder")}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder={t("settings.passwordPlaceholder")}
                 />
               </div>
-            </>
-          )}
-          {formError && <div className="st-form-error">{formError}</div>}
-        </form>
-        <div className="st-modal-footer">
-          <button className="st-btn" onClick={onClose}>{t("common.cancel")}</button>
-          <button className="st-btn st-btn-primary" onClick={handleSubmit}>{t("settings.addBtn")}</button>
+            )}
+
+            {/* 公钥认证字段 */}
+            {authMethod === AuthMethod.PUBKEY && (
+              <>
+                <div className="st-form-row">
+                  <label className="st-form-label">
+                    {t("settings.privateKeyFile")}
+                    <InfoTip tip={t("settings.privateKeyTip")} />
+                  </label>
+                  <input
+                    type="file"
+                    className="st-form-input"
+                    onChange={handlePrivateKeySelect}
+                    accept=".pem,.key,id_rsa,id_ed25519,id_ecdsa,id_dsa"
+                  />
+                </div>
+                {privateKeyFile && (
+                  <div className="st-form-row">
+                    <span className="st-form-hint">{t("settings.keyPreview", { key: privateKeyFile.split('\n')[0].substring(0, 50) })}</span>
+                  </div>
+                )}
+                <div className="st-form-row">
+                  <label className="st-form-label">{t("settings.passphrase")}</label>
+                  <input
+                    type="password"
+                    className="st-form-input"
+                    value={passphrase}
+                    onChange={(e) => setPassphrase(e.target.value)}
+                    placeholder={t("settings.passphrasePlaceholder")}
+                  />
+                </div>
+              </>
+            )}
+            {formError && <div className="st-form-error">{formError}</div>}
+            {step === "detecting" && (
+              <div className="st-form-hint">{t("settings.provision.detecting")}</div>
+            )}
+          </form>
+          <div className="st-modal-footer">
+            <button className="st-btn" onClick={onClose} disabled={step === "detecting"}>{t("common.cancel")}</button>
+            <button className="st-btn st-btn-primary" onClick={handleSubmit} disabled={step === "detecting"}>
+              {step === "detecting" ? t("settings.provision.detectTitle") + "…" : t("settings.addBtn")}
+            </button>
+          </div>
         </div>
       </div>
+    );
+  }
+
+  // 确认步骤：展示检测结果 + host key 指纹确认
+  if (step === "confirm" && detect) {
+    const stateText = (() => {
+      if (detect.installState === "notInstalled") return t("settings.provision.stateNotInstalled");
+      if (detect.installState === "broken") return t("settings.provision.stateBroken");
+      const existing = detect.existing!;
+      return detect.needsUpgrade
+        ? t("settings.provision.stateInstalledUpgrade", { version: existing.version, target: detect.targetVersion })
+        : t("settings.provision.stateInstalledUpToDate", { version: existing.version });
+    })();
+    const sudoText = (() => {
+      switch (detect.sudoMode) {
+        case "none": return t("settings.provision.sudoNone");
+        case "passwordless": return t("settings.provision.sudoPasswordless");
+        case "password": return t("settings.provision.sudoPassword");
+        case "unsupported": {
+          if (detect.sudoBlockReason === "no_sudo") return t("settings.provision.sudoBlockNoSudo");
+          if (detect.sudoBlockReason === "doas_only") return t("settings.provision.sudoBlockDoasOnly");
+          if (detect.sudoBlockReason === "sudo_requires_password") return t("settings.provision.sudoBlockRequiresPassword");
+          return t("settings.provision.sudoUnsupported");
+        }
+      }
+    })();
+
+    return (
+      <div className="st-modal-overlay">
+        <div className="st-modal">
+          <div className="st-modal-header">
+            <span className="st-modal-title">{t("settings.provision.detectTitle")}</span>
+            <button className="st-modal-close" onClick={onClose}>×</button>
+          </div>
+          <div className="st-modal-body">
+            <div className="st-form-row"><span>{stateText}</span></div>
+            <div className="st-form-row">
+              <span className="st-form-hint">{sudoText}</span>
+            </div>
+            <div className="st-form-row">
+              <span className="st-form-hint">
+                {t("settings.provision.archLabel")}: {detect.arch}
+                {!detect.systemdOk ? ` — ${t("settings.provision.systemdBlocked")}` : ""}
+              </span>
+            </div>
+            <div className="st-form-row">
+              <span className="st-form-label text-label">{t("settings.provision.hostKeyTitle")}</span>
+              <code>{detect.hostKeyFingerprint}</code>
+              <span className="st-form-hint">{t("settings.provision.hostKeyHint")}</span>
+            </div>
+            {formError && <div className="st-form-error">{formError}</div>}
+          </div>
+          <div className="st-modal-footer">
+            <button className="st-btn" onClick={onClose}>{t("common.cancel")}</button>
+            {/* 配置已保存；不再自动安装，直接关闭（手动安装后可正常连接） */}
+            <button className="st-btn" onClick={onClose}>{t("settings.provision.saveOnly")}</button>
+            {detect.sudoMode !== "unsupported" && detect.systemdOk && (
+              <button className="st-btn st-btn-primary" onClick={startInstall}>{t("settings.provision.startInstall")}</button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 安装中：进度显示
+  if (step === "installing") {
+    return (
+      <div className="st-modal-overlay">
+        <div className="st-modal">
+          <div className="st-modal-header">
+            <span className="st-modal-title">{t("settings.provision.installing")}</span>
+            <button className="st-modal-close" onClick={onClose}>×</button>
+          </div>
+          <div className="st-modal-body">
+            <div className="st-form-row">
+              <span className="st-form-hint">{progress.detail}</span>
+            </div>
+            <div className="st-form-row">
+              <progress value={progress.percent} max={100} style={{ width: "100%" }} />
+            </div>
+            {formError && <div className="st-form-error">{formError}</div>}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 降级：展示手动命令
+  if (step === "degraded" && degradedOutcome) {
+    return (
+      <div className="st-modal-overlay">
+        <div className="st-modal">
+          <div className="st-modal-header">
+            <span className="st-modal-title">{t("settings.provision.degradedTitle")}</span>
+            <button className="st-modal-close" onClick={onClose}>×</button>
+          </div>
+          <div className="st-modal-body">
+            {degradedOutcome.reason && (
+              <div className="st-form-row">
+                <span className="st-form-hint">
+                  {t("settings.provision.degradedReason", { reason: degradedOutcome.reason })}
+                </span>
+              </div>
+            )}
+            {degradedOutcome.installCommand ? (
+              <div className="st-form-row">
+                <code style={{ wordBreak: "break-all" }}>{degradedOutcome.installCommand}</code>
+              </div>
+            ) : (
+              <div className="st-form-row">
+                <span className="st-form-hint">{t("settings.provision.degradedNoCommand")}</span>
+              </div>
+            )}
+            {formError && <div className="st-form-error">{formError}</div>}
+          </div>
+          <div className="st-modal-footer">
+            <button className="st-btn" onClick={onClose}>{t("common.cancel")}</button>
+            {degradedOutcome.installCommand && (
+              <button className="st-btn" onClick={copyInstallCommand}>{copied ? t("settings.provision.copied") : t("settings.provision.copyCmd")}</button>
+            )}
+            <button className="st-btn st-btn-primary" onClick={connectAfterManual}>{t("settings.provision.manualDone")}</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return null;
+}
+
+/** provision 错误格式化（AppError: { code, params?, detail? }） */
+function formatProvisionError(err: unknown): string {
+  if (typeof err === "object" && err !== null) {
+    const e = err as { code?: string; detail?: string };
+    return e.detail || e.code || String(err);
+  }
+  return String(err);
+}
+
+/* ── quireld 版本管理卡片（在线更新）────────────────── */
+
+interface QuirelVersionCardProps {
+  serverId: string;
+  serverName: string;
+}
+
+interface QuirelUpdateCheck {
+  supported: boolean;
+  enabled: boolean;
+  managerVersion: string | null;
+  workerVersion: string | null;
+  managerLagsWorker: boolean;
+  latestVersion: string | null;
+  updateAvailable: boolean | null;
+  staged: { sha256: string; size: number; version: string; stagedAt: number } | null;
+  lastError: string | null;
+}
+
+interface QuirelActionOutcome {
+  success: boolean;
+  error: string | null;
+  managerVersion: string | null;
+  workerVersion: string | null;
+  managerLagsWorker: boolean;
+  rolledBack: boolean;
+}
+
+export function QuirelVersionCard({ serverId, serverName }: QuirelVersionCardProps) {
+  const { t } = useTranslation();
+  const [check, setCheck] = useState<QuirelUpdateCheck | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [doneMsg, setDoneMsg] = useState<string | null>(null);
+  const { updateServer } = useServersStore();
+
+  const runCheck = async () => {
+    setChecking(true);
+    setActionError(null);
+    try {
+      const result = await invoke<QuirelUpdateCheck>("agent_update_check", { serverId });
+      setCheck(result);
+      // 版本同步到 ServerConfig（连接信息卡片/更新判断用）
+      if (result.managerVersion) {
+        updateServer(serverId, { quireldVersion: result.managerVersion });
+      }
+    } catch (err) {
+      setActionError(formatProvisionError(err));
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  // 选中服务器变化时自动检查一次
+  useEffect(() => {
+    void runCheck();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverId]);
+
+  const runUpdate = async () => {
+    // 二次确认（计划要求：更新是重操作，默认仅手动）
+    if (!window.confirm(t("settings.quireldVersion.confirmUpdate"))) return;
+    setUpdating(true);
+    setActionError(null);
+    setDoneMsg(null);
+    try {
+      const outcome = await invoke<QuirelActionOutcome>("agent_update_apply", { serverId });
+      if (outcome.success) {
+        setDoneMsg(t("settings.quireldVersion.updateDone"));
+        if (outcome.workerVersion) updateServer(serverId, { quireldVersion: outcome.workerVersion });
+        void runCheck();
+      } else {
+        setActionError(outcome.error ?? t("settings.quireldVersion.actionFailed"));
+      }
+    } catch (err) {
+      setActionError(formatProvisionError(err));
+    } finally {
+      setUpdating(false);
+    }
+  };
+
+  const runRollback = async () => {
+    setUpdating(true);
+    setActionError(null);
+    setDoneMsg(null);
+    try {
+      const outcome = await invoke<QuirelActionOutcome>("agent_update_rollback", { serverId });
+      if (outcome.success) {
+        setDoneMsg(t("settings.quireldVersion.rollbackDone"));
+        void runCheck();
+      } else {
+        setActionError(outcome.error ?? t("settings.quireldVersion.actionFailed"));
+      }
+    } catch (err) {
+      setActionError(formatProvisionError(err));
+    } finally {
+      setUpdating(false);
+    }
+  };
+
+  return (
+    <div className="st-card">
+      <div className="st-card-header text-title">{t("settings.quireldVersion.title")}</div>
+      {!check ? (
+        <div className="st-form-row">
+          <span className="st-form-hint">{checking ? t("settings.quireldVersion.checking") : ""}</span>
+        </div>
+      ) : !check.supported ? (
+        <div className="st-form-row">
+          <span className="st-form-hint">{t("settings.quireldVersion.notSupported")}</span>
+        </div>
+      ) : (
+        <>
+          <div className="st-form-row">
+            <span>
+              {t("settings.quireldVersion.current")}:{" "}
+              <strong>{check.managerVersion ?? t("settings.quireldVersion.unknown")}</strong>
+              {!check.enabled && (
+                <span className="st-form-hint"> — {t("settings.quireldVersion.disabled")}</span>
+              )}
+            </span>
+          </div>
+          {check.managerLagsWorker && check.workerVersion && (
+            <div className="st-form-row">
+              <span className="st-form-hint">
+                {t("settings.quireldVersion.workerLags", {
+                  worker: check.workerVersion,
+                  manager: check.managerVersion ?? "",
+                })}
+              </span>
+            </div>
+          )}
+          {check.staged && (
+            <div className="st-form-row">
+              <span className="st-form-hint">{t("settings.quireldVersion.stagedHint")}</span>
+            </div>
+          )}
+          <div className="st-form-row">
+            <span className="st-form-hint">
+              {check.updateAvailable === true && check.latestVersion
+                ? t("settings.quireldVersion.updateAvailable", { version: check.latestVersion })
+                : check.updateAvailable === false
+                  ? t("settings.quireldVersion.noUpdate")
+                  : ""}
+            </span>
+          </div>
+          {doneMsg && <div className="st-form-row"><span className="st-form-hint">{doneMsg}</span></div>}
+          {actionError && <div className="st-form-error">{actionError}</div>}
+          <div className="st-form-row">
+            <button className="st-btn" onClick={runCheck} disabled={checking || updating}>
+              {checking ? t("settings.quireldVersion.checking") : t("settings.quireldVersion.checkBtn")}
+            </button>
+            {(check.updateAvailable === true || check.staged) && check.enabled && (
+              <button className="st-btn st-btn-primary" onClick={runUpdate} disabled={updating}>
+                {updating ? t("settings.quireldVersion.updating") : t("settings.quireldVersion.updateBtn")}
+              </button>
+            )}
+            {check.enabled && check.managerVersion && (
+              <button className="st-btn" onClick={runRollback} disabled={updating}>
+                {t("settings.quireldVersion.rollbackBtn")}
+              </button>
+            )}
+          </div>
+        </>
+      )}
+      <span className="st-form-hint" data-server={serverName} />
     </div>
   );
 }
@@ -604,7 +1131,6 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
   const {
     servers,
     activeServer,
-    addServer,
     updateServer,
     removeServer,
     connectServer,
@@ -647,14 +1173,7 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
   // 主题已由 Desktop.tsx 全局应用，此处不再重复调用
   // useTheme(themeId, accentColorId);
 
-  const handleAddServer = (name: string, host: string, port: number, auth: any) => {
-    addServer({
-      name,
-      host,
-      port,
-      auth,
-    });
-  };
+  // 添加服务器的保存逻辑已内聚到 AddServerModal（自动安装向导需要 id 触发 provision 流程）
 
   const handleEditServer = (id: string, name: string, host: string, port: number, auth: any) => {
     updateServer(id, { name, host, port, auth });
@@ -788,6 +1307,11 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
               </div>
             </div>
 
+            {/* quireld 版本管理（仅连接中的服务器显示——命令走 QUIC 通道） */}
+            {cardServer?.status === "connected" && (
+              <QuirelVersionCard serverId={cardServer.id} serverName={cardServer.name} />
+            )}
+
             {/* Saved Servers */}
             <div className="st-card">
               <div className="st-card-header text-title">{t("settings.savedServers")}</div>
@@ -889,7 +1413,6 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
             <AddServerModal
               isOpen={addModalOpen}
               onClose={() => setAddModalOpen(false)}
-              onAdd={handleAddServer}
             />
 
             {removeConfirmServer && (

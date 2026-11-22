@@ -26,6 +26,6 @@ pub use stats::{
 };
 pub use subscription::SubscriptionType;
 pub use types::{
-    CommonLocation, DiffType, DiskInfo, FileDiff, FileEntry, MetricsSnapshot, MountInfo,
-    ProcessEntry,
+    AgentUpdateLastResult, CommonLocation, DiffType, DiskInfo, FileDiff, FileEntry,
+    MetricsSnapshot, MountInfo, ProcessEntry, StagedUpdate,
 };

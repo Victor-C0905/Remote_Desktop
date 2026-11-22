@@ -72,6 +72,11 @@ struct Args {
     uid: Option<u32>,
     #[arg(long, hide = true)]
     gid: Option<u32>,
+    /// 附加组列表（逗号分隔，含主 gid）。降权前 setgroups 显式替换，
+    /// 禁止继承 root 附加组（2026-11-20 审计 A-01）；缺失按空表处理
+    /// （仅保留主 gid），fail-closed。
+    #[arg(long, hide = true)]
+    supp_gids: Option<String>,
     /// writer 的 final_path
     #[arg(long, hide = true)]
     final_path: Option<String>,
@@ -312,10 +317,9 @@ async fn run_manager_mode(args: &Args) -> Result<()> {
         .expect("无法创建审计日志文件"));
     tracing::info!("审计日志已启用: {}", cfg.audit.log_path);
 
-    // 初始化认证器
+    // 初始化认证器（公钥认证不走组合器：挑战入口按 cfg.auth.ssh.enable_pubkey 检查）
     let authenticator = Arc::new(CompositeAuthenticator::new(
         cfg.auth.ssh.pam_service.clone(),
-        cfg.auth.ssh.enable_pubkey,
         cfg.auth.ssh.enable_password,
     ));
     tracing::info!("认证器已初始化 (公钥认证: {}, 密码认证: {})",
@@ -424,8 +428,22 @@ async fn dispatch_isolated_command(args: &Args) -> Result<bool> {
         1 => {
             let uid = args.uid.unwrap_or(0);
             let gid = args.gid.unwrap_or(0);
-            // 降权（setgid 先于 setuid，顺序重要）
+            // 附加组：必须仍在 root 时 setgroups 显式替换（setuid 后无权再改）。
+            // 仅 setgid/setuid 不清除附加组，隔离子进程将继承 root 附加组
+            // （至少 gid 0）——2026-11-20 审计 A-01。参数缺失/解析失败按空表
+            // 处理（仅主 gid），fail-closed。
+            // 非 root 运行（开发/测试模式，降权目标即自身）无 root 组继承
+            // 问题且 setgroups 必然 EPERM，跳过；root 下失败 = 真异常，退出。
+            let mut gids = parse_supplementary_gids_arg(args.supp_gids.as_deref().unwrap_or(""));
+            if !gids.contains(&gid) {
+                gids.push(gid);
+            }
+            // 降权（setgroups → setgid → setuid，顺序重要）
             unsafe {
+                if libc::geteuid() == 0 && libc::setgroups(gids.len(), gids.as_ptr()) != 0 {
+                    eprintln!("setgroups 失败: {}", std::io::Error::last_os_error());
+                    std::process::exit(1);
+                }
                 if libc::setgid(gid) != 0 {
                     std::process::exit(1);
                 }
@@ -462,6 +480,33 @@ async fn dispatch_isolated_command(args: &Args) -> Result<bool> {
 #[cfg(not(unix))]
 async fn dispatch_isolated_command(_args: &Args) -> Result<bool> {
     Ok(false)
+}
+
+/// 解析 `--supp-gids`（逗号分隔附加组列表）；空串/非法片段跳过，
+/// 主 gid 由调用方补入（缺失参数 → 仅主 gid，fail-closed）
+#[cfg(unix)]
+fn parse_supplementary_gids_arg(s: &str) -> Vec<libc::gid_t> {
+    s.split(',')
+        .filter_map(|p| p.trim().parse::<u32>().ok())
+        .collect()
+}
+
+#[cfg(all(test, unix))]
+mod supp_gids_tests {
+    use super::parse_supplementary_gids_arg;
+
+    #[test]
+    fn parses_valid_list_and_skips_invalid_fragments() {
+        assert_eq!(parse_supplementary_gids_arg("0,27,44"), vec![0, 27, 44]);
+        assert_eq!(parse_supplementary_gids_arg(" 27 , x , 44 "), vec![27, 44]);
+    }
+
+    #[test]
+    fn missing_or_invalid_arg_yields_empty_list() {
+        // 空表 → dispatch 仅保留主 gid（fail-closed，不继承 root 附加组）
+        assert!(parse_supplementary_gids_arg("").is_empty());
+        assert!(parse_supplementary_gids_arg("x,y").is_empty());
+    }
 }
 
 // ============================================================================
@@ -514,9 +559,18 @@ fn run_isolated_writer(temp_path: &str, final_path: &str) -> Result<()> {
 
 /// 隔离读取子进程：读文件 → 写 stdout
 /// 退出码：2=打开文件失败 / 3=写入 stdout 失败 / 4=读取文件失败
+/// / 8=路径不是常规文件（FIFO/socket/device 等）
 #[cfg(unix)]
 fn run_isolated_reader(path: &str) -> Result<()> {
     use std::io::{Read, Write};
+    // 拒绝非普通文件：open FIFO 会阻塞到出现写端，父进程 pipe 读随之永久
+    // 阻塞并占用 tokio worker（2026-11-20 审计 A-03）。metadata 仅 stat
+    // 不 open，对 FIFO 也不会阻塞。
+    match std::fs::metadata(path) {
+        Ok(m) if m.is_file() => {}
+        Ok(_) => std::process::exit(8),
+        Err(_) => std::process::exit(2),
+    }
     let file = match std::fs::File::open(path) {
         Ok(f) => f,
         Err(_) => std::process::exit(2),

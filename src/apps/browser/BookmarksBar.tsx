@@ -10,6 +10,7 @@ import { useTranslation } from "react-i18next";
 import { useBookmarksStore, selectBookmarks } from "../../stores/bookmarksStore";
 import { ContextMenu, type ContextMenuEntry } from "../../components/ContextMenu/ContextMenu";
 import { createLogger } from "../../utils/logger";
+import { isDangerousUrl } from "./dangerousUrl";
 import "./BookmarksBar.css";
 
 const log = createLogger("BookmarksBar");
@@ -29,6 +30,11 @@ export function BookmarksBar({ serverId, onNavigate }: BookmarksBarProps) {
   const [menu, setMenu] = useState<{ x: number; y: number; url: string; title: string } | null>(null);
 
   const newTabNavigate = useCallback((url: string) => {
+    // 前端 scheme 拦截（C-01 纵深防御；Rust normalize_url 是最终强制层）
+    if (isDangerousUrl(url)) {
+      log.warn("书签新标签已拦截危险 scheme:", url.slice(0, 48));
+      return;
+    }
     if (serverId) invoke("browser_create_tab", { serverId, url }).catch((e) => log.error("书签新标签打开失败:", e));
   }, [serverId]);
 

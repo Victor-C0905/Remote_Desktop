@@ -129,6 +129,35 @@ pub(crate) fn sync_browser_background_colors(app: &AppHandle) {
     }
 }
 
+/// 日志用 URL 脱敏：去除 query/fragment（可能携带 token/session 凭据），
+/// 保留 scheme://host/path 供定位问题（2026-11-20 审计 B-13 日志红线）
+pub(crate) fn sanitize_url_for_log(url: &str) -> String {
+    match url.find(|c| c == '?' || c == '#') {
+        Some(idx) => format!("{}…", &url[..idx]),
+        None => url.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod sanitize_url_tests {
+    use super::sanitize_url_for_log;
+
+    /// B-13 回归：query/fragment 中的 token 不得进入日志
+    #[test]
+    fn strips_query_and_fragment() {
+        assert_eq!(
+            sanitize_url_for_log("https://a.com/p?token=abc&x=1"),
+            "https://a.com/p…"
+        );
+        assert_eq!(
+            sanitize_url_for_log("https://a.com/p#section"),
+            "https://a.com/p…"
+        );
+        assert_eq!(sanitize_url_for_log("https://a.com/p"), "https://a.com/p");
+        assert_eq!(sanitize_url_for_log("about:blank"), "about:blank");
+    }
+}
+
 /// App 退出时清理全部代理会话（RunEvent::Exit 调用）：
 /// 遍历清理，避免浏览器子进程残留指向已死的代理端口。
 pub fn cleanup_all_sessions(app: &AppHandle) {
@@ -183,8 +212,14 @@ async fn handle_socks5_conn(
     quic_conn: Arc<quinn::Connection>,
 ) -> Result<(), String> {
     // 1. SOCKS5 握手（greeting + CONNECT）
-    socks5::socks5_greeting(&mut tcp).await?;
-    let target = socks5::socks5_read_connect(&mut tcp).await?;
+    // 握手读加超时（B-07）：本机任意进程可建连后不发数据，半开连接挂着
+    // 任务/FD；greeting 与 CONNECT 请求各给 10s
+    tokio::time::timeout(Duration::from_secs(10), socks5::socks5_greeting(&mut tcp))
+        .await
+        .map_err(|_| "SOCKS5 握手超时".to_string())??;
+    let target = tokio::time::timeout(Duration::from_secs(10), socks5::socks5_read_connect(&mut tcp))
+        .await
+        .map_err(|_| "SOCKS5 CONNECT 读取超时".to_string())??;
 
     // 2. 开 QUIC 双向流，发 ProxyOpen 首帧（限时，防病态连接挂死）
     let (mut quic_tx, mut quic_rx) = tokio::time::timeout(
@@ -318,12 +353,23 @@ async fn spawn_socks5_listener(
 
     // 监听循环
     let quic_for_accept = quic_conn;
+    // 并发连接上限（B-07）：本机任意进程可建大量半开连接耗尽任务/FD，
+    // 超限立即关闭新连接（permit 随任务结束归还）
+    const SOCKS5_MAX_CONCURRENT: usize = 128;
+    let accept_sem = Arc::new(tokio::sync::Semaphore::new(SOCKS5_MAX_CONCURRENT));
     let listener_task = tokio::spawn(async move {
         loop {
             match listener.accept().await {
                 Ok((tcp, _addr)) => {
+                    let Ok(permit) = accept_sem.clone().try_acquire_owned() else {
+                        tracing::warn!(
+                            "[Proxy] SOCKS5 并发连接达上限({SOCKS5_MAX_CONCURRENT})，拒绝新连接"
+                        );
+                        continue; // tcp 立即 drop 关闭
+                    };
                     let quic = quic_for_accept.clone();
                     tokio::spawn(async move {
+                        let _permit = permit;
                         // Err 时 tcp 被 drop 关闭（见 handle_socks5_conn 契约）
                         if let Err(e) = handle_socks5_conn(tcp, quic).await {
                             tracing::debug!("[Proxy] SOCKS5 连接结束: {}", e);

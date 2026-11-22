@@ -14,6 +14,9 @@ pub struct AgentConfig {
     pub log: LogConfig,
     #[serde(default)]
     pub worker: WorkerConfig,
+    /// 客户端驱动的更新配置（新增节，旧配置文件缺省时全部走默认值）
+    #[serde(default)]
+    pub updates: UpdatesConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -50,7 +53,7 @@ impl Default for AuthConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SshAuthConfig {
     #[serde(default = "default_enable_pubkey")]
     pub enable_pubkey: bool,
@@ -60,6 +63,22 @@ pub struct SshAuthConfig {
 
     #[serde(default = "default_pam_service")]
     pub pam_service: String,
+
+    /// authorized_keys 严格权限校验（等价 sshd StrictModes）：
+    /// 家目录/.ssh/authorized_keys 属主必须是用户或 root，且不得对组/其他用户可写
+    #[serde(default = "default_strict_modes")]
+    pub strict_modes: bool,
+}
+
+impl Default for SshAuthConfig {
+    fn default() -> Self {
+        Self {
+            enable_pubkey: default_enable_pubkey(),
+            enable_password: default_enable_password(),
+            pam_service: default_pam_service(),
+            strict_modes: default_strict_modes(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -176,6 +195,39 @@ impl Default for WorkerConfig {
     }
 }
 
+/// 客户端驱动的更新配置（[updates] 节；全部带默认值，旧配置文件无需修改）
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct UpdatesConfig {
+    /// 更新功能开关（false 时 AgentUpdateStatusResponse.enabled=false，客户端隐藏更新 UI）
+    #[serde(default = "default_updates_enabled")]
+    pub enabled: bool,
+    /// staging 目录（新二进制暂存与状态文件；目录树 0700）
+    #[serde(default = "default_updates_staging_dir")]
+    pub staging_dir: String,
+    /// 单个更新二进制大小上限（MB，防磁盘配额耗尽）
+    #[serde(default = "default_updates_max_binary_mb")]
+    pub max_binary_mb: u64,
+    /// 二进制备份保留份数（commit 前自动备份到 /var/backups/quireld/）
+    #[serde(default = "default_updates_keep_backups")]
+    pub keep_backups: usize,
+}
+
+impl Default for UpdatesConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_updates_enabled(),
+            staging_dir: default_updates_staging_dir(),
+            max_binary_mb: default_updates_max_binary_mb(),
+            keep_backups: default_updates_keep_backups(),
+        }
+    }
+}
+
+fn default_updates_enabled() -> bool { true }
+fn default_updates_staging_dir() -> String { "/var/lib/quireld/updates".into() }
+fn default_updates_max_binary_mb() -> u64 { 500 }
+fn default_updates_keep_backups() -> usize { 3 }
+
 fn default_quic_port() -> u16 { 8443 }
 // 移除：fn default_allowed_paths() -> Vec<String> { vec!["/home".into(), "/etc".into(), "/var/log".into(), "/opt".into()] }
 fn default_max_sessions() -> usize { 10 }
@@ -192,7 +244,9 @@ fn default_log_dir() -> String { "logs".into() }
 // SSH 认证默认值
 fn default_enable_pubkey() -> bool { true }
 fn default_enable_password() -> bool { true }
-fn default_pam_service() -> String { "sshd".into() }
+fn default_strict_modes() -> bool { true }
+/// 独立 PAM 服务（安装脚本写入 /etc/pam.d/quireld；复用 sshd 会被其 2FA/access 策略耦合）
+fn default_pam_service() -> String { "quireld".into() }
 
 // Worker 默认值
 /// 默认 Agent 二进制路径：自动获取当前可执行文件的绝对路径
@@ -254,7 +308,8 @@ fn default_config() -> AgentConfig {
             ssh: SshAuthConfig {
                 enable_pubkey: true,
                 enable_password: true,
-                pam_service: "sshd".into(),
+                pam_service: "quireld".into(),
+                strict_modes: true,
             },
         },
         limits: LimitsConfig {
@@ -271,5 +326,20 @@ fn default_config() -> AgentConfig {
         audit: AuditConfig::default(),
         log: LogConfig::default(),
         worker: WorkerConfig::default(),
+        updates: UpdatesConfig::default(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 默认认证配置：独立 PAM 服务 + StrictModes 开启（与 sshd 安全默认对齐）
+    #[test]
+    fn ssh默认配置_独立pam与严格模式() {
+        let cfg = SshAuthConfig::default();
+        assert_eq!(cfg.pam_service, "quireld");
+        assert!(cfg.strict_modes);
+        assert!(cfg.enable_pubkey);
     }
 }

@@ -62,7 +62,7 @@ interface FilePathUsageState {
   recordVisit: (serverId: string | null, path: string, source: VisitSource) => void;
   /** 目录确认不存在时从常用中剔除（导航失败调用，避免僵尸条目常驻） */
   removePath: (serverId: string | null, path: string) => void;
-  /** 删除服务器时清理其访问统计（serversStore.removeServer 调用） */
+  /** 删除服务器时清理其访问统计（统一清理入口 serverCleanup.purgeServerData 调用） */
   clearServer: (serverId: string) => void;
 }
 

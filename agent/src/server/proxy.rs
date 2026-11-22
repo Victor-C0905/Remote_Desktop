@@ -156,15 +156,23 @@ pub async fn handle_proxy_relay(
 
 /// 目标 IP 是否为被拦截的云元数据链路本地地址
 ///
-/// - v4: 169.254.0.0/16（`is_link_local`，覆盖 169.254.169.254 元数据端点）
-/// - v6: fe80::/10（`is_unicast_link_local`）；v4-mapped（::ffff: 前缀）
-///   形式还原为 v4 后判断，防绕过
+/// - v4: 169.254.0.0/16（`is_link_local`，覆盖 AWS/GCP/Azure 的 169.254.169.254
+///   元数据端点）+ 阿里云元数据端点 100.100.100.200（非链路本地，单独点名拦截）
+/// - v6: fe80::/10（`is_unicast_link_local`）+ AWS IMDS IPv6 端点 fd00:ec2::254
+///   （ULA 空间内固定端点，单独点名拦截）；v4-mapped（::ffff: 前缀）形式还原
+///   为 v4 后判断，防绕过
+///
+/// 不整段拦截 100.64/10 与 fc00::/7：会误伤运营商 CGNAT 与 IPv6 私有内网的
+/// 合法代理目标，仅点名已知的云元数据端点（2026-11-20 审计 A-07）。
 fn is_blocked_metadata_target(ip: std::net::IpAddr) -> bool {
+    const ALIYUN_METADATA_V4: std::net::Ipv4Addr = std::net::Ipv4Addr::new(100, 100, 100, 200);
+    const AWS_METADATA_V6: std::net::Ipv6Addr =
+        std::net::Ipv6Addr::new(0xfd00, 0xec2, 0, 0, 0, 0, 0, 0x254);
     match ip {
-        std::net::IpAddr::V4(v4) => v4.is_link_local(),
+        std::net::IpAddr::V4(v4) => v4.is_link_local() || v4 == ALIYUN_METADATA_V4,
         std::net::IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
-            Some(mapped) => mapped.is_link_local(),
-            None => v6.is_unicast_link_local(),
+            Some(mapped) => mapped.is_link_local() || mapped == ALIYUN_METADATA_V4,
+            None => v6.is_unicast_link_local() || v6 == AWS_METADATA_V6,
         },
     }
 }
@@ -216,6 +224,21 @@ mod tests {
         )));
     }
 
+    /// A-07 回归：非链路本地的云元数据端点必须单独拦截
+    #[test]
+    fn cloud_metadata_endpoints_blocked() {
+        // 阿里云元数据端点（v4，非链路本地）
+        assert!(is_blocked_metadata_target(IpAddr::V4(Ipv4Addr::new(100, 100, 100, 200))));
+        // v4-mapped v6 形式不得绕过（::ffff:100.100.100.200）
+        assert!(is_blocked_metadata_target(IpAddr::V6(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0xffff, 0x6464, 0x64c8)
+        )));
+        // AWS IMDS IPv6 端点（fd00:ec2::254）
+        assert!(is_blocked_metadata_target(IpAddr::V6(
+            Ipv6Addr::new(0xfd00, 0xec2, 0, 0, 0, 0, 0, 0x254)
+        )));
+    }
+
     #[test]
     fn normal_targets_allowed() {
         // 本地/内网/公网目标不受影响（root 网络视角是功能预期语义）
@@ -225,5 +248,10 @@ mod tests {
         // 169.255.x.x 不在 169.254/16 内
         assert!(!is_blocked_metadata_target(IpAddr::V4(Ipv4Addr::new(169, 255, 1, 1))));
         assert!(!is_blocked_metadata_target(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+        // A-07 边界：端点相邻地址不误伤（100.100.100.201 / fd00:ec2::253）
+        assert!(!is_blocked_metadata_target(IpAddr::V4(Ipv4Addr::new(100, 100, 100, 201))));
+        assert!(!is_blocked_metadata_target(IpAddr::V6(
+            Ipv6Addr::new(0xfd00, 0xec2, 0, 0, 0, 0, 0, 0x253)
+        )));
     }
 }

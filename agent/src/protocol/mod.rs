@@ -31,6 +31,7 @@ pub use serde::{
     MountInfo, FileEntry, DiskInfo, ProcessEntry, CommonLocation,
     AuthErrorCode,
     ArchiveCapabilities, ArchiveFormatCapability, ArchiveHostOs, ArchiveTool,
+    StagedUpdate, AgentUpdateLastResult,
 };
 
 /// 辅助函数：创建错误 Payload

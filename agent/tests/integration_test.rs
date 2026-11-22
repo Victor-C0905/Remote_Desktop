@@ -49,14 +49,17 @@ impl TestEnv {
         server.start().await.expect("Failed to start IPC server");
 
         // 获取 quireld 二进制路径
-        // 测试二进制位于 target/<profile>/deps/，而 quireld 二进制位于 target/<profile>/
+        // 测试二进制位于 target/<profile>/deps/（旧 cargo）或
+        // target/<profile>/build/quireld/<hash>/out/（新 cargo 布局），
+        // 而 quireld 二进制位于 target/<profile>/ ——从 current_exe 逐级向上
+        // 查找同名二进制，兼容两种布局
         let agent_binary = std::env::current_exe()
             .expect("Failed to get current exe path")
-            .parent()
-            .expect("Failed to get parent dir")
-            .parent()
-            .expect("Failed to get grandparent dir")
-            .join("quireld");
+            .ancestors()
+            .skip(1) // 跳过测试二进制自身
+            .map(|dir| dir.join("quireld"))
+            .find(|p| p.is_file())
+            .expect("未找到 quireld 二进制（cargo test 需先产出二进制；如缺失请先 cargo build）");
 
         // 启动 Worker 子进程
         let worker_process = Command::new(&agent_binary)

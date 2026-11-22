@@ -57,6 +57,24 @@ pub mod codes {
     pub const PROXY_BROWSER_ENV_FAILED: &str = "proxy_browser_env_failed"; // WebView2 环境创建失败
     pub const PROXY_BROWSER_WINDOW_FAILED: &str = "proxy_browser_window_failed"; // 浏览器窗口/webview 创建失败
     pub const PROXY_BROWSER_WINDOW_CLOSED: &str = "proxy_browser_window_closed"; // 浏览器窗口已关闭
+
+    // ── SSH 自动安装（ssh.rs / provision.rs）──
+    pub const SSH_CONNECT_FAILED: &str = "ssh_connect_failed"; // SSH 建连失败（网络/握手）
+    pub const SSH_AUTH_FAILED: &str = "ssh_auth_failed"; // SSH 认证被拒（凭据错误/私钥解析失败）
+    pub const SSH_EXEC_FAILED: &str = "ssh_exec_failed"; // 远端命令执行失败
+    pub const SSH_HOST_KEY_CHANGED: &str = "ssh_host_key_changed"; // host key 与确认值不一致（疑似 MITM，中止）
+    pub const PROVISION_DETECT_FAILED: &str = "provision_detect_failed"; // 环境探测失败/输出解析失败
+    pub const PROVISION_UNSUPPORTED_ARCH: &str = "provision_unsupported_arch"; // 服务器架构不在支持列表
+    pub const PROVISION_GITHUB_UNAVAILABLE: &str = "provision_github_unavailable"; // GitHub Releases 不可达/资产缺失
+    pub const PROVISION_SHA256_MISMATCH: &str = "provision_sha256_mismatch"; // 哈希校验失败/tarball 条目非法
+    pub const PROVISION_INSTALL_FAILED: &str = "provision_install_failed"; // 远端 install.sh 执行失败
+    pub const PROVISION_CERT_READ_FAILED: &str = "provision_cert_read_failed"; // 证书回读失败
+
+    // ── 客户端驱动的 quireld 更新（agent_update.rs）──
+    pub const UPDATE_NOT_SUPPORTED: &str = "update_not_supported"; // 旧 Agent 无 agent_update 能力
+    pub const UPDATE_STAGING_REJECTED: &str = "update_staging_rejected"; // 服务端拒绝暂存（哈希/架构/版本校验失败）
+    pub const UPDATE_COMMIT_FAILED: &str = "update_commit_failed"; // commit 失败（含服务端自动回滚）
+    pub const UPDATE_AGENT_REJECTED: &str = "update_agent_rejected"; // Agent 返回错误帧
 }
 
 /// 结构化错误：invoke reject 时序列化为 { code, params?, detail? }。

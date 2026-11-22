@@ -5,6 +5,7 @@
 // - v1：旧版本全局历史无法判定服务器归属，迁移时直接清除（用户决定）。
 
 import { create } from "zustand";
+import { isDangerousUrl } from "../apps/browser/dangerousUrl";
 import { persist, createJSONStorage } from "zustand/middleware";
 import { browserDataStorage } from "../utils/storage";
 
@@ -53,8 +54,9 @@ export const useHistoryStore = create<HistoryState>()(
 
       record: (serverId, url, title) =>
         set((s) => {
-          // 未绑定服务器 / 内部页 / 空地址不入历史
-          if (!serverId || !url || url.startsWith("about:")) return s;
+          // 未绑定服务器 / 内部页 / 空地址 / 危险 scheme 不入历史（C-01：
+          // 历史面板点击会重新导航，危险 URL 不得回流；判据与导航侧一致）
+          if (!serverId || !url || url.startsWith("about:") || isDangerousUrl(url)) return s;
           const list = s.entriesByServer[serverId] ?? [];
           const prev = list.find((e) => e.url === url);
           const rest = list.filter((e) => e.url !== url);

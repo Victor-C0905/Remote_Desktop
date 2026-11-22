@@ -10,32 +10,35 @@ show_help() {
 Quireld 构建打包工具
 
 用法:
-    $0 <环境> [选项]
+    $0 <环境> [架构] [选项]
 
 环境:
     release     生产环境 (使用 quireld.prod.toml, 端口 9443/9444)
     test        测试环境 (使用 quireld.test.toml, 端口 8443/8444)
     dev         开发环境 (使用 quireld.dev.toml, 端口 8443/8444)
 
+架构:
+    amd64       x86_64 (默认)
+    arm64       aarch64 (需已安装 aarch64-unknown-linux-gnu target
+                与 aarch64-linux-gnu-gcc 交叉链接器)
+
 选项:
     --output DIR    输出目录 (默认: dist)
     --help          显示此帮助信息
 
 示例:
-    # 打包生产版本
+    # 打包生产版本 (amd64)
     $0 release
 
-    # 打包测试版本
-    $0 test
-
-    # 打包开发版本
-    $0 dev
+    # 打包生产版本 (arm64)
+    $0 release arm64
 
     # 指定输出目录
-    $0 release --output /tmp/packages
+    $0 release amd64 --output /tmp/packages
 
 打包结果:
-    dist/quireld-{version}-{env}-linux-amd64.tar.gz
+    dist/quireld-{version}-{env}-linux-{amd64|arm64}.tar.gz
+    dist/SHA256SUMS              (dist 内全部 tarball 的校验清单, 每次构建后重建)
 
 解压后包含:
     - quireld            可执行文件
@@ -66,6 +69,10 @@ fi
 ENV="$1"
 shift
 
+# 架构参数：第一个非选项位置参数（默认 amd64）
+# 命名映射统一收口：uname -m 输出 → 包名后缀（客户端/引导脚本复用同一映射）
+ARCH="amd64"
+
 OUTPUT_DIR="dist"
 
 while [[ $# -gt 0 ]]; do
@@ -77,12 +84,40 @@ while [[ $# -gt 0 ]]; do
         --help|-h)
             show_help
             ;;
-        *)
+        -*)
             echo "错误: 未知参数 '$1'"
             exit 1
             ;;
+        *)
+            # 第一个位置参数为架构
+            if [ "$ARCH" = "amd64" ] && [ "$ARCH_SET" != "1" ]; then
+                ARCH="$1"
+                ARCH_SET=1
+                shift
+            else
+                echo "错误: 多余参数 '$1'"
+                exit 1
+            fi
+            ;;
     esac
 done
+
+# 架构配置映射
+case "$ARCH" in
+    amd64)
+        RUST_TARGET="x86_64-unknown-linux-gnu"
+        ARCH_DESC="x86_64"
+        ;;
+    arm64)
+        RUST_TARGET="aarch64-unknown-linux-gnu"
+        ARCH_DESC="aarch64"
+        ;;
+    *)
+        echo "错误: 未知架构 '$ARCH'"
+        echo "可选: amd64, arm64"
+        exit 1
+        ;;
+esac
 
 # 环境配置映射
 case "$ENV" in
@@ -136,23 +171,56 @@ log_info "========== 构建配置 =========="
 log_info "  环境: $ENV_DESC ($ENV)"
 log_info "  版本: $VERSION"
 log_info "  配置: $CONFIG_FILE"
+log_info "  架构: $ARCH_DESC ($ARCH)"
 log_info "==============================="
+
+# arm64 交叉编译前置检查：rustup target 与交叉链接器必须就绪
+if [ "$ARCH" = "arm64" ]; then
+    if ! rustup target list --installed 2>/dev/null | grep -q '^aarch64-unknown-linux-gnu$'; then
+        log_error "缺少 rust target: 执行 rustup target add aarch64-unknown-linux-gnu"
+        exit 1
+    fi
+    if ! command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
+        log_error "缺少交叉链接器 aarch64-linux-gnu-gcc (apt install gcc-aarch64-linux-gnu)"
+        exit 1
+    fi
+fi
 
 # 1/4 编译
 log_info "[1/4] 编译 Quireld..."
 cd "$AGENT_DIR"
 
-# 根据环境选择编译参数
+# 根据环境选择编译参数；arm64 追加 --target 走交叉编译
+TARGET_ARGS=""
+if [ "$ARCH" = "arm64" ]; then
+    TARGET_ARGS="--target $RUST_TARGET"
+fi
+
 case "$ENV" in
     release)
-        cargo build --release
-        BINARY_PATH="target/release/quireld"
+        cargo build --release $TARGET_ARGS
+        # 工作区共享 target-dir（.cargo/config.toml → 项目根 target/）：
+        # amd64 不带 --target 产物在 ../target/release；arm64 交叉产物在 ../target/<triple>/release
+        if [ "$ARCH" = "arm64" ]; then
+            BINARY_PATH="../target/$RUST_TARGET/release/quireld"
+        else
+            BINARY_PATH="../target/release/quireld"
+        fi
         ;;
     test)
-        cargo build --release
-        BINARY_PATH="target/release/quireld"
+        cargo build --release $TARGET_ARGS
+        if [ "$ARCH" = "arm64" ]; then
+            BINARY_PATH="../target/$RUST_TARGET/release/quireld"
+        else
+            BINARY_PATH="../target/release/quireld"
+        fi
         ;;
     dev)
+        # dev 环境保持本机调试构建，不支持交叉（调试产物无需跨架构）
+        if [ "$ARCH" = "arm64" ]; then
+            log_error "dev 环境不支持 arm64 交叉构建（调试构建仅限本机架构）"
+            exit 1
+        fi
         cargo build
         BINARY_PATH="target/debug/quireld"
         ;;
@@ -167,7 +235,7 @@ log_success "编译完成: $BINARY_PATH"
 
 # 2/4 准备打包目录
 log_info "[2/4] 准备打包..."
-PACKAGE_NAME="quireld-${VERSION}-${ENV}-linux-amd64"
+PACKAGE_NAME="quireld-${VERSION}-${ENV}-linux-${ARCH}"
 PACKAGE_DIR="$OUTPUT_DIR/$PACKAGE_NAME"
 
 # 清理旧文件
@@ -212,6 +280,22 @@ log_success "压缩包生成完成: $PACKAGE_NAME.tar.gz ($PACKAGE_SIZE)"
 # 4/4 清理临时目录
 log_info "[4/4] 清理..."
 rm -rf "$PACKAGE_DIR"
+
+# 重建 dist/SHA256SUMS：覆盖 dist 内全部 quireld-*.tar.gz 的校验清单
+# （客户端与 install-quireld.sh 按"文件名 → 哈希"精确匹配消费）
+log_info "[4/4] 重建 SHA256SUMS..."
+cd "$OUTPUT_DIR"
+SHA256_FILES=$(ls -1 quireld-*.tar.gz 2>/dev/null || true)
+if [ -z "$SHA256_FILES" ]; then
+    log_error "dist 内没有 tarball，无法生成 SHA256SUMS"
+    exit 1
+fi
+: > SHA256SUMS
+for f in $SHA256_FILES; do
+    sha256sum "$f" >> SHA256SUMS
+done
+cd "$AGENT_DIR"
+log_success "SHA256SUMS 已重建 ($(wc -l < "$OUTPUT_DIR/SHA256SUMS") 个条目)"
 
 log_success "构建完成！"
 echo ""

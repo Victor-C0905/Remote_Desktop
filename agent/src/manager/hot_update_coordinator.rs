@@ -66,10 +66,22 @@ impl HotUpdateCoordinator {
         worker_manager: Arc<WorkerManager>,
         trigger_rx: mpsc::Receiver<ReloadTrigger>,
     ) -> Self {
+        Self::new_with_flag(worker_manager, trigger_rx, Arc::new(AtomicBool::new(false)))
+    }
+
+    /// 创建热更新协调器（外部持有 is_reloading 标志的变体）
+    ///
+    /// 更新管理器（update_manager.rs）需要轮询同一标志等待 reload 完成，
+    /// 因此标志的所有权在 Manager（mod.rs start()），此处注入。
+    pub fn new_with_flag(
+        worker_manager: Arc<WorkerManager>,
+        trigger_rx: mpsc::Receiver<ReloadTrigger>,
+        is_reloading: Arc<AtomicBool>,
+    ) -> Self {
         Self {
             worker_manager,
             trigger_rx,
-            is_reloading: Arc::new(AtomicBool::new(false)),
+            is_reloading,
         }
     }
 

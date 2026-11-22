@@ -190,7 +190,8 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
       const unlisten = await listen<{ server_id: string; fingerprint: string }>(
         "cert-trusted",
         (event) => {
-          log.info("收到证书信任事件:", event.payload);
+          // 安全红线：指纹不落前端日志，仅记录 server_id
+          log.info("收到证书信任事件: server_id=" + event.payload.server_id);
           updateServer(event.payload.server_id, {
             certFingerprint: event.payload.fingerprint,
           });

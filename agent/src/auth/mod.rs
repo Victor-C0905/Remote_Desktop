@@ -15,7 +15,6 @@ use std::fmt;
 use std::sync::Arc;
 
 pub mod executor;
-pub mod namespace;
 pub mod path_guard;
 pub mod pam;
 pub mod session;
@@ -25,8 +24,6 @@ pub mod rate_limiter;
 pub mod stats;
 
 pub use executor::UserExecutor;
-#[cfg(target_os = "linux")]
-pub use namespace::UserNamespace;
 pub use session::UserSession;
 pub use path_guard::{SafePath, validate_path};
 pub use challenge::ChallengeManager;
@@ -93,27 +90,12 @@ impl fmt::Display for UserIdentity {
 ///
 /// 实现此 trait 的类型必须支持：
 /// - Send + Sync：支持跨线程共享
-/// - 公钥认证：SSH风格
-/// - 密码认证：PAM风格
+/// - 密码认证：PAM 风格
+///
+/// 公钥认证不走此 trait（2026-11-20 审计 A-11 删除）：统一由挑战-响应流程
+/// 处理（quic.rs：SshAuthenticator 查 authorized_keys + verify_signature
+/// 验签），避免出现"仅匹配公钥即放行"的无验签旁路。
 pub trait Authenticator: Send + Sync {
-    /// 公钥认证（SSH风格）
-    ///
-    /// # 参数
-    /// - `username`: 用户名
-    /// - `pubkey`: 公钥数据（SSH公钥格式）
-    /// - `signature`: 可选的签名数据（用于验证）
-    ///
-    /// # 返回
-    /// - `Ok(AuthResult::Success(identity))`: 认证成功
-    /// - `Ok(AuthResult::Failure)`: 认证失败
-    /// - `Err(...)`: 系统错误（如IO错误）
-    fn authenticate_pubkey(
-        &self,
-        username: &str,
-        pubkey: &[u8],
-        signature: Option<&[u8]>,
-    ) -> Result<AuthResult>;
-
     /// 密码认证（PAM风格）
     ///
     /// # 参数
@@ -228,13 +210,11 @@ pub fn get_user_info(_username: &str) -> Result<UserIdentity> {
 
 /// 组合认证器（支持多种认证方式）
 ///
-/// 通过委托模式组合 SSH 和 PAM 认证器，实现高内聚低耦合。
-/// - 公钥认证委托给 SshAuthenticator
-/// - 密码认证委托给 PamAuthenticator
+/// 密码认证委托给 PamAuthenticator。公钥认证不走本组合器（A-11 删除）：
+/// 由挑战-响应流程在 quic.rs 直接使用 SshAuthenticator（enable_pubkey
+/// 配置在挑战入口处检查）。
 pub struct CompositeAuthenticator {
-    ssh_auth: Arc<ssh::SshAuthenticator>,
     pam_auth: Arc<pam::PamAuthenticator>,
-    enable_pubkey: bool,
     enable_password: bool,
 }
 
@@ -243,7 +223,6 @@ impl CompositeAuthenticator {
     ///
     /// # 参数
     /// - `pam_service`: PAM 服务名称
-    /// - `enable_pubkey`: 是否启用公钥认证
     /// - `enable_password`: 是否启用密码认证
     ///
     /// # 示例
@@ -251,36 +230,17 @@ impl CompositeAuthenticator {
     /// let auth = CompositeAuthenticator::new(
     ///     "quireld".to_string(),
     ///     true,
-    ///     true,
     /// );
     /// ```
-    pub fn new(
-        pam_service: String,
-        enable_pubkey: bool,
-        enable_password: bool,
-    ) -> Self {
+    pub fn new(pam_service: String, enable_password: bool) -> Self {
         Self {
-            ssh_auth: Arc::new(ssh::SshAuthenticator::new()),
             pam_auth: Arc::new(pam::PamAuthenticator::new(pam_service)),
-            enable_pubkey,
             enable_password,
         }
     }
 }
 
 impl Authenticator for CompositeAuthenticator {
-    fn authenticate_pubkey(
-        &self,
-        username: &str,
-        pubkey: &[u8],
-        signature: Option<&[u8]>,
-    ) -> Result<AuthResult> {
-        if !self.enable_pubkey {
-            return Ok(AuthResult::Failure);
-        }
-        self.ssh_auth.authenticate_pubkey(username, pubkey, signature)
-    }
-
     fn authenticate_password(&self, username: &str, password: &str) -> Result<AuthResult> {
         if !self.enable_password {
             return Ok(AuthResult::Failure);

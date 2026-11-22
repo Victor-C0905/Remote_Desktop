@@ -656,19 +656,61 @@ pub async fn handle_rename(req: Rename) -> WorkerResponse {
     }
 }
 
+// Copy 递归复制的资源预算上限（2026-11-20 审计 A-08）：
+// 巨型目录会长时间独占共享 Worker（全体用户文件操作串行排队）；
+// 符号链接环（a→b→a，fs::metadata 跟随符号链接）会导致无限递归。
+// 超大规模复制应走传输协议或 CLI，文件管理器 Copy 语义内视为越界。
+const COPY_MAX_FILES: u64 = 10_000;
+const COPY_MAX_TOTAL_BYTES: u64 = 1024 * 1024 * 1024; // 1 GiB
+// 深度上限须低于内核符号链接解析跳数限制（ELOOP，约 40），保证符号链接环
+// 由自家预算中止而非内核报错
+const COPY_MAX_DEPTH: usize = 32;
+
+/// 递归复制预算跟踪（复制文件数 / 总字节），跨递归层级累计
+#[derive(Default)]
+struct CopyBudget {
+    files: u64,
+    total_bytes: u64,
+}
+
 /// 递归复制路径：目录深拷贝（create_dir_all + 逐项复制），文件直接 fs::copy。
 /// 供 handle_copy 在目标用户上下文中调用——剪贴板复制文件夹需要目录递归，
-/// 协议语义不变（仍是单 src → 单 dst）。
-fn copy_path_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+/// 协议语义不变（仍是单 src → 单 dst）。受 CopyBudget 与深度上限约束。
+fn copy_path_recursive(
+    src: &std::path::Path,
+    dst: &std::path::Path,
+    budget: &mut CopyBudget,
+    depth: usize,
+) -> std::io::Result<()> {
+    if depth > COPY_MAX_DEPTH {
+        return Err(std::io::Error::other(format!(
+            "目录嵌套超过 {} 层，已中止复制（疑似符号链接环）",
+            COPY_MAX_DEPTH
+        )));
+    }
     let metadata = fs::metadata(src)?;
     if metadata.is_dir() {
         fs::create_dir_all(dst)?;
         for entry in fs::read_dir(src)? {
             let entry = entry?;
-            copy_path_recursive(&entry.path(), &dst.join(entry.file_name()))?;
+            copy_path_recursive(&entry.path(), &dst.join(entry.file_name()), budget, depth + 1)?;
         }
         Ok(())
     } else {
+        budget.files += 1;
+        if budget.files > COPY_MAX_FILES {
+            return Err(std::io::Error::other(format!(
+                "复制条目数超过上限（>{}），已中止",
+                COPY_MAX_FILES
+            )));
+        }
+        budget.total_bytes += metadata.len();
+        if budget.total_bytes > COPY_MAX_TOTAL_BYTES {
+            return Err(std::io::Error::other(format!(
+                "复制总量超过上限（>{} MiB），已中止",
+                COPY_MAX_TOTAL_BYTES / (1024 * 1024)
+            )));
+        }
         if let Some(parent) = dst.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -724,7 +766,13 @@ pub async fn handle_copy(req: Copy) -> WorkerResponse {
             }
         })?;
 
-        copy_path_recursive(std::path::Path::new(&src), std::path::Path::new(&dst)).map_err(|e| {
+        copy_path_recursive(
+            std::path::Path::new(&src),
+            std::path::Path::new(&dst),
+            &mut CopyBudget::default(),
+            0,
+        )
+        .map_err(|e| {
             let msg = e.to_string();
             if msg.contains("Permission denied") {
                 anyhow::anyhow!("权限不足: 无法复制 '{}' (需要相应的 Linux 用户权限)", src)
@@ -1493,4 +1541,68 @@ fn apply_chmod(_path: &str, _mode: u32, _recursive: bool) -> AnyhowResult<()> {
 #[cfg(not(unix))]
 fn apply_chown(_path: &str, _uid: u32, _gid: u32, _recursive: bool) -> AnyhowResult<()> {
     anyhow::bail!("chown 仅支持 Unix 平台")
+}
+
+#[cfg(test)]
+mod copy_tests {
+    use super::{copy_path_recursive, CopyBudget, COPY_MAX_FILES, COPY_MAX_TOTAL_BYTES};
+    use std::fs;
+
+    /// 构造 src 树：1 个子目录 + 2 个文件
+    fn build_tree() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        fs::create_dir_all(src.join("sub")).unwrap();
+        fs::write(src.join("a.txt"), b"alpha").unwrap();
+        fs::write(src.join("sub").join("b.txt"), b"beta").unwrap();
+        let dst = tmp.path().join("dst");
+        (tmp, src, dst)
+    }
+
+    /// A-08 回归：预算内目录树正常递归复制，预算计数正确
+    #[test]
+    fn copies_tree_and_tracks_budget() {
+        let (_tmp, src, dst) = build_tree();
+        let mut budget = CopyBudget::default();
+        copy_path_recursive(&src, &dst, &mut budget, 0).unwrap();
+        assert_eq!(fs::read(dst.join("a.txt")).unwrap(), b"alpha");
+        assert_eq!(fs::read(dst.join("sub").join("b.txt")).unwrap(), b"beta");
+        assert_eq!(budget.files, 2);
+        assert_eq!(budget.total_bytes, 9); // "alpha" 5 + "beta" 4 字节
+    }
+
+    /// A-08 复现：文件数预算耗尽 → 明确报错而非无限独占共享 Worker
+    #[test]
+    fn aborts_when_file_budget_exhausted() {
+        let (_tmp, src, dst) = build_tree();
+        let mut budget = CopyBudget { files: COPY_MAX_FILES, ..Default::default() };
+        let err = copy_path_recursive(&src, &dst, &mut budget, 0).unwrap_err();
+        assert!(err.to_string().contains("条目数"), "应报条目数超限: {err}");
+    }
+
+    /// A-08 复现：字节预算耗尽 → 明确报错
+    #[test]
+    fn aborts_when_byte_budget_exhausted() {
+        let (_tmp, src, dst) = build_tree();
+        let mut budget = CopyBudget { total_bytes: COPY_MAX_TOTAL_BYTES, ..Default::default() };
+        let err = copy_path_recursive(&src, &dst, &mut budget, 0).unwrap_err();
+        assert!(err.to_string().contains("总量"), "应报总量超限: {err}");
+    }
+
+    /// A-08 复现：符号链接环（loop → src 自身）由深度上限中止，
+    /// 旧实现无限递归（fs::metadata 跟随符号链接）
+    #[cfg(unix)]
+    #[test]
+    fn aborts_on_symlink_cycle_via_depth_cap() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("f.txt"), b"x").unwrap();
+        std::os::unix::fs::symlink(&src, src.join("loop")).unwrap();
+
+        let dst = tmp.path().join("dst");
+        let mut budget = CopyBudget::default();
+        let err = copy_path_recursive(&src, &dst, &mut budget, 0).unwrap_err();
+        assert!(err.to_string().contains("嵌套"), "应报嵌套超限: {err}");
+    }
 }

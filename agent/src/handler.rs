@@ -587,8 +587,9 @@ pub async fn handle_file_transfer_request(
             // 默认分块大小 256KB
             let chunk_size = chunk_size.unwrap_or(256 * 1024);
 
-            // 协商 stream_count（None/0/1 视为单流，向后兼容）
-            let stream_count = stream_count.unwrap_or(1).max(1);
+            // 协商 stream_count（None/0/1 视为单流，向后兼容；钳制上限——
+            // 客户端声明值不可信，无上限会按其分配内存，A-02）
+            let stream_count = crate::transfer_session::negotiate_stream_count(stream_count);
 
             // 使用 UserExecutor 在隔离子进程中执行文件写入（方案 ii'）
             let executor = UserExecutor::new(session);
@@ -868,8 +869,10 @@ pub async fn handle_multi_stream_join(
         ));
     }
 
-    // 防重复加入（同一 stream_index 已有 writer）
-    if transfer_session.part_writers.contains_key(&stream_index) {
+    // 防重复加入（A-17）：writer 被完成路径 take 后 part_writers 不再含
+    // 该 index，contains_key 判据失效——以独立 joined 集合拒绝重复 join，
+    // 否则新 writer 覆盖 part_paths[idx] 造成段文件泄漏/合并错段
+    if transfer_session.joined_streams.contains(&stream_index) {
         return Err(format!(
             "多流加入失败: stream_index={} 已加入 (重复): {}", stream_index, session_id
         ));
@@ -894,6 +897,8 @@ pub async fn handle_multi_stream_join(
     );
 
     // 注册到 session（调用方后续 take 出来用）
+    // joined 标记在 spawn 成功之后写入：spawn 失败时客户端可重试同 index
+    transfer_session.joined_streams.insert(stream_index);
     transfer_session.part_paths[stream_index as usize] = part_path.clone();
     transfer_session.part_writers.insert(stream_index, writer);
 
@@ -1010,36 +1015,45 @@ async fn handle_file_transfer_complete(
     _cfg: &AgentConfig,
     requester_uid: u32,
 ) -> Result<Envelope, String> {
-    // 1. 从 TRANSFER_SESSIONS 获取会话
-    let mut sessions = TRANSFER_SESSIONS.lock().await;
+    // 1. 从 TRANSFER_SESSIONS 取出会话并立即释放锁（2026-11-20 审计 A-04：
+    //    finish/abort 是阻塞 waitpid/fsync，持全局锁会串行化全体用户的传输
+    //    操作，NFS/FUSE 挂起时永久卡死；锁持有时间只覆盖 map 增删查）
+    let mut session = {
+        let mut sessions = TRANSFER_SESSIONS.lock().await;
+        let session = sessions
+            .remove(session_id)
+            .ok_or_else(|| format!("传输会话不存在: {}", session_id))?;
+        // 属主校验（2026-11 审计 M2）：防跨用户强制 finish/abort 他人在途传输
+        if session.owner_uid != requester_uid {
+            sessions.insert(session_id.to_string(), session);
+            return Err("传输会话不属于当前用户".to_string());
+        }
+        session
+    };
 
-    let mut session = sessions
-        .remove(session_id)
-        .ok_or_else(|| format!("传输会话不存在: {}", session_id))?;
-    // 属主校验（2026-11 审计 M2）：防跨用户强制 finish/abort 他人在途传输
-    if session.owner_uid != requester_uid {
-        sessions.insert(session_id.to_string(), session);
-        return Err("传输会话不属于当前用户".to_string());
-    }
-
-    // 2. 根据成功状态处理
+    // 2. 锁外执行 finish/abort（spawn_blocking：waitpid/fsync 阻塞不占 tokio worker）
     let mtime = if success {
         // 成功：finish() 写入，获取 mtime
         match session.direction.as_str() {
             "upload" => {
                 // 上传完成：写入文件
                 let mut writer = session.writer.take().ok_or("传输会话没有 writer")?;
-                writer.finish()?;
-
-                // 获取文件修改时间
-                let metadata = fs::metadata(&session.path)
-                    .map_err(|e| format!("无法获取文件信息: {}", e))?;
-                let mtime = metadata
-                    .modified()
-                    .map_err(|e| format!("无法获取修改时间: {}", e))?
-                    .duration_since(UNIX_EPOCH)
-                    .map_err(|e| format!("时间转换失败: {}", e))?
-                    .as_secs();
+                let final_path = session.path.clone();
+                let mtime = tokio::task::spawn_blocking(move || -> Result<u64, String> {
+                    writer.finish()?;
+                    // 获取文件修改时间
+                    let metadata = fs::metadata(&final_path)
+                        .map_err(|e| format!("无法获取文件信息: {}", e))?;
+                    let mtime = metadata
+                        .modified()
+                        .map_err(|e| format!("无法获取修改时间: {}", e))?
+                        .duration_since(UNIX_EPOCH)
+                        .map_err(|e| format!("时间转换失败: {}", e))?
+                        .as_secs();
+                    Ok(mtime)
+                })
+                .await
+                .map_err(|e| format!("finish 任务 panic: {}", e))??;
 
                 tracing::info!("文件上传完成: path={}, size={}", session.path, session.file_size);
                 Some(mtime)
@@ -1056,7 +1070,9 @@ async fn handle_file_transfer_complete(
         match session.direction.as_str() {
             "upload" => {
                 if let Some(mut writer) = session.writer.take() {
-                    writer.abort();
+                    tokio::task::spawn_blocking(move || writer.abort())
+                        .await
+                        .map_err(|e| format!("abort 任务 panic: {}", e))?;
                     tracing::info!("文件上传取消: path={}", session.path);
                 }
             }
@@ -1097,22 +1113,27 @@ async fn handle_cancel_file_transfer(
     _cfg: &AgentConfig,
     requester_uid: u32,
 ) -> Result<Envelope, String> {
-    // 1. 从 TRANSFER_SESSIONS 移除会话
-    let mut sessions = TRANSFER_SESSIONS.lock().await;
+    // 1. 从 TRANSFER_SESSIONS 移除会话并立即释放锁（A-04：abort 的 kill+waitpid
+    //    阻塞不得持全局锁，否则串行化/挂起全体用户的传输操作）
+    let mut session = {
+        let mut sessions = TRANSFER_SESSIONS.lock().await;
+        let session = sessions
+            .remove(session_id)
+            .ok_or_else(|| format!("传输会话不存在: {}", session_id))?;
+        // 属主校验（2026-11 审计 M2）：防跨用户取消/删除他人传输的临时文件
+        if session.owner_uid != requester_uid {
+            sessions.insert(session_id.to_string(), session);
+            return Err("传输会话不属于当前用户".to_string());
+        }
+        session
+    };
 
-    let mut session = sessions
-        .remove(session_id)
-        .ok_or_else(|| format!("传输会话不存在: {}", session_id))?;
-    // 属主校验（2026-11 审计 M2）：防跨用户取消/删除他人传输的临时文件
-    if session.owner_uid != requester_uid {
-        sessions.insert(session_id.to_string(), session);
-        return Err("传输会话不属于当前用户".to_string());
-    }
-
-    // 2. 如果有 writer，调用 abort() 清理临时文件
+    // 2. 如果有 writer，锁外 spawn_blocking 调用 abort() 清理临时文件
     //    使用 take() 将 writer 从 session 中取出，避免 Drop 时重复清理
     if let Some(mut writer) = session.writer.take() {
-        writer.abort();
+        tokio::task::spawn_blocking(move || writer.abort())
+            .await
+            .map_err(|e| format!("abort 任务 panic: {}", e))?;
         tracing::info!("取消上传，已删除临时文件: path={}", session.path);
     }
 

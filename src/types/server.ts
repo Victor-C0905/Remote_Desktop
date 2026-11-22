@@ -76,4 +76,17 @@ export interface ServerConfig {
   rttMs?: number;
   /** 服务器证书指纹（SHA-256，证书钉扎，SSH known_hosts 模式） */
   certFingerprint?: string;
+  // ── quireld 自动供应（SSH 自动安装）扩展字段，全部可选不破坏 servers.bin 结构 ──
+  /** SSH 端口（自动安装/管理通道使用，默认 22） */
+  sshPort?: number;
+  /** quireld QUIC 端口（自动安装时探测/写入的值） */
+  quireldPort?: number;
+  /** 自动安装完成时间戳 */
+  provisionedAt?: number;
+  /** 安装方式：auto=SSH 自动安装 / manual=手动命令 */
+  provisionMethod?: 'auto' | 'manual';
+  /** 最近一次确认的 quireld 版本 */
+  quireldVersion?: string;
+  /** SSH host key 指纹（OpenSSH SHA256:base64，自动安装 TOFU 记录） */
+  sshHostKeyFingerprint?: string;
 }

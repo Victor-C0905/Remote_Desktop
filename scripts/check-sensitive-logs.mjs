@@ -26,10 +26,15 @@ const SENSITIVE_ARG =
 const PLACEHOLDER = /\{(?::[^}]*)?\}/;
 const SAFE_ARG = /(len\(\)|is_some\(\)|is_ok\(\))/;
 const LOG_MACRO = /\b(info|debug|warn|error|trace|println)!\s*\(/;
-const TS_LOG = /(console\.(log|warn|error|info)|\blog\.(info|warn|error|debug))\s*\(/;
+const TS_LOG = /(console\.(log|warn|error|info|trace)|\blog\.(info|warn|error|debug|trace))\s*\(/;
 const AUTH_PAYLOAD_DUMP = /收到: *\{:\?\}"?\s*,\s*(other|payload|envelope)\b/i;
 const TS_SENSITIVE_PROP = /\b(password|privateKey|passphrase|secret|token)\s*[:=]/i;
-const TS_ALLOW = /(Exists|!!|\bnull\b|\bundefined\b|\bfalse\b)/i;
+// 敏感属性按"值形态"判定：仅当该属性自身赋的是非值字面量（null/undefined/
+// false/!!/Exists）才豁免——整块任一关键词豁免会把 password:p,ok:false 这
+// 类混行漏报（2026-11-20 审计 C-05）
+const TS_SENSITIVE_PROP_VALUE =
+  /\b(password|privateKey|passphrase|secret|token)\s*[:=]\s*([^,;})]{0,50})/gi;
+const TS_SAFE_VALUE = /^(!!|\bnull\b|\bundefined\b|\bfalse\b|Exists)/i;
 
 function* walk(dir) {
   let entries;
@@ -89,7 +94,16 @@ function scanTsFile(path, text, findings) {
   if (path.includes(`${join("src", "i18n")}`)) return; // 文案翻译非敏感
   const lines = text.split(/\r?\n/);
   for (const block of logBlocks(lines)) {
-    if (TS_SENSITIVE_PROP.test(block.text) && !TS_ALLOW.test(block.text)) {
+    if (!TS_SENSITIVE_PROP.test(block.text)) continue;
+    // 逐个敏感属性按值形态判定（C-05：允许清单从整块关键词改为属性自身值）
+    let flagged = false;
+    for (const m of block.text.matchAll(TS_SENSITIVE_PROP_VALUE)) {
+      if (!TS_SAFE_VALUE.test(m[2])) {
+        flagged = true;
+        break;
+      }
+    }
+    if (flagged) {
       findings.push([
         `[R3] ${path}:${block.first + 1}-${block.last + 1}`,
         block.text.replace(/\s+/g, " ").slice(0, 150),

@@ -7,6 +7,21 @@ use crate::file_stream::{PipeFileStreamReader, PipeFileStreamWriter};
 use std::collections::HashMap;
 use std::time::SystemTime;
 
+/// 单次传输最大并行流数上限。
+///
+/// stream_count 来自客户端声明（认证用户可发任意 u32），无上限会按其
+/// 预分配内存（part_offsets/part_paths，约 40 字节/流）——u32::MAX 约
+/// 96GB → alloc-abort 杀死共享 Manager（跨用户 DoS，2026-11-20 审计 A-02）。
+pub const MAX_STREAM_COUNT: u32 = 16;
+
+/// 协商 stream_count：None/0/1 视为单流（向后兼容），钳制到 `[1, MAX_STREAM_COUNT]`。
+///
+/// 客户端声明值不可信；Accept 回显服务端协商结果，客户端按回显值开流，
+/// 因此钳制对既有客户端透明。
+pub fn negotiate_stream_count(raw: Option<u32>) -> u32 {
+    raw.unwrap_or(1).max(1).min(MAX_STREAM_COUNT)
+}
+
 /// 传输会话状态
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(dead_code)]
@@ -107,6 +122,13 @@ pub struct TransferSession {
     /// 主 stream (index=0) 的 writer 存于 `writer` 字段，此处不重复
     #[allow(dead_code)]
     pub part_writers: HashMap<u32, PipeFileStreamWriter>,
+
+    /// 已加入的 stream_index 集合（去重判据）。
+    /// writer 被完成路径 take 后 `part_writers` 不再含该 index，重复 join
+    /// 会靠它拒绝，否则新 writer 覆盖 part_paths[idx] 造成段泄漏/错段
+    /// （2026-11-20 审计 A-17）
+    #[allow(dead_code)]
+    pub joined_streams: std::collections::HashSet<u32>,
 }
 
 impl TransferSession {
@@ -140,6 +162,7 @@ impl TransferSession {
             part_offsets: Vec::new(),
             part_paths: Vec::new(),
             part_writers: HashMap::new(),
+            joined_streams: std::collections::HashSet::new(),
         }
     }
 
@@ -171,8 +194,9 @@ impl TransferSession {
         owner_uid: u32,
     ) -> Self {
         assert!(
-            stream_count >= 1,
-            "stream_count 必须 >= 1, 实际 = {}",
+            (1..=MAX_STREAM_COUNT).contains(&stream_count),
+            "stream_count 必须在 1..={}，实际 = {}（调用方必须先经 negotiate_stream_count 钳制）",
+            MAX_STREAM_COUNT,
             stream_count
         );
         assert_eq!(
@@ -201,6 +225,7 @@ impl TransferSession {
             part_offsets,
             part_paths,
             part_writers: HashMap::new(),
+            joined_streams: std::collections::HashSet::new(),
         }
     }
 
@@ -208,6 +233,15 @@ impl TransferSession {
     #[allow(dead_code)]
     pub fn is_multi_stream(&self) -> bool {
         self.stream_count > 1
+    }
+
+    /// 标记 stream_index 已加入；返回 false = 重复加入。
+    ///
+    /// 去重判据（A-17）：writer 被完成路径 take 后 `part_writers` 不再含
+    /// 该 index，重复 join 必须以本集合拒绝。
+    #[allow(dead_code)]
+    pub fn mark_joined(&mut self, stream_index: u32) -> bool {
+        self.joined_streams.insert(stream_index)
     }
 
     /// 标记某个 stream 段已完成，返回是否所有 stream 均已完成（触发合并条件）
@@ -315,6 +349,53 @@ mod tests {
         assert_eq!(s.transferred, 0);
     }
 
+    /// A-02 回归：协商函数钳制客户端声明值（None/0 → 1，超限 → MAX）
+    #[test]
+    fn negotiate_stream_count_clamps_untrusted_input() {
+        assert_eq!(negotiate_stream_count(None), 1);
+        assert_eq!(negotiate_stream_count(Some(0)), 1);
+        assert_eq!(negotiate_stream_count(Some(1)), 1);
+        assert_eq!(negotiate_stream_count(Some(4)), 4);
+        assert_eq!(negotiate_stream_count(Some(MAX_STREAM_COUNT)), MAX_STREAM_COUNT);
+        // 复现：u32::MAX 声明值被钳制，不再按其预分配内存
+        assert_eq!(negotiate_stream_count(Some(u32::MAX)), MAX_STREAM_COUNT);
+    }
+
+    /// A-02 回归：构造器守卫拒绝超限 stream_count（拦住绕过协商函数的调用方）
+    #[test]
+    #[should_panic(expected = "stream_count 必须在 1..=")]
+    fn new_multi_stream_rejects_stream_count_over_limit() {
+        let offsets = vec![(0, 1); (MAX_STREAM_COUNT + 1) as usize];
+        TransferSession::new_multi_stream(
+            "sess-over".to_string(),
+            "upload".to_string(),
+            "/tmp/big.bin".to_string(),
+            1024,
+            256 * 1024,
+            MAX_STREAM_COUNT + 1,
+            offsets,
+            1000,
+        );
+    }
+
+    /// A-02 回归：上限值可正常构造（边界不过杀）
+    #[test]
+    fn new_multi_stream_accepts_max_stream_count() {
+        let offsets = vec![(0, 1); MAX_STREAM_COUNT as usize];
+        let s = TransferSession::new_multi_stream(
+            "sess-max".to_string(),
+            "upload".to_string(),
+            "/tmp/big.bin".to_string(),
+            1024,
+            256 * 1024,
+            MAX_STREAM_COUNT,
+            offsets,
+            1000,
+        );
+        assert_eq!(s.part_paths.len(), MAX_STREAM_COUNT as usize);
+        assert!(s.is_multi_stream());
+    }
+
     #[test]
     fn test_new_multi_stream_fields() {
         // 多流构造：stream_count=4，part_offsets 长度匹配，part_paths 预分配槽位
@@ -390,5 +471,32 @@ mod tests {
             1000,
         );
         assert!(s.mark_stream_completed(), "单流 1 次 mark 即应触发");
+    }
+}
+#[cfg(test)]
+mod joined_tests {
+    use super::*;
+
+    /// A-17 复现：writer 被完成路径 take 后（part_writers 变空），重复 join
+    /// 必须被 joined 集合拒绝——旧判据 contains_key 在 take 后失效，新 writer
+    /// 覆盖 part_paths[idx] 造成段泄漏/合并错段
+    #[test]
+    fn mark_joined_dedups_after_writer_take() {
+        let offsets = vec![(0, 1); 3];
+        let mut s = TransferSession::new_multi_stream(
+            "sess-join".to_string(),
+            "upload".to_string(),
+            "/tmp/big.bin".to_string(),
+            1024,
+            256 * 1024,
+            3,
+            offsets,
+            1000,
+        );
+        assert!(s.mark_joined(1), "首次加入应成功");
+        // 模拟完成路径 take writer 后 part_writers 变空，重复 join 仍须被拒
+        s.part_writers.remove(&1);
+        assert!(!s.mark_joined(1), "重复加入必须被拒绝（A-17）");
+        assert!(s.mark_joined(2), "其他 index 不受影响");
     }
 }

@@ -91,7 +91,12 @@ fn backup_one(app: &tauri::AppHandle, name: &str) -> Result<Option<PathBuf>, Str
 pub fn backup_all_on_startup(app: &tauri::AppHandle) {
     for name in ALLOWED_STORES {
         match backup_one(app, name) {
-            Ok(Some(path)) => tracing::info!("[Store] 启动备份 {} -> {}", name, path.display()),
+            Ok(Some(path)) => tracing::info!(
+                // 日志红线：不输出真实用户路径，仅备份文件名（目录由 name 可定位）
+                "[Store] 启动备份 {} -> {}",
+                name,
+                path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default()
+            ),
             Ok(None) => {} // 文件尚不存在（首次启动）无需备份
             Err(e) => tracing::error!("[Store] 启动备份 {} 失败: {}", name, e),
         }

@@ -29,6 +29,10 @@ pub mod signal_handler;
 #[cfg(unix)]
 pub mod hot_update_coordinator;
 
+// 客户端驱动的 quireld 更新（staging/校验/commit/rollback）
+#[cfg(unix)]
+pub mod update_manager;
+
 // Session 进程连接管理（Unix-only：abstract UnixSocket）
 #[cfg(unix)]
 pub mod session_connection;
@@ -60,6 +64,9 @@ pub use signal_handler::{ReloadTrigger, watch_sighup, watch_sigterm};
 
 #[cfg(unix)]
 pub use hot_update_coordinator::HotUpdateCoordinator;
+
+#[cfg(unix)]
+pub use update_manager::UpdateManager;
 
 // Session 连接管理导出
 #[cfg(unix)]
@@ -98,6 +105,10 @@ pub struct Manager {
     /// 使用 Mutex 包装以支持 `&self` 的 start/shutdown(内部可变性)
     #[cfg(unix)]
     crash_detector: tokio::sync::Mutex<Option<WorkerCrashDetector>>,
+
+    /// 客户端驱动的更新管理器（staging/commit/rollback；QUIC 层经此处理 agent_update_* 命令）
+    #[cfg(unix)]
+    pub update_manager: Arc<UpdateManager>,
 }
 
 impl Manager {
@@ -131,11 +142,25 @@ impl Manager {
         // 创建孤儿进程回收器
         // Phase 4 新增：用于在 PTY EOF 时回收 Session 僵尸进程
 
+        // 客户端驱动的更新管理器（staging 状态从磁盘恢复；失败不阻断启动——
+        // 更新功能不可用时 status.enabled 保持 true 但 commit 会失败，日志明确告警）
+        let update_manager = match UpdateManager::new(&config.updates) {
+            Ok(m) => Arc::new(m),
+            Err(e) => {
+                tracing::error!("更新管理器初始化失败（更新功能不可用）: {e:#}");
+                // 降级：用禁用配置构造（status.enabled=false，客户端隐藏更新 UI）
+                let mut disabled = config.updates.clone();
+                disabled.enabled = false;
+                Arc::new(UpdateManager::new(&disabled).expect("禁用配置的 UpdateManager 初始化不应失败"))
+            }
+        };
+
         Ok(Self {
             pty_registry,
             worker_manager,
             ipc_server,
             crash_detector: tokio::sync::Mutex::new(None),
+            update_manager,
         })
     }
 
@@ -173,6 +198,8 @@ impl Manager {
 
         // 启动崩溃检测器
         let mut crash_detector = WorkerCrashDetector::new(self.worker_manager.clone());
+        // 客户端驱动的更新观察：commit 后观察窗内 Worker 反复崩溃 → 自动回滚
+        crash_detector.set_update_guard(Some(self.update_manager.clone()));
         crash_detector.start();
         *self.crash_detector.lock().await = Some(crash_detector);
 
@@ -180,14 +207,23 @@ impl Manager {
         // 必须在 start() 中启动,否则 systemctl reload 发送的 SIGHUP
         // 会使用默认行为(终止进程),导致 Manager 退出
         let (trigger_tx, trigger_rx) = tokio::sync::mpsc::channel(16);
-        let _sighup_handle = crate::manager::signal_handler::watch_sighup(trigger_tx);
+        let _sighup_handle = crate::manager::signal_handler::watch_sighup(trigger_tx.clone());
+
+        // is_reloading 标志由 Manager 持有并注入：热更新协调器与更新管理器共享
+        // 同一 AtomicBool（防重入 + commit 后轮询等待 reload 完成）
+        let coordinator_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
         // 启动热更新协调器(Phase 4)
-        let coordinator = crate::manager::hot_update_coordinator::HotUpdateCoordinator::new(
+        let coordinator = crate::manager::hot_update_coordinator::HotUpdateCoordinator::new_with_flag(
             self.worker_manager.clone(),
             trigger_rx,
+            coordinator_flag.clone(),
         );
         tokio::spawn(coordinator.run());
+
+        // 更新管理器接入同一触发通道（ClientCommand{operator} 与 SIGHUP 汇聚到
+        // 同一协调器，防重入由共享 is_reloading 标志保证）
+        self.update_manager.set_reload_channel(trigger_tx, coordinator_flag);
 
         tracing::info!("Manager 已启动(IPC + Worker + CrashDetector + SIGHUP + HotUpdate)");
 

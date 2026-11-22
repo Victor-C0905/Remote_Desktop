@@ -53,7 +53,7 @@ interface NotificationState {
   markAllRead: (filter?: (n: AppNotification) => boolean) => void;
   dismiss: (id: string) => void;
   clearAll: (filter?: (n: AppNotification) => boolean) => void;
-  /** 删除服务器时联动清理其持久化通知（serversStore.removeServer 调用） */
+  /** 删除服务器时联动清理其持久化通知（统一清理入口 serverCleanup.purgeServerData 调用） */
   purgeServer: (serverId: string) => void;
 }
 
@@ -159,10 +159,14 @@ export const useNotificationStore = create<NotificationState>()(
             count: 1,
           };
           // 同源降噪：窗口内同键未读通知合并进已有条目（保留原 id），并置顶刷新
-          const idx = s.notifications.findIndex((e) => mergeIncoming(e, incoming) !== null);
-          if (idx >= 0) {
-            const merged = mergeIncoming(s.notifications[idx], incoming)!;
-            const rest = s.notifications.filter((_, i) => i !== idx);
+          let mergeIdx = -1;
+          let merged: AppNotification | null = null;
+          for (let i = 0; i < s.notifications.length; i++) {
+            const m = mergeIncoming(s.notifications[i], incoming);
+            if (m !== null) { mergeIdx = i; merged = m; break; }
+          }
+          if (mergeIdx >= 0 && merged) {
+            const rest = s.notifications.filter((_, i) => i !== mergeIdx);
             return { notifications: [merged, ...rest].slice(0, NOTIFICATION_CAP) };
           }
           return { notifications: [incoming, ...s.notifications].slice(0, NOTIFICATION_CAP) };

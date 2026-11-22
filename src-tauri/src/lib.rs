@@ -7,11 +7,14 @@ use tokio::sync::Mutex;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
 pub mod errors;
+mod agent_update;
 mod connection;
 mod credentials;
 mod fullscreen;
 mod net_frame;
+mod provision;
 mod proxy;
+mod ssh;
 mod store_maintenance;
 mod terminal;
 mod transfer;
@@ -1273,6 +1276,12 @@ pub fn run() {
             connection::set_transfer_limit,     // 修改上传大小限制（仅 root）
             connection::subscribe,
             connection::unsubscribe,
+            provision::provision_detect, // SSH 环境探测与安装状态判定（自动安装第一步）
+            provision::provision_server, // quireld 自动安装编排（下载/推送/安装/指纹回读）
+            connection::get_quireld_version,     // 查询当前连接的 quireld 版本（认证响应携带）
+            agent_update::agent_update_check,    // 更新检查（版本比对 + staged 状态）
+            agent_update::agent_update_apply,    // 应用更新（下载/上传/commit）
+            agent_update::agent_update_rollback, // 手动回滚到最近备份
             proxy::proxy_start_session,
             proxy::browser_open,
             proxy::proxy_stop_session,

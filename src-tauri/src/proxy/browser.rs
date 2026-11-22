@@ -203,7 +203,9 @@ pub async fn browser_open_in_system(
     tracing::info!(
         "[Browser] 已用系统浏览器打开（走隧道 socks5://127.0.0.1:{socks_port}）: \
          browser={browser_id_resolved} url={}",
-        url.as_deref().unwrap_or("(新标签页)")
+        url.as_deref()
+            .map(crate::proxy::sanitize_url_for_log)
+            .unwrap_or_else(|| "(新标签页)".to_string())
     );
     Ok(())
 }

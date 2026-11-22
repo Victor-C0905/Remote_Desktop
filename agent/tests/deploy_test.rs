@@ -149,6 +149,61 @@ fn test_install_script_executable() {
     }
 }
 
+/// 安装脚本必须落地独立 PAM 服务、日志轮转与防火墙提示（安全基线）
+#[test]
+fn test_install_script_sets_up_pam_logrotate_and_firewall_hint() {
+    let path = project_root().join("deploy").join("install.sh");
+    let content = std::fs::read_to_string(&path).expect("Failed to read install.sh");
+
+    assert!(content.contains("/etc/pam.d/$SERVICE_NAME"), "缺少 PAM 服务写入");
+    assert!(content.contains("@include common-auth"), "PAM 服务缺少 common-auth");
+    assert!(content.contains("@include common-account"), "PAM 服务缺少 common-account");
+    assert!(content.contains("/etc/logrotate.d/$SERVICE_NAME"), "缺少日志轮转配置");
+    assert!(content.contains("copytruncate"), "日志轮转需 copytruncate（无需 reopen）");
+    assert!(content.contains("print_firewall_hint"), "缺少防火墙提示");
+}
+
+/// 升级失败必须自动回滚最近备份并复检（不得只打印提示后退出）
+#[test]
+fn test_install_script_upgrade_auto_rollback() {
+    let path = project_root().join("deploy").join("install.sh");
+    let content = std::fs::read_to_string(&path).expect("Failed to read install.sh");
+
+    assert!(content.contains("尝试自动回滚到最近备份"), "升级失败缺少自动回滚动作");
+    assert!(content.contains("LATEST_BACKUP"), "缺少最近备份选取");
+    assert!(content.contains("已回滚到备份"), "缺少回滚成功提示");
+    assert!(content.contains("回滚后服务仍无法启动"), "缺少回滚失败的人工处理提示");
+    // 备份保留策略的 glob 必须带通配符（否则 ls 匹配不到任何备份文件）
+    assert!(
+        content.contains("\"$BACKUP_DIR/${SERVICE_NAME}_\"*"),
+        "备份清理/选取的 glob 缺少通配符"
+    );
+}
+
+/// 一键引导脚本必须按「主域 → 备用域 → GitHub」取包，且校验失败立即中断
+#[test]
+fn test_bootstrap_script_multi_domain_sources() {
+    let path = project_root().join("deploy").join("install-quireld.sh");
+    let content = std::fs::read_to_string(&path).expect("Failed to read install-quireld.sh");
+
+    assert!(content.contains("https://quireld.cn/downloads/quireld"), "缺少官网主域");
+    assert!(content.contains("https://quireld.icu/downloads/quireld"), "缺少官网备用域");
+    assert!(content.contains("SITE_BASE_URLS"), "缺少多源列表变量");
+    assert!(content.contains("FETCH_RC -eq 2"), "SHA-256 校验失败必须中断");
+    assert!(content.contains("GitHub Releases"), "缺少 GitHub 兜底");
+}
+
+/// 全新安装失败必须给出排查与卸载清理指引
+#[test]
+fn test_install_script_fresh_failure_cleanup_hint() {
+    let path = project_root().join("deploy").join("install.sh");
+    let content = std::fs::read_to_string(&path).expect("Failed to read install.sh");
+
+    assert!(content.contains("排查与清理指引"), "全新安装失败缺少排查指引");
+    assert!(content.contains("systemctl disable --now"), "卸载指引缺少停用服务步骤");
+    assert!(content.contains("systemctl daemon-reload"), "卸载指引缺少 daemon-reload");
+}
+
 #[test]
 fn test_systemd_service_syntax() {
     let path = systemd_service_path();

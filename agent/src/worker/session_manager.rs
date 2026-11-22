@@ -232,33 +232,43 @@ impl SessionManager {
         tracing::info!("子进程监控任务启动");
 
         loop {
-            // 非阻塞等待任意子进程
-            match waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG)) {
-                Ok(WaitStatus::Exited(pid, status)) => {
-                    tracing::info!("子进程退出: pid={}, status={}", pid, status);
-                    // 查找并清理会话
-                    self.cleanup_by_pid(pid).await;
-                }
-                Ok(WaitStatus::Signaled(pid, sig, _)) => {
-                    tracing::warn!("子进程被信号终止: pid={}, signal={:?}", pid, sig);
-                    self.cleanup_by_pid(pid).await;
-                }
-                Ok(_) => {
-                    // 其他状态（如 StillAlive），没有子进程退出
-                    // 等待一段时间后再检查
-                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                }
-                Err(e) => {
-                    // ECHILD: 没有子进程可等待
-                    // 这是正常情况，继续等待
-                    if e == nix::errno::Errno::ECHILD {
-                        tracing::trace!("没有子进程可等待，继续监控");
-                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                    } else {
-                        tracing::error!("waitpid 错误: {}", e);
-                        return Err(anyhow::anyhow!("waitpid error: {}", e));
+            // 仅对已注册的 session pid 点名 waitpid，绝不用 -1 通配（A-16）：
+            // Worker 进程里还有 executor fork 的隔离子进程与 Command 子进程，
+            // 由各自父路径 waitpid 回收；monitor 用 -1 抢先回收会让父
+            // waitpid 拿到 ECHILD，被忽略后 status 保持 0，子进程异常退出
+            // 被误判成功
+            let pids: Vec<Pid> = {
+                let sessions = self.sessions.read().await;
+                sessions.values().map(|s| s.pid).collect()
+            };
+            let mut reaped = false;
+            for pid in pids {
+                match waitpid(pid, Some(WaitPidFlag::WNOHANG)) {
+                    Ok(WaitStatus::Exited(_, status)) => {
+                        tracing::info!("子进程退出: pid={}, status={}", pid, status);
+                        self.cleanup_by_pid(pid).await;
+                        reaped = true;
+                    }
+                    Ok(WaitStatus::Signaled(_, sig, _)) => {
+                        tracing::warn!("子进程被信号终止: pid={}, signal={:?}", pid, sig);
+                        self.cleanup_by_pid(pid).await;
+                        reaped = true;
+                    }
+                    Ok(_) => {} // 仍存活
+                    Err(nix::errno::Errno::ECHILD) => {
+                        // pid 已被其他路径回收——session 进程已不在，照常清理
+                        tracing::info!("子进程已被其他路径回收: pid={}", pid);
+                        self.cleanup_by_pid(pid).await;
+                        reaped = true;
+                    }
+                    Err(e) => {
+                        // 单个 pid 的等待错误不终止监控任务
+                        tracing::error!("waitpid 错误: pid={}, {}", pid, e);
                     }
                 }
+            }
+            if !reaped {
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
             }
         }
     }

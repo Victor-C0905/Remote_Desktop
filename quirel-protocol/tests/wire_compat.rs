@@ -354,6 +354,7 @@ fn auth_response_with_code_wire_format() {
             session_id: None,
             code: Some(AuthErrorCode::InvalidCredentials),
             capabilities: None,
+            version: None,
         },
     );
     let json = serde_json::to_string(&env).unwrap();
@@ -369,7 +370,7 @@ fn auth_response_without_code_compat() {
     let raw = r#"{"request_id":7,"payload":{"type":"auth_response","data":{"success":false,"error":"账户暂时锁定，请15分钟后再试","session_id":null}}}"#;
     let env: Envelope = serde_json::from_str(raw).expect("旧格式必须可解码");
     match env.payload {
-        Payload::AuthResponse { success, error, session_id: _, code, capabilities: _ } => {
+        Payload::AuthResponse { success, error, session_id: _, code, capabilities: _, version: _ } => {
             assert!(!success);
             assert_eq!(error.as_deref(), Some("账户暂时锁定，请15分钟后再试"));
             assert_eq!(code, None);
@@ -628,6 +629,7 @@ fn auth_response_with_capabilities_wire_format() {
         session_id: Some("sess-1".to_string()),
         code: None,
         capabilities: Some(vec!["transfer_limit".to_string()]),
+        version: None,
     });
     let json = serde_json::to_string(&env).unwrap();
     assert_eq!(
@@ -790,5 +792,240 @@ fn process_list_response_roundtrip() {
             assert_eq!(processes[0].state, "S");
         }
         _ => panic!("变体不匹配"),
+    }
+}
+
+// ── 客户端驱动的 quireld 更新（2026-11-16 设计） ──
+// 全部为新增变体 + serde default 可选字段 → 兼容性变更：
+// 旧 Agent 无法解码新 payload（客户端凭 capabilities "agent_update" 门控）；
+// 旧客户端遇到新 Agent 的 AuthResponse.version 缺失时回退 None（serde default）。
+
+#[test]
+fn auth_response_with_version_roundtrip() {
+    // 新 Agent 认证响应携带 quireld 版本（lockstep）
+    let env = Envelope::new(15, Payload::AuthResponse {
+        success: true,
+        error: None,
+        session_id: Some("s1".to_string()),
+        code: None,
+        capabilities: Some(vec!["agent_update".to_string()]),
+        version: Some("0.3.3".to_string()),
+    });
+    let json = serde_json::to_string(&env).unwrap();
+    assert_eq!(
+        json,
+        r#"{"request_id":15,"payload":{"type":"auth_response","data":{"success":true,"error":null,"session_id":"s1","code":null,"capabilities":["agent_update"],"version":"0.3.3"}}}"#
+    );
+    let back = roundtrip(&env);
+    match back.payload {
+        Payload::AuthResponse { version, capabilities, .. } => {
+            assert_eq!(version.as_deref(), Some("0.3.3"));
+            assert_eq!(capabilities, Some(vec!["agent_update".to_string()]));
+        }
+        _ => panic!("变体不匹配"),
+    }
+}
+
+#[test]
+fn auth_response_without_version_compat() {
+    // 旧 Agent 响应不含 version → 新客户端必须可解码且回退 None
+    let raw = r#"{"request_id":7,"payload":{"type":"auth_response","data":{"success":true,"error":null,"session_id":"s1","code":null}}}"#;
+    let env: Envelope = serde_json::from_str(raw).expect("旧格式必须可解码");
+    match env.payload {
+        Payload::AuthResponse { version, .. } => {
+            assert_eq!(version, None);
+        }
+        _ => panic!("变体不匹配"),
+    }
+}
+
+#[test]
+fn agent_update_status_roundtrip() {
+    use quirel_protocol::{AgentUpdateLastResult, StagedUpdate};
+    // AgentUpdateStatusResponse 是 Payload 枚举变体（非独立类型），直接以变体路径构造
+
+    let env = Envelope::new(20, Payload::AgentUpdateStatusResponse {
+        manager_version: "0.3.2".to_string(),
+        worker_version: Some("0.3.3".to_string()),
+        manager_lags_worker: true,
+        is_reloading: false,
+        enabled: true,
+        staged: Some(StagedUpdate {
+            sha256: "ab12".to_string(),
+            size: 10_485_760,
+            version: "0.3.3".to_string(),
+            staged_at: 1700000000,
+        }),
+        last_result: Some(AgentUpdateLastResult {
+            action: "update".to_string(),
+            success: false,
+            error: Some("worker failed to start".to_string()),
+            timestamp: 1700000001,
+        }),
+    });
+    let json = serde_json::to_string(&env).unwrap();
+    assert_eq!(
+        json,
+        r#"{"request_id":20,"payload":{"type":"agent_update_status_resp","data":{"manager_version":"0.3.2","worker_version":"0.3.3","manager_lags_worker":true,"is_reloading":false,"enabled":true,"staged":{"sha256":"ab12","size":10485760,"version":"0.3.3","staged_at":1700000000},"last_result":{"action":"update","success":false,"error":"worker failed to start","timestamp":1700000001}}}}"#
+    );
+    let back = roundtrip(&env);
+    match back.payload {
+        Payload::AgentUpdateStatusResponse { manager_version, manager_lags_worker, staged, .. } => {
+            assert_eq!(manager_version, "0.3.2");
+            assert!(manager_lags_worker);
+            assert_eq!(staged.map(|s| s.version), Some("0.3.3".to_string()));
+        }
+        _ => panic!("变体不匹配"),
+    }
+}
+
+#[test]
+fn agent_update_upload_request_roundtrip() {
+    let env = Envelope::new(21, Payload::AgentUpdateUploadRequest {
+        file_size: 10_485_760,
+        sha256: "ab12cd34".to_string(),
+        version: "0.3.3".to_string(),
+    });
+    let json = serde_json::to_string(&env).unwrap();
+    assert_eq!(
+        json,
+        r#"{"request_id":21,"payload":{"type":"agent_update_upload","data":{"file_size":10485760,"sha256":"ab12cd34","version":"0.3.3"}}}"#
+    );
+    let back = roundtrip(&env);
+    match back.payload {
+        Payload::AgentUpdateUploadRequest { file_size, sha256, version } => {
+            assert_eq!(file_size, 10_485_760);
+            assert_eq!(sha256, "ab12cd34");
+            assert_eq!(version, "0.3.3");
+        }
+        _ => panic!("变体不匹配"),
+    }
+}
+
+#[test]
+fn agent_update_upload_response_roundtrip() {
+    use quirel_protocol::StagedUpdate;
+
+    let ok = Envelope::new(22, Payload::AgentUpdateUploadResponse {
+        success: true,
+        error: None,
+        staged: Some(StagedUpdate {
+            sha256: "ab12cd34".to_string(),
+            size: 10_485_760,
+            version: "0.3.3".to_string(),
+            staged_at: 1700000000,
+        }),
+    });
+    let json = serde_json::to_string(&ok).unwrap();
+    assert_eq!(
+        json,
+        r#"{"request_id":22,"payload":{"type":"agent_update_upload_resp","data":{"success":true,"staged":{"sha256":"ab12cd34","size":10485760,"version":"0.3.3","staged_at":1700000000}}}}"#
+    );
+    let back = roundtrip(&ok);
+    match back.payload {
+        Payload::AgentUpdateUploadResponse { success, error, staged } => {
+            assert!(success);
+            assert_eq!(error, None);
+            assert_eq!(staged.map(|s| s.sha256), Some("ab12cd34".to_string()));
+        }
+        _ => panic!("变体不匹配"),
+    }
+
+    // 失败场景：staged 缺省回退 None（staged 为 Option 字段）
+    let fail = Envelope::new(22, Payload::AgentUpdateUploadResponse {
+        success: false,
+        error: Some("SHA-256 mismatch".to_string()),
+        staged: None,
+    });
+    let fail_json = serde_json::to_string(&fail).unwrap();
+    assert_eq!(
+        fail_json,
+        r#"{"request_id":22,"payload":{"type":"agent_update_upload_resp","data":{"success":false,"error":"SHA-256 mismatch"}}}"#
+    );
+}
+
+#[test]
+fn agent_update_commit_roundtrip() {
+    let req = Envelope::new(23, Payload::AgentUpdateCommitRequest {
+        expected_sha256: "ab12cd34".to_string(),
+    });
+    let json = serde_json::to_string(&req).unwrap();
+    assert_eq!(
+        json,
+        r#"{"request_id":23,"payload":{"type":"agent_update_commit","data":{"expected_sha256":"ab12cd34"}}}"#
+    );
+    let back = roundtrip(&req);
+    match back.payload {
+        Payload::AgentUpdateCommitRequest { expected_sha256 } => {
+            assert_eq!(expected_sha256, "ab12cd34");
+        }
+        _ => panic!("变体不匹配"),
+    }
+}
+
+#[test]
+fn agent_update_rollback_and_action_resp_roundtrip() {
+    let rb = Envelope::new(24, Payload::AgentUpdateRollbackRequest {});
+    let json = serde_json::to_string(&rb).unwrap();
+    assert_eq!(
+        json,
+        r#"{"request_id":24,"payload":{"type":"agent_update_rollback","data":{}}}"#
+    );
+
+    let resp = Envelope::new(25, Payload::AgentUpdateActionResult {
+        success: true,
+        error: None,
+        manager_version: "0.3.3".to_string(),
+        worker_version: Some("0.3.3".to_string()),
+        manager_lags_worker: false,
+        rolled_back: false,
+    });
+    let resp_json = serde_json::to_string(&resp).unwrap();
+    assert_eq!(
+        resp_json,
+        r#"{"request_id":25,"payload":{"type":"agent_update_action_resp","data":{"success":true,"manager_version":"0.3.3","worker_version":"0.3.3","manager_lags_worker":false,"rolled_back":false}}}"#
+    );
+    let back = roundtrip(&resp);
+    match back.payload {
+        Payload::AgentUpdateActionResult { success, rolled_back, .. } => {
+            assert!(success);
+            assert!(!rolled_back);
+        }
+        _ => panic!("变体不匹配"),
+    }
+}
+
+/// C-04 回归：SubscriptionType::type_name 与 serde rename 手工双写的一致性。
+/// type_name 用于订阅路由/日志，新增变体漏改一边会静默失配——遍历全部
+/// 变体锁死 type 字段与命名形态。
+#[test]
+fn subscription_type_name_matches_serde_rename() {
+    use quirel_protocol::SubscriptionType;
+
+    let variants: Vec<SubscriptionType> = vec![
+        SubscriptionType::Metrics { interval_secs: None },
+        SubscriptionType::FileChanges { path: "/tmp".into(), recursive: None },
+        SubscriptionType::ProcessEvents { interval_secs: None },
+        SubscriptionType::AppLogs { app_name: "a".into(), level: None },
+        SubscriptionType::ServiceStatus { service: "s".into(), interval_secs: None },
+    ];
+    for v in variants {
+        let expected = v.type_name();
+        let json = serde_json::to_value(&v).expect("订阅类型序列化失败");
+        assert_eq!(
+            json.get("type").and_then(|t| t.as_str()),
+            Some(expected.as_str()),
+            "type_name 与 serde rename 不一致: {}",
+            json
+        );
+        // 路由/日志用的命名形态：非空小写蛇形
+        assert!(
+            !expected.is_empty()
+                && expected
+                    .chars()
+                    .all(|c| c == '_' || c.is_ascii_lowercase() || c.is_ascii_digit()),
+            "type_name 应为非空小写蛇形: {}",
+            expected
+        );
     }
 }

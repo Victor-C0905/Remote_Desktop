@@ -178,23 +178,33 @@ impl AuthRateLimiter {
 
         record.count += 1;
 
-        // 达到失败阈值，触发锁定
+        // 达到失败阈值，触发锁定。
+        // 锁定期内不刷新 locked_until（2026-11-20 审计 A-13）：挑战响应等
+        // 多条失败路径不经过用户名闸，持续失败的攻击者不得无限延长锁定——
+        // 锁到点必然释放，配合 is_username_allowed 的到期清记录，合法用户
+        // 每个周期都有真实的可登录窗口。
         if record.count >= self.max_failed_attempts {
-            record.locked_until = Some(now + self.lockout_duration);
-            tracing::warn!(
-                "用户名触发锁定: username={}, failed_attempts={}, lockout_duration={:?}",
-                username,
-                record.count,
-                self.lockout_duration
-            );
+            let currently_locked = record
+                .locked_until
+                .map(|until| now < until)
+                .unwrap_or(false);
+            if !currently_locked {
+                record.locked_until = Some(now + self.lockout_duration);
+                tracing::warn!(
+                    "用户名触发锁定: username={}, failed_attempts={}, lockout_duration={:?}",
+                    username,
+                    record.count,
+                    self.lockout_duration
+                );
 
-            // 记录到审计日志
-            tracing::info!(
-                "SECURITY_EVENT: account_locked username={} failed_attempts={} lockout_duration_secs={}",
-                username,
-                record.count,
-                self.lockout_duration.as_secs()
-            );
+                // 记录到审计日志
+                tracing::info!(
+                    "SECURITY_EVENT: account_locked username={} failed_attempts={} lockout_duration_secs={}",
+                    username,
+                    record.count,
+                    self.lockout_duration.as_secs()
+                );
+            }
         } else {
             tracing::info!(
                 "认证失败记录: username={}, failed_attempts={}, max={}",
@@ -352,5 +362,34 @@ mod tests {
 
         // 应该允许
         assert!(limiter.is_username_allowed("testuser").await.unwrap());
+    }
+
+    /// A-13 复现：锁定期内的持续失败不得刷新 locked_until。
+    /// 旧实现在锁定期内再次达到阈值会重置 locked_until（挑战响应等未过
+    /// 用户名闸的失败路径持续触发），攻击者可永久锁定受害账户。
+    #[tokio::test]
+    async fn locked_until_not_refreshed_during_lockout() {
+        // 3 次失败锁定 3 秒（短窗口便于时间断言）
+        let limiter = AuthRateLimiter::with_config(3, 3, 100);
+
+        // 触发首次锁定（到期 T0+3s）
+        for _ in 0..3 {
+            limiter.record_failure("victim").await;
+        }
+        assert!(!limiter.is_username_allowed("victim").await.unwrap());
+
+        // T≈2s：仍在锁定期内，继续失败——不得刷新锁定
+        tokio::time::sleep(Duration::from_millis(2000)).await;
+        for _ in 0..3 {
+            limiter.record_failure("victim").await;
+        }
+
+        // T≈3.5s：超过首次锁定的到期点（T0+3s）→ 必须已解锁。
+        // 旧实现此时 locked_until 已被刷新到 T2+3s=5s，仍处于锁定（判红）
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        assert!(
+            limiter.is_username_allowed("victim").await.unwrap(),
+            "锁定期内持续失败不得延长锁定（A-13）"
+        );
     }
 }

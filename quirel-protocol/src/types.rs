@@ -133,3 +133,29 @@ pub struct ProcessEntry {
     /// 单字符状态（R/S/I/Z/T/D/?），ps 风格
     pub state: String,
 }
+
+// ── 客户端驱动的 quireld 更新（agent_update_* 消息的辅助类型） ──
+
+/// 暂存区中的更新二进制描述（上传校验通过后、commit 前存在）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StagedUpdate {
+    /// 客户端声明的 SHA-256（Manager 落盘后复核一致才入 staging）
+    pub sha256: String,
+    pub size: u64,
+    /// 二进制自报版本（staging 文件 --version 探测值）
+    pub version: String,
+    /// 暂存时间（Unix 秒）
+    pub staged_at: u64,
+}
+
+/// 最近一次更新/回滚操作结果（状态响应与操作留痕共用）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentUpdateLastResult {
+    /// "update" | "rollback"
+    pub action: String,
+    pub success: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// 操作时间（Unix 秒）
+    pub timestamp: u64,
+}

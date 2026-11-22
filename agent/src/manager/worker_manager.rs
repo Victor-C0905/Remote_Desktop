@@ -480,27 +480,6 @@ impl WorkerManager {
         self.restart().await
     }
 
-    /// 等待 Worker 进程退出
-    ///
-    /// 阻塞当前任务直到 Worker 子进程退出。
-    /// Phase 4 新增。
-    pub async fn wait_for_exit(&self) -> Result<()> {
-        let mut process_guard = self.worker_process.write().await;
-
-        if let Some(ref mut child) = *process_guard {
-            match child.wait() {
-                Ok(status) => {
-                    info!("Worker 进程已退出: status={}", status);
-                }
-                Err(e) => {
-                    warn!("等待 Worker 进程退出时出错: {}", e);
-                }
-            }
-            *process_guard = None;
-        }
-
-        Ok(())
-    }
 }
 
 impl Drop for WorkerManager {

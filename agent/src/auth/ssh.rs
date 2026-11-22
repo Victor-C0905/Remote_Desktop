@@ -33,13 +33,19 @@ use std::path::PathBuf;
 /// 基于 `~/.ssh/authorized_keys` 进行公钥认证，
 /// 遵循SSH协议规范。
 pub struct SshAuthenticator {
-    // 预留字段位置，后续版本可添加配置项
+    /// authorized_keys 严格权限校验（等价 sshd StrictModes）
+    strict_modes: bool,
 }
 
 impl SshAuthenticator {
-    /// 创建新的SSH认证器
+    /// 创建新的SSH认证器（默认启用 StrictModes）
     pub fn new() -> Self {
-        Self {}
+        Self { strict_modes: true }
+    }
+
+    /// 按配置创建认证器
+    pub fn with_strict_modes(strict_modes: bool) -> Self {
+        Self { strict_modes }
     }
 
     /// 检查公钥是否在用户的 authorized_keys 中
@@ -109,26 +115,6 @@ impl SshAuthenticator {
         Ok(base64_encode(pubkey))
     }
 
-    /// 获取用户的 authorized_keys 文件路径
-    ///
-    /// # 参数
-    /// - `username`: 用户名
-    ///
-    /// # 返回
-    /// - 成功返回 Ok(PathBuf)
-    /// - 用户不存在或路径构建失败返回 Err
-    fn get_authorized_keys_path(&self, username: &str) -> Result<PathBuf> {
-        // 获取用户信息
-        let user_info = get_user_info(username)?;
-
-        // 构建路径: ~/.ssh/authorized_keys
-        let path = PathBuf::from(&user_info.home_dir)
-            .join(".ssh")
-            .join("authorized_keys");
-
-        Ok(path)
-    }
-
     /// 加载用户的 authorized_keys 文件
     ///
     /// # 参数
@@ -139,11 +125,31 @@ impl SshAuthenticator {
     /// - 文件不存在返回 Ok(String::new())
     /// - 读取失败返回 Err
     fn load_authorized_keys(&self, username: &str) -> Result<String> {
-        let path = self.get_authorized_keys_path(username)?;
+        let user_info = get_user_info(username)?;
+        let path = PathBuf::from(&user_info.home_dir)
+            .join(".ssh")
+            .join("authorized_keys");
 
         // 文件不存在返回空字符串（不视为错误）
         if !path.exists() {
             return Ok(String::new());
+        }
+
+        // StrictModes（等价 sshd）：家目录/.ssh/authorized_keys 不得对他人可写
+        #[cfg(unix)]
+        if self.strict_modes {
+            if let Err(reason) = Self::check_strict_modes(
+                std::path::Path::new(&user_info.home_dir),
+                user_info.uid,
+                &path,
+            ) {
+                tracing::warn!(
+                    "authorized_keys 权限校验未通过，拒绝公钥认证: user={} reason={}",
+                    username,
+                    reason
+                );
+                return Ok(String::new());
+            }
         }
 
         // 读取文件内容
@@ -186,6 +192,41 @@ impl SshAuthenticator {
         }
 
         Ok(keys)
+    }
+
+    /// authorized_keys 严格权限校验（等价 sshd StrictModes）
+    ///
+    /// 家目录、`.ssh` 目录与 `authorized_keys` 文件必须：
+    /// - 属于该用户或 root
+    /// - 不对组/其他用户可写（mode & 0o022 == 0）
+    /// - 不是符号链接
+    #[cfg(unix)]
+    fn check_strict_modes(
+        home_dir: &std::path::Path,
+        uid: u32,
+        key_path: &std::path::Path,
+    ) -> Result<(), String> {
+        use std::os::unix::fs::MetadataExt;
+
+        let check = |path: &std::path::Path, label: &str| -> Result<(), String> {
+            let meta = std::fs::symlink_metadata(path)
+                .map_err(|e| format!("{label} 无法读取: {e}"))?;
+            if meta.file_type().is_symlink() {
+                return Err(format!("{label} 是符号链接"));
+            }
+            if meta.uid() != 0 && meta.uid() != uid {
+                return Err(format!("{label} 属主不是用户或 root"));
+            }
+            if meta.mode() & 0o022 != 0 {
+                return Err(format!("{label} 对组或其他用户可写"));
+            }
+            Ok(())
+        };
+
+        check(home_dir, "家目录")?;
+        check(&home_dir.join(".ssh"), ".ssh 目录")?;
+        check(key_path, "authorized_keys")?;
+        Ok(())
     }
 
     /// 验证公钥签名
@@ -484,93 +525,6 @@ impl Default for SshAuthenticator {
 }
 
 impl Authenticator for SshAuthenticator {
-    /// SSH公钥认证
-    ///
-    /// # 实现流程
-    /// 1. 加载用户的 authorized_keys
-    /// 2. 解析并查找匹配的公钥
-    /// 3. 如果提供签名，验证签名（支持 Ed25519 和 RSA）
-    /// 4. 成功返回 UserIdentity
-    ///
-    /// # 参数
-    /// - `username`: 用户名
-    /// - `pubkey`: 公钥数据（base64解码后的字节或OpenSSH格式字符串）
-    /// - `signature`: 签名数据（可选，推荐提供以增强安全性）
-    fn authenticate_pubkey(
-        &self,
-        username: &str,
-        pubkey: &[u8],
-        signature: Option<&[u8]>,
-    ) -> Result<AuthResult> {
-        // 第一步：加载用户的 authorized_keys
-        let content = match self.load_authorized_keys(username) {
-            Ok(content) => content,
-            Err(e) => {
-                // 错误信息不包含用户名，防止信息泄露
-                tracing::warn!("Failed to load authorized_keys: {}", e);
-                return Ok(AuthResult::Failure);
-            }
-        };
-
-        // 第二步：解析 authorized_keys
-        let authorized_keys = match self.parse_authorized_keys(&content) {
-            Ok(keys) => keys,
-            Err(e) => {
-                tracing::warn!("Failed to parse authorized_keys: {}", e);
-                return Ok(AuthResult::Failure);
-            }
-        };
-
-        // 第三步：查找匹配的公钥
-        // 使用简化的字节比较，后续可用russh-keys完整实现
-        let key_found = authorized_keys.iter().any(|key| key == pubkey);
-
-        if !key_found {
-            // 公钥未匹配
-            return Ok(AuthResult::Failure);
-        }
-
-        // 第四步：如果提供签名，验证签名
-        if let Some(sig) = signature {
-            tracing::debug!("开始验证签名");
-
-            // 构造挑战数据（实际应用中应该使用真实的挑战-响应机制）
-            // 这里使用 pubkey 本身作为简化的挑战数据
-            // 实际部署时应该使用随机生成的挑战，并防止重放攻击
-            let challenge = pubkey;
-
-            match self.verify_signature(pubkey, sig, challenge) {
-                Ok(true) => {
-                    tracing::info!("签名验证成功");
-                }
-                Ok(false) => {
-                    tracing::warn!("签名验证失败：签名无效");
-                    return Ok(AuthResult::Failure);
-                }
-                Err(e) => {
-                    tracing::error!("签名验证过程发生错误: {}", e);
-                    return Ok(AuthResult::Failure);
-                }
-            }
-        } else {
-            // 未提供签名，仅进行公钥匹配（不安全，记录警告）
-            tracing::warn!(
-                "公钥认证未提供签名 - 仅匹配公钥，无法防止重放攻击"
-            );
-        }
-
-        // 第五步：认证成功，返回用户身份
-        let user_info = match get_user_info(username) {
-            Ok(info) => info,
-            Err(e) => {
-                tracing::warn!("Failed to get user info: {}", e);
-                return Ok(AuthResult::Failure);
-            }
-        };
-
-        Ok(AuthResult::Success(user_info))
-    }
-
     /// 密码认证（不支持）
     ///
     /// # 设计说明
@@ -651,12 +605,8 @@ mod tests {
 
     #[test]
     fn test_ssh_authenticator_new() {
-        let auth = SshAuthenticator::new();
-        // 空实现测试，确保能创建实例
-        assert!(matches!(
-            auth.authenticate_pubkey("test", &[], None).unwrap(),
-            AuthResult::Failure
-        ));
+        // 确保能创建实例（A-11 删除 authenticate_pubkey 死代码后不再经 trait 调公钥认证）
+        let _auth = SshAuthenticator::new();
     }
 
     #[test]
@@ -774,5 +724,46 @@ mod tests {
         let ed_alg = ssh_key::Algorithm::Ed25519;
         assert!(auth.is_algorithm_compatible(&ed_alg, "ssh-ed25519"));
         assert!(!auth.is_algorithm_compatible(&ed_alg, "rsa-sha2-256"));
+    }
+
+    /// 回归：StrictModes 必须拒绝他人可写与符号链接（对齐 sshd）
+    #[cfg(unix)]
+    #[test]
+    fn strict_modes_拒绝他人可写与符号链接() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let uid = unsafe { libc::getuid() };
+        let base = std::env::temp_dir().join(format!("quirel-strict-{}", uuid::Uuid::new_v4()));
+        let ssh_dir = base.join(".ssh");
+        let key = ssh_dir.join("authorized_keys");
+        std::fs::create_dir_all(&ssh_dir).unwrap();
+        std::fs::write(&key, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest test\n").unwrap();
+
+        let set = |p: &std::path::Path, mode: u32| {
+            std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode)).unwrap();
+        };
+
+        // 正常权限：家目录 0755、.ssh 0700、文件 0600
+        set(&base, 0o755);
+        set(&ssh_dir, 0o700);
+        set(&key, 0o600);
+        assert!(SshAuthenticator::check_strict_modes(&base, uid, &key).is_ok());
+
+        // 家目录对组可写 → 拒绝
+        set(&base, 0o775);
+        assert!(SshAuthenticator::check_strict_modes(&base, uid, &key).is_err());
+        set(&base, 0o755);
+
+        // authorized_keys 对他人可写 → 拒绝
+        set(&key, 0o666);
+        assert!(SshAuthenticator::check_strict_modes(&base, uid, &key).is_err());
+        set(&key, 0o600);
+
+        // 符号链接 → 拒绝
+        let link = ssh_dir.join("link_keys");
+        std::os::unix::fs::symlink(&key, &link).unwrap();
+        assert!(SshAuthenticator::check_strict_modes(&base, uid, &link).is_err());
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

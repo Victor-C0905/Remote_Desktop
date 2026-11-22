@@ -28,7 +28,8 @@ const EXPECTED_STORE_VERSIONS: Record<string, number> = {
   "quirel-wallpaper": 0,
   // v1：旧通知记录迁移为 legacy（仅「全部」视图可见），见 notificationStore
   "notifications": 1,
-  // v1：书签/历史从全局扁平改为按服务器隔离，旧数据进入 legacy 等待认领
+  // v1：书签/历史从全局扁平改为按服务器隔离；旧全局数据无法判定归属，
+  // 迁移时直接清除（设计取舍，见 bookmarksStore/historyStore 的 migrate）
   "bookmarks": 1,
   "history": 1,
   // 文件管理器目录访问统计（侧边栏「常用」分组）

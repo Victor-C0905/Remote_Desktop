@@ -64,6 +64,22 @@ pkcs1 = { version = "0.7", features = ["pem"] }
 pem = "3.0"
 sha2 = "0.10"
 
+# SSH 自动安装通道（quireld 自动供应）：russh 自带加密栈不依赖 rustls，
+# 仅共享 tokio/rand/ed25519-dalek，避免与 quinn 的 rustls 0.23(ring) 冲突
+russh = "0.49"
+russh-sftp = "2"
+# russh Handler trait 基于 async-trait 宏（impl 侧需同宏标注）
+async-trait = "0.1"
+thiserror = "2"
+# GitHub Releases 下载（quireld 二进制/SHA256SUMS）：rustls-tls 默认走 ring provider
+# 与 quinn 共用 ring 编译单元，禁用 default-features 防止 native-tls/openssl-sys 混入
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+# 安装包解压（本地 tarball 校验解压）
+tar = "0.4"
+flate2 = "1.0"
+# sudo 密码缓冲用后即清（自动供应链路密钥材料不落盘不留痕）
+zeroize = "1"
+
 # 内置浏览器：WebView2 独立 Environment（嵌入 Quirel 桌面）
 # 版本锁定说明：wry 0.55.1 引入 webview2-com 0.38，必须复用同版本，
 # 版本错位会导致 windows crate 双份编译（二进制 +5~15MB）

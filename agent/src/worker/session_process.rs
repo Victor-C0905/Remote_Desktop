@@ -71,6 +71,16 @@ pub fn create_session(params: SessionParams) -> Result<SessionCreatedInfo> {
     let session_id = params.session_id.clone();
     let socket_name = params.socket_name.clone();
 
+    // 附加组：fork 前在父进程（Worker，root）解析目标用户组列表（fork 后
+    // malloc 不可靠，子进程只做 setgroups 系统调用）；子进程 setgroups 显式
+    // 替换而非继承 root 附加组（2026-11-20 审计 A-01，与 executor 路径对齐）。
+    // 读取失败按空表处理（仅主 gid），fail-closed。
+    let supplementary_gids = params
+        .user
+        .as_ref()
+        .map(|u| crate::auth::executor::resolve_supplementary_groups(&u.username, u.gid))
+        .unwrap_or_default();
+
     // 2. fork → child 是 Session 进程
     match unsafe { fork() } {
         Ok(ForkResult::Parent { child }) => {
@@ -100,7 +110,7 @@ pub fn create_session(params: SessionParams) -> Result<SessionCreatedInfo> {
             unsafe { close_inherited_fds(master_fd, slave_fd); }
 
             // 注意: fork 后 tokio runtime 已损坏，不能用 tracing
-            if let Err(e) = run_session_process(params, master_fd, slave_fd) {
+            if let Err(e) = run_session_process(params, supplementary_gids, master_fd, slave_fd) {
                 eprintln!("Session 进程错误: {}", e);
             }
             // 必须用 std::process::exit，不能用 return（避免运行析构函数导致死锁）
@@ -223,7 +233,12 @@ fn load_login_environment(shell: &str, user: &SessionUserContext) -> Result<Vec<
 /// 5. fork 孙进程 execvp(bash)
 /// 6. close slave（只需 master）
 /// 7. listen + session_io_loop
-fn run_session_process(params: SessionParams, master_fd: RawFd, slave_fd: RawFd) -> Result<()> {
+fn run_session_process(
+    params: SessionParams,
+    supplementary_gids: Vec<u32>,
+    master_fd: RawFd,
+    slave_fd: RawFd,
+) -> Result<()> {
     // 1. 忽略 SIGPIPE（write 到已关闭的 socket 不应杀进程）
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_IGN);
@@ -231,6 +246,19 @@ fn run_session_process(params: SessionParams, master_fd: RawFd, slave_fd: RawFd)
 
     // 2. 降权（必须在 fork 孙进程前完成，确保孙进程继承降权后的身份）
     if let Some(ref user) = params.user {
+        // 附加组：必须仍在 root 时 setgroups 显式替换（setuid 后无权再改）。
+        // 仅 setgid/setuid 不清除附加组，Session/bash 将继承 Worker(root) 的
+        // 附加组（至少 gid 0）——2026-11-20 审计 A-01。列表已在 fork 前解析，
+        // 读取失败按空表处理（仅主 gid），fail-closed。
+        // 非 root 运行（开发/测试模式，降权目标即自身）无 root 组继承问题
+        // 且 setgroups 必然 EPERM，跳过；root 下失败 = 真异常，退出。
+        let gids: Vec<libc::gid_t> =
+            supplementary_gids.iter().map(|&g| g as libc::gid_t).collect();
+        if unsafe { libc::geteuid() == 0 && libc::setgroups(gids.len(), gids.as_ptr()) != 0 } {
+            eprintln!("setgroups 失败: {}", std::io::Error::last_os_error());
+            std::process::exit(1);
+        }
+
         // 先 setgid 再 setuid
         let ret = unsafe { libc::setgid(user.gid as libc::gid_t) };
         if ret != 0 {

@@ -20,6 +20,7 @@ import { createLogger } from "../../utils/logger";
 import type { TabInfo } from "./useBrowserTabs";
 import { useBrowserSuggest } from "./useBrowserSuggest";
 import { HistoryPanel } from "./HistoryPanel";
+import { isDangerousUrl } from "./dangerousUrl";
 
 const log = createLogger("BrowserNavbar");
 
@@ -113,10 +114,10 @@ export function BrowserNavbar({
   const submit = (override?: string) => {
     // override：选中的联想词（纯文本，经 Rust normalize_url 落到搜索结果页）
     const value = (override ?? draft).trim();
-    // 纵深防御（审计 L11）：脚本类 scheme 在前端显式拦截。Rust
-    // normalize_url 目前会把它们意外中和（归入搜索词/畸形 https），
-    // 但产品语义上地址栏永远不该执行脚本——显式阻断防 Rust 侧回归
-    if (/^(javascript|data|vbscript):/i.test(value)) {
+    // 纵深防御（审计 L11/C-01）：脚本类 scheme 在前端显式拦截。Rust
+    // normalize_url 是最终强制层，此处防其回归；判据剥离内嵌控制字符
+    // （java\tscript: 可绕过朴素正则）
+    if (isDangerousUrl(value)) {
       log.warn("地址栏已拦截危险 scheme:", value.slice(0, 48));
       return;
     }

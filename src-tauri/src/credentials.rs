@@ -37,18 +37,25 @@ fn entry(app: &tauri::AppHandle, account: &str) -> Result<Entry, String> {
 }
 
 /// 主密钥：优先读取，不存在则生成并写入 keyring（首次初始化）
+///
+/// 中间缓冲（b64/raw）用后即清（B-09：与密码/私钥的 Zeroizing 惯例对齐）
 fn master_key(app: &tauri::AppHandle) -> Result<[u8; 32], String> {
+    use zeroize::Zeroize;
     let e = entry(app, MASTER_ACCOUNT)?;
     match e.get_password() {
         Ok(b64) => {
-            let raw = base64::engine::general_purpose::STANDARD
+            let mut b64 = b64;
+            let mut raw = base64::engine::general_purpose::STANDARD
                 .decode(b64.as_bytes())
                 .map_err(|e| format!("主密钥解码失败: {}", e))?;
+            b64.zeroize();
             if raw.len() != 32 {
+                raw.zeroize();
                 return Err("主密钥长度异常".to_string());
             }
             let mut key = [0u8; 32];
             key.copy_from_slice(&raw);
+            raw.zeroize();
             Ok(key)
         }
         Err(keyring::Error::NoEntry) => {
@@ -56,8 +63,9 @@ fn master_key(app: &tauri::AppHandle) -> Result<[u8; 32], String> {
             let rng = SystemRandom::new();
             let mut key = [0u8; 32];
             rng.fill(&mut key).map_err(|e| format!("随机源失败: {}", e))?;
-            let b64 = base64::engine::general_purpose::STANDARD.encode(key);
+            let mut b64 = base64::engine::general_purpose::STANDARD.encode(key);
             e.set_password(&b64).map_err(|e| format!("主密钥写入失败: {}", e))?;
+            b64.zeroize();
             tracing::info!("[Credentials] 主密钥首次初始化完成");
             Ok(key)
         }
@@ -65,18 +73,21 @@ fn master_key(app: &tauri::AppHandle) -> Result<[u8; 32], String> {
     }
 }
 
-/// 凭据密文文件路径（account 仅允许安全字符，双保险防路径穿越）
+/// 凭据密文文件路径（account hex 编码，一一对应且无路径语义，B-09）
+///
+/// 旧消毒方案把非安全字符统一映射 `_`，"a/b" 与 "a_b" 落同一文件互相
+/// 覆盖。注意：与旧编码的文件名不兼容（未发布项目，旧开发期凭据需重新保存）。
 fn cred_path(app: &tauri::AppHandle, account: &str) -> Result<PathBuf, String> {
-    let safe: String = account
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+    let hex: String = account
+        .bytes()
+        .map(|b| format!("{b:02x}"))
         .collect();
     let dir = app
         .path()
         .app_data_dir()
         .map_err(|e| format!("无法定位应用数据目录: {}", e))?
         .join("credentials");
-    Ok(dir.join(format!("{}.bin", safe)))
+    Ok(dir.join(format!("{hex}.bin")))
 }
 
 fn seal(plaintext: &str, key: &[u8; 32]) -> Result<Vec<u8>, String> {
@@ -114,13 +125,25 @@ fn open(sealed: &[u8], key: &[u8; 32]) -> Result<String, String> {
 
 #[tauri::command]
 pub fn credential_set(account: String, value: String, app: tauri::AppHandle) -> Result<(), String> {
+    use zeroize::Zeroize;
     let key = master_key(&app)?;
     let sealed = seal(&value, &key)?;
+    // 明文用后即清（B-09）
+    let mut value = value;
+    value.zeroize();
     let path = cred_path(&app, &account)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建凭据目录失败: {}", e))?;
     }
-    fs::write(&path, sealed).map_err(|e| format!("写入凭据文件失败: {}", e))
+    // 原子替换（B-09）：临时文件 + rename，杜绝读到半写文件
+    let tmp_path = path.with_extension("tmp");
+    {
+        use std::io::Write;
+        let mut f = fs::File::create(&tmp_path).map_err(|e| format!("创建临时凭据文件失败: {}", e))?;
+        f.write_all(&sealed).map_err(|e| format!("写入凭据临时文件失败: {}", e))?;
+        f.sync_all().map_err(|e| format!("凭据临时文件落盘失败: {}", e))?;
+    }
+    fs::rename(&tmp_path, &path).map_err(|e| format!("提交凭据文件失败: {}", e))
 }
 
 #[tauri::command]

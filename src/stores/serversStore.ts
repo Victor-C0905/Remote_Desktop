@@ -22,7 +22,8 @@ export interface ServersState {
 }
 
 export interface ServersActions {
-  addServer: (server: Omit<ServerConfig, "id" | "status" | "lastConnected" | "auth"> & { auth?: Partial<ServerConfig["auth"]> }) => void;
+  /** 返回新服务器 id（自动安装向导需要 id 触发 provision_detect/server） */
+  addServer: (server: Omit<ServerConfig, "id" | "status" | "lastConnected" | "auth"> & { auth?: Partial<ServerConfig["auth"]> }) => string;
   removeServer: (id: string) => void;
   updateServer: (id: string, updates: Partial<ServerConfig>) => void;
   setActiveServerId: (id: string | null) => void;
@@ -59,9 +60,11 @@ export const useServersStore = create<ServersState & ServersActions>()(
           passphrase: undefined,
         };
 
+        // id 在 action 内生成并返回（自动安装向导需要 id 触发 provision_detect/server）
+        const id = generateId();
         const newServer: ServerConfig = {
           ...server,
-          id: generateId(),
+          id,
           status: "disconnected",
           auth: {
             ...defaultAuth,
@@ -73,6 +76,7 @@ export const useServersStore = create<ServersState & ServersActions>()(
           void secretsSet(newServer.id, newServer.auth);
         }
         set({ servers: [...get().servers, newServer] });
+        return id;
       },
 
       removeServer: (id) => {

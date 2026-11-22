@@ -489,6 +489,11 @@ fn build_server_config(
     Ok(quic_config)
 }
 
+/// 更新命令授权：仅 root（上传/提交/回滚/状态查询，A-14 对齐）
+fn update_authorized(session: &UserSession) -> bool {
+    session.uid == 0
+}
+
 async fn handle_connection(
     connection: quinn::Connection,
     cfg: &AgentConfig,
@@ -616,7 +621,19 @@ async fn handle_connection(
             }
 
             // 调用认证器进行密码认证
-            match authenticator.authenticate_password(username, password) {
+            // PAM 认证是同步阻塞调用（网络 PAM 后端 LDAP/SSSD 可能很慢），
+            // 包 spawn_blocking 移出 tokio worker，防止慢认证占满 worker
+            // 冻结整个 runtime（2026-11-20 审计 A-06）
+            let authenticator = Arc::clone(&authenticator);
+            let auth_username = username.clone();
+            let auth_password = password.clone();
+            let auth_result = tokio::task::spawn_blocking(move || {
+                authenticator.authenticate_password(&auth_username, &auth_password)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("认证任务失败: {}", e))?;
+
+            match auth_result {
                 Ok(crate::auth::AuthResult::Success(identity)) => {
                     // 认证成功：清除失败记录
                     rate_limiter.clear_failures(username).await;
@@ -731,6 +748,22 @@ async fn handle_connection(
                     auth_envelope.request_id,
                     AuthErrorCode::AccountLocked,
                     "账户暂时锁定，请15分钟后再试",
+                ).await;
+                return Ok(());
+            }
+
+            // 公钥认证开关：enable_pubkey=false 时拒绝。此前该开关仅在已删除的
+            // 死代码 CompositeAuthenticator::authenticate_pubkey 中生效，线上
+            // 挑战路径从未检查（2026-11-20 审计 A-11 删除死代码时一并接线）
+            if !cfg.auth.ssh.enable_pubkey {
+                tracing::warn!("公钥认证已被配置禁用: username={}", username);
+                audit_log.log_auth_failure(username, 0, "pubkey_disabled");
+                reject_auth(
+                    &connection,
+                    &mut auth_send,
+                    auth_envelope.request_id,
+                    AuthErrorCode::PubkeyNotAuthorized,
+                    "公钥认证已禁用",
                 ).await;
                 return Ok(());
             }
@@ -1251,6 +1284,179 @@ async fn handle_stream(
             return Ok(());
         }
     };
+
+    // ── 客户端驱动的 quireld 更新（本地处理，不路由 Worker）──────────
+    // 能力串 "agent_update" 门控：旧客户端不会发送这些 payload；
+    // enabled=false 时仅 status 可查（enabled 字段如实上报），其余命令拒绝。
+    // 授权：全部更新命令（含状态查询，A-14）仅 root——版本/staged/last_result
+    // 属运维面信息（安装与更新本身需要 root，客户端 UI 不作安全边界）。
+
+    // 更新状态查询
+    if let Payload::AgentUpdateStatus {} = &envelope.payload {
+        if !update_authorized(session) {
+            tracing::warn!(
+                "拒绝非 root 更新状态查询: user={} uid={}",
+                session.username,
+                session.uid
+            );
+            let response = Envelope::new(
+                envelope.request_id,
+                Payload::Error {
+                    code: 403,
+                    message: crate::manager::update_manager::UPDATE_REQUIRES_ROOT.to_string(),
+                },
+            );
+            if let Ok(bytes) = response.encode() {
+                let _ = write_message(&mut send, &bytes).await;
+            }
+            return Ok(());
+        }
+        let response = Envelope::new(envelope.request_id, manager.update_manager.status());
+        if let Ok(bytes) = response.encode() {
+            write_message(&mut send, &bytes).await?;
+        }
+        return Ok(());
+    }
+
+    // 更新二进制上传：请求帧后同一流上继续读 FileChunk，收齐后校验落盘 staging
+    if let Payload::AgentUpdateUploadRequest { file_size, sha256, version } = &envelope.payload {
+        if !update_authorized(session) {
+            tracing::warn!(
+                "拒绝非 root 更新上传: user={} uid={}",
+                session.username,
+                session.uid
+            );
+            let response = Envelope::new(
+                envelope.request_id,
+                Payload::AgentUpdateUploadResponse {
+                    success: false,
+                    error: Some(crate::manager::update_manager::UPDATE_REQUIRES_ROOT.to_string()),
+                    staged: None,
+                },
+            );
+            if let Ok(bytes) = response.encode() {
+                let _ = write_message(&mut send, &bytes).await;
+            }
+            return Ok(());
+        }
+        tracing::info!("收到更新上传请求: size={} version={} user={}", file_size, version, session.username);
+        let send_result: Result<quirel_protocol::StagedUpdate, String> = async {
+            let staging = manager.update_manager.begin_upload(*file_size)?;
+            let mut received: u64 = 0;
+            // 读取结果（break 值统一收敛到循环出口）
+            let read_result: Result<(), String> = loop {
+                let chunk_data = match read_message(&mut recv).await {
+                    Ok(Some(d)) => d,
+                    Ok(None) => break Ok(()), // 客户端提前关闭 → 大小复核会失败
+                    Err(e) => break Err(e.to_string()),
+                };
+                let chunk_env = Envelope::decode(&chunk_data)
+                    .map_err(|e| format!("分块帧解码失败: {e}"))?;
+                match chunk_env.payload {
+                    Payload::FileChunk { data, .. } => {
+                        // 按实际字节计数——客户端声明的 size 不可信，按其计数
+                        // 可用小声明绕过下面的超限中止，灌满 staging 磁盘（A-12）
+                        received += data.len() as u64;
+                        if let Err(e) = manager.update_manager.write_chunk(&staging, &data) {
+                            break Err(e);
+                        }
+                    }
+                    Payload::FileTransferComplete { success, .. } => {
+                        if !success {
+                            // 客户端主动中止 → 不再读帧
+                        }
+                        break Ok(());
+                    }
+                    other => break Err(format!("上传流中出现非预期帧: {}", other.type_name())),
+                }
+                // 防御：超过声明大小时立即终止（不信任客户端自我约束）
+                if received > *file_size {
+                    break Err("上传数据超出声明大小".to_string());
+                }
+            };
+            read_result?;
+            // finish_upload 是重同步操作（sha256 全量哈希 + 子进程版本探测），
+            // 包 spawn_blocking 移出 tokio worker（A-09）
+            let um = Arc::clone(&manager.update_manager);
+            let sha256 = sha256.clone();
+            let version = version.clone();
+            let file_size = *file_size;
+            tokio::task::spawn_blocking(move || um.finish_upload(&sha256, file_size, &version))
+                .await
+                .map_err(|e| format!("finish_upload 任务失败: {e}"))?
+        }.await;
+        let response = Envelope::new(envelope.request_id, match send_result {
+            Ok(staged) => Payload::AgentUpdateUploadResponse { success: true, error: None, staged: Some(staged) },
+            Err(e) => {
+                tracing::warn!("更新上传失败: {} user={}", e, session.username);
+                Payload::AgentUpdateUploadResponse { success: false, error: Some(e), staged: None }
+            }
+        });
+        if let Ok(bytes) = response.encode() {
+            write_message(&mut send, &bytes).await?;
+        }
+        return Ok(());
+    }
+
+    // 提交更新（备份 → 原子替换 → 热更新 → 确认；失败自动回滚）
+    if let Payload::AgentUpdateCommitRequest { expected_sha256 } = &envelope.payload {
+        if !update_authorized(session) {
+            tracing::warn!(
+                "拒绝非 root 更新提交: user={} uid={}",
+                session.username,
+                session.uid
+            );
+            let response = Envelope::new(
+                envelope.request_id,
+                manager
+                    .update_manager
+                    .denied(crate::manager::update_manager::UPDATE_REQUIRES_ROOT, false),
+            );
+            if let Ok(bytes) = response.encode() {
+                let _ = write_message(&mut send, &bytes).await;
+            }
+            return Ok(());
+        }
+        tracing::info!("收到更新提交请求: user={}", session.username);
+        let response = Envelope::new(
+            envelope.request_id,
+            manager.update_manager.commit(expected_sha256, &session.username).await,
+        );
+        if let Ok(bytes) = response.encode() {
+            let _ = write_message(&mut send, &bytes).await;
+        }
+        return Ok(());
+    }
+
+    // 手动回滚到最近备份
+    if let Payload::AgentUpdateRollbackRequest {} = &envelope.payload {
+        if !update_authorized(session) {
+            tracing::warn!(
+                "拒绝非 root 更新回滚: user={} uid={}",
+                session.username,
+                session.uid
+            );
+            let response = Envelope::new(
+                envelope.request_id,
+                manager
+                    .update_manager
+                    .denied(crate::manager::update_manager::UPDATE_REQUIRES_ROOT, false),
+            );
+            if let Ok(bytes) = response.encode() {
+                let _ = write_message(&mut send, &bytes).await;
+            }
+            return Ok(());
+        }
+        tracing::info!("收到更新回滚请求: user={}", session.username);
+        let response = Envelope::new(
+            envelope.request_id,
+            manager.update_manager.rollback(&session.username).await,
+        );
+        if let Ok(bytes) = response.encode() {
+            let _ = write_message(&mut send, &bytes).await;
+        }
+        return Ok(());
+    }
 
     // 压缩能力探测：本地处理（不路由 Worker），按登录用户执行一次样本探测
     if let Payload::ArchiveCapabilitiesRequest { refresh } = &envelope.payload {
@@ -1849,6 +2055,8 @@ async fn send_auth_response(
                     .map(|s| s.to_string())
                     .collect(),
             ),
+            // quireld 版本上报（lockstep；客户端据此展示版本与判断更新）
+            version: Some(crate::manager::update_manager::MANAGER_VERSION.to_string()),
         },
     );
 
@@ -2095,23 +2303,37 @@ async fn handle_file_download_stream(
     let session = sessions.get_mut(&session_id)
         .ok_or_else(|| anyhow::anyhow!("会话不存在: {}", session_id))?;
 
-    let mut reader = session.reader.take()
+    let reader = session.reader.take()
         .ok_or_else(|| anyhow::anyhow!("文件读取器不存在"))?;
 
     drop(sessions);  // 释放锁
+
+    // 管道读是同步阻塞 IO（FIFO/SIGSTOP 的隔离子进程可使其无限阻塞），
+    // 逐 chunk 包 spawn_blocking 移出 tokio worker，防止占满 worker 冻结
+    // 整个 runtime（2026-11-20 审计 A-03；finish/abort 已是同模式）
+    let reader = Arc::new(std::sync::Mutex::new(reader));
 
     let mut seq = 1u32;
     let mut download_success = true;
 
     // 读取并发送文件块
     loop {
-        let chunk = match reader.read_next_chunk() {
-            Ok(Some(c)) => c,
-            Ok(None) => break,  // EOF
-            Err(e) => {
-                tracing::error!("读取文件块失败: {}", e);
-                download_success = false;
-                break;
+        let chunk = {
+            let reader = Arc::clone(&reader);
+            match tokio::task::spawn_blocking(move || reader.lock().unwrap().read_next_chunk()).await
+            {
+                Ok(Ok(Some(c))) => c,
+                Ok(Ok(None)) => break,  // EOF
+                Ok(Err(e)) => {
+                    tracing::error!("读取文件块失败: {}", e);
+                    download_success = false;
+                    break;
+                }
+                Err(e) => {
+                    tracing::error!("读取文件块任务失败: {}", e);
+                    download_success = false;
+                    break;
+                }
             }
         };
 
@@ -2147,6 +2369,25 @@ async fn handle_file_download_stream(
 
         seq += 1;
         tracing::debug!("已发送块: seq={}, size={}", seq-1, chunk.len());
+    }
+
+    // EOF 后校验隔离子进程退出状态：EOF 也可能来自子进程异常退出（拒绝
+    // 非常规文件 / 写 stdout 失败），不查状态会把空/截断文件误报成功（A-03）
+    if download_success {
+        let reader = Arc::clone(&reader);
+        let finish_result = tokio::task::spawn_blocking(move || reader.lock().unwrap().finish())
+            .await;
+        match finish_result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                tracing::error!("读取子进程异常退出: {}", e);
+                download_success = false;
+            }
+            Err(e) => {
+                tracing::error!("读取子进程回收任务失败: {}", e);
+                download_success = false;
+            }
+        }
     }
 
     // 发送 FileTransferComplete
@@ -2229,11 +2470,15 @@ async fn handle_file_upload_stream(
     let session = sessions.get_mut(&session_id)
         .ok_or_else(|| anyhow::anyhow!("会话不存在: {}", session_id))?;
 
-    let mut writer = session.writer.take()
+    let writer = session.writer.take()
         .ok_or_else(|| anyhow::anyhow!("文件写入器不存在"))?;
     let is_multi = session.is_multi_stream();
 
     drop(sessions);  // 释放锁
+
+    // 管道写是同步阻塞 IO（降权子进程被 SIGSTOP/FIFO 等可使其长期阻塞），
+    // 写块统一包 spawn_blocking 移出 tokio worker，防止冻结整个 runtime（A-03）
+    let writer = Arc::new(std::sync::Mutex::new(writer));
 
     let mut upload_success = false;
     // finish(rename) 失败原因：不立即返回，先给客户端回失败确认再统一收尾
@@ -2249,7 +2494,7 @@ async fn handle_file_upload_stream(
                     // 流中断(客户端断连)— writer 的 Drop impl 会自动清理临时文件
                     tracing::warn!(
                         "文件上传流中断(裸帧读失败): session_id={}, path={}, 已传输: {}/{}, err: {}",
-                        session_id, path, writer.transferred(), file_size, e
+                        session_id, path, writer.lock().unwrap().transferred(), file_size, e
                     );
                     break;
                 }
@@ -2257,7 +2502,12 @@ async fn handle_file_upload_stream(
             match type_byte {
                 raw_frame::TYPE_DATA => {
                     let chunk = raw_frame::read_data_chunk_body(&mut recv, body_len).await?;
-                    writer.write_chunk(&chunk.data).map_err(|e| anyhow::anyhow!("{}", e))?;
+                    // 管道写为同步阻塞 IO，包 spawn_blocking 移出 tokio worker（A-03）
+                    let w = Arc::clone(&writer);
+                    tokio::task::spawn_blocking(move || w.lock().unwrap().write_chunk(&chunk.data))
+                        .await
+                        .map_err(|e| anyhow::anyhow!("write_chunk 任务失败: {}", e))?
+                        .map_err(|e| anyhow::anyhow!("{}", e))?;
                 }
                 raw_frame::TYPE_CONTROL => {
                     let body = raw_frame::read_control_body(&mut recv, body_len).await?;
@@ -2265,7 +2515,8 @@ async fn handle_file_upload_stream(
                     match env.payload {
                         Payload::FileTransferComplete { success, error, .. } => {
                             if success {
-                                let finish_result = tokio::task::spawn_blocking(move || writer.finish())
+                                let w = Arc::clone(&writer);
+                                let finish_result = tokio::task::spawn_blocking(move || w.lock().unwrap().finish())
                                     .await
                                     .map_err(|e| anyhow::anyhow!("finish 任务 panic: {}", e))?;
                                 match finish_result {
@@ -2279,7 +2530,8 @@ async fn handle_file_upload_stream(
                                     }
                                 }
                             } else {
-                                tokio::task::spawn_blocking(move || writer.abort())
+                                let w = Arc::clone(&writer);
+                                tokio::task::spawn_blocking(move || w.lock().unwrap().abort())
                                     .await
                                     .map_err(|e| anyhow::anyhow!("abort 任务 panic: {}", e))?;
                                 tracing::error!("文件传输失败(客户端报告,裸帧): session_id={}, error={:?}", session_id, error);
@@ -2298,7 +2550,7 @@ async fn handle_file_upload_stream(
                 // 流中断（客户端断连）— writer 的 Drop impl 会自动清理临时文件
                 tracing::warn!(
                     "文件上传流中断（客户端断连）: session_id={}, path={}, 已传输: {}/{}",
-                    session_id, path, writer.transferred(), file_size
+                    session_id, path, writer.lock().unwrap().transferred(), file_size
                 );
                 break;
             }
@@ -2308,12 +2560,18 @@ async fn handle_file_upload_stream(
 
             match envelope.payload {
                 Payload::FileChunk { data, .. } => {
-                    writer.write_chunk(&data).map_err(|e| anyhow::anyhow!("{}", e))?;
+                    // 管道写为同步阻塞 IO，包 spawn_blocking 移出 tokio worker（A-03）
+                    let w = Arc::clone(&writer);
+                    tokio::task::spawn_blocking(move || w.lock().unwrap().write_chunk(&data))
+                        .await
+                        .map_err(|e| anyhow::anyhow!("write_chunk 任务失败: {}", e))?
+                        .map_err(|e| anyhow::anyhow!("{}", e))?;
                 }
                 Payload::FileTransferComplete { success, error, .. } => {
                     if success {
                         // spawn_blocking 避免 sync waitpid(flush+sync+rename)阻塞 tokio worker
-                        let finish_result = tokio::task::spawn_blocking(move || writer.finish())
+                        let w = Arc::clone(&writer);
+                        let finish_result = tokio::task::spawn_blocking(move || w.lock().unwrap().finish())
                             .await
                             .map_err(|e| anyhow::anyhow!("finish 任务 panic: {}", e))?;
                         match finish_result {
@@ -2329,7 +2587,8 @@ async fn handle_file_upload_stream(
                     } else {
                         // 客户端报告失败，abort 删除临时文件
                         // spawn_blocking 避免 sync waitpid(kill+waitpid)阻塞 tokio worker
-                        tokio::task::spawn_blocking(move || writer.abort())
+                        let w = Arc::clone(&writer);
+                        tokio::task::spawn_blocking(move || w.lock().unwrap().abort())
                             .await
                             .map_err(|e| anyhow::anyhow!("abort 任务 panic: {}", e))?;
                         tracing::error!("文件传输失败（客户端报告）: session_id={}, error={:?}", session_id, error);
@@ -2384,8 +2643,31 @@ async fn handle_file_upload_stream(
                     "多流主 stream 完成,等待其他 stream: session_id={}",
                     session_id
                 );
+                // 等待必须有 deadline（A-15）：keepalive 存活下其他流永不完成
+                // 时，无限轮询会泄漏 task/session/段文件；到点标记 Error +
+                // 清理段文件，其余流任务观察到 Error 自行退出
+                const MULTI_STREAM_WAIT_DEADLINE: Duration = Duration::from_secs(600);
+                let wait_deadline = std::time::Instant::now() + MULTI_STREAM_WAIT_DEADLINE;
                 loop {
                     tokio::time::sleep(Duration::from_millis(100)).await;
+                    if std::time::Instant::now() >= wait_deadline {
+                        tracing::warn!(
+                            "多流等待超时(600s)，中止合并并清理段文件: session_id={}",
+                            session_id
+                        );
+                        let part_paths: Vec<String> = {
+                            let mut sessions = crate::handler::TRANSFER_SESSIONS.lock().await;
+                            match sessions.get_mut(&session_id) {
+                                Some(s) => {
+                                    s.status = crate::transfer_session::TransferStatus::Error;
+                                    s.part_paths.clone()
+                                }
+                                None => Vec::new(),
+                            }
+                        };
+                        remove_part_files(&part_paths);
+                        break;
+                    }
                     let sessions = crate::handler::TRANSFER_SESSIONS.lock().await;
                     match sessions.get(&session_id) {
                         Some(s) => {
@@ -2740,5 +3022,32 @@ mod auth_error_tests {
             }
             _ => panic!("变体不匹配"),
         }
+    }
+}
+
+#[cfg(test)]
+mod update_auth_tests {
+    use super::update_authorized;
+    use crate::auth::UserSession;
+    use std::path::PathBuf;
+    use std::time::SystemTime;
+
+    fn session_with_uid(uid: u32) -> UserSession {
+        UserSession {
+            session_id: "test-session".to_string(),
+            username: "tester".to_string(),
+            uid,
+            gid: uid,
+            home_dir: PathBuf::from("/home/tester"),
+            shell: PathBuf::from("/bin/bash"),
+            created_at: SystemTime::now(),
+        }
+    }
+
+    /// 回归：普通用户不得上传/提交/回滚 quireld 更新（防本地提权）
+    #[test]
+    fn 更新命令_仅root可执行() {
+        assert!(update_authorized(&session_with_uid(0)));
+        assert!(!update_authorized(&session_with_uid(1000)));
     }
 }

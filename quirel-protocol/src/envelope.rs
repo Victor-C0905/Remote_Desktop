@@ -16,8 +16,8 @@ use crate::archive::{ArchiveCapabilities, ArchiveExtractPolicy};
 use crate::stats::StatsResponse;
 use crate::subscription::SubscriptionType;
 use crate::types::{
-    default_frame_mode, one, CommonLocation, FileDiff, FileEntry, MetricsSnapshot, MountInfo,
-    ProcessEntry,
+    default_frame_mode, one, AgentUpdateLastResult, CommonLocation, FileDiff, FileEntry,
+    MetricsSnapshot, MountInfo, ProcessEntry, StagedUpdate,
 };
 
 /// 认证/连接错误码（客户端↔Agent 线上协议的组成部分）
@@ -188,6 +188,10 @@ pub enum Payload {
         /// 盲发会导致 Agent 断流、客户端误判整条连接断开
         #[serde(default, skip_serializing_if = "Option::is_none")]
         capabilities: Option<Vec<String>>,
+        /// quireld 版本（Manager 进程编译期注入；旧版 Agent 不含此字段 → None）。
+        /// 客户端据此展示版本、判断是否需要更新（lockstep 版本纪律）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
     },
 
     /// 统计查询请求
@@ -394,8 +398,9 @@ pub enum Payload {
         username: String,
         #[serde(default)]
         home_dir: String,
-        // 服务器常用位置为后加字段：旧版 Agent 响应不含此字段，
-        // 前端回退到原有硬编码布局（default 保证旧包可解码）
+        // 服务器常用位置为后加字段：旧版 Agent 响应不含此字段（default 保证旧包
+        // 可解码）。前端对空数组仅展示主目录——旧版 Agent 失去标准位置快捷方式，
+        // 属设计取舍（见 src/apps/fileSidebar.ts buildSidebarSections）
         #[serde(default)]
         common_locations: Vec<CommonLocation>,
     },
@@ -674,6 +679,78 @@ pub enum Payload {
 
     #[serde(rename = "error")]
     Error { code: i32, message: String },
+
+    // ===== 客户端驱动的 quireld 更新（能力串 "agent_update" 门控） =====
+    // 旧 Agent 无法解码以下 payload；客户端必须先检查 capabilities 再发送。
+    // staged/worker_version 等可选字段均带 serde default，向后兼容。
+
+    /// 查询更新状态（当前版本/staged/最近结果；任何已认证用户可查）
+    #[serde(rename = "agent_update_status")]
+    AgentUpdateStatus {},
+
+    /// 更新状态响应
+    /// - manager_version：Manager 进程版本（QUIC 层，只有 systemctl restart 才更新）
+    /// - worker_version：Worker 进程版本（热更新即生效）
+    /// - manager_lags_worker：Worker 新于 Manager → "半更新"状态，UI 提示需 systemctl restart
+    #[serde(rename = "agent_update_status_resp")]
+    AgentUpdateStatusResponse {
+        manager_version: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        worker_version: Option<String>,
+        manager_lags_worker: bool,
+        is_reloading: bool,
+        /// 服务端更新开关（配置 [updates].enabled，false 时客户端隐藏更新 UI）
+        enabled: bool,
+        /// 暂存区中的新二进制（上传校验通过后存在，等待 commit）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        staged: Option<StagedUpdate>,
+        /// 最近一次更新/回滚操作结果
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last_result: Option<AgentUpdateLastResult>,
+    },
+
+    /// 更新二进制上传请求（声明大小/哈希/版本；Agent 校验后返回，客户端随后
+    /// 在同一流上发送 FileChunk 帧，全部收齐后校验落盘 staging）
+    #[serde(rename = "agent_update_upload")]
+    AgentUpdateUploadRequest {
+        file_size: u64,
+        sha256: String,
+        version: String,
+    },
+
+    /// 上传结果（收齐分块 + sha256 校验 + ELF 架构/版本探测后的回执）
+    #[serde(rename = "agent_update_upload_resp")]
+    AgentUpdateUploadResponse {
+        success: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        staged: Option<StagedUpdate>,
+    },
+
+    /// 提交更新：备份 → 原子替换二进制 → 触发热更新 → 确认新 Worker 存活
+    /// （失败自动回滚备份；expected_sha256 防止提交与暂存不一致的陈旧请求）
+    #[serde(rename = "agent_update_commit")]
+    AgentUpdateCommitRequest { expected_sha256: String },
+
+    /// 手动回滚到最近备份
+    #[serde(rename = "agent_update_rollback")]
+    AgentUpdateRollbackRequest {},
+
+    /// commit/rollback 共用结果响应
+    /// - rolled_back=true 表示本次操作触发了自动/手动回滚
+    /// - manager_version/worker_version/manager_lags_worker 语义同状态响应
+    #[serde(rename = "agent_update_action_resp")]
+    AgentUpdateActionResult {
+        success: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+        manager_version: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        worker_version: Option<String>,
+        manager_lags_worker: bool,
+        rolled_back: bool,
+    },
 }
 
 impl Payload {
@@ -757,6 +834,13 @@ impl Payload {
             Payload::ArchiveCapabilitiesResponse(_) => "ArchiveCapabilitiesResponse",
             Payload::ArchiveListRequest { .. } => "ArchiveListRequest",
             Payload::ArchiveExtractRequest { .. } => "ArchiveExtractRequest",
+            Payload::AgentUpdateStatus {} => "AgentUpdateStatus",
+            Payload::AgentUpdateStatusResponse { .. } => "AgentUpdateStatusResponse",
+            Payload::AgentUpdateUploadRequest { .. } => "AgentUpdateUploadRequest",
+            Payload::AgentUpdateUploadResponse { .. } => "AgentUpdateUploadResponse",
+            Payload::AgentUpdateCommitRequest { .. } => "AgentUpdateCommitRequest",
+            Payload::AgentUpdateRollbackRequest {} => "AgentUpdateRollbackRequest",
+            Payload::AgentUpdateActionResult { .. } => "AgentUpdateActionResult",
             Payload::Error { .. } => "Error",
         }
     }

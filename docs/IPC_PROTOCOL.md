@@ -1386,4 +1386,39 @@ fn validate_path(path: &str) -> Result<(), Error> {
 
 ---
 
+## 十二、客户端驱动的 quireld 更新（2026-11-16 新增）
+
+能力串 `agent_update` 门控（AuthResponse.capabilities）：旧 Agent 无法
+解码以下 payload，客户端必须先检查能力再发送（盲发会断流）。
+`AuthResponse` 同时新增 `version: Option<String>` 字段（serde default，
+旧 Agent 缺省回退 None）——Manager 进程编译期版本，客户端据此展示与判断更新。
+
+| type | 方向 | 载荷要点 |
+|------|------|----------|
+| `agent_update_status` | 客户端→Agent | 空载荷 |
+| `agent_update_status_resp` | Agent→客户端 | `manager_version`（Manager 编译期版本）/ `worker_version`（最近 commit 版本，缺省 None）/ `manager_lags_worker`（Worker 新于 Manager → 半更新状态，UI 提示 systemctl restart）/ `is_reloading` / `enabled`（[updates].enabled 开关）/ `staged: Option<StagedUpdate>` / `last_result: Option<AgentUpdateLastResult>` |
+| `agent_update_upload` | 客户端→Agent | `file_size` / `sha256` / `version`；**同一流**上客户端随后发送 `FileChunk` 分块帧与 `FileTransferComplete` 完成帧（session_id 固定 "agent-update"） |
+| `agent_update_upload_resp` | Agent→客户端 | `success` / `error` / `staged`——收齐分块后服务端复核 sha256 + ELF e_machine 架构 + `--version` 探测，通过落 staging（0700/0600），失败丢弃 |
+| `agent_update_commit` | 客户端→Agent | `expected_sha256`（与 staged 一致才提交）；服务端备份 → 原子替换（rm+cp，ETXTBSY 安全）→ 触发热更新（与 SIGHUP 同一协调器，防重入）→ 等待完成；失败自动回滚备份 |
+| `agent_update_rollback` | 客户端→Agent | 空载荷；回滚到最近备份 |
+| `agent_update_action_resp` | Agent→客户端 | `success` / `error` / `manager_version` / `worker_version` / `manager_lags_worker` / `rolled_back` |
+
+辅助类型（types.rs）：
+- `StagedUpdate { sha256, size, version, staged_at }`
+- `AgentUpdateLastResult { action, success, error, timestamp }`
+
+服务端配置：`[updates]` 节（`enabled` / `staging_dir` / `max_binary_mb` /
+`keep_backups`），全部带 serde default，旧配置文件无需修改。
+
+安全设计：
+- 大小上限（`max_binary_mb`）防磁盘配额耗尽；staging 目录 0700 / 文件 0600
+- 双重哈希校验（客户端下载后 + 服务端收齐后）；ELF e_machine 与本机架构
+  一致才接受；staging 二进制 `--version` 子进程探测（1.5s 超时）
+- commit 前强制备份（保留 `keep_backups` 份到 /var/backups/quireld/）；
+  热更新等待超时（30s）自动回滚备份并再次 reload
+- 更新命令仅认证连接可发（QUIC 层会话前提）；上传/commit/rollback 进一步要求
+  会话 uid == 0（普通用户仅可查询 status），operator 用户名留痕
+
+---
+
 **文档结束**

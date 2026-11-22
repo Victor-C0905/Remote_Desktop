@@ -14,6 +14,7 @@ import { useServerManager } from "../context/ServerManager";
 import { useSettingsStore } from "../stores/settingsStore";
 import { createLogger } from "../utils/logger";
 import { SymbolicIcon } from "../components/symbolic";
+import { isDangerousUrl } from "./browser/dangerousUrl";
 import { ConnectionErrorState, ReconnectingState } from "../components/ConnectionState";
 import { getServerErrorInfo } from "../stores/serversStore";
 import { formatUnknownError } from "../types/errors";
@@ -422,6 +423,12 @@ export function BrowserApp({ windowId }: BrowserAppProps) {
   const reopenClosedTab = useCallback(() => {
     const tab = closedTabs[0];
     if (!tab || !serverId) return;
+    // 前端 scheme 拦截（C-01 纵深防御；Rust normalize_url 是最终强制层）
+    if (isDangerousUrl(tab.url)) {
+      log.warn("重新打开标签已拦截危险 scheme:", tab.url.slice(0, 48));
+      setClosedTabs((cs) => cs.slice(1));
+      return;
+    }
     invoke("browser_create_tab", { serverId, url: tab.url }).catch((e) => log.error("重新打开标签失败:", e));
     setClosedTabs((cs) => cs.slice(1));
   }, [closedTabs, serverId, setClosedTabs]);
@@ -444,7 +451,11 @@ export function BrowserApp({ windowId }: BrowserAppProps) {
     if (menuTab) {
       items.push({
         label: t("browser.ctxDuplicate"),
-        onClick: () => { if (serverId) invoke("browser_create_tab", { serverId, url: menuTab.url }).catch(() => {}); },
+        onClick: () => {
+          if (serverId && menuTab.url && !isDangerousUrl(menuTab.url)) {
+            invoke("browser_create_tab", { serverId, url: menuTab.url }).catch(() => {});
+          }
+        },
       });
     }
     items.push({ separator: true });

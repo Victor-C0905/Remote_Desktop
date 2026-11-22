@@ -1143,7 +1143,11 @@ pub(crate) fn runtime_main(
     let _ = init_tx.send(Ok(()));
     tracing::info!(
         "[Browser] runtime 就绪: server_id={} port={} 首tab_url={} rect={:?} 窗口可见={}",
-        state.ctx.server_id, state.ctx.proxy_port, first_url, state.rect, state.window_visible
+        state.ctx.server_id,
+        state.ctx.proxy_port,
+        crate::proxy::sanitize_url_for_log(&first_url),
+        state.rect,
+        state.window_visible
     );
 
     // 唤醒事件句柄（spawn 侧创建、随 CmdSender 分发）：主循环等待与收尾关闭用

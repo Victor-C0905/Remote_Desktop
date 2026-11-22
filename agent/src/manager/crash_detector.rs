@@ -13,12 +13,13 @@
 //! - 通过 `is_graceful_shutdown` 标志区分优雅关闭和崩溃
 //! - 检测间隔 500ms（平衡 CPU 占用和响应速度）
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use nix::unistd::Pid;
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use tracing::{info, warn, error, debug};
 
+use super::update_manager::UpdateManager;
 use super::worker_manager::WorkerManager;
 
 /// Worker 崩溃检测器
@@ -33,12 +34,16 @@ use super::worker_manager::WorkerManager;
 ///
 /// let worker_manager = Arc::new(WorkerManager::new(...));
 /// let mut detector = WorkerCrashDetector::new(worker_manager);
+/// detector.set_update_guard(Some(update_manager)); // 可选：更新崩溃观察窗
 /// detector.start();
 /// // 检测器将持续运行直到 Worker 优雅退出或调用 stop()
 /// ```
 pub struct WorkerCrashDetector {
     /// Worker 管理器
     worker_manager: Arc<WorkerManager>,
+    /// 客户端驱动的更新观察（set_update_guard 接线；None = 未接线/更新不可用）。
+    /// Arc<Mutex<_>> 允许 start 前后随时接线，检测循环内即时生效。
+    update_guard: Arc<Mutex<Option<Arc<UpdateManager>>>>,
     /// 检测任务句柄
     detector_handle: Option<tokio::task::JoinHandle<()>>,
 }
@@ -52,7 +57,24 @@ impl WorkerCrashDetector {
     pub fn new(worker_manager: Arc<WorkerManager>) -> Self {
         Self {
             worker_manager,
+            update_guard: Arc::new(Mutex::new(None)),
             detector_handle: None,
+        }
+    }
+
+    /// 接线更新观察：commit 后观察窗内 Worker 反复崩溃 → 自动回滚到更新前备份
+    pub fn set_update_guard(&self, guard: Option<Arc<UpdateManager>>) {
+        *self.update_guard.lock().unwrap() = guard;
+    }
+
+    /// 崩溃后的更新观察判定与自动回滚（观察窗外/未接线为 no-op）
+    async fn maybe_auto_rollback(update_guard: &Arc<Mutex<Option<Arc<UpdateManager>>>>) {
+        let guard = update_guard.lock().unwrap().clone();
+        if let Some(um) = guard {
+            if um.observe_worker_crash() {
+                error!("更新观察窗内 Worker 反复崩溃，自动回滚到更新前备份");
+                um.auto_rollback_after_crash().await;
+            }
         }
     }
 
@@ -67,6 +89,7 @@ impl WorkerCrashDetector {
         }
 
         let worker_manager = self.worker_manager.clone();
+        let update_guard = self.update_guard.clone();
 
         self.detector_handle = Some(tokio::spawn(async move {
             info!("Worker 崩溃检测器启动");
@@ -126,6 +149,8 @@ impl WorkerCrashDetector {
                                         info!("Worker 自动重启成功");
                                         // 重置优雅关闭标志（新 Worker 启动）
                                         worker_manager.reset_graceful_shutdown().await;
+                                        // 更新观察窗：窗内反复崩溃 → 自动回滚到 commit 前备份
+                                        Self::maybe_auto_rollback(&update_guard).await;
                                         // 继续监控新 Worker
                                     }
                                     Err(e) => {
@@ -171,6 +196,7 @@ impl WorkerCrashDetector {
                                     Ok(()) => {
                                         info!("Worker 自动重启成功");
                                         worker_manager.reset_graceful_shutdown().await;
+                                        Self::maybe_auto_rollback(&update_guard).await;
                                     }
                                     Err(e) => {
                                         error!(

@@ -56,6 +56,7 @@ function runShellStep(step) {
     encoding: 'utf8',
     maxBuffer: 10 * 1024 * 1024,
     stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, ...(step.env || {}) },
   });
   finish(step, r);
 }
@@ -110,7 +111,8 @@ function agentStep(label, cargoSub) {
   return {
     label: `${label} (agent, WSL)`,
     cmd: 'wsl.exe',
-    args: ['-e', 'bash', '-lc', `cd '${repo}' && cargo ${cargoSub} --manifest-path agent/Cargo.toml`],
+    // 单引号包裹前做 POSIX 转义（C-03）：仓库路径含单引号时命令断裂
+    args: ['-e', 'bash', '-lc', `cd '${repo.replace(/'/g, "'\\''")}' && cargo ${cargoSub} --manifest-path agent/Cargo.toml`],
   };
 }
 
@@ -124,7 +126,17 @@ const CARGO_SUB = {
   clippy: CLIPPY_STRICT ? 'clippy --message-format short -- -D warnings' : 'clippy --message-format short',
 };
 
-const vitest = { label: 'vitest（前端单测）', cmdStr: 'npm run test:run' };
+// jsdom 依赖链（@csstools/css-calc）以 ESM 形态发布，Node 20 直接 require 会
+// ERR_REQUIRE_ESM；--experimental-require-module 开启后 vitest worker 才能启动。
+// Node >=22.12 默认支持 require(ESM)，重复传该 flag 也无副作用，但按版本判断更干净。
+function nodeRequireModuleEnv() {
+  const [major, minor] = process.versions.node.split('.').map(Number);
+  if (major > 22 || (major === 22 && minor >= 12)) return {};
+  const merged = [process.env.NODE_OPTIONS, '--experimental-require-module'].filter(Boolean).join(' ');
+  return { NODE_OPTIONS: merged };
+}
+
+const vitest = { label: 'vitest（前端单测）', cmdStr: 'npm run test:run', env: nodeRequireModuleEnv() };
 const sensitiveLogs = { label: 'check:sensitive-logs（敏感日志门禁）', cmdStr: 'npm run check:sensitive-logs' };
 const lockstep = { label: 'lockstep 版本一致性', js: true, fn: lockstepStep };
 

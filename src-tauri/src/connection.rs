@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
@@ -96,12 +96,18 @@ pub use quirel_protocol::{
 pub struct ConnectionManager {
     pub connections: Mutex<HashMap<String, ActiveConnection>>,
     request_counter: Mutex<u32>,
+    /// 连接代数计数器：每次 connect 递增。同 server_id 重连覆盖旧条目后，
+    /// 旧连接的延迟清理块按 generation 识别"条目已非本连接"，避免误清
+    /// 新连接的传输/订阅/代理（2026-11-20 审计 B-03）
+    generation_counter: AtomicU64,
 }
 
 pub struct ActiveConnection {
     #[allow(dead_code)]
     info: ConnectionInfo,
     tx: mpsc::Sender<ClientRequest>,
+    /// 本连接的代数（connect 时取自 ConnectionManager 计数器）
+    pub generation: u64,
     // QUIC Connection（用于创建持久 Stream）
     pub quic_conn: Option<Arc<quinn::Connection>>,
     // 持久 Stream 监听任务：key 区分不同订阅（metrics / file_changes:<path>…）。
@@ -112,6 +118,8 @@ pub struct ActiveConnection {
     pub user_initiated: Arc<AtomicBool>,
     // Agent 能力声明（认证响应携带；旧 Agent 为空列表）
     pub capabilities: Vec<String>,
+    // quireld 版本（认证响应携带；旧 Agent 为 None）
+    pub quireld_version: Option<String>,
 }
 
 /// 连接丢失的触发源（用于日志区分）
@@ -239,6 +247,7 @@ impl ConnectionManager {
         Self {
             connections: Mutex::new(HashMap::new()),
             request_counter: Mutex::new(0),
+            generation_counter: AtomicU64::new(0),
         }
     }
 
@@ -246,6 +255,11 @@ impl ConnectionManager {
         let mut counter = self.request_counter.lock().unwrap();
         *counter += 1;
         *counter
+    }
+
+    /// 取下一个连接代数（从 1 开始，0 保留为"未设置"语义）
+    pub fn next_generation(&self) -> u64 {
+        self.generation_counter.fetch_add(1, Ordering::Relaxed) + 1
     }
 }
 
@@ -315,11 +329,22 @@ pub async fn remote_connect(
                     fingerprint_display
                 )
             } else {
+                // 变更场景：新旧指纹并列展示，便于用户经可信渠道逐一核对，
+                // 压缩「不核对就点同意」的社工窗口
+                let known_display = cert_fingerprint
+                    .as_deref()
+                    .map(PinningCertVerifier::format_fingerprint)
+                    .unwrap_or_default();
                 format!(
-                    "⚠️ 警告：服务器证书与之前记录的不一致！\n可能是服务器重装或存在中间人攻击风险。\n\n新证书指纹 (SHA-256):\n{}\n\n是否信任新证书？",
-                    fingerprint_display
+                    "⚠️ 安全警告：服务器证书与之前记录的不一致！\n\n可能原因：\n· 服务器重装或更换了证书（正常情况）\n· 连接正被中间人攻击劫持（危险）\n\n已记录指纹 (SHA-256):\n{}\n\n本次观测指纹 (SHA-256):\n{}\n\n请先通过其他可信渠道（如 SSH 登录服务器）核实新指纹。\n无法核实时请选择「否」断开连接。\n\n是否信任新证书并继续？",
+                    known_display, fingerprint_display
                 )
             };
+
+            // 变更事件留痕（安全红线：日志不含指纹值）
+            if !is_first {
+                tracing::warn!("[TLS] 服务器证书指纹与已钉扎值不一致，等待用户确认: server_id={}", server_id);
+            }
 
             // 使用原生对话框（在独立线程上阻塞，避免阻塞 tokio 运行时）
             let app_clone = app.clone();
@@ -340,6 +365,9 @@ pub async fn remote_connect(
             }).await.unwrap_or(false);
 
             if !accepted {
+                if !is_first {
+                    tracing::info!("[TLS] 用户拒绝变更后的服务器证书，连接已断开: server_id={}", server_id);
+                }
                 conn.close(0u32.into(), b"cert rejected");
                 return Err(ConnectError::new(AuthErrorCode::CertificateRejected));
             }
@@ -353,7 +381,12 @@ pub async fn remote_connect(
                 ConnectError::new(AuthErrorCode::Unknown)
             })?;
 
-            tracing::info!("[TLS] 证书已信任并存储: server_id={}", server_id);
+            if is_first {
+                tracing::info!("[TLS] 证书已信任并存储: server_id={}", server_id);
+            } else {
+                // 钉扎基线被用户主动变更——安全相关事件，warn 级留痕便于审计
+                tracing::warn!("[TLS] 用户接受变更后的服务器证书，钉扎值已更新: server_id={}", server_id);
+            }
         }
 
         // 认证
@@ -361,6 +394,8 @@ pub async fn remote_connect(
 
         // Agent 能力声明（两条认证路径填充；旧 Agent 为空列表，用于门控新协议命令）
         let agent_capabilities: Vec<String>;
+        // quireld 版本（认证响应携带；旧 Agent 为 None）
+        let agent_quireld_version: Option<String>;
 
         // 根据 method 执行不同的认证流程
         match creds.method {
@@ -396,7 +431,7 @@ pub async fn remote_connect(
 
                 // 验证返回类型（增加类型检查）
                 match envelope.payload {
-                    Payload::AuthResponse { success, error, session_id: _, code, capabilities } => {
+                    Payload::AuthResponse { success, error, session_id: _, code, capabilities, version } => {
                         if !success {
                             // 优先结构化 code；旧版 Agent 按文案 fallback 分类
                             let err_code = code
@@ -407,6 +442,7 @@ pub async fn remote_connect(
                         }
                         // 认证成功：捕获能力声明（旧 Agent 无此字段 → 空列表）
                         agent_capabilities = capabilities.unwrap_or_default();
+                        agent_quireld_version = version;
                     }
                     other => {
                         conn.close(0u32.into(), b"unexpected response");
@@ -423,7 +459,7 @@ pub async fn remote_connect(
                 tracing::info!("[Connection] 开始公钥认证: username={}", creds.username);
 
                 // 执行公钥认证
-                let (session_id, pk_capabilities) = perform_pubkey_auth(
+                let (session_id, pk_capabilities, pk_version) = perform_pubkey_auth(
                     &conn,
                     creds.username.clone(),
                     private_key,
@@ -441,6 +477,7 @@ pub async fn remote_connect(
                     e
                 })?;
                 agent_capabilities = pk_capabilities;
+                agent_quireld_version = pk_version;
 
                 tracing::info!("[Connection] 公钥认证成功: username={}, session_id={:?}", creds.username, session_id);
             }
@@ -450,15 +487,35 @@ pub async fn remote_connect(
         let (tx, mut rx) = mpsc::channel::<ClientRequest>(32);
         // 用户主动断开标志（与 ActiveConnection 共享，见结构体注释）
         let user_initiated = Arc::new(AtomicBool::new(false));
+        // 本连接代数：清理块据此识别条目是否已被重连覆盖（B-03）
+        let generation = manager.next_generation();
         {
             let mut conns = manager.connections.lock().unwrap();
+            // 同 server_id 重连：先断开并清退旧条目（JoinHandle drop 不中止任务，
+            // 须显式 abort；旧连接显式 close 触发其主循环清理块——清理块内有
+            // generation 识别，不会误清本连接）。旧连接延迟死亡时仅凭覆盖
+            // 不足以自证，此处主动清退 + 清理块兜底双保险。
+            if let Some(old) = conns.remove(&server_id) {
+                for (_, task) in old.subscriptions {
+                    task.abort();
+                }
+                if let Some(old_conn) = &old.quic_conn {
+                    old_conn.close(0u32.into(), b"superseded by reconnect");
+                }
+                tracing::info!(
+                    "[Connection] 同 server_id 旧连接已清退: server_id={}, old_generation={}",
+                    server_id, old.generation
+                );
+            }
             conns.insert(server_id.clone(), ActiveConnection {
                 info: info.clone(),
                 tx: tx.clone(),
+                generation,
                 quic_conn: Some(Arc::new(conn.clone())),
                 subscriptions: std::collections::HashMap::new(),
                 user_initiated: user_initiated.clone(),
                 capabilities: agent_capabilities,
+                quireld_version: agent_quireld_version,
             });
         }
 
@@ -467,6 +524,8 @@ pub async fn remote_connect(
         let conn_clone = conn.clone();
         // 主循环内捕获 user_initiated 标志，统一清理块据此分类事件来源
         let user_initiated_clone = user_initiated.clone();
+        // 清理块按 generation 识别条目是否已被重连覆盖（B-03）
+        let generation_clone = generation;
 
         tokio::spawn(async move {
             // ── 心跳任务（Watchdog）：快速检测连接断开 ────────
@@ -652,6 +711,26 @@ pub async fn remote_connect(
             // 所有清理集中在此处，保证只执行一次
             // ════════════════════════════════════════════════════════════
 
+            // 0. 重连覆盖识别（B-03）：同 server_id 已被新连接接管（条目存在但
+            //    generation 不匹配）时，本连接的延迟死亡不得清理新连接的传输/
+            //    订阅/代理，也不应向前端发 connection-lost（新连接仍在服务）。
+            //    条目不存在 = 无新连接顶替（显式流程亦在本块内移除），照常清理。
+            let superseded = match app_handle.state::<ConnectionManager>().connections.lock() {
+                Ok(conns) => match conns.get(&server_id_clone) {
+                    Some(active) => active.generation != generation_clone,
+                    None => false,
+                },
+                // 锁中毒：保守照常清理（与既有行为一致）
+                Err(_) => false,
+            };
+            if superseded {
+                tracing::info!(
+                    "[Connection] 跳过清理：server_id={} 已被新连接接管（generation 不匹配）",
+                    server_id_clone
+                );
+                return;
+            }
+
             // 1. 停止检测任务（防止心跳/status 在清理后还发 ConnectionLost）
             heartbeat_task.abort();
             status_task.abort();
@@ -790,6 +869,7 @@ pub async fn remote_ping(server_id: String, app: tauri::AppHandle) -> Result<Pin
     let envelope = Envelope::new(request_id, Payload::Ping { timestamp: now });
     let (response_tx, response_rx) = tokio::sync::oneshot::channel();
 
+    let start = std::time::Instant::now();
     tx.send(ClientRequest::Send { envelope, response_tx })
         .await
         .map_err(|_| AppError::new(codes::NETWORK_FAILED))?;
@@ -799,11 +879,10 @@ pub async fn remote_ping(server_id: String, app: tauri::AppHandle) -> Result<Pin
 
     let resp = Envelope::decode(&data)
         .map_err(|e| AppError::new(codes::UNEXPECTED_RESPONSE).with_detail(format!("decode ping response: {e}")))?;
-    if let Payload::Pong { timestamp, server_time } = resp.payload {
-        let latency = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64 - timestamp;
+    if let Payload::Pong { server_time, .. } = resp.payload {
+        // 往返计时（B-10）：按服务器回显 timestamp 求差会被恶意 Pong 的
+        // 未来时间戳造成 u64 下溢回绕，且延迟语义本就是客户端往返 RTT
+        let latency = start.elapsed().as_millis() as u64;
         Ok(PingResult { ok: true, latency_ms: latency as f64, server_time })
     } else {
         Err(AppError::new(codes::UNEXPECTED_RESPONSE)
@@ -1432,16 +1511,39 @@ pub async fn remote_open_locally(
         .decode(base64_content.as_bytes())
         .map_err(|e| AppError::new(codes::UNEXPECTED_RESPONSE).with_detail(format!("base64 decode: {e}")))?;
 
-    // 2. 写入本地临时目录（%TEMP%/quirel-view[-dev]/，不存在则创建，同名覆盖）
+    // 2. 扩展名白名单（B-05，Rust 侧最终强制）：本命令语义是"HTML 预览"，
+    //    默认应用打开任意扩展名（.exe/.hta/...）等于在本机执行远端内容；
+    //    前端路由门控不作为安全边界
+    let file_name = sanitize_local_filename(remote_path.rsplit('/').next().unwrap_or(""));
+    let lower = file_name.to_lowercase();
+    if !lower.ends_with(".html") && !lower.ends_with(".htm") {
+        return Err(AppError::new(codes::OPERATION_FAILED)
+            .with_detail("仅支持 .html/.htm 文件的本地预览".to_string()));
+    }
+
+    // 写入本地临时目录（%TEMP%/quirel-view[-dev]/，不存在则创建）
     // 远端文件名可含 `\`、`..` 等 Windows 路径语义字符，必须清洗后再落盘，
     // 否则恶意远端名可逃逸临时目录写到客户端任意可写位置
-    let file_name = sanitize_local_filename(remote_path.rsplit('/').next().unwrap_or(""));
     let dir = crate::profile_temp_path("quirel-view", &app.config().identifier);
     std::fs::create_dir_all(&dir)
         .map_err(|e| AppError::new(codes::IO_FAILED).with_detail(format!("create temp dir: {e}")))?;
-    let local_path = dir.join(file_name);
-    std::fs::write(&local_path, &bytes)
-        .map_err(|e| AppError::new(codes::IO_FAILED).with_detail(format!("write temp file: {e}")))?;
+    // 随机临时名 + 独占创建（B-05）：可预测的同名覆盖存在竞态（本机其他
+    // 进程可抢先放置内容再被打开）
+    let stem = file_name
+        .rsplit_once('.')
+        .map(|(s, _)| s.to_string())
+        .unwrap_or_else(|| file_name.clone());
+    let local_path = dir.join(format!("{stem}-{}.html", uuid::Uuid::new_v4().simple()));
+    let mut tmp = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&local_path)
+        .map_err(|e| AppError::new(codes::IO_FAILED).with_detail(format!("create temp file: {e}")))?;
+    {
+        use std::io::Write;
+        tmp.write_all(&bytes)
+            .map_err(|e| AppError::new(codes::IO_FAILED).with_detail(format!("write temp file: {e}")))?;
+    }
 
     // 3. 系统默认应用打开（HTML 的默认应用即浏览器）
     app.opener()
@@ -1734,6 +1836,111 @@ pub fn get_agent_capabilities(server_id: String, app: tauri::AppHandle) -> Resul
         .ok_or_else(|| AppError::new(codes::CONNECTION_NOT_FOUND))
 }
 
+/// Tauri Command: 查询当前连接的 quireld 版本（认证响应携带；旧 Agent 为 None）
+#[tauri::command]
+pub fn get_quireld_version(server_id: String, app: tauri::AppHandle) -> Result<Option<String>, AppError> {
+    let manager = app.state::<ConnectionManager>();
+    let conns = manager.connections.lock().unwrap();
+    Ok(conns.get(&server_id).and_then(|c| c.quireld_version.clone()))
+}
+
+/// 更新二进制上传（同流多帧）：AgentUpdateUploadRequest → FileChunk* →
+/// FileTransferComplete → 读 AgentUpdateUploadResponse。
+///
+/// 与 remote_send 的一请求一响应模型不同：Agent 的上传分支在同一 stream
+/// 上持续读取分块帧，必须保持同一 stream 写入（open_bi 后逐帧发送）。
+pub(crate) async fn send_agent_update_upload(
+    server_id: &str,
+    app: &tauri::AppHandle,
+    file_size: u64,
+    sha256: &str,
+    version: &str,
+    data: Vec<u8>,
+) -> Result<Payload, AppError> {
+    const CHUNK_SIZE: usize = 64 * 1024;
+    const UPLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+    // 拿 QUIC 连接与 request_id
+    let (conn_arc, request_id) = {
+        let manager = app.state::<ConnectionManager>();
+        let conns = manager.connections.lock().unwrap();
+        let conn = conns.get(server_id)
+            .ok_or_else(|| AppError::new(codes::CONNECTION_NOT_FOUND))?;
+        (conn.quic_conn.clone().ok_or_else(|| {
+            AppError::new(codes::TRANSFER_QUIC_UNAVAILABLE).with_detail("连接无 QUIC 通道")
+        })?, manager.next_request_id())
+    };
+    let conn = conn_arc.as_ref();
+
+    let (mut send, mut recv) = tokio::time::timeout(UPLOAD_TIMEOUT, conn.open_bi())
+        .await
+        .map_err(|_| AppError::new(codes::NETWORK_FAILED).with_detail("open stream timeout"))?
+        .map_err(|e| AppError::new(codes::NETWORK_FAILED).with_detail(format!("open stream: {e}")))?;
+
+    let upload = async {
+        // 1. 请求帧（声明大小/哈希/版本）
+        let req = Envelope::new(request_id, Payload::AgentUpdateUploadRequest {
+            file_size,
+            sha256: sha256.to_string(),
+            version: version.to_string(),
+        });
+        let bytes = req.encode()
+            .map_err(|e| AppError::new(codes::FRAME_WRITE_FAILED).with_detail(format!("encode: {e}")))?;
+        write_len_prefixed(&mut send, &bytes).await?;
+
+        // 2. 分块帧（FileChunk，session_id 固定；Agent 侧仅识别该流内帧）
+        let total_chunks = data.len().div_ceil(CHUNK_SIZE);
+        for (i, chunk) in data.chunks(CHUNK_SIZE).enumerate() {
+            let seq = (i + 1) as u32;
+            let frame = Envelope::new(0, Payload::FileChunk {
+                session_id: "agent-update".to_string(),
+                seq,
+                data: chunk.to_vec(),
+                size: chunk.len() as u32,
+            });
+            let bytes = frame.encode()
+                .map_err(|e| AppError::new(codes::FRAME_WRITE_FAILED).with_detail(format!("encode chunk: {e}")))?;
+            write_len_prefixed(&mut send, &bytes).await?;
+        }
+
+        // 3. 完成帧
+        let done = Envelope::new(0, Payload::FileTransferComplete {
+            session_id: "agent-update".to_string(),
+            success: true,
+            mtime: None,
+            error: None,
+        });
+        let bytes = done.encode()
+            .map_err(|e| AppError::new(codes::FRAME_WRITE_FAILED).with_detail(format!("encode done: {e}")))?;
+        write_len_prefixed(&mut send, &bytes).await?;
+        send.finish()
+            .map_err(|e| AppError::new(codes::NETWORK_FAILED).with_detail(format!("finish: {e}")))?;
+
+        // 4. 读取上传结果
+        let resp_bytes = crate::net_frame::read_len_prefixed(&mut recv).await
+            .map_err(|e| AppError::new(codes::NETWORK_FAILED).with_detail(format!("read upload resp: {e}")))?
+            .ok_or_else(|| AppError::new(codes::NETWORK_FAILED).with_detail("upload resp: stream finished early"))?;
+        Envelope::decode(&resp_bytes)
+            .map_err(|e| AppError::new(codes::UNEXPECTED_RESPONSE).with_detail(format!("decode upload resp: {e}")))
+            .map(|env| env.payload)
+    };
+
+    tokio::time::timeout(UPLOAD_TIMEOUT, upload)
+        .await
+        .map_err(|_| AppError::new(codes::RESPONSE_TIMEOUT).with_detail("update upload timeout"))?
+}
+
+/// 长度前缀帧写入（与 Agent 侧 read_message / net_frame::read_len_prefixed 对齐）
+async fn write_len_prefixed(send: &mut quinn::SendStream, bytes: &[u8]) -> Result<(), AppError> {
+    use tokio::io::AsyncWriteExt;
+    let len = (bytes.len() as u32).to_le_bytes();
+    send.write_all(&len).await
+        .map_err(|e| AppError::new(codes::NETWORK_FAILED).with_detail(format!("write length: {e}")))?;
+    send.write_all(bytes).await
+        .map_err(|e| AppError::new(codes::NETWORK_FAILED).with_detail(format!("write data: {e}")))?;
+    Ok(())
+}
+
 /// 上传大小限制信息（透传 Agent 响应；字段命名与 StatsResponse 一致为 snake_case）
 #[derive(Debug, serde::Serialize)]
 pub struct TransferLimitInfo {
@@ -1926,7 +2133,17 @@ pub async fn subscribe(
         {
             let mut conns = manager.connections.lock().unwrap();
             if let Some(active_conn) = conns.get_mut(&server_id) {
-                active_conn.subscriptions.insert(sub_key, task);
+                // B-11：入口幂等检查与 insert 之间隔着 open_bi/send/ack 的
+                // await——并发同 key 的两个任务都会到达这里。insert 返回的
+                // 旧句柄立即 abort，保证 map 中恒只有一条存活任务（被中止
+                // 者写端随之释放，服务端随流 FIN 自行释放订阅）
+                if let Some(prev) = active_conn.subscriptions.insert(sub_key.clone(), task) {
+                    tracing::warn!(
+                        "并发同 key 订阅，中止先到的监听任务: server_id={}, key={}",
+                        server_id, sub_key
+                    );
+                    prev.abort();
+                }
             }
         }
 
@@ -2141,15 +2358,6 @@ impl PinningCertVerifier {
         }
     }
 
-    /// 计算证书 DER 数据的 SHA-256 指纹（纯十六进制小写）
-    fn compute_fingerprint(cert_der: &[u8]) -> String {
-        use sha2::{Sha256, Digest};
-        let mut hasher = Sha256::new();
-        hasher.update(cert_der);
-        let hash = hasher.finalize();
-        hash.iter().map(|b| format!("{:02x}", b)).collect()
-    }
-
     /// 格式化指纹用于显示（每两位用冒号分隔，便于阅读）
     fn format_fingerprint(hex: &str) -> String {
         hex.as_bytes()
@@ -2157,6 +2365,23 @@ impl PinningCertVerifier {
             .map(|c| std::str::from_utf8(c).unwrap_or("??"))
             .collect::<Vec<_>>()
             .join(":")
+    }
+}
+
+/// 计算证书 DER 数据的 SHA-256 指纹（纯十六进制小写）。
+/// QUIC 证书钉扎与 SSH 自动安装的证书预钉扎共用此格式（provision.rs 回读时一致）。
+pub(crate) fn compute_cert_fingerprint(cert_der: &[u8]) -> String {
+    use sha2::{Sha256, Digest};
+    let mut hasher = Sha256::new();
+    hasher.update(cert_der);
+    let hash = hasher.finalize();
+    hash.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+impl PinningCertVerifier {
+    /// 计算证书指纹（兼容旧调用点；实现收敛到顶层 pub(crate) 函数）
+    fn compute_fingerprint(cert_der: &[u8]) -> String {
+        compute_cert_fingerprint(cert_der)
     }
 }
 
@@ -2170,7 +2395,8 @@ impl rustls::client::danger::ServerCertVerifier for PinningCertVerifier {
         _now: rustls::pki_types::UnixTime,
     ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
         let fingerprint = Self::compute_fingerprint(end_entity.as_ref());
-        tracing::debug!("[TLS] 服务器证书指纹: {}", Self::format_fingerprint(&fingerprint));
+        // 安全红线：日志不落指纹全文，仅留 8 字符前缀供诊断关联
+        tracing::debug!("[TLS] 服务器证书指纹前缀: {}…", &fingerprint[..8]);
 
         // 回传指纹供 remote_connect 校验
         *self.observed_fingerprint.lock().unwrap() = Some(fingerprint);
@@ -2221,7 +2447,7 @@ async fn perform_pubkey_auth(
     username: String,
     private_key: String,
     passphrase: Option<String>,
-) -> Result<(Option<String>, Vec<String>), ConnectError> {
+) -> Result<(Option<String>, Vec<String>, Option<String>), ConnectError> {
     use tokio::io::AsyncWriteExt;
 
     tracing::info!("[PubKeyAuth] 开始公钥认证流程: username={}", username);
@@ -2542,11 +2768,11 @@ async fn perform_pubkey_auth(
             ConnectError::new(AuthErrorCode::ProtocolError)
         })?;
     match final_envelope.payload {
-        Payload::AuthResponse { success, error, session_id, code, capabilities } => {
+        Payload::AuthResponse { success, error, session_id, code, capabilities, version } => {
             if success {
                 tracing::info!("[PubKeyAuth] 公钥认证成功: username={}, session_id={:?}", username, session_id);
-                // 认证成功：携带能力声明返回（旧 Agent 无此字段 → 空列表）
-                Ok((session_id, capabilities.unwrap_or_default()))
+                // 认证成功：携带能力声明与 quireld 版本返回（旧 Agent → 空列表 / None）
+                Ok((session_id, capabilities.unwrap_or_default(), version))
             } else {
                 // 优先使用结构化 code；旧版 Agent 无 code 时按文案 fallback 分类
                 let err_code = code
@@ -2936,5 +3162,21 @@ mod pinning_verifier_tests {
         // supported_verify_schemes 上报 provider 算法表（非空且含 P-256）
         let schemes = verifier.supported_verify_schemes();
         assert!(schemes.contains(&rustls::SignatureScheme::ECDSA_NISTP256_SHA256));
+    }
+}
+#[cfg(test)]
+mod generation_tests {
+    use super::ConnectionManager;
+
+    /// B-03 回归：连接代数单调递增且从 1 开始——重连覆盖旧条目后，
+    /// 新旧连接 generation 必不相同（旧连接延迟清理据此识别被顶替）
+    #[test]
+    fn next_generation_is_monotonic_and_starts_at_one() {
+        let manager = ConnectionManager::new();
+        let g1 = manager.next_generation();
+        let g2 = manager.next_generation();
+        let g3 = manager.next_generation();
+        assert_eq!(g1, 1);
+        assert!(g1 < g2 && g2 < g3);
     }
 }

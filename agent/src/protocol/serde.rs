@@ -9,4 +9,5 @@ pub use quirel_protocol::{
     ResponseTimePercentiles, StatsResponse,
     AuthErrorCode,
     ArchiveCapabilities, ArchiveFormatCapability, ArchiveHostOs, ArchiveTool,
+    StagedUpdate, AgentUpdateLastResult,
 };

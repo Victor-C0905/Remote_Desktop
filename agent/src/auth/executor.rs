@@ -78,6 +78,43 @@ fn parse_supplementary_group_ids(content: &str, username: &str) -> Vec<u32> {
     ids
 }
 
+/// 解析目标用户的完整组列表（主 gid + /etc/group 附加组），供全部降权路径共用。
+///
+/// 读取失败按空表处理（仅保留主 gid，拒绝默认继承），fail-closed。
+/// 调用方必须在进程仍为 root 时调用 libc::setgroups 显式替换附加组
+/// （setuid 后无权再改；仅 setgid/setuid 不清除附加组——2026-11-20 审计 A-01）。
+/// （fork/隔离子命令降权路径使用，均 cfg(unix)；非 unix 平台无死代码告警）
+#[cfg_attr(not(unix), allow(dead_code))]
+pub(crate) fn resolve_supplementary_groups(username: &str, primary_gid: u32) -> Vec<u32> {
+    let supplementary = std::fs::read_to_string("/etc/group")
+        .map(|content| parse_supplementary_group_ids(&content, username))
+        .unwrap_or_else(|e| {
+            tracing::warn!("读取 /etc/group 失败，降权进程仅保留主 gid: {}", e);
+            Vec::new()
+        });
+    combine_group_ids(primary_gid, supplementary)
+}
+
+/// 并入主 gid 并去重（setgroups 只关心集合，去重防 /etc/group 畸形重复行）
+#[cfg_attr(not(unix), allow(dead_code))]
+fn combine_group_ids(primary_gid: u32, supplementary: Vec<u32>) -> Vec<u32> {
+    let mut groups = vec![primary_gid];
+    groups.extend(supplementary);
+    groups.sort_unstable();
+    groups.dedup();
+    groups
+}
+
+/// 完整组列表的命令行形态（隔离子命令经 `--supp-gids` 由 Manager 侧解析后传入）
+#[cfg_attr(not(unix), allow(dead_code))]
+pub(crate) fn supplementary_gids_csv(username: &str, primary_gid: u32) -> String {
+    resolve_supplementary_groups(username, primary_gid)
+        .iter()
+        .map(|g| g.to_string())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 /// 用户上下文执行器
 #[derive(Clone)]
 pub struct UserExecutor {
@@ -158,14 +195,7 @@ impl UserExecutor {
             // 附加组：fork 前在父进程中解析目标用户的组列表。子进程 setgroups
             // 显式替换（而不是继承父进程 = root 的附加组）；读取失败按空表
             // 处理（仅保留主 gid，拒绝默认继承），fail-closed。
-            let supplementary = std::fs::read_to_string("/etc/group")
-                .map(|content| parse_supplementary_group_ids(&content, &self.username))
-                .unwrap_or_else(|e| {
-                    tracing::warn!("读取 /etc/group 失败，降权进程仅保留主 gid: {}", e);
-                    Vec::new()
-                });
-            let mut groups = vec![gid];
-            groups.extend(supplementary);
+            let groups = resolve_supplementary_groups(&self.username, gid);
 
             tracing::debug!("fork 子进程执行操作: uid={}, gid={}", uid, gid);
 
@@ -233,15 +263,16 @@ impl UserExecutor {
                     let result = f();
 
                     // 根据结果类型分别处理：
-                    // - Ok(T): 序列化 T 直接写入管道（父进程按 T 反序列化）
-                    // - Err(e): 通过 write_error_to_pipe 写入错误（带 0x00 标记）
+                    // - Ok(T): 序列化 T 写成功帧（QROK 魔数 + 长度 + JSON，父进程按 T 反序列化）
+                    // - Err(e): 通过 write_error_to_pipe 写错误帧（QERR 魔数）
                     match result {
                         Ok(val) => {
                             match serde_json::to_vec(&val) {
                                 Ok(data) => {
-                                    // 先写入长度（4 字节小端）
+                                    // 先写入魔数与长度（4 字节小端）
                                     let len = (data.len() as u32).to_le_bytes();
-                                    if write_all_to_pipe(write_fd, &len).is_err()
+                                    if write_all_to_pipe(write_fd, &FRAME_MAGIC_OK).is_err()
+                                        || write_all_to_pipe(write_fd, &len).is_err()
                                         || write_all_to_pipe(write_fd, &data).is_err()
                                     {
                                         let _ = write_error_to_pipe(write_fd, "写入结果失败");
@@ -359,6 +390,7 @@ impl UserExecutor {
            .arg("--final-path").arg(final_path)
            .arg("--uid").arg(self.uid.to_string())
            .arg("--gid").arg(self.gid.to_string())
+           .arg("--supp-gids").arg(supplementary_gids_csv(&self.username, self.gid))
            .stdin(std::process::Stdio::piped())
            .stdout(std::process::Stdio::null())
            .stderr(std::process::Stdio::null());
@@ -389,6 +421,7 @@ impl UserExecutor {
         cmd.arg("--isolated-reader").arg(path)
            .arg("--uid").arg(self.uid.to_string())
            .arg("--gid").arg(self.gid.to_string())
+           .arg("--supp-gids").arg(supplementary_gids_csv(&self.username, self.gid))
            .stdin(std::process::Stdio::null())
            .stdout(std::process::Stdio::piped())
            .stderr(std::process::Stdio::null());
@@ -427,6 +460,7 @@ impl UserExecutor {
         cmd.arg("--isolated-writer-part").arg(part_path)
            .arg("--uid").arg(self.uid.to_string())
            .arg("--gid").arg(self.gid.to_string())
+           .arg("--supp-gids").arg(supplementary_gids_csv(&self.username, self.gid))
            .stdin(std::process::Stdio::piped())
            .stdout(std::process::Stdio::null())
            .stderr(std::process::Stdio::null());
@@ -467,6 +501,7 @@ impl UserExecutor {
            .arg("--final-path").arg(final_path)
            .arg("--uid").arg(self.uid.to_string())
            .arg("--gid").arg(self.gid.to_string())
+           .arg("--supp-gids").arg(supplementary_gids_csv(&self.username, self.gid))
            .stdin(std::process::Stdio::null())
            .stdout(std::process::Stdio::null())
            .stderr(std::process::Stdio::null());
@@ -490,6 +525,7 @@ impl UserExecutor {
     /// - 5: flush 失败(writer/writer_part)
     /// - 6: sync_all 失败(writer/writer_part)
     /// - 7: rename 失败(writer)
+    /// - 8: 路径不是常规文件(reader, FIFO/socket/device 等)
     /// - 10: merger 打开最终文件失败
     /// - 11: merger 打开段文件失败
     /// - 12: merger 读取段文件失败
@@ -530,6 +566,7 @@ impl UserExecutor {
                     2 => "打开文件失败",
                     3 => "写入失败(文件/pipe)",
                     4 => "读取失败(pipe/文件)",
+                    8 => "路径不是常规文件(FIFO/socket/device 等)",
                     5 => "flush 失败",
                     6 => "sync_all 失败",
                     7 => "rename 失败",
@@ -566,14 +603,18 @@ impl UserExecutor {
         let path = path.to_string();
         let uid = self.uid;
         let gid = self.gid;
+        let username = self.username.clone();
         tokio::task::spawn_blocking(move || -> Result<(u64, u64)> {
             use anyhow::Context;
             let _guard = with_fork_guard();
             let current_exe = isolated_executable()?;
+            // 附加组解析留在此 spawn_blocking 内（/etc/group 读取不占 async worker）
+            let supp_gids = supplementary_gids_csv(&username, gid);
             let output = std::process::Command::new(current_exe)
                 .arg("--metadata").arg(&path)
                 .arg("--uid").arg(uid.to_string())
                 .arg("--gid").arg(gid.to_string())
+                .arg("--supp-gids").arg(&supp_gids)
                 .output()
                 .context("Failed to spawn metadata command")?;
             if !output.status.success() {
@@ -643,48 +684,6 @@ impl UserExecutor {
     pub fn home_dir(&self) -> &PathBuf {
         &self.home_dir
     }
-
-    /// 在用户上下文中生成子进程（Unix平台，用于PTY）
-    #[cfg(unix)]
-    #[allow(dead_code)]
-    pub fn spawn_process(&self, program: &str, args: &[&str]) -> Result<i32> {
-        use anyhow::Context;
-        use std::os::unix::process::CommandExt;
-        use std::process::Command;
-
-        let mut cmd = Command::new(program);
-        cmd.args(args);
-        cmd.current_dir(&self.home_dir);
-
-        let uid = self.uid;
-        let gid = self.gid;
-
-        unsafe {
-            cmd.pre_exec(move || {
-                let current_uid = nix::unistd::getuid().as_raw();
-                if current_uid == uid {
-                    return Ok(());
-                }
-                if current_uid == 0 {
-                    nix::unistd::setgid(nix::unistd::Gid::from_raw(gid))
-                        .map_err(|e| std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            format!("Failed to setgid: {}", e)
-                        ))?;
-                    nix::unistd::setuid(nix::unistd::Uid::from_raw(uid))
-                        .map_err(|e| std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            format!("Failed to setuid: {}", e)
-                        ))?;
-                    return Ok(());
-                }
-                Ok(())
-            });
-        }
-
-        let child = cmd.spawn().context("Failed to spawn process")?;
-        Ok(child.id() as i32)
-    }
 }
 
 /// 向管道写入所有数据(循环写入,处理部分写入)
@@ -707,16 +706,36 @@ fn write_all_to_pipe(fd: i32, data: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
+// ============================================================================
+// 管道帧协议（同一二进制内的父子进程，无跨版本兼容约束）
+// ============================================================================
+//
+// 帧格式：
+// - 成功帧: [QROK][4字节 LE 长度][JSON 数据] → 父进程解析为 Ok(T)
+// - 错误帧: [QERR][4字节 LE 长度][JSON 错误消息] → 父进程解析为 Err
+//
+// 魔数保证帧类型判定无歧义。旧协议用单字节 0x00 当错误标记，而成功帧首字节
+// 是 LE 长度的**低位**字节——data.len() % 256 == 0 时恰为 0x00，成功帧被误判
+// 为错误帧，并把后续 JSON 首字节 '{'(0x7b) 当长度高位算出 ~2GB 的分配
+// （2026-11-20 审计 A-05）。
+
+/// 成功帧魔数
+#[cfg(unix)]
+const FRAME_MAGIC_OK: [u8; 4] = *b"QROK";
+/// 错误帧魔数
+#[cfg(unix)]
+const FRAME_MAGIC_ERR: [u8; 4] = *b"QERR";
+/// 结果/错误数据统一上限（防止异常子进程按不可信长度放大分配）
+#[cfg(unix)]
+const FRAME_DATA_LIMIT: usize = 100 * 1024 * 1024;
+
 /// 向管道写入错误信息
 ///
-/// 格式: [0x00][4字节长度][JSON 错误数据]
-/// 正常结果的格式: [4字节长度][JSON 数据]
-/// 用 0x00 标记区分错误和正常结果
+/// 格式: [QERR][4字节长度][JSON 错误数据]
 #[cfg(unix)]
 fn write_error_to_pipe(fd: i32, message: &str) -> std::io::Result<()> {
-    // 写入错误标记
-    let marker: u8 = 0x00;
-    write_all_to_pipe(fd, &[marker])?;
+    // 写入错误帧魔数
+    write_all_to_pipe(fd, &FRAME_MAGIC_ERR)?;
 
     // 序列化错误消息
     let error_data = serde_json::to_vec(&message)
@@ -730,78 +749,69 @@ fn write_error_to_pipe(fd: i32, message: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-/// 从管道读取结果
-///
-/// 格式:
-/// - 正常结果: [4字节长度][JSON 数据]  → 解析为 Ok(T)
-/// - 错误结果: [0x00][4字节长度][JSON 错误消息] → 解析为 Err
+/// 从管道精确读取 n 字节（循环补齐短读）
 #[cfg(unix)]
-fn read_result_from_pipe<T>(fd: i32) -> Result<T>
-where
-    T: serde::Serialize + for<'de> serde::Deserialize<'de>,
-{
-    // 读取第一个字节判断是否为错误标记
-    let mut first_byte = [0u8; 1];
-    let n = unsafe { libc::read(fd, first_byte.as_mut_ptr() as *mut _, 1) };
-    if n != 1 {
-        return Err(anyhow::anyhow!("读取管道数据失败: 无法读取标记字节"));
-    }
-
-    // 如果是错误标记
-    if first_byte[0] == 0x00 {
-        // 读取错误消息长度
-        let mut len_buf = [0u8; 4];
-        let n = unsafe { libc::read(fd, len_buf.as_mut_ptr() as *mut _, 4) };
-        if n != 4 {
-            return Err(anyhow::anyhow!("读取管道数据失败: 无法读取错误消息长度"));
-        }
-        let msg_len = u32::from_le_bytes(len_buf) as usize;
-
-        // 读取错误消息
-        let mut msg_buf = vec![0u8; msg_len];
-        let mut offset = 0;
-        while offset < msg_len {
-            let n = unsafe {
-                libc::read(fd, msg_buf.as_mut_ptr().add(offset) as *mut _, msg_len - offset)
-            };
-            if n <= 0 {
-                return Err(anyhow::anyhow!("读取管道数据失败: 连接断开"));
-            }
-            offset += n as usize;
-        }
-
-        let error_msg: String = serde_json::from_slice(&msg_buf)
-            .unwrap_or_else(|_| "未知错误".to_string());
-        return Err(anyhow::anyhow!("子进程执行失败: {}", error_msg));
-    }
-
-    // 正常结果：第一个字节是长度的高位字节
-    // 读取剩余 3 字节的长度
-    let mut len_buf = [0u8; 4];
-    len_buf[0] = first_byte[0];
-    let n = unsafe { libc::read(fd, len_buf.as_mut_ptr().add(1) as *mut _, 3) };
-    if n != 3 {
-        return Err(anyhow::anyhow!("读取管道数据失败: 无法读取结果长度"));
-    }
-    let data_len = u32::from_le_bytes(len_buf) as usize;
-
-    // 限制结果大小（防止恶意子进程写入大量数据）
-    if data_len > 100 * 1024 * 1024 {
-        return Err(anyhow::anyhow!("结果数据过大: {} bytes", data_len));
-    }
-
-    // 读取结果数据
-    let mut data_buf = vec![0u8; data_len];
+fn read_exact_from_pipe(fd: i32, buf: &mut [u8]) -> Result<()> {
     let mut offset = 0;
-    while offset < data_len {
-        let n = unsafe {
-            libc::read(fd, data_buf.as_mut_ptr().add(offset) as *mut _, data_len - offset)
-        };
+    while offset < buf.len() {
+        let n = unsafe { libc::read(fd, buf.as_mut_ptr().add(offset) as *mut _, buf.len() - offset) };
         if n <= 0 {
             return Err(anyhow::anyhow!("读取管道数据失败: 连接断开"));
         }
         offset += n as usize;
     }
+    Ok(())
+}
+
+/// 从管道读取 4 字节 LE 长度并校验上限（成功帧与错误帧共用，防止按
+/// 不可信长度盲目分配内存）
+#[cfg(unix)]
+fn read_len_from_pipe(fd: i32) -> Result<usize> {
+    let mut len_buf = [0u8; 4];
+    read_exact_from_pipe(fd, &mut len_buf)?;
+    let len = u32::from_le_bytes(len_buf) as usize;
+    if len > FRAME_DATA_LIMIT {
+        return Err(anyhow::anyhow!("结果数据过大: {} bytes", len));
+    }
+    Ok(len)
+}
+
+/// 从管道读取结果
+///
+/// 格式:
+/// - 正常结果: [QROK][4字节长度][JSON 数据] → 解析为 Ok(T)
+/// - 错误结果: [QERR][4字节长度][JSON 错误消息] → 解析为 Err
+#[cfg(unix)]
+fn read_result_from_pipe<T>(fd: i32) -> Result<T>
+where
+    T: serde::Serialize + for<'de> serde::Deserialize<'de>,
+{
+    // 读取 4 字节魔数判断帧类型
+    let mut magic = [0u8; 4];
+    read_exact_from_pipe(fd, &mut magic)?;
+
+    if magic == FRAME_MAGIC_ERR {
+        // 错误帧：长度与正常分支共用同一上限
+        let msg_len = read_len_from_pipe(fd)?;
+        let mut msg_buf = vec![0u8; msg_len];
+        read_exact_from_pipe(fd, &mut msg_buf)?;
+
+        let error_msg: String = serde_json::from_slice(&msg_buf)
+            .unwrap_or_else(|_| "未知错误".to_string());
+        return Err(anyhow::anyhow!("子进程执行失败: {}", error_msg));
+    }
+    if magic != FRAME_MAGIC_OK {
+        return Err(anyhow::anyhow!(
+            "管道数据帧魔数非法（协议不同步或数据损坏）"
+        ));
+    }
+
+    // 正常结果：读取数据长度
+    let data_len = read_len_from_pipe(fd)?;
+
+    // 读取结果数据
+    let mut data_buf = vec![0u8; data_len];
+    read_exact_from_pipe(fd, &mut data_buf)?;
 
     // 反序列化结果
     serde_json::from_slice(&data_buf)
@@ -870,6 +880,98 @@ g2:x:2:testuser\n";
         );
     }
 
+    /// A-01 回归：组列表并入主 gid + 去重（setgroups 前的最终集合）
+    #[test]
+    fn combine_group_ids_keeps_primary_and_dedups() {
+        assert_eq!(combine_group_ids(1000, vec![27, 44, 27]), vec![27, 44, 1000]);
+        assert_eq!(combine_group_ids(1000, vec![]), vec![1000]);
+        // /etc/group 把主 gid 也列为附加组时不产生重复
+        assert_eq!(combine_group_ids(1000, vec![1000]), vec![1000]);
+    }
+
+    /// A-01 回归：未知用户（或 /etc/group 缺失）→ 仅保留主 gid，fail-closed
+    #[cfg(unix)]
+    #[test]
+    fn resolve_supplementary_groups_unknown_user_keeps_primary_only() {
+        assert_eq!(
+            resolve_supplementary_groups("no_such_user_xyz", 424242),
+            vec![424242]
+        );
+    }
+
+    /// A-01 回归：CSV 形态可被隔离子命令侧逐段解析回数字列表
+    #[cfg(unix)]
+    #[test]
+    fn supplementary_gids_csv_roundtrip_parses_back() {
+        let csv = supplementary_gids_csv("no_such_user_xyz", 424242);
+        assert_eq!(csv, "424242");
+        let parsed: Vec<u32> = csv.split(',').filter_map(|p| p.parse::<u32>().ok()).collect();
+        assert_eq!(parsed, vec![424242]);
+    }
+
+    // ---- A-05 管道帧协议回归（QROK/QERR 魔数帧） ----
+
+    /// 打开一对匿名管道供帧测试使用
+    #[cfg(unix)]
+    fn open_test_pipe() -> (i32, i32) {
+        let mut fds = [0i32; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0, "pipe 创建失败");
+        (fds[0], fds[1])
+    }
+
+    /// A-05 复现：成功载荷 JSON 长度恰为 256 倍数 → LE 长度低位字节为 0x00。
+    /// 旧协议以单字节 0x00 当错误标记，会把它误判为错误帧并按后续字节算出
+    /// ~2GB 分配；新协议以 QROK 魔数判定，正确解析为成功帧。
+    #[cfg(unix)]
+    #[test]
+    fn read_result_from_pipe_success_frame_with_len_multiple_of_256() {
+        let payload = "a".repeat(254);
+        let data = serde_json::to_vec(&payload).unwrap();
+        assert_eq!(data.len() % 256, 0, "fixture 必须命中 256 倍数边界");
+
+        let (read_fd, write_fd) = open_test_pipe();
+        // 手写成功帧（与子进程写入侧同构）
+        let mut frame = FRAME_MAGIC_OK.to_vec();
+        frame.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        frame.extend_from_slice(&data);
+        write_all_to_pipe(write_fd, &frame).unwrap();
+        unsafe { libc::close(write_fd); }
+
+        let result: Result<String> = read_result_from_pipe(read_fd);
+        unsafe { libc::close(read_fd); }
+        assert_eq!(result.unwrap(), payload);
+    }
+
+    /// A-05 回归：错误帧按 QERR 魔数解析，消息内容透传
+    #[cfg(unix)]
+    #[test]
+    fn read_result_from_pipe_error_frame_parses_message() {
+        let (read_fd, write_fd) = open_test_pipe();
+        write_error_to_pipe(write_fd, "测试错误消息").unwrap();
+        unsafe { libc::close(write_fd); }
+
+        let result: Result<String> = read_result_from_pipe(read_fd);
+        unsafe { libc::close(read_fd); }
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("测试错误消息"), "应包含错误消息: {err}");
+    }
+
+    /// A-05 回归：魔数非法 → 明确报错，绝不按不可信长度盲目分配
+    #[cfg(unix)]
+    #[test]
+    fn read_result_from_pipe_rejects_bad_magic() {
+        let (read_fd, write_fd) = open_test_pipe();
+        // 伪装成巨大长度但魔数错误的帧
+        write_all_to_pipe(write_fd, &[0x01, 0x02, 0x03, 0x04]).unwrap();
+        write_all_to_pipe(write_fd, &u32::MAX.to_le_bytes()).unwrap();
+        unsafe { libc::close(write_fd); }
+
+        let result: Result<String> = read_result_from_pipe(read_fd);
+        unsafe { libc::close(read_fd); }
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("魔数非法"), "应报魔数非法: {err}");
+    }
+
     #[test]
     fn test_execute_as_user_simple() {
         // 在测试环境中，当前用户可能就是 uid=1000
@@ -910,6 +1012,25 @@ g2:x:2:testuser\n";
         })
         .await;
         assert!(err.is_err());
+    }
+
+    /// A-03 回归：reader 拒绝非常规文件的退出码 8 被翻译为可读错误
+    #[cfg(unix)]
+    #[test]
+    fn wait_isolated_child_translates_exit_code_8() {
+        let session = create_test_session();
+        let executor = UserExecutor::new(&session);
+        // spawn 一个以退出码 8 结束的子进程（模拟 reader 拒绝 FIFO/socket/device）
+        let mut child = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("exit 8")
+            .spawn()
+            .unwrap();
+        let pid = child.id() as i32;
+        let result = executor.wait_isolated_child(pid);
+        assert!(result.is_err(), "非零退出码应返回 Err");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("常规文件"), "应翻译退出码 8: {msg}");
     }
 
     /// 测试 wait_isolated_child 处理 ECHILD:子进程已被回收时应返回错误

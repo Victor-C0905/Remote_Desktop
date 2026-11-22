@@ -21,11 +21,19 @@ pub struct RemoteTerminalSession {
     pub rows: u16,
 }
 
+/// 终端会话句柄：输入通道 + 关闭信号发送端
+struct TerminalSessionHandle {
+    input_tx: mpsc::Sender<Vec<u8>>,
+    /// 关闭信号（B-06）：输出读循环阻塞在 read_exact 上，仅关闭输入通道
+    /// 无法唤醒它；close 时置 true，输出循环经 select! 退出
+    close_tx: tokio::sync::watch::Sender<bool>,
+}
+
 /// 终端 Stream 管理器（保存持久 Stream 的发送端）
 #[derive(Clone)]
 pub struct TerminalStreamManager {
-    /// 活跃的终端会话（session_id -> 输入发送通道）
-    sessions: Arc<Mutex<HashMap<String, mpsc::Sender<Vec<u8>>>>>,
+    /// 活跃的终端会话（session_id -> 会话句柄）
+    sessions: Arc<Mutex<HashMap<String, TerminalSessionHandle>>>,
 }
 
 impl TerminalStreamManager {
@@ -35,22 +43,33 @@ impl TerminalStreamManager {
         }
     }
 
-    /// 获取内部的 Arc（用于克隆）
-    #[allow(dead_code)]
-    pub fn inner(&self) -> Arc<Mutex<HashMap<String, mpsc::Sender<Vec<u8>>>>> {
-        self.sessions.clone()
-    }
-
     /// 添加终端会话
-    pub async fn add_session(&self, session_id: String, input_tx: mpsc::Sender<Vec<u8>>) {
+    pub async fn add_session(
+        &self,
+        session_id: String,
+        input_tx: mpsc::Sender<Vec<u8>>,
+        close_tx: tokio::sync::watch::Sender<bool>,
+    ) {
         let mut sessions = self.sessions.lock().await;
-        sessions.insert(session_id, input_tx);
+        sessions.insert(session_id, TerminalSessionHandle { input_tx, close_tx });
     }
 
     /// 获取终端会话的输入通道
     pub async fn get_input_tx(&self, session_id: &str) -> Option<mpsc::Sender<Vec<u8>>> {
         let sessions = self.sessions.lock().await;
-        sessions.get(session_id).cloned()
+        sessions.get(session_id).map(|h| h.input_tx.clone())
+    }
+
+    /// 请求关闭终端会话（B-06）：置关闭信号唤醒阻塞在输出读上的隧道任务，
+    /// 任务自身完成通道关闭 + 会话移除 + 前端通知
+    pub async fn request_close(&self, session_id: &str) {
+        let close_tx = {
+            let mut sessions = self.sessions.lock().await;
+            sessions.remove(session_id).map(|h| h.close_tx)
+        };
+        if let Some(close_tx) = close_tx {
+            let _ = close_tx.send(true);
+        }
     }
 
     /// 移除终端会话
@@ -63,6 +82,72 @@ impl TerminalStreamManager {
 impl Default for TerminalStreamManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ── 输出读取步骤（B-06） ─────────────────────────────────
+
+enum TerminalReadStep {
+    /// 收到关闭信号
+    Closed,
+    /// 流结束 / 读取失败（已记日志）
+    Eof,
+    /// 读到一个输出块
+    Data(Vec<u8>),
+}
+
+async fn read_exact_owned(
+    recv: &mut quinn::RecvStream,
+    n: usize,
+) -> Result<Vec<u8>, quinn::ReadExactError> {
+    let mut buf = vec![0u8; n];
+    recv.read_exact(&mut buf).await?;
+    Ok(buf)
+}
+
+/// 一次"长度头 + 数据"读取，期间 select 关闭信号。
+/// recv 的可变借用限制在本函数内，保证循环迭代间借用不冲突。
+async fn terminal_read_step(
+    recv: &mut quinn::RecvStream,
+    close_rx: &mut tokio::sync::watch::Receiver<bool>,
+) -> TerminalReadStep {
+    let len = {
+        let read = read_exact_owned(recv, 4);
+        tokio::pin!(read);
+        tokio::select! {
+            // 仅存在 false→true 一次变更，changed() 触发即视为关闭
+            _ = close_rx.changed() => return TerminalReadStep::Closed,
+            r = &mut read => match r {
+                Ok(buf4) => {
+                    let len = u32::from_le_bytes(buf4.as_slice().try_into().expect("4 字节长度头")) as usize;
+                    if len == 0 || len > 1024 * 1024 {
+                        tracing::warn!("无效的终端数据长度: {}", len);
+                        return TerminalReadStep::Eof;
+                    }
+                    len
+                }
+                Err(quinn::ReadExactError::FinishedEarly(_)) => {
+                    tracing::info!("终端 Stream 关闭");
+                    return TerminalReadStep::Eof;
+                }
+                Err(e) => {
+                    tracing::warn!("读取终端输出长度失败: {}", e);
+                    return TerminalReadStep::Eof;
+                }
+            },
+        }
+    };
+    let read = read_exact_owned(recv, len);
+    tokio::pin!(read);
+    tokio::select! {
+        _ = close_rx.changed() => TerminalReadStep::Closed,
+        r = &mut read => match r {
+            Ok(buf) => TerminalReadStep::Data(buf),
+            Err(e) => {
+                tracing::warn!("读取终端输出失败: {}", e);
+                TerminalReadStep::Eof
+            }
+        },
     }
 }
 
@@ -144,9 +229,11 @@ pub async fn remote_spawn_terminal(
 
     // 创建输入通道（用于后续写入）
     let (input_tx, mut input_rx) = mpsc::channel::<Vec<u8>>(256);
+    // 关闭信号（B-06）：watch 保留最后值——close 早于任务首次轮询也不会丢
+    let (close_tx, close_rx) = tokio::sync::watch::channel(false);
 
     // 保存到管理器
-    terminal_manager.add_session(session_id.clone(), input_tx).await;
+    terminal_manager.add_session(session_id.clone(), input_tx, close_tx).await;
 
     // 启动双向数据隧道任务
     let session_id_clone = session_id.clone();
@@ -177,39 +264,25 @@ pub async fn remote_spawn_terminal(
             tracing::info!("输入写入任务结束: session_id={}", session_id_input);
         });
 
-        // PTY 输出读取循环
+        // PTY 输出读取循环（B-06）：每次"长度+数据"读取期间 select 关闭
+        // 信号——恶意/异常服务器发半帧后挂起时，close 请求唤醒退出，不再
+        // 泄漏僵尸任务。watch::changed 保留状态变更，信号在两次读取间隙
+        // 发出也不丢失；recv 的可变借用限于 helper 内部，不跨迭代。
         let session_id_output = session_id_clone.clone();
+        let mut close_rx = close_rx;
         loop {
-            let mut len_buf = [0u8; 4];
-            match recv.read_exact(&mut len_buf).await {
-                Ok(_) => {
-                    let len = u32::from_le_bytes(len_buf) as usize;
-                    if len == 0 || len > 1024 * 1024 {
-                        tracing::warn!("无效的终端数据长度: {}", len);
-                        break;
-                    }
-                    let mut data = vec![0u8; len];
-                    match recv.read_exact(&mut data).await {
-                        Ok(_) => {
-                            // 发送事件到前端
-                            let _ = app_handle.emit("terminal-output", serde_json::json!({
-                                "session_id": session_id_output,
-                                "data": data,
-                            }));
-                        }
-                        Err(e) => {
-                            tracing::warn!("读取终端输出失败: {}", e);
-                            break;
-                        }
-                    }
-                }
-                Err(quinn::ReadExactError::FinishedEarly(_)) => {
-                    tracing::info!("终端 Stream 关闭");
+            match terminal_read_step(&mut recv, &mut close_rx).await {
+                TerminalReadStep::Closed => {
+                    tracing::info!("终端会话被主动关闭: session_id={}", session_id_output);
                     break;
                 }
-                Err(e) => {
-                    tracing::warn!("读取终端输出长度失败: {}", e);
-                    break;
+                TerminalReadStep::Eof => break,
+                TerminalReadStep::Data(data) => {
+                    // 发送事件到前端
+                    let _ = app_handle.emit("terminal-output", serde_json::json!({
+                        "session_id": session_id_output,
+                        "data": data,
+                    }));
                 }
             }
         }
@@ -269,8 +342,9 @@ pub async fn remote_terminal_close(
 ) -> Result<(), AppError> {
     let terminal_manager = app.state::<Arc<TerminalStreamManager>>();
 
-    // 移除会话（会关闭通道，导致 Stream 任务结束）
-    terminal_manager.remove_session(&session_id).await;
+    // 置关闭信号并移除会话（B-06）：输出读循环经 select 收到信号后退出，
+    // 隧道任务自身完成通道关闭/会话移除/前端通知——不再有僵尸任务
+    terminal_manager.request_close(&session_id).await;
 
     tracing::info!("远程终端关闭请求: session_id={}", session_id);
     Ok(())

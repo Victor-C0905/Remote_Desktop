@@ -13,6 +13,7 @@
     "test:ui": "vitest --ui",
     "test:run": "vitest run",
     "release": "node scripts/release.mjs",
+    "publish:quireld": "node scripts/publish-quireld.mjs",
     "prepare": "husky",
     "check:sensitive-logs": "node scripts/check-sensitive-logs.mjs",
     "verify": "node scripts/verify.mjs quick",

@@ -10,7 +10,8 @@ key_path = "./key.pem"
 [auth.ssh]
 enable_pubkey = true
 enable_password = true
-pam_service = "sshd"
+pam_service = "quireld"  # 独立 PAM 服务（安装脚本写入 /etc/pam.d/quireld）
+strict_modes = true      # authorized_keys 严格权限校验（等价 sshd StrictModes）
 
 [security]
 # 移除：allowed_paths = ["home", "/etc", "/var/log", "/opt"]
@@ -47,3 +48,13 @@ max_restarts = 3
 # IPC 请求 channel 容量（Manager 侧 dispatcher 的 mpsc channel 大小）
 # 满时 send().await 会等待，提供背压；默认 128 足够
 ipc_channel_capacity = 128
+
+[updates]
+# 客户端驱动的更新（认证后的 QUIC 命令触发；false 时客户端隐藏更新入口）
+enabled = true
+# staging 目录（新二进制暂存与状态文件；父目录须已存在，目录树 0700）
+staging_dir = "/var/lib/quireld/updates"
+# 单个更新二进制大小上限（MB）
+max_binary_mb = 500
+# commit 前自动备份的保留份数（/var/backups/quireld/）
+keep_backups = 3

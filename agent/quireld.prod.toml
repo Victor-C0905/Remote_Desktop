@@ -11,7 +11,8 @@ key_path = "./key.pem"
 [auth.ssh]
 enable_pubkey = true
 enable_password = true  # 生产环境可根据安全策略调整
-pam_service = "sshd"
+pam_service = "quireld"  # 独立 PAM 服务（安装脚本写入 /etc/pam.d/quireld）
+strict_modes = true      # authorized_keys 严格权限校验（等价 sshd StrictModes）
 
 [security]
 # 生产环境：移除路径限制（已重构权限系统）

@@ -34,7 +34,7 @@ use pam::Client;
 /// 支持各种PAM模块（如pam_unix, pam_ldap等）。
 #[cfg(unix)]
 pub struct PamAuthenticator {
-    /// PAM服务名（如 "sshd", "login"）
+    /// PAM服务名（如 "quireld", "sshd", "login"）
     pam_service: String,
 }
 
@@ -43,11 +43,11 @@ impl PamAuthenticator {
     /// 创建新的PAM认证器
     ///
     /// # 参数
-    /// - `pam_service`: PAM服务名，通常使用 "sshd" 或 "login"
+    /// - `pam_service`: PAM服务名，推荐使用独立的 "quireld"（不复用 sshd）
     ///
     /// # 示例
     /// ```rust,ignore
-    /// let auth = PamAuthenticator::new("sshd".to_string());
+    /// let auth = PamAuthenticator::new("quireld".to_string());
     /// ```
     pub fn new(pam_service: String) -> Self {
         Self { pam_service }
@@ -60,6 +60,10 @@ impl PamAuthenticator {
     /// 2. 设置用户名和密码
     /// 3. 调用PAM认证
     /// 4. 获取用户信息
+    ///
+    /// 注意：pam 0.8 的 `Client::authenticate()` 内部已包含 `acct_mgmt`（account 阶段），
+    /// 因此账户过期/锁定、`pam_nologin`、`pam_access` 等 account 规则会生效；
+    /// 本模块不调用 `open_session`（会话生命周期由 quireld 自身管理）。
     ///
     /// # 错误处理
     /// - 不记录密码等敏感信息
@@ -104,27 +108,12 @@ impl PamAuthenticator {
 #[cfg(unix)]
 impl Default for PamAuthenticator {
     fn default() -> Self {
-        Self::new("sshd".to_string())
+        Self::new("quireld".to_string())
     }
 }
 
 #[cfg(unix)]
 impl Authenticator for PamAuthenticator {
-    /// 公钥认证（不支持）
-    ///
-    /// # 设计说明
-    /// PAM模块遵循高内聚原则，只处理密码认证。
-    /// 公钥认证由SSH模块负责，避免职责混淆。
-    fn authenticate_pubkey(
-        &self,
-        _username: &str,
-        _pubkey: &[u8],
-        _signature: Option<&[u8]>,
-    ) -> Result<AuthResult> {
-        // PAM模块不支持公钥认证
-        Ok(AuthResult::Failure)
-    }
-
     /// 密码认证（PAM风格）
     ///
     /// # 实现说明
@@ -160,16 +149,6 @@ impl Default for PamAuthenticator {
 
 #[cfg(not(unix))]
 impl Authenticator for PamAuthenticator {
-    /// 公钥认证（Windows不支持）
-    fn authenticate_pubkey(
-        &self,
-        _username: &str,
-        _pubkey: &[u8],
-        _signature: Option<&[u8]>,
-    ) -> Result<AuthResult> {
-        Ok(AuthResult::Failure)
-    }
-
     /// 密码认证（Windows不支持）
     fn authenticate_password(&self, _username: &str, _password: &str) -> Result<AuthResult> {
         warn!("PAM authentication not supported on Windows platform");
@@ -196,19 +175,9 @@ mod tests {
     }
 
     #[test]
-    fn test_pam_pubkey_not_supported() {
-        let auth = PamAuthenticator::new("sshd".to_string());
-        // PAM不应该支持公钥认证
-        assert!(matches!(
-            auth.authenticate_pubkey("test", &[], None).unwrap(),
-            AuthResult::Failure
-        ));
-    }
-
-    #[test]
     fn test_pam_default_service() {
         let auth = PamAuthenticator::default();
-        // 默认使用sshd服务
+        // 默认使用独立 quireld 服务
         assert!(matches!(
             auth.authenticate_password("test", "password").unwrap(),
             AuthResult::Failure
