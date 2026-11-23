@@ -3,7 +3,7 @@
  *
  * 数据来源：
  * - 常用：本机按服务器统计的目录访问次数（filePathUsageStore），
- *   排除家目录与标准位置（侧边栏「位置」已有，重复入口属于功能冗余）
+ *   排除家目录、标准位置与已书签路径（书签组已有入口）
  * - 家目录 / 用户名：remote_get_current_user（Agent 按 /etc/passwd 返回）
  * - 标准位置：Agent 返回的 common_locations（XDG user-dirs 中真实存在的目录）
  */
@@ -29,6 +29,12 @@ export interface FrequentPath {
   lastUsed: number;
 }
 
+/** 手动添加的文件夹书签（folderBookmarksStore 产出） */
+export interface FolderBookmark {
+  path: string;
+  addedAt: number;
+}
+
 /** 侧边栏项（labelKey: 预置书签词典 key，渲染处 t()；label: 动态标签如真实目录名） */
 export interface SidebarItem {
   icon: AppIconName;
@@ -37,6 +43,8 @@ export interface SidebarItem {
   path: string;
   /** 悬浮提示（常用路径显示完整路径） */
   title?: string;
+  /** 手动书签项：渲染悬浮 ×（移除入口，仅书签组使用） */
+  removable?: boolean;
 }
 
 /** 侧边栏部分（titleKey: 词典 key，渲染处 t()） */
@@ -88,8 +96,10 @@ export function buildSidebarSections(params: {
   commonLocations?: CommonLocation[];
   /** 按访问分数排序的常用目录（无统计时不渲染该分组） */
   frequentPaths?: FrequentPath[];
+  /** 手动添加的文件夹书签（无书签时不渲染该分组） */
+  folderBookmarks?: FolderBookmark[];
 }): SidebarSection[] {
-  const { username, homeDir, activeServerId, commonLocations, frequentPaths } = params;
+  const { username, homeDir, activeServerId, commonLocations, frequentPaths, folderBookmarks } = params;
 
   if (!activeServerId || !username || !homeDir) {
     // 离线模式：使用默认 Linux 侧边栏（保持 UI 结构一致）
@@ -128,8 +138,11 @@ export function buildSidebarSections(params: {
   // 常用：完全由本机访问统计生成（无统计/首次使用时整组隐藏）。
   // 排除家目录与标准位置：侧边栏「位置」已有入口，重复展示属于功能冗余
   const excluded = new Set(homeItems.map((item) => item.path));
+  // 书签优先：已手动固定的路径不再进入常用组，避免同一路径两行展示、双高亮
+  const bookmarkedPaths = new Set((folderBookmarks ?? []).map((bm) => bm.path));
   const frequentItems = (frequentPaths ?? [])
     .filter((entry) => !excluded.has(entry.path))
+    .filter((entry) => !bookmarkedPaths.has(entry.path))
     .map((entry) => ({
       icon: 'folder' as const,
       label: pathLabel(entry.path),
@@ -138,6 +151,20 @@ export function buildSidebarSections(params: {
     }));
 
   const sections: SidebarSection[] = [];
+
+  // 手动书签：用户显式添加的常用文件夹，排最前（显式意图优先于自动统计）。
+  // 不与「位置」组去重——用户显式意图优先于去重美学
+  const bookmarkItems = (folderBookmarks ?? []).map((bm) => ({
+    icon: 'folder' as const,
+    label: pathLabel(bm.path),
+    title: bm.path,
+    path: bm.path,
+    removable: true,
+  }));
+  if (bookmarkItems.length > 0) {
+    sections.push({ titleKey: 'fileManager.bookmarks', items: bookmarkItems });
+  }
+
   if (frequentItems.length > 0) {
     sections.push({ titleKey: 'fileManager.frequent', items: frequentItems });
   }

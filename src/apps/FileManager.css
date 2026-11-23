@@ -413,6 +413,27 @@
   opacity: 0.8;
 }
 
+/* 书签项移除按钮：悬浮浮现（右侧，语义同搜索框 ✕ / Explorer 取消固定） */
+.fm-sidebar .fm-sidebar-item .fm-si-remove {
+  flex-shrink: 0;
+  display: none;
+  border: none;
+  background: none;
+  color: var(--quirel-text-secondary);
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.fm-sidebar .fm-sidebar-item:hover .fm-si-remove {
+  display: inline-flex;
+}
+
+.fm-sidebar .fm-sidebar-item .fm-si-remove:hover {
+  color: var(--quirel-text-primary);
+}
+
 /* ── File List / Grid Area ───────────────────────────── */
 
 /* List View - 重构为 flex 布局（模仿 SystemMonitor） */

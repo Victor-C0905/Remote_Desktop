@@ -28,6 +28,7 @@ import { buildSidebarSections } from './fileSidebar';
 import type { CommonLocation, SidebarSection } from './fileSidebar';
 import { selectFrequentPaths, useFilePathUsageStore } from '../stores/filePathUsageStore';
 import type { VisitSource } from '../stores/filePathUsageStore';
+import { selectFolderBookmarks, isFolderBookmarked, useFolderBookmarksStore } from '../stores/folderBookmarksStore';
 import { rangeSelection, toggleSelection, entryName } from './fileSelection';
 import { useFileTransfer } from './useFileTransfer';
 import { applyBrowseChanges, applySearchChanges, isTransferTempName, type FileViewChange } from './fileMutations';
@@ -394,6 +395,14 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   const frequentPaths = useMemo(
     () => selectFrequentPaths(pathUsageByServer, activeServerId),
     [pathUsageByServer, activeServerId]
+  );
+
+  // 手动书签：与「常用」（frecency 自动统计）相互独立——书签是用户显式固定的
+  // 文件夹，排在常用之前展示；常用组会过滤已书签路径（书签优先，避免重复行）
+  const folderBookmarksByServer = useFolderBookmarksStore((s) => s.folderBookmarksByServer);
+  const folderBookmarks = useMemo(
+    () => selectFolderBookmarks(folderBookmarksByServer, activeServerId),
+    [folderBookmarksByServer, activeServerId]
   );
 
   // 路径输入框状态
@@ -908,9 +917,10 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
       activeServerId,
       commonLocations,
       frequentPaths,
+      folderBookmarks,
     });
     setSidebarSections(sections);
-  }, [activeServerId, username, homeDir, commonLocations, frequentPaths, initialData]);
+  }, [activeServerId, username, homeDir, commonLocations, frequentPaths, folderBookmarks, initialData]);
 
   // ── 断连即时响应 ─────────────────────────────────────
   // 当 activeServerId 从有值变为 null（断连），立即清空数据并显示离线占位符
@@ -1150,6 +1160,27 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   const handleSidebarReset = useCallback(() => {
     handleSidebarWidthChange(SIDEBAR_DEFAULT_WIDTH);
   }, [handleSidebarWidthChange]);
+
+  // ── 文件夹书签（手动固定当前目录）────────────────────
+  const removeFolderBookmark = useCallback(
+    (path: string) => {
+      if (!activeServerId) return;
+      useFolderBookmarksStore.getState().removeFolderBookmark(activeServerId, path);
+    },
+    [activeServerId]
+  );
+
+  const currentFolderBookmarked = useMemo(
+    () => isFolderBookmarked(folderBookmarks, currentPath),
+    [folderBookmarks, currentPath]
+  );
+
+  const toggleFolderBookmark = useCallback(() => {
+    if (!activeServerId || !currentPath) return;
+    const { addFolderBookmark, removeFolderBookmark: rm } = useFolderBookmarksStore.getState();
+    if (currentFolderBookmarked) rm(activeServerId, currentPath);
+    else addFolderBookmark(activeServerId, currentPath);
+  }, [activeServerId, currentPath, currentFolderBookmarked]);
 
   // 路径格式化函数：确保路径格式正确
   const normalizePath = useCallback((path: string): string => {
@@ -2575,6 +2606,13 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                   >
                     <span className="fm-si-icon"><AppIcon name={item.icon} size={16} /></span>
                     <span className="fm-si-label">{item.labelKey ? t(item.labelKey) : item.label}</span>
+                    {item.removable && (
+                      <button
+                        className="fm-si-remove"
+                        title={t("fileManager.removeBookmark")}
+                        onClick={(e) => { e.stopPropagation(); removeFolderBookmark(item.path); }}
+                      >×</button>
+                    )}
                   </div>
                   );
                 })}
@@ -2732,6 +2770,12 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                 节奏一致——此前新建文件夹独占一层 wrapper，与视图切换组之间
                 被 toolbar 的 8px 组间隔开，同排出现 8/4 不齐，R12-SP-1） */}
             <div className="fm-toolbar-view">
+              <button
+                className={`fm-toolbar-btn ${currentFolderBookmarked ? "active" : ""}`}
+                onClick={toggleFolderBookmark}
+                title={currentFolderBookmarked ? t("fileManager.removeBookmark") : t("fileManager.addBookmark")}
+                disabled={!activeServerId}
+              ><SymbolicIcon name={currentFolderBookmarked ? "star" : "star-outline"} size={15} /></button>
               <button
                 className="fm-toolbar-btn"
                 onClick={() => createEntry("folder")}
