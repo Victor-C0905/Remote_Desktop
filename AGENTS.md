@@ -103,3 +103,12 @@ target 体积无上限增长，清理统一走 cargo-sweep（全局安装，v0.8
 ## 10. 窗口坏帧红线
 
 最大化/缩放坏帧现方案为「以当前壁纸平均色填充暴露区」（实验 G 定稿）。触碰 §5 红线表第 2 行所列范围，改动前必读 `docs/window-flash-rules.md`，改完按其 §7 用 dupcap 探针回归；硬红线清单见该文档 §5。
+
+## 11. 跨项目发布约定（RELEASE-CONTRACT v1）
+
+本节为本次通过的发布约定，与 §4 并用，不改变 §4 既有条款：
+
+- 版本号与 tag 只能由用户在 main 上通过 `npm run release <版本号>` 产生；AI 与 CI 不得自行决定版本号、创建或删除 tag。
+- 发布流水线只消费用户已产生的 tag，不生产 tag；不得由 CI bump 版本、squash 合并、合并 dev→main 或推送 main/dev。
+- squash 合并、dev→main、push、生产发布审批仍归人工；生产发布须经人工审批。
+- 跨项目制品的发布契约（职责边界、端点/字段/错误码、制品命名与目录、鉴权作用域、时序与回滚）以 `docs/superpowers/plans/2026-11-24-cross-project-release-automation-plan.md` 为唯一权威版本；变更须在该文档升版并同步 quirel_web 副本。

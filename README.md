@@ -38,3 +38,12 @@
 - [docs/data-storage.md](docs/data-storage.md) — 数据存储与清除策略
 - [docs/audits/](docs/audits/) — 安全与 bug 审计报告
 - `.agents/skills/` — 项目级触发式技能（红线 / 验证 / 协议变更 / 安全 / Rust 惯例）
+
+## 发布契约
+
+跨项目（Quirel 桌面端 / quireld / quirel_web）的发布职责、接口契约、分阶段计划与红线，以
+[docs/superpowers/plans/2026-11-24-cross-project-release-automation-plan.md](docs/superpowers/plans/2026-11-24-cross-project-release-automation-plan.md)
+（RELEASE-CONTRACT v1）为唯一权威版本。
+
+- 谁该读：发版负责人、维护发布脚本与 CI 的人、修改 quirel_web 发布接口或制品目录的人。
+- 契约变更（端点、字段、错误码、制品命名与目录、时序、凭据作用域）必须回到该文档修改并升版，再同步 quirel_web 副本。
