@@ -38,6 +38,11 @@ export async function purgeServerData(serverId: string): Promise<void> {
         (await import("../stores/folderBookmarksStore")).useFolderBookmarksStore.getState().clearServer(serverId),
     },
     {
+      label: "侧栏展开态",
+      run: async () =>
+        (await import("../stores/sidebarTreeStore")).useSidebarTreeStore.getState().clearServer(serverId),
+    },
+    {
       label: "历史",
       run: async () =>
         (await import("../stores/historyStore")).useHistoryStore.getState().clearServer(serverId),

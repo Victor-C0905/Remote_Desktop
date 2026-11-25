@@ -24,11 +24,12 @@ import { SymbolicIcon } from "../components/symbolic";
 import { ToolbarMenu, type MenuEntry } from "../components/ToolbarMenu/ToolbarMenu";
 import { ContextMenu, type ContextMenuEntry } from "../components/ContextMenu/ContextMenu";
 import type { FileEntry } from './fileTypes';
-import { buildSidebarSections } from './fileSidebar';
-import type { CommonLocation, SidebarSection } from './fileSidebar';
+import { buildSidebarSections, buildSidebarChildren, flattenSidebarSections } from './fileSidebar';
+import type { CommonLocation, SidebarSection, SidebarChildrenState, SidebarRow, SidebarSectionRows } from './fileSidebar';
 import { selectFrequentPaths, useFilePathUsageStore } from '../stores/filePathUsageStore';
 import type { VisitSource } from '../stores/filePathUsageStore';
 import { selectFolderBookmarks, isFolderBookmarked, useFolderBookmarksStore } from '../stores/folderBookmarksStore';
+import { selectExpandedPaths, useSidebarTreeStore } from '../stores/sidebarTreeStore';
 import { rangeSelection, toggleSelection, entryName } from './fileSelection';
 import { useFileTransfer } from './useFileTransfer';
 import { applyBrowseChanges, applySearchChanges, isTransferTempName, type FileViewChange } from './fileMutations';
@@ -46,6 +47,9 @@ const log = createLogger('FileManager');
 
 /** 搜索下钻层数档位（0 = 仅当前目录一层，不在选项内单列；Rust 侧 clamp_search_depth 在 8 截断） */
 const SEARCH_DEPTH_OPTIONS = [1, 2, 3, 5, 8];
+
+/** 侧栏子目录缓存有效期：窗口内重复展开/重试复用已加载数据，避免每次点击都打 Agent */
+const SIDEBAR_CHILDREN_TTL_MS = 30_000;
 
 /** 列表行间距（px）：必须与 .fm-list-content 的 row-gap 一致。
  *  虚拟窗口按「行高 + 间距」计算占位高度，漏算会让滚动高度累计变短，
@@ -405,6 +409,33 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     [folderBookmarksByServer, activeServerId]
   );
 
+  // 侧栏目录树：展开态按服务器持久化；子目录条目只做内存缓存（切换服务器即失效）
+  const sidebarExpandedByServer = useSidebarTreeStore((s) => s.expandedByServer);
+  const expandedSidebarPaths = useMemo(
+    () => new Set(selectExpandedPaths(sidebarExpandedByServer, activeServerId)),
+    [sidebarExpandedByServer, activeServerId]
+  );
+  const [sidebarChildren, setSidebarChildren] = useState<Record<string, SidebarChildrenState>>({});
+  const sidebarChildrenRef = useRef(sidebarChildren);
+  sidebarChildrenRef.current = sidebarChildren;
+  /** path → 最近一次成功加载时间（TTL 判定用） */
+  const sidebarFetchedAtRef = useRef<Record<string, number>>({});
+  /** path → 请求代际：重试/切换服务器后旧响应不得回填 */
+  const sidebarEpochRef = useRef<Record<string, number>>({});
+  /** 预取队列：可见目录的下一层（顺序消费，弱网下避免并发打满） */
+  const sidebarPrefetchQueueRef = useRef<string[]>([]);
+  const sidebarPrefetchQueuedRef = useRef<Set<string>>(new Set());
+  const sidebarPrefetchRunningRef = useRef(false);
+  /** 当前可见行路径：排队中的目录被收起后跳过，避免无效请求 */
+  const sidebarVisiblePathsRef = useRef<Set<string>>(new Set());
+  /** 侧栏右键菜单：仅书签/常用组提供移除入口 */
+  const [sidebarMenu, setSidebarMenu] = useState<{
+    x: number;
+    y: number;
+    path: string;
+    kind: "bookmark" | "frequent";
+  } | null>(null);
+
   // 路径输入框状态
   const [pathInput, setPathInput] = useState(currentPath);
   const [isEditingPath, setIsEditingPath] = useState(false);
@@ -529,6 +560,103 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     if (!activeServerId) return null;
     return invoke<ReadDirResponse>("remote_read_dir", { serverId: activeServerId, path });
   }, [activeServerId]);
+
+  /** 侧栏子目录加载：未知目录首次请求；缓存过期时后台刷新（保留旧内容不闪加载） */
+  const loadSidebarChildren = useCallback(async (path: string, opts?: { force?: boolean }) => {
+    const serverId = activeServerIdRef.current;
+    if (!serverId) return;
+    const cached = sidebarChildrenRef.current[path];
+    const fetchedAt = sidebarFetchedAtRef.current[path] ?? 0;
+    if (!opts?.force && cached?.status === "loading") return;
+    if (!opts?.force && cached?.status === "loaded" && Date.now() - fetchedAt < SIDEBAR_CHILDREN_TTL_MS) {
+      return;
+    }
+
+    const hasCachedData = cached?.status === "loaded";
+    const epoch = (sidebarEpochRef.current[path] ?? 0) + 1;
+    sidebarEpochRef.current[path] = epoch;
+    // 已有缓存时保持展示（stale-while-revalidate）：展开不再因 TTL 过期闪加载行
+    if (!hasCachedData) {
+      setSidebarChildren((prev) => ({ ...prev, [path]: { status: "loading" } }));
+    }
+
+    try {
+      const resp = await invoke<ReadDirResponse>("remote_read_dir", { serverId, path });
+      // 竞态守卫：切换服务器/重试后旧响应不得回填
+      if (sidebarEpochRef.current[path] !== epoch || activeServerIdRef.current !== serverId) return;
+      sidebarFetchedAtRef.current[path] = Date.now();
+      const children = buildSidebarChildren(path, resp.entries ?? []);
+      // 目录没有子文件夹：收起并清除持久化展开态（叶子不显示展开箭头）
+      if (children.items.length === 0) {
+        useSidebarTreeStore.getState().collapseExpanded(serverId, path);
+      }
+      setSidebarChildren((prev) => ({ ...prev, [path]: { status: "loaded", ...children } }));
+    } catch (e) {
+      if (sidebarEpochRef.current[path] !== epoch || activeServerIdRef.current !== serverId) return;
+      delete sidebarFetchedAtRef.current[path];
+      // 后台刷新失败：保留旧树，避免已展开内容回退成错误行
+      if (hasCachedData) return;
+      setSidebarChildren((prev) => ({
+        ...prev,
+        [path]: { status: "error", message: formatUnknownError(e) },
+      }));
+    }
+  }, []);
+
+  /** 预取泵：串行消费队列；只对未知目录发起请求 */
+  const runSidebarPrefetchRef = useRef<() => void>(() => {});
+  const pumpSidebarPrefetch = useCallback(function pump(): void {
+    if (sidebarPrefetchRunningRef.current) return;
+    const path = sidebarPrefetchQueueRef.current.shift();
+    if (!path) return;
+    sidebarPrefetchQueuedRef.current.delete(path);
+    // 目录已不可见（被收起/切服）：跳过，省掉无效流量
+    if (!sidebarVisiblePathsRef.current.has(path)) {
+      pump();
+      return;
+    }
+    if (sidebarChildrenRef.current[path]) {
+      pump();
+      return;
+    }
+    sidebarPrefetchRunningRef.current = true;
+    void loadSidebarChildren(path).finally(() => {
+      sidebarPrefetchRunningRef.current = false;
+      // 让出事件循环，避免长队列同步递归
+      window.setTimeout(() => runSidebarPrefetchRef.current(), 0);
+    });
+  }, [loadSidebarChildren]);
+  runSidebarPrefetchRef.current = pumpSidebarPrefetch;
+
+  /** 点箭头切换展开/收起；点行仍只导航（展开时懒加载子目录） */
+  const handleToggleSidebarItem = useCallback((path: string) => {
+    const serverId = activeServerIdRef.current;
+    if (!serverId) return;
+    const store = useSidebarTreeStore.getState();
+    const wasExpanded = selectExpandedPaths(store.expandedByServer, serverId).includes(path);
+    store.toggleExpanded(serverId, path);
+    if (!wasExpanded) void loadSidebarChildren(path);
+  }, [loadSidebarChildren]);
+
+  // 切换服务器：子目录缓存/时间戳/请求代际/预取队列全部失效，防止跨服串数据
+  useEffect(() => {
+    sidebarChildrenRef.current = {};
+    sidebarFetchedAtRef.current = {};
+    sidebarEpochRef.current = {};
+    sidebarPrefetchQueueRef.current = [];
+    sidebarPrefetchQueuedRef.current = new Set();
+    sidebarPrefetchRunningRef.current = false;
+    sidebarVisiblePathsRef.current = new Set();
+    setSidebarChildren({});
+  }, [activeServerId]);
+
+  // 持久化的展开态在启动/切换服务器后没有子目录缓存：补加载（不做祖先自动展开）
+  useEffect(() => {
+    if (!activeServerId) return;
+    for (const path of expandedSidebarPaths) {
+      void loadSidebarChildren(path);
+    }
+  }, [activeServerId, expandedSidebarPaths, loadSidebarChildren]);
 
   const loadDir = useCallback(async (path: string, opts?: { keepSelection?: boolean }): Promise<boolean> => {
     // 竞态守卫：快速连续导航时，先发后至的旧响应不得覆盖新目录视图
@@ -1115,16 +1243,23 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     const el = breadcrumbRef.current;
     if (!el || isEditingPath) return;
     const segments = parsePathSegments(currentPath);
-    const buttons = el.querySelectorAll<HTMLButtonElement>('.fm-breadcrumb-segment');
-    const widths = segments.map((seg, i) => {
-      const b = buttons[i];
-      if (b) {
-        // 自然宽度：flex 挤压后的 offsetWidth 只反映剩余空间，scrollWidth
-        // 才是未截断的文本宽——规划器必须用自然宽，否则永远「放得下」
-        const w = Math.max(b.offsetWidth, b.scrollWidth);
-        crumbWidthCacheRef.current.set(seg.path, w);
-        return w;
-      }
+    // 按路径取实测宽度：收拢态下「…」按钮也带 fm-breadcrumb-segment 类，
+    // 旧实现按数组下标取按钮，会把「…」的宽度记到被收拢段上，宽度账目
+    // 错乱后深层路径在窄窗口里会「收拢 ↔ 展开」反复抖动，直至 React
+    // 抛 Maximum update depth exceeded（点击侧栏深层目录必现）。
+    const measured = new Map<string, number>();
+    el.querySelectorAll<HTMLButtonElement>('.fm-breadcrumb-segment[data-crumb-path]').forEach((b) => {
+      const path = b.dataset.crumbPath;
+      if (!path) return;
+      // 自然宽度：flex 挤压后的 offsetWidth 只反映剩余空间，scrollWidth
+      // 才是未截断的文本宽——规划器必须用自然宽，否则永远「放得下」
+      const w = Math.max(b.offsetWidth, b.scrollWidth);
+      measured.set(path, w);
+      crumbWidthCacheRef.current.set(path, w);
+    });
+    const widths = segments.map((seg) => {
+      const hit = measured.get(seg.path);
+      if (hit !== undefined) return hit;
       // 已收拢段不可测：读缓存，缺失时按字符数估算（收敛后会被实测覆盖）
       return crumbWidthCacheRef.current.get(seg.path) ?? seg.name.length * 9 + 26;
     });
@@ -1166,6 +1301,21 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     (path: string) => {
       if (!activeServerId) return;
       useFolderBookmarksStore.getState().removeFolderBookmark(activeServerId, path);
+    },
+    [activeServerId]
+  );
+
+  /** 侧栏行右键：书签/常用组提供「移除」入口（展开出的子目录行不提供） */
+  const handleSidebarContextMenu = useCallback(
+    (e: React.MouseEvent, row: SidebarRow, section: SidebarSectionRows) => {
+      if (row.kind !== "item" || row.depth !== 0 || !activeServerId) return;
+      let kind: "bookmark" | "frequent" | null = null;
+      if (section.titleKey === "fileManager.bookmarks" && row.item.removable) kind = "bookmark";
+      else if (section.titleKey === "fileManager.frequent") kind = "frequent";
+      if (!kind) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setSidebarMenu({ x: e.clientX + 3, y: e.clientY + 3, path: row.item.path, kind });
     },
     [activeServerId]
   );
@@ -2176,9 +2326,11 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
     setContextMenu({ x: e.clientX + 3, y: e.clientY + 3, targets: selectedEntries });
   }, [selectedSet, selectedEntries, entryFullPath]);
 
-  // 空白区域右键菜单
+  // 空白区域右键菜单（列表容器绑在 .fm-list：左右 6px 安全留白也能弹出；
+  // 表头由列头自身交互，不弹空白菜单）
   const handleEmptyContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
+    if ((e.target as HTMLElement).closest(".fm-list-header")) return;
     setContextMenu({ x: e.clientX + 3, y: e.clientY + 3, targets: null });
   }, []);
 
@@ -2239,6 +2391,8 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   const handleEmptyClick = useCallback((e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
     if (target.closest(".fm-list-row") || target.closest(".fm-grid-item")) return;
+    // 表头点击（排序/列菜单）不参与空白清选
+    if (target.closest(".fm-list-header")) return;
     if (marqueeJustEndedRef.current) {
       marqueeJustEndedRef.current = false;
       return;
@@ -2549,6 +2703,37 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
   const fileCount = statusEntries.filter(e => !e.is_dir).length;
   const totalSize = statusEntries.filter(e => !e.is_dir).reduce((s, e) => s + e.size, 0);
 
+  // 目录树平铺：展开项后插入子目录/状态行（纯函数见 fileSidebar.flattenSidebarSections）
+  const sidebarRows = useMemo(
+    () => flattenSidebarSections(sidebarSections, {
+      expandedPaths: expandedSidebarPaths,
+      children: sidebarChildren,
+      // 离线占位项（/home 等）不可导航，也不提供展开
+      allowExpand: !!activeServerId,
+    }),
+    [sidebarSections, expandedSidebarPaths, sidebarChildren, activeServerId]
+  );
+
+  // 可见目录预取：提前拉取下一层，叶子箭头能尽早隐藏、展开直接命中缓存。
+  // 只预取当前可见行并按顺序串行请求；缓存过期由 loadSidebarChildren 后台刷新
+  useEffect(() => {
+    if (!activeServerId) return;
+    const visible = new Set<string>();
+    for (const section of sidebarRows) {
+      for (const row of section.rows) {
+        if (row.kind !== "item") continue;
+        const path = row.item.path;
+        visible.add(path);
+        if (sidebarChildren[path]) continue;
+        if (sidebarPrefetchQueuedRef.current.has(path)) continue;
+        sidebarPrefetchQueuedRef.current.add(path);
+        sidebarPrefetchQueueRef.current.push(path);
+      }
+    }
+    sidebarVisiblePathsRef.current = visible;
+    pumpSidebarPrefetch();
+  }, [activeServerId, sidebarRows, sidebarChildren, pumpSidebarPrefetch]);
+
   // 搜索视图的内容区占位（搜索中/错误/无命中）；有结果时 null → 走列表/网格渲染
   const searchEmptyState = activeSearch ? (
     searching ? (
@@ -2590,29 +2775,72 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
         sidebar={
           /* Sidebar */
           <div className="fm-sidebar">
-            {sidebarSections.map((section, sectionIdx) => (
+            {sidebarRows.map((section, sectionIdx) => (
               <div key={sectionIdx} className="fm-sidebar-section">
                 <div className="fm-sidebar-section-title">{section.titleKey ? t(section.titleKey) : section.title}</div>
-                {section.items.map((item, itemIdx) => {
-                  // 书签（常用/位置）可作拖拽放置目标
+                {section.rows.map((row, rowIdx) => {
+                  // 加载中/无子目录/失败重试/超限提示：与子目录同层缩进的状态行
+                  if (row.kind === "status") {
+                    const indent = 8 + row.depth * 12 + 26;
+                    if (row.state === "error") {
+                      return (
+                        <div
+                          key={`${sectionIdx}-${rowIdx}`}
+                          className="fm-sidebar-status fm-sidebar-status-error"
+                          style={{ paddingLeft: indent }}
+                          title={row.message}
+                        >
+                          <span className="fm-si-status-text">
+                            {t("fileManager.sidebarLoadFailed", { message: row.message })}
+                          </span>
+                          <button
+                            className="fm-si-retry"
+                            onClick={() => { void loadSidebarChildren(row.path, { force: true }); }}
+                          >{t("common.retry")}</button>
+                        </div>
+                      );
+                    }
+                    return (
+                      <div
+                        key={`${sectionIdx}-${rowIdx}`}
+                        className="fm-sidebar-status"
+                        style={{ paddingLeft: indent }}
+                      >
+                        {row.state === "loading" && t("common.loading")}
+                        {row.state === "more" && t("fileManager.sidebarMoreItems", { count: row.count ?? 0 })}
+                      </div>
+                    );
+                  }
+
+                  const item = row.item;
+                  // 书签（常用/位置）与展开出的子目录都可作拖拽放置目标
                   const isDropTarget = dropTargetPath === item.path;
                   return (
                   <div
-                    key={`${sectionIdx}-${itemIdx}`}
+                    key={`${sectionIdx}-${rowIdx}`}
                     className={`fm-sidebar-item${currentPath === item.path ? " fm-sidebar-item-active" : ""}${isDropTarget ? " drop-target" : ""}`}
+                    style={{ paddingLeft: 8 + row.depth * 12 }}
                     data-drop-dir={item.path}
                     title={item.title}
                     onClick={() => navigateTo(item.path, "sidebar")}
+                    onContextMenu={(e) => handleSidebarContextMenu(e, row, section)}
                   >
+                    {/* 展开箭头：只切换展开态，不触发导航（点行仍导航） */}
+                    {row.expandable ? (
+                      <button
+                        className="fm-si-arrow"
+                        aria-expanded={row.expanded}
+                        title={row.expanded ? t("fileManager.collapseFolder") : t("fileManager.expandFolder")}
+                        onClick={(e) => { e.stopPropagation(); handleToggleSidebarItem(item.path); }}
+                      >
+                        <SymbolicIcon name={row.expanded ? "chevron-down" : "chevron-right"} size={14} />
+                      </button>
+                    ) : (
+                      // 叶子行保留箭头槽位：同层图标/文字与可展开行对齐
+                      <span className="fm-si-arrow-gutter" aria-hidden="true" />
+                    )}
                     <span className="fm-si-icon"><AppIcon name={item.icon} size={16} /></span>
                     <span className="fm-si-label">{item.labelKey ? t(item.labelKey) : item.label}</span>
-                    {item.removable && (
-                      <button
-                        className="fm-si-remove"
-                        title={t("fileManager.removeBookmark")}
-                        onClick={(e) => { e.stopPropagation(); removeFolderBookmark(item.path); }}
-                      >×</button>
-                    )}
                   </div>
                   );
                 })}
@@ -2684,6 +2912,7 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
                         <button
                           key={segment.path}
                           className={`fm-breadcrumb-segment ${isLast ? 'fm-crumb-current' : ''}${dropTargetPath === segment.path ? ' drop-target' : ''}`}
+                          data-crumb-path={segment.path}
                           data-drop-dir={segment.path}
                           data-spring=""
                           onClick={(e) => {
@@ -2877,6 +3106,14 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
               className={`fm-list${hoveredCol ? ` col-hover-${hoveredCol}` : ""}`}
               ref={listAreaRef}
               style={{ "--fm-cols": buildGridTemplate(columnWidths) } as React.CSSProperties}
+              /* 空白操作绑在 .fm-list：左右 6px 安全留白（框选/右键/左键）同样生效；
+                 表头由列头自身交互（排序/调宽），mousedown 不进入框选 */
+              onContextMenu={handleEmptyContextMenu}
+              onClick={handleEmptyClick}
+              onMouseDown={(e) => {
+                if ((e.target as HTMLElement).closest(".fm-list-header")) return;
+                beginMarquee(e);
+              }}
             >
               {/* 操作失败就地提示（R6：重命名/删除等失败此前仅通知中心，容易被错过） */}
               {actionError && (
@@ -2947,9 +3184,6 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
               <div
                 className="fm-list-content"
                 ref={listContentRef}
-                onContextMenu={handleEmptyContextMenu}
-                onClick={handleEmptyClick}
-                onMouseDown={beginMarquee}
               >
                 {/* 上下占位：撑起未挂载行的滚动高度（审计 M25） */}
                 {viewMode === "list" && padTop > 0 && (
@@ -3241,6 +3475,29 @@ export function FileManager({ windowId, preloadData }: FileManagerProps) {
             onClick: () => handleBreadcrumbClick(p.path),
           }))}
           onClose={() => setCrumbMenu(null)}
+        />
+      )}
+
+      {/* 侧栏右键菜单：书签/常用组提供移除入口 */}
+      {sidebarMenu && (
+        <ContextMenu
+          pos={{ x: sidebarMenu.x, y: sidebarMenu.y }}
+          items={[
+            {
+              label:
+                sidebarMenu.kind === "bookmark"
+                  ? t("fileManager.removeBookmark")
+                  : t("fileManager.removeFromFrequent"),
+              onClick: () => {
+                if (sidebarMenu.kind === "bookmark") {
+                  removeFolderBookmark(sidebarMenu.path);
+                } else if (activeServerId) {
+                  removePathVisit(activeServerId, sidebarMenu.path);
+                }
+              },
+            },
+          ]}
+          onClose={() => setSidebarMenu(null)}
         />
       )}
 

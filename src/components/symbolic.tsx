@@ -16,7 +16,7 @@ export type SymbolicIconName =
   | "bell" | "bell-outline"
   | "pan-up" | "pan-down"
   | "funnel"
-  | "chevron-up" | "chevron-down"
+  | "chevron-up" | "chevron-down" | "chevron-right"
   | "go-previous" | "go-next" | "go-home" | "tab-new"
   | "go-up" | "go-down"
   | "media-play" | "media-pause"
@@ -206,6 +206,11 @@ const ICONS: Record<SymbolicIconName, ReactNode> = {
   ),
   "chevron-down": (
     <path d="M3.5 6 L8 10.5 L12.5 6"
+      fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+  ),
+  // 右向 chevron（树形展开/收起，收起态；与上下 chevron 同线宽）
+  "chevron-right": (
+    <path d="M6 3.5 L10.5 8 L6 12.5"
       fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
   ),
   // 实心左箭头（浏览后退）

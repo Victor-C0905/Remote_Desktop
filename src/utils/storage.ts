@@ -38,6 +38,9 @@ const EXPECTED_STORE_VERSIONS: Record<string, number> = {
   // 文件管理器文件夹书签（侧边栏「书签」分组，按服务器隔离）
   // v1：初始结构（path/addedAt），与常用统计同文件不同 key
   "fm-folder-bookmarks": 1,
+  // 文件管理器侧边栏目录树展开态（按服务器隔离）
+  // v1：初始结构（path 数组）；只记录展开集合，子目录内容不落盘
+  "fm-sidebar-tree": 1,
 };
 
 /** 直接存放业务 JSON 的文件（非 zustand persist 的 {state, version} 包装） */
@@ -366,7 +369,7 @@ const PREFLIGHT_GROUPS: Array<{
   { path: "settings.bin", getStorage: getSettingsStorage, keys: ["quirel-settings", "quirel-wallpaper"] },
   { path: "notifications.bin", getStorage: getNotificationsStorage, keys: ["notifications"] },
   { path: "browser-data.bin", getStorage: getBrowserDataStorage, keys: ["bookmarks", "history"] },
-  { path: "filemanager.bin", getStorage: getFileManagerStorage, keys: ["filemanager-path-usage", "fm-folder-bookmarks"] },
+  { path: "filemanager.bin", getStorage: getFileManagerStorage, keys: ["filemanager-path-usage", "fm-folder-bookmarks", "fm-sidebar-tree"] },
   { path: "transfers.bin", getStorage: getTransfersStorage, keys: ["quirel-transfers"] },
 ];
 

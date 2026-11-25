@@ -12,6 +12,9 @@ export default defineConfig(async () => ({
   //
   // 1. prevent Vite from obscuring rust errors
   clearScreen: false,
+  // 只从 index.html 扫描依赖：target/ 下 cargo 产物 html 会被当作入口，
+  // 触发全量预构建并长时间占用 dev server
+  optimizeDeps: { entries: ["index.html"] },
   // 2. tauri expects a fixed port, fail if that port is not available
   server: {
     port: 1420,
@@ -26,7 +29,8 @@ export default defineConfig(async () => ({
       : undefined,
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      // target/ 体积巨大（cargo 构建产物），递归 watch 会阻塞 dev server
+      ignored: ["**/src-tauri/**", "**/target/**"],
     },
   },
 }));

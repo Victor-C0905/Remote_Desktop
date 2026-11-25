@@ -113,8 +113,14 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
   // 待自动重连的服务器集合（防止同一服务器重复调度重连定时器）
   const pendingReconnectRef = useRef<Set<string>>(new Set());
 
+  // 连接意图代数：每次「发起连接 / 主动断开」递增，performConnect 在
+  // remote_connect 返回后校验代数。慢速服务器的迟到成功若已过期，必须
+  // 断掉刚建立的连接——否则后端会残留第二条连接（单连接模型被破坏，
+  // 列表出现两台「已连接」）
+  const connectionEpochRef = useRef(0);
+
   // 连接核心逻辑的稳定引用（手动连接与自动重连共用，见 performConnect）
-  const performConnectRef = useRef<(server: ServerConfig) => Promise<void>>(async () => {});
+  const performConnectRef = useRef<(server: ServerConfig, epoch: number) => Promise<boolean>>(async () => false);
   // 调度重连的稳定引用（connection-lost 监听器与重连失败重试共用）
   const scheduleReconnectRef = useRef<(serverId: string, attempt: number) => void>(() => {});
 
@@ -122,57 +128,61 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
   useEffect(() => {
     log.info("设置连接丢失监听器");
 
-    const setupListener = async () => {
-      const unlisten = await listen<ConnectionLostPayload>("connection-lost", (event) => {
-        const { server_id: lostServerId, source, code } = event.payload;
-        log.info("收到连接丢失事件:", lostServerId, "来源:", source, "code:", code);
-
-        // 通过 ref 读取最新值，而非闭包捕获
-        if (activeServerIdRef.current === lostServerId) {
-          log.info("当前活跃服务器断开，清空 activeServerId");
-          setActiveServerId(null);
-        }
-
-        if (source === "user_initiated") {
-          // 用户主动断开：不自动重连
-          setServerStatus(lostServerId, "disconnected");
-          log.warn(`服务器 ${lostServerId} 已主动断开`);
-          return;
-        }
-
-        // 网络断开：进入自动重连流程（最多 3 次、5 秒间隔）
-        // 状态置为 reconnecting，各应用依据 activeServerId 已清空显示离线占位，
-        // 重连成功后恢复 activeServerId，应用现有 effect 自动恢复
-        setServerStatus(lostServerId, "reconnecting");
-        log.warn(`服务器 ${lostServerId} 连接断开（${source}），开始自动重连`);
-
-        // 断连通知（code 携带分类：如认证超时/会话超时等明确原因）
-        const lostServer = useServersStore.getState().servers.find((s) => s.id === lostServerId);
-        const lostInfo = code != null ? getErrorInfo(code) : null;
-        // 事件监听器只注册一次（空依赖），文案经 i18n 取当前语言而非 hook 缓存
-        pushServerNotification(lostServerId, {
-          title: lostInfo?.title ?? i18n.t("serverManager.lostTitle"),
-          body: lostInfo?.message ?? i18n.t("serverManager.lostBody"),
-          action: i18n.t("serverManager.lostAction"),
-          urgency: "normal",
-          kind: "connection",
-          source: lostServer ? lostServer.name || lostServer.host : i18n.t("serverManager.source"),
-          // 连接可用性通知：不随当前服务器隔离，避免后台服务器掉线无人察觉
-          global: true,
-        });
-        scheduleReconnectRef.current(lostServerId, 1);
-      });
-
-      return unlisten;
-    };
-
+    // 竞态防护：listen 异步注册，cleanup 可能先于 resolve 执行（StrictMode
+    // 双跑/快速重挂载）——resolve 时若已卸载立即注销，否则会残留第二份监听器，
+    // 同一 connection-lost 被处理两次（通知合并成 ×2）
+    let cancelled = false;
     let unlistenFn: (() => void) | undefined;
-    setupListener().then((fn) => {
-      unlistenFn = fn;
+
+    listen<ConnectionLostPayload>("connection-lost", (event) => {
+      const { server_id: lostServerId, source, code } = event.payload;
+      log.info("收到连接丢失事件:", lostServerId, "来源:", source, "code:", code);
+
+      // 通过 ref 读取最新值，而非闭包捕获
+      if (activeServerIdRef.current === lostServerId) {
+        log.info("当前活跃服务器断开，清空 activeServerId");
+        setActiveServerId(null);
+      }
+
+      if (source === "user_initiated") {
+        // 用户主动断开：不自动重连
+        setServerStatus(lostServerId, "disconnected");
+        log.warn(`服务器 ${lostServerId} 已主动断开`);
+        return;
+      }
+
+      // 网络断开：进入自动重连流程（最多 3 次、5 秒间隔）
+      // 状态置为 reconnecting，各应用依据 activeServerId 已清空显示离线占位，
+      // 重连成功后恢复 activeServerId，应用现有 effect 自动恢复
+      setServerStatus(lostServerId, "reconnecting");
+      log.warn(`服务器 ${lostServerId} 连接断开（${source}），开始自动重连`);
+
+      // 断连通知（code 携带分类：如认证超时/会话超时等明确原因）
+      const lostServer = useServersStore.getState().servers.find((s) => s.id === lostServerId);
+      const lostInfo = code != null ? getErrorInfo(code) : null;
+      // 事件监听器只注册一次（空依赖），文案经 i18n 取当前语言而非 hook 缓存
+      pushServerNotification(lostServerId, {
+        title: lostInfo?.title ?? i18n.t("serverManager.lostTitle"),
+        body: lostInfo?.message ?? i18n.t("serverManager.lostBody"),
+        action: i18n.t("serverManager.lostAction"),
+        urgency: "normal",
+        kind: "connection",
+        source: lostServer ? lostServer.name || lostServer.host : i18n.t("serverManager.source"),
+        // 连接可用性通知：不随当前服务器隔离，避免后台服务器掉线无人察觉
+        global: true,
+      });
+      scheduleReconnectRef.current(lostServerId, 1);
+    }).then((fn) => {
+      if (cancelled) {
+        fn();
+      } else {
+        unlistenFn = fn;
+      }
     }).catch((e) => log.error('连接丢失监听设置失败:', e));
 
     // 清理监听器
     return () => {
+      cancelled = true;
       if (unlistenFn) {
         log.info("清理连接丢失监听器");
         unlistenFn();
@@ -186,26 +196,29 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
   useEffect(() => {
     log.info("设置证书信任监听器");
 
-    const setupListener = async () => {
-      const unlisten = await listen<{ server_id: string; fingerprint: string }>(
-        "cert-trusted",
-        (event) => {
-          // 安全红线：指纹不落前端日志，仅记录 server_id
-          log.info("收到证书信任事件: server_id=" + event.payload.server_id);
-          updateServer(event.payload.server_id, {
-            certFingerprint: event.payload.fingerprint,
-          });
-        }
-      );
-      return unlisten;
-    };
-
+    // 竞态防护同 connection-lost：resolve 时已卸载则立即注销，避免残留监听器
+    let cancelled = false;
     let unlistenFn: (() => void) | undefined;
-    setupListener().then((fn) => {
-      unlistenFn = fn;
+
+    listen<{ server_id: string; fingerprint: string }>(
+      "cert-trusted",
+      (event) => {
+        // 安全红线：指纹不落前端日志，仅记录 server_id
+        log.info("收到证书信任事件: server_id=" + event.payload.server_id);
+        updateServer(event.payload.server_id, {
+          certFingerprint: event.payload.fingerprint,
+        });
+      }
+    ).then((fn) => {
+      if (cancelled) {
+        fn();
+      } else {
+        unlistenFn = fn;
+      }
     }).catch((e) => log.error('证书信任监听设置失败:', e));
 
     return () => {
+      cancelled = true;
       if (unlistenFn) {
         unlistenFn();
       }
@@ -215,22 +228,25 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
   // 监听心跳 RTT 回传事件（Rust 端心跳每 5s Ping-Pong 顺便测量，免额外请求）
   // 高频低价值事件：不打日志，静默更新 store
   useEffect(() => {
-    const setupListener = async () => {
-      const unlisten = await listen<{ server_id: string; rtt_ms: number }>(
-        "server_rtt",
-        (event) => {
-          setServerRtt(event.payload.server_id, event.payload.rtt_ms);
-        }
-      );
-      return unlisten;
-    };
-
+    // 竞态防护同 connection-lost：resolve 时已卸载则立即注销，避免残留监听器
+    let cancelled = false;
     let unlistenFn: (() => void) | undefined;
-    setupListener().then((fn) => {
-      unlistenFn = fn;
+
+    listen<{ server_id: string; rtt_ms: number }>(
+      "server_rtt",
+      (event) => {
+        setServerRtt(event.payload.server_id, event.payload.rtt_ms);
+      }
+    ).then((fn) => {
+      if (cancelled) {
+        fn();
+      } else {
+        unlistenFn = fn;
+      }
     }).catch((e) => log.error('RTT 监听设置失败:', e));
 
     return () => {
+      cancelled = true;
       if (unlistenFn) {
         unlistenFn();
       }
@@ -268,7 +284,8 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
 
   // 连接核心逻辑：认证凭据 → remote_connect → 状态更新 → 订阅指标
   // 手动连接（connectServer）与自动重连（attemptReconnect）共用
-  const performConnect = useCallback(async (server: ServerConfig) => {
+  // 返回 true = 本次连接已提交为当前连接；false = 已被更新的意图取代并已清理
+  const performConnect = useCallback(async (server: ServerConfig, epoch: number): Promise<boolean> => {
     // 浏览器模式（无 Tauri 运行时）：连接能力由 Rust 后端提供，直接短路。
     // 抛结构化错误 → 复用 connectServer 现有失败通知链，避免暴露 invoke 实现细节
     if (!isTauri()) {
@@ -317,6 +334,23 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
       certFingerprint: server.certFingerprint || null,
     });
 
+    // 竞态防护（单连接模型）：等待期间用户已发起更新的连接/断开意图
+    // （代数变化），本次成功已过期——立即断掉刚建立的连接，否则后端会
+    // 同时保留两条连接，旧目标迟到的 connected 也会覆盖新的 activeServerId
+    if (epoch !== connectionEpochRef.current) {
+      log.warn("连接成功但已被更新的连接意图取代，主动清理:", server.id);
+      try {
+        await invoke("remote_disconnect", { serverId: server.id });
+      } catch (e) {
+        log.warn("清理过期连接时出错:", e);
+      }
+      return false;
+    }
+
+    // 提交本次连接：推进代数，使同批次并发连接（如两台同时自动重连）的
+    // 迟到成功全部失效，只有第一个提交者成为当前连接
+    connectionEpochRef.current += 1;
+
     setServerStatus(server.id, "connected", undefined, info.rttMs >= 0 ? info.rttMs : undefined);
     setActiveServerId(server.id);
 
@@ -336,6 +370,7 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
     }
 
     log.info("连接成功:", info.transport, `RTT=${info.rttMs}ms`);
+    return true;
   }, [setServerStatus, setActiveServerId]);
 
   // 持有最新 performConnect 引用（供 setTimeout 回调使用，避免过时闭包）
@@ -348,6 +383,9 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
       log.error("未找到服务器:", id);
       return;
     }
+
+    // 本次连接意图的代数：打断所有更早的连接/重连意图
+    const epoch = ++connectionEpochRef.current;
 
     // 切换目标 ≠ 当前连接 且有未完成传输 → 确认中断（显式契约：
     // 用户知道切换有代价；任务随后会被统一清理块标记为 interrupted）
@@ -375,24 +413,35 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
       }
     }
 
-    // 如果当前有其他连接，先断开（像切换WiFi一样）
-    // ask 确认期间用户可能已断开或切换到其他服务器，重读最新值避免操作失效连接
-    const currentActiveId = activeServerIdRef.current;
-    if (currentActiveId && currentActiveId !== id) {
-      log.info("断开当前连接:", currentActiveId);
+    // 单连接模型：断开所有其它「已连接 / 连接中 / 重连中」的服务器。
+    // 只处理 activeServerId 不够——正在连接中的服务器不在 activeServerId 里，
+    // 两条 remote_connect 并发会让后端同时保留两条连接（列表出现两台已连接）。
+    // ask 确认期间状态可能已变化，重读最新值
+    const latest = useServersStore.getState();
+    const staleIds = latest.servers
+      .filter(
+        (s) =>
+          s.id !== id &&
+          (s.id === latest.activeServerId || s.status === "connecting" || s.status === "reconnecting"),
+      )
+      .map((s) => s.id);
+    for (const staleId of staleIds) {
+      log.info("断开当前连接:", staleId);
       try {
-        await invoke("remote_disconnect", { serverId: currentActiveId });
-        setServerStatus(currentActiveId, "disconnected");
+        await invoke("remote_disconnect", { serverId: staleId });
       } catch (e) {
+        // 连接可能尚未建立/已不存在（connection_not_found），不阻塞新连接
         log.warn("断开旧连接时出错:", e);
       }
+      // 旧目标已放弃：无论后端是否存在连接，都置为离线
+      setServerStatus(staleId, "disconnected");
     }
 
     // 设置连接中状态
     setServerStatus(id, "connecting");
 
     try {
-      await performConnect(server);
+      await performConnect(server, epoch);
     } catch (err) {
       // 结构化解析 → 映射表文案（含对比提示）→ 状态 + 通知双通道
       const others = servers.filter((s) => s.id !== id && s.status === "connected").length;
@@ -427,7 +476,13 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
 
     log.info(`自动重连第 ${attempt} 次:`, serverId);
     try {
-      await performConnectRef.current(server);
+      // 传入当前代数：若期间用户发起新连接/断开，本次迟到成功会被识别为
+      // 过期并清理，不会覆盖新的当前连接（也不会误发"恢复"通知）
+      const committed = await performConnectRef.current(server, connectionEpochRef.current);
+      if (!committed) {
+        log.info("自动重连已被更新的连接意图取代，放弃:", serverId);
+        return;
+      }
       log.info("自动重连成功:", serverId);
       // 重连成功通知（连接恢复）
       pushServerNotification(serverId, {
@@ -486,6 +541,9 @@ export function ServerManagerProvider({ children }: ServerManagerProviderProps) 
     // 注意：不调用 unsubscribe。
     // remote_disconnect 的统一清理块会 abort subscription_task 并清理所有子任务，
     // 先调 unsubscribe 会因连接已断开报"未找到连接"噪音日志。
+
+    // 用户主动断开也是意图变化：推进代数，让仍在途的连接（含本台的迟到成功）失效
+    connectionEpochRef.current += 1;
 
     // 断开连接（后端清理块会接管所有子任务清理）
     try {

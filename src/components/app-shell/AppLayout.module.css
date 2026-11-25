@@ -82,8 +82,9 @@
   overflow-x: hidden; /* 防止横向滚动 */
 }
 /* 拖拽分隔柄（R12-FM-1，复核修正）：常态零占位——0 宽锚点 + ::after
-   覆盖式命中区（8px，横跨侧栏边界两侧，不打断侧栏自身的 1px 右边框）；
-   常态完全透明，悬停/拖拽在边界正中显示 2px 强调线 */
+   覆盖式命中区（8px，全部落在侧栏一侧，不侵入主区）；
+   主区左缘留白因此归还列表（边缘右键/左键/框选起手可用）。
+   常态完全透明，悬停/拖拽在边界内侧显示 2px 强调线 */
 .appSidebarResizer {
   position: relative;
   flex-shrink: 0;
@@ -96,7 +97,7 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  left: -4px;
+  left: -8px; /* 命中区贴合侧栏右缘内侧，不覆盖主区 6px 安全留白 */
   width: 8px;
   transition: background var(--duration-fast) var(--ease-out);
 }
@@ -105,10 +106,10 @@
 .appSidebarResizer[data-resizing]::after {
   background: linear-gradient(
     to right,
-    transparent calc(50% - 1px),
-    var(--quirel-accent-bg) calc(50% - 1px),
-    var(--quirel-accent-bg) calc(50% + 1px),
-    transparent calc(50% + 1px)
+    transparent calc(100% - 2px),
+    var(--quirel-accent-bg) calc(100% - 2px),
+    var(--quirel-accent-bg) 100%,
+    transparent 100%
   );
   opacity: 0.6;
 }

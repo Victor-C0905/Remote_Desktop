@@ -11,7 +11,7 @@ const ALL_NAMES = [
   "bell", "bell-outline",
   "pan-up", "pan-down",
   "funnel",
-  "chevron-up", "chevron-down",
+  "chevron-up", "chevron-down", "chevron-right",
   "go-previous", "go-next", "go-home", "tab-new",
   "go-up", "go-down",
   "media-play", "media-pause",

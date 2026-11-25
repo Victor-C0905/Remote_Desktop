@@ -413,25 +413,66 @@
   opacity: 0.8;
 }
 
-/* 书签项移除按钮：悬浮浮现（右侧，语义同搜索框 ✕ / Explorer 取消固定） */
-.fm-sidebar .fm-sidebar-item .fm-si-remove {
+/* 目录树展开箭头：只切换展开态（点行仍导航），窄宽避免挤压标签 */
+.fm-sidebar .fm-sidebar-item .fm-si-arrow {
   flex-shrink: 0;
-  display: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 20px;
+  padding: 0;
   border: none;
+  border-radius: var(--radius-xs);
   background: none;
   color: var(--quirel-text-secondary);
+  line-height: 0;
   cursor: pointer;
-  padding: 0 2px;
-  font-size: 12px;
-  line-height: 1;
 }
 
-.fm-sidebar .fm-sidebar-item:hover .fm-si-remove {
-  display: inline-flex;
+/* chevron 为 SVG（SymbolicIcon）：去掉行内基线留白，保持 18×20 点击区居中 */
+.fm-sidebar .fm-sidebar-item .fm-si-arrow .symbolic-icon {
+  display: block;
 }
 
-.fm-sidebar .fm-sidebar-item .fm-si-remove:hover {
+.fm-sidebar .fm-sidebar-item .fm-si-arrow:hover {
   color: var(--quirel-text-primary);
+  background: var(--quirel-sidebar-bg);
+}
+
+/* 叶子行箭头槽位：不可见占位，保证同层图标/文字与可展开行对齐 */
+.fm-sidebar .fm-sidebar-item .fm-si-arrow-gutter {
+  flex-shrink: 0;
+  width: 18px;
+  height: 20px;
+}
+
+/* 子目录状态行（加载中/无子目录/超限/失败重试）：弱化展示，不参与行悬停 */
+.fm-sidebar .fm-sidebar-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  color: var(--quirel-text-secondary);
+  font-size: var(--font-small);
+  overflow: hidden;
+}
+
+.fm-sidebar .fm-sidebar-status .fm-si-status-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-sidebar .fm-sidebar-status .fm-si-retry {
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--quirel-text-primary);
+  font-size: inherit;
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 /* ── File List / Grid Area ───────────────────────────── */
@@ -447,8 +488,9 @@
      竖向色差带（用户指出的「缝隙」）。补 view-bg 与工具栏同源 */
   background: var(--quirel-view-bg);
   /* R12-FM-3：两侧留白——边缘可起手框选/拖放（对齐 Explorer）；表头与行
-     同在滚动容器内，padding 同步内移，列对齐不受影响 */
-  padding: 0 6px;
+     同在滚动容器内，padding 同步内移，列对齐不受影响。
+     表头通过负 margin 吃掉该留白（见 .fm-list-header），左右不再露底色竖缝 */
+  padding: 0 15px;
   /* 滚动上提：列总和超出容器宽时整体横滚（表头与行同滚，对齐 Explorer）；
      行多时纵滚（表头 sticky 顶部保持可见）。此前 content 独立滚动 + 横向 hidden，
      列超宽只能裁剪，导致拖拽必须锁上限、占满后所有列互相锁死 */
@@ -464,7 +506,11 @@
   font-size: var(--font-small);
   font-weight: 600;
   color: var(--quirel-text-secondary);
-  padding: 0 12px;  /* 垂直 padding 下放至各列头自身：聚焦背景才能铺满整个表头高 */
+  /* 水平 padding 左右不等：左 19px（15px 安全边距 + 行左距 4px）、右 27px
+     （15px + 行右距 12px）；配合负 margin 让表头背景铺满 .fm-list 的
+     padding 区，与侧栏/右缘直接相接，且网格轨道与行严格对齐 */
+  margin: 0 -15px;
+  padding: 0 27px 0 19px;  /* 垂直 padding 下放至各列头自身：聚焦背景才能铺满整个表头高 */
   background: var(--quirel-headerbar-bg);  /* ✅ 实心背景：行滚过时盖住（sticky） */
   position: sticky;  /* 滚动上提至 .fm-list 后，纵滚时表头吸顶 */
   top: 0;
@@ -494,17 +540,16 @@
   transition: color var(--duration-fast) var(--ease-out);
 }
 
-/* 首尾列头盒外扩吃掉 header 左右 padding：聚焦背景铺满整个表头宽，
-   与行的全宽 hover/选中背景左右对齐（否则名称左侧留有空白条）。
-   首列额外补回外扩量：文字距窗口左缘 12+16=28px，与行内名称文字
-   （行 padding 12 + 单元格 16）绝对位置一致 */
+/* 首尾列头盒外扩吃掉 header 全部水平 padding：聚焦背景铺满整个表头宽，
+   与行的全宽 hover/选中背景对齐。首列文字距内容区左缘 2px（21-19），
+   与行内图标绝对位置一致；尾列仍按右侧 27px 外扩 */
 .fm-list .fm-list-header .fm-col-header:first-child {
-  margin-left: -12px;
-  padding-left: 28px;
+  margin-left: -19px;
+  padding-left: 21px;
 }
 .fm-list .fm-list-header .fm-col-header:last-child {
-  margin-right: -12px;
-  padding-right: 12px;
+  margin-right: -27px;
+  padding-right: 27px;
 }
 
 /* 悬停/当前排序列：文字转主色，示意可交互 */
@@ -675,7 +720,7 @@
   grid-template-columns: var(--fm-cols, minmax(180px, 2fr) 90px 140px 90px 90px);  /* ✅ 匹配表头列宽（--fm-cols 同源） */
   scroll-margin-top: 40px;  /* 键盘导航 scrollIntoView 时避开 sticky 表头遮挡 */
   gap: 8px;
-  padding: 6px 12px;
+  padding: 6px 12px 6px 4px;  /* 左侧收窄：选中背景更贴图标；右侧保持与表头尾列对齐 */
   border-radius: var(--radius-xs);
   cursor: pointer;
   align-items: center;
@@ -699,7 +744,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding-left: 16px;  /* 与表头列头水平内距同步，表头文字与数据文字对齐 */
+  padding-left: 2px;  /* 与表头首列水平内距同步；行内开头留白收窄（选中背景更贴图标） */
   min-width: 0;  /* 列宽交由 --fm-cols 轨道管理（可拖拽调窄），文本自身用省略号截断 */
   overflow: hidden;
 }

@@ -133,8 +133,6 @@ export function AddServerModal({ isOpen, onClose }: AddServerModalProps) {
     }
   }, [isOpen]);
 
-  if (!isOpen) return null;
-
   const resetForm = () => {
     setName("");
     setHost("");
@@ -218,6 +216,10 @@ export function AddServerModal({ isOpen, onClose }: AddServerModalProps) {
     setup().catch((e) => log.error("provision 进度监听失败:", e));
     return () => { unlisten?.(); };
   }, [step]);
+
+  // 关闭状态必须在所有 hook 之后返回：放在第二个 useEffect 之前会让打开/关闭
+  // 切换时 hook 数量变化，React 抛 "Rendered more hooks than during the previous render"
+  if (!isOpen) return null;
 
   /** 探测：SSH 连接 + 环境判定（只读，不改服务器状态） */
   const runDetect = async (id: string) => {
@@ -637,8 +639,8 @@ function formatProvisionError(err: unknown): string {
 /* ── quireld 版本管理卡片（在线更新）────────────────── */
 
 interface QuirelVersionCardProps {
-  serverId: string;
-  serverName: string;
+  serverId: string | null;
+  serverName: string | null;
 }
 
 interface QuirelUpdateCheck {
@@ -672,6 +674,7 @@ export function QuirelVersionCard({ serverId, serverName }: QuirelVersionCardPro
   const { updateServer } = useServersStore();
 
   const runCheck = async () => {
+    if (!serverId) return;
     setChecking(true);
     setActionError(null);
     try {
@@ -688,13 +691,21 @@ export function QuirelVersionCard({ serverId, serverName }: QuirelVersionCardPro
     }
   };
 
-  // 选中服务器变化时自动检查一次
+  // 选中服务器变化时自动检查一次；无连接时清空数据并保留占位骨架
   useEffect(() => {
+    if (!serverId) {
+      setCheck(null);
+      setChecking(false);
+      setActionError(null);
+      setDoneMsg(null);
+      return;
+    }
     void runCheck();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serverId]);
 
   const runUpdate = async () => {
+    if (!serverId) return;
     // 二次确认（计划要求：更新是重操作，默认仅手动）
     if (!window.confirm(t("settings.quireldVersion.confirmUpdate"))) return;
     setUpdating(true);
@@ -717,6 +728,7 @@ export function QuirelVersionCard({ serverId, serverName }: QuirelVersionCardPro
   };
 
   const runRollback = async () => {
+    if (!serverId) return;
     setUpdating(true);
     setActionError(null);
     setDoneMsg(null);
@@ -737,70 +749,67 @@ export function QuirelVersionCard({ serverId, serverName }: QuirelVersionCardPro
 
   return (
     <div className="st-card">
-      <div className="st-card-header text-title">{t("settings.quireldVersion.title")}</div>
-      {!check ? (
-        <div className="st-form-row">
-          <span className="st-form-hint">{checking ? t("settings.quireldVersion.checking") : ""}</span>
-        </div>
-      ) : !check.supported ? (
+      <div className="st-card-header st-card-header-row">
+        <div className="text-title">{t("settings.quireldVersion.title")}</div>
+        {check && check.supported && check.updateAvailable === false && (
+          <span className="st-status-chip st-status-chip-success">
+            {t("settings.quireldVersion.noUpdate")}
+          </span>
+        )}
+        {check && check.supported && check.updateAvailable === true && check.latestVersion && (
+          <span className="st-status-chip st-status-chip-accent">
+            {t("settings.quireldVersion.updateAvailable", { version: check.latestVersion })}
+          </span>
+        )}
+      </div>
+      {/* 无数据/未连接时保留同一骨架（版本占位 + 禁用操作），卡片高度不跳变 */}
+      <div className="st-conn-row">
+        <span className="st-conn-label">{t("settings.quireldVersion.current")}</span>
+        <span className="st-conn-value">
+          {check?.managerVersion ?? (serverId ? t("settings.quireldVersion.unknown") : "—")}
+          {check && !check.enabled && (
+            <span className="st-conn-protocol"> — {t("settings.quireldVersion.disabled")}</span>
+          )}
+        </span>
+      </div>
+      {check && !check.supported && (
         <div className="st-form-row">
           <span className="st-form-hint">{t("settings.quireldVersion.notSupported")}</span>
         </div>
-      ) : (
-        <>
-          <div className="st-form-row">
-            <span>
-              {t("settings.quireldVersion.current")}:{" "}
-              <strong>{check.managerVersion ?? t("settings.quireldVersion.unknown")}</strong>
-              {!check.enabled && (
-                <span className="st-form-hint"> — {t("settings.quireldVersion.disabled")}</span>
-              )}
-            </span>
-          </div>
-          {check.managerLagsWorker && check.workerVersion && (
-            <div className="st-form-row">
-              <span className="st-form-hint">
-                {t("settings.quireldVersion.workerLags", {
-                  worker: check.workerVersion,
-                  manager: check.managerVersion ?? "",
-                })}
-              </span>
-            </div>
-          )}
-          {check.staged && (
-            <div className="st-form-row">
-              <span className="st-form-hint">{t("settings.quireldVersion.stagedHint")}</span>
-            </div>
-          )}
-          <div className="st-form-row">
-            <span className="st-form-hint">
-              {check.updateAvailable === true && check.latestVersion
-                ? t("settings.quireldVersion.updateAvailable", { version: check.latestVersion })
-                : check.updateAvailable === false
-                  ? t("settings.quireldVersion.noUpdate")
-                  : ""}
-            </span>
-          </div>
-          {doneMsg && <div className="st-form-row"><span className="st-form-hint">{doneMsg}</span></div>}
-          {actionError && <div className="st-form-error">{actionError}</div>}
-          <div className="st-form-row">
-            <button className="st-btn" onClick={runCheck} disabled={checking || updating}>
-              {checking ? t("settings.quireldVersion.checking") : t("settings.quireldVersion.checkBtn")}
-            </button>
-            {(check.updateAvailable === true || check.staged) && check.enabled && (
-              <button className="st-btn st-btn-primary" onClick={runUpdate} disabled={updating}>
-                {updating ? t("settings.quireldVersion.updating") : t("settings.quireldVersion.updateBtn")}
-              </button>
-            )}
-            {check.enabled && check.managerVersion && (
-              <button className="st-btn" onClick={runRollback} disabled={updating}>
-                {t("settings.quireldVersion.rollbackBtn")}
-              </button>
-            )}
-          </div>
-        </>
       )}
-      <span className="st-form-hint" data-server={serverName} />
+      {check?.managerLagsWorker && check.workerVersion && (
+        <div className="st-form-row">
+          <span className="st-form-hint">
+            {t("settings.quireldVersion.workerLags", {
+              worker: check.workerVersion,
+              manager: check.managerVersion ?? "",
+            })}
+          </span>
+        </div>
+      )}
+      {check?.staged && (
+        <div className="st-form-row">
+          <span className="st-form-hint">{t("settings.quireldVersion.stagedHint")}</span>
+        </div>
+      )}
+      {doneMsg && <div className="st-form-row"><span className="st-form-hint">{doneMsg}</span></div>}
+      {actionError && <div className="st-form-error">{actionError}</div>}
+      <div className="st-form-actions st-card-actions">
+        <button className="st-btn" onClick={runCheck} disabled={!serverId || checking || updating}>
+          {checking ? t("settings.quireldVersion.checking") : t("settings.quireldVersion.checkBtn")}
+        </button>
+        {check?.supported && (check.updateAvailable === true || check.staged) && check.enabled && (
+          <button className="st-btn st-btn-primary" onClick={runUpdate} disabled={!serverId || updating}>
+            {updating ? t("settings.quireldVersion.updating") : t("settings.quireldVersion.updateBtn")}
+          </button>
+        )}
+        {check?.supported && check.enabled && check.managerVersion && (
+          <button className="st-btn" onClick={runRollback} disabled={!serverId || updating}>
+            {t("settings.quireldVersion.rollbackBtn")}
+          </button>
+        )}
+      </div>
+      <span className="st-form-hint" data-server={serverName ?? undefined} />
     </div>
   );
 }
@@ -1196,15 +1205,15 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
     disconnectServer(id);
   };
 
-  // 断开后 activeServerId 已清空（activeServer 为 null），
-  // 回退到最近选择的服务器，保证"当前连接"卡片仍显示上下文与重连入口
-  const cardServer = activeServer || servers.find((s) => s.id === selectedServerId) || null;
-
   // 服务器列表按最近连接时间降序展示；从未连接过的排在末尾（稳定排序保持添加顺序）
   const sortedServers = useMemo(
     () => [...servers].sort((a, b) => (b.lastConnected ?? 0) - (a.lastConnected ?? 0)),
     [servers],
   );
+  // 断开后 activeServerId 已清空（activeServer 为 null），回退到最近选择/最近连接的
+  // 服务器，保证「当前连接」卡片仍显示上下文，并提供一键恢复最近连接的入口
+  const cardServer =
+    activeServer || sortedServers.find((s) => s.id === selectedServerId) || sortedServers[0] || null;
   const selServer = sortedServers.find((s) => s.id === selectedServerId) || null;
 
   // 删除入口仅负责唤起确认弹窗，真正的删除在用户确认后执行
@@ -1214,14 +1223,40 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
 
   const renderSection = () => {
     switch (activeSection) {
-      case "connection":
+      case "connection": {
+        // 状态文案在标题行与状态胶囊共用（原「状态」信息行移除，避免重复）
+        const connectionStatus =
+          cardServer?.status === "connected" ? t("settings.statusConnected") :
+          cardServer?.status === "connecting" ? t("settings.statusConnecting") :
+          cardServer?.status === "reconnecting" ? t("settings.statusReconnecting") :
+          cardServer?.status === "error" ? t("settings.statusError") :
+          t("settings.notConnected");
         return (
           <div className="st-section">
             <div className="st-section-title text-heading">{t("settings.connTitle")}</div>
 
             {/* Current Connection */}
             <div className="st-card">
-              <div className="st-card-header text-title">{t("settings.currentConnection")}</div>
+              <div className="st-card-header st-card-header-row">
+                <div className="text-title">{t("settings.currentConnection")}</div>
+                <button
+                  type="button"
+                  className="st-status-chip st-status-chip-btn"
+                  disabled={!cardServer || cardServer.status === "connecting" || cardServer.status === "reconnecting"}
+                  title={cardServer?.status === "connected" ? t("settings.disconnectBtn") : t("settings.connectBtn")}
+                  onClick={() => {
+                    if (!cardServer) return;
+                    if (cardServer.status === "connected") handleDisconnect(cardServer.id);
+                    else handleConnect(cardServer.id);
+                  }}
+                >
+                  <span
+                    className="st-status-dot"
+                    style={{ background: cardServer ? getStatusColor(cardServer.status) : "#9a9996" }}
+                  />
+                  {connectionStatus}
+                </button>
+              </div>
               <div className="st-current-connection">
                 <div className="st-conn-row">
                   <span className="st-conn-label text-label">{t("settings.connHost")}</span>
@@ -1234,20 +1269,6 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                   <span className="st-conn-value st-conn-value-port">
                     {cardServer?.port || <span className="st-conn-placeholder">—</span>}
                     <span className="st-conn-protocol">(QUIC)</span>
-                  </span>
-                </div>
-                <div className="st-conn-row">
-                  <span className="st-conn-label text-label">{t("settings.connStatus")}</span>
-                  <span className="st-conn-value st-conn-value-status">
-                    <span
-                      className="st-status-dot"
-                      style={{ background: cardServer ? getStatusColor(cardServer.status) : "#9a9996" }}
-                    />
-                    {cardServer?.status === "connected" ? t("settings.statusConnected") :
-                     cardServer?.status === "connecting" ? t("settings.statusConnecting") :
-                     cardServer?.status === "reconnecting" ? t("settings.statusReconnecting") :
-                     cardServer?.status === "error" ? t("settings.statusError") :
-                     <span className="st-conn-placeholder">{t("settings.notConnected")}</span>}
                   </span>
                 </div>
                 {/* 延迟行常驻渲染：连接建立时若才插入该行，卡片高度跳变挤压整窗；
@@ -1281,36 +1302,13 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                   );
                 })()}
               </div>
-              <div className="st-card-actions">
-                {/* 动作区常驻一枚按钮（断开连接 / 重试连接+连接 / 连接中…禁用），
-                    行高恒定，状态切换不再塌陷 */}
-                {cardServer?.status === "connected" ? (
-                  <button
-                    className="st-btn st-btn-danger"
-                    onClick={() => handleDisconnect(cardServer.id)}
-                  >
-                    {t("settings.disconnectBtn")}
-                  </button>
-                ) : (
-                  <button
-                    className="st-btn st-btn-primary"
-                    disabled={!cardServer || cardServer.status === "connecting" || cardServer.status === "reconnecting"}
-                    onClick={() => { if (cardServer) handleConnect(cardServer.id); }}
-                  >
-                    {cardServer?.status === "connecting" || cardServer?.status === "reconnecting"
-                      ? t("settings.rowConnecting")
-                      : cardServer
-                        ? t("settings.retryConnectBtn")
-                        : t("settings.connectBtn")}
-                  </button>
-                )}
-              </div>
             </div>
 
-            {/* quireld 版本管理（仅连接中的服务器显示——命令走 QUIC 通道） */}
-            {cardServer?.status === "connected" && (
-              <QuirelVersionCard serverId={cardServer.id} serverName={cardServer.name} />
-            )}
+            {/* quireld 版本管理：始终渲染，无连接时用占位数据保持卡片高度稳定 */}
+            <QuirelVersionCard
+              serverId={cardServer?.status === "connected" ? cardServer.id : null}
+              serverName={cardServer?.status === "connected" ? cardServer.name : null}
+            />
 
             {/* Saved Servers */}
             <div className="st-card">
@@ -1376,19 +1374,17 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
                     </div>
                   ))
                 )}
-                {/* 添加服务器 = 列表末尾的居中占位行（替代底部独立按钮） */}
+                {/* 添加服务器：列表底部虚线占位行 */}
                 <button
                   type="button"
                   className="st-server-add"
                   onClick={() => setAddModalOpen(true)}
                 >
-                  <span className="st-server-add-plus">+</span>
                   {t("settings.addServerBtn")}
                 </button>
               </div>
-              <div className="st-card-actions">
-                {/* 动作区常驻一枚按钮（连接 / 连接中…禁用 / 断开连接），高度被按钮
-                    恒定撑住：connecting 态若整行不渲染，卡片高度塌陷会挤压下方布局 */}
+              {/* 列表右下角连接位：作用于当前选中的服务器（原交互位置） */}
+              <div className="st-card-actions st-card-actions-end">
                 {selServer?.status === "connected" ? (
                   <button
                     className="st-btn st-btn-danger"
@@ -1438,6 +1434,7 @@ export function Settings({ windowId: _windowId }: { windowId: string }) {
             />
           </div>
         );
+      }
 
       case "appearance":
         const currentTheme = themes[themeId];

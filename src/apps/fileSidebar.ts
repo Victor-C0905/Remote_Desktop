@@ -173,3 +173,150 @@ export function buildSidebarSections(params: {
 
   return sections;
 }
+
+/* ── 目录树：展开后平铺为可见行 ─────────────────────────── */
+
+/** 每层最多展示的子目录数（超出以「还有 N 项」提示，避免超大目录撑爆侧栏） */
+export const SIDEBAR_CHILDREN_LIMIT = 200;
+
+/** 单个目录的子目录装载结果 */
+export interface SidebarChildren {
+  /** 子目录项（仅目录、按名称排序，已按上限截断） */
+  items: SidebarItem[];
+  /** 超出展示上限被裁掉的条目数 */
+  hidden: number;
+}
+
+/** 子目录加载状态（FileManager 维护，flatten 只消费） */
+export type SidebarChildrenState =
+  | { status: 'loading' }
+  | { status: 'loaded'; items: SidebarItem[]; hidden: number }
+  | { status: 'error'; message: string };
+
+/** 目录路径 → 加载状态 */
+export type SidebarChildrenStates = Record<string, SidebarChildrenState | undefined>;
+
+/** 侧栏可见行：分组顶层项 + 展开后插入的子目录/状态行 */
+export type SidebarRow =
+  | {
+      kind: 'item';
+      item: SidebarItem;
+      /** 缩进层级：0 = 分组顶层项，1 = 一级子目录…… */
+      depth: number;
+      /** 是否带展开箭头（离线占位项不提供展开） */
+      expandable: boolean;
+      expanded: boolean;
+    }
+  | {
+      kind: 'status';
+      /** loading 加载中 / error 加载失败可重试 / more 超出展示上限 */
+      state: 'loading' | 'error' | 'more';
+      depth: number;
+      /** 状态所属目录（error 重试时作为请求路径） */
+      path: string;
+      /** error：错误信息 */
+      message?: string;
+      /** more：被裁掉的条目数 */
+      count?: number;
+    };
+
+/** 分组 + 可见行（渲染层按组输出标题） */
+export interface SidebarSectionRows {
+  titleKey?: string;
+  title?: string;
+  rows: SidebarRow[];
+}
+
+/**
+ * 从 read_dir 结果构建子目录项：只保留目录、按名称排序，超出上限截断。
+ * 只显示子目录——侧栏是导航树，文件条目属于内容区。
+ */
+export function buildSidebarChildren(
+  parentPath: string,
+  entries: readonly { name: string; is_dir: boolean }[],
+  limit = SIDEBAR_CHILDREN_LIMIT,
+): SidebarChildren {
+  const names = entries
+    .filter((entry) => entry.is_dir)
+    .map((entry) => entry.name)
+    .sort((a, b) => a.localeCompare(b));
+  const shown = names.slice(0, Math.max(0, limit));
+  return {
+    items: shown.map((name) => ({
+      icon: 'folder',
+      label: name,
+      title: joinRemotePath(parentPath, name),
+      path: joinRemotePath(parentPath, name),
+    })),
+    hidden: Math.max(0, names.length - shown.length),
+  };
+}
+
+/**
+ * 把分组 + 展开态平铺为可见行（纯函数，便于单测）。
+ * 展开的目录行后紧跟其子目录（递归），加载中/无子目录/失败/超限以状态行占位。
+ * `allowExpand=false`（离线占位项）时不输出箭头与子行。
+ */
+export function flattenSidebarSections(
+  sections: SidebarSection[],
+  params: {
+    expandedPaths: ReadonlySet<string>;
+    children: SidebarChildrenStates;
+    allowExpand?: boolean;
+  },
+): SidebarSectionRows[] {
+  const { expandedPaths, children, allowExpand = true } = params;
+
+  const appendRows = (rows: SidebarRow[], items: SidebarItem[], depth: number): void => {
+    for (const item of items) {
+      const state = children[item.path];
+      // 已加载且没有子目录 = 叶子：不显示展开箭头，也不保留展开态
+      //（点击叶子只会得到空结果，不应提供无效的展开入口）
+      const knownLeaf = state?.status === 'loaded' && state.items.length === 0;
+      const hasChildren = state?.status === 'loaded' && state.items.length > 0;
+      const expanded = allowExpand && !knownLeaf && expandedPaths.has(item.path);
+      // 箭头只在「已知有子目录 / 正在展开 / 加载失败可重试」时显示。
+      // 未知目录先留空槽，等预取结果再补箭头——避免箭头先渲染再消失
+      const expandable =
+        allowExpand && (hasChildren || expanded || state?.status === 'error');
+      rows.push({
+        kind: 'item',
+        item,
+        depth,
+        expandable,
+        expanded,
+      });
+      if (!expanded) continue;
+
+      const childDepth = depth + 1;
+      if (!state || state.status === 'loading') {
+        rows.push({ kind: 'status', state: 'loading', depth: childDepth, path: item.path });
+      } else if (state.status === 'error') {
+        rows.push({
+          kind: 'status',
+          state: 'error',
+          depth: childDepth,
+          path: item.path,
+          message: state.message,
+        });
+      } else {
+        appendRows(rows, state.items, childDepth);
+        if (state.hidden > 0) {
+          rows.push({
+            kind: 'status',
+            state: 'more',
+            depth: childDepth,
+            path: item.path,
+            count: state.hidden,
+          });
+        }
+      }
+    }
+  };
+
+  return sections.map((section) => {
+    const rows: SidebarRow[] = [];
+    appendRows(rows, section.items, 0);
+    return { titleKey: section.titleKey, title: section.title, rows };
+  });
+}
